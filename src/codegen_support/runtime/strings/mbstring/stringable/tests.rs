@@ -44,6 +44,43 @@ fn emit_formatter_fixture(emitter: &mut Emitter) {
     }
 }
 
+/// Lets the C host call the boundary with the fixture's context block installed in the context register.
+fn emit_context_trampoline(emitter: &mut Emitter) {
+    emitter.label_global("fixture_call_stringable");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // preserve the C caller's linkage and keep the stack aligned
+            emitter.instruction("str x28, [sp, #16]");                          // park the host's callee-saved context register
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x28", "fixture_ctx");
+            emitter.instruction("bl __rt_mbstring_stringable");                 // run the real boundary against the fixture context
+            emitter.instruction("ldr x28, [sp, #16]");                          // hand the host's context register back
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore the C caller's linkage
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the C caller's frame
+            emitter.instruction("mov rbp, rsp");                                // establish the trampoline frame
+            emitter.instruction("push r14");                                    // park the host's callee-saved context register
+            emitter.instruction("sub rsp, 8");                                  // keep the nested call 16-byte aligned
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r14", "fixture_ctx");
+            emitter.instruction("call __rt_mbstring_stringable");               // run the real boundary against the fixture context
+            emitter.instruction("add rsp, 8");                                  // release the alignment pad
+            emitter.instruction("pop r14");                                     // hand the host's context register back
+            emitter.instruction("pop rbp");                                     // restore the C caller's frame
+        }
+    }
+    emitter.instruction("ret");                                                 // return the boundary status to the C host
+}
+
+/// Names the context slots the C host reads and writes directly.
+fn fixture_ctx_defines(target: Target) -> Vec<String> {
+    use crate::codegen_support::runtime::ctx::*;
+    let emitter = Emitter::new(target);
+    let diagnostics = per_context_symbol_offset(&emitter, "_rt_diag_suppression").expect("diagnostic suppression is a context slot");
+    [("FIXTURE_CTX_SIZE", CTX_SIZE), ("FIXTURE_EXC_HANDLER_TOP", CTX_EXC_HANDLER_TOP_OFFSET),
+        ("FIXTURE_EXC_CALL_FRAME_TOP", CTX_EXC_CALL_FRAME_TOP_OFFSET), ("FIXTURE_DIAG_SUPPRESSION", diagnostics)]
+        .iter().map(|(name, value)| format!("-D{name}={value}")).collect()
+}
+
 /// Runs real host machine code through ordinary, throwing, nested, and invalid-input C calls.
 #[test]
 fn mbstring_stringable_boundary_preserves_host_state() {
@@ -56,12 +93,14 @@ fn mbstring_stringable_boundary_preserves_host_state() {
     emitter.raw(".text");
     emit(&mut emitter);
     emit_formatter_fixture(&mut emitter);
+    emit_context_trampoline(&mut emitter);
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("boundary.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("boundary.c"), include_str!("native_boundary.c")).unwrap();
     let library = directory.join("boundary.so");
     let output = Command::new("cc").current_dir(&directory)
         .arg(if target.platform == Platform::MacOS { "-dynamiclib" } else { "-shared" })
+        .args(fixture_ctx_defines(target))
         .args(["-fPIC", "-Wall", "-Wextra", "-Werror", "boundary.c", "boundary.s", "-o"])
         .arg(&library).output().unwrap();
     assert!(output.status.success(), "boundary build failed: {}", String::from_utf8_lossy(&output.stderr));

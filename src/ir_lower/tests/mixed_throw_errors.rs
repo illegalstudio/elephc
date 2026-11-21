@@ -8,6 +8,32 @@
 //! - Both invalid branches release their owned box before allocating the catchable Error.
 //! - Each supported target has a separate test to bound per-test assembly-generation work.
 
+/// A boxed nullable exception moves into the unwinder without releasing its source box.
+#[test]
+fn nullable_throw_box_transfer_on_all_supported_targets() {
+    let source = r#"<?php
+function relay(?Throwable $error): void {
+    if ($error instanceof Throwable) { throw $error; }
+}
+try { relay(new RuntimeException("retained")); }
+catch (RuntimeException $caught) { echo $caught->getMessage(); }
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let relay = module.functions.iter().find(|function| function.name == "relay").unwrap();
+        let moves = relay.instructions.iter().filter(|inst| inst.op == crate::ir::Op::ZeroLocalSlot)
+            .collect::<Vec<_>>();
+        assert_eq!(moves.len(), 1, "{target}: terminating throw moves one local owner");
+        assert!(!relay.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::ReleaseLocalSlot && inst.immediate == moves[0].immediate
+        }), "{target}: the transferred Mixed box must not be released first");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Compiles both deferred throw forms and checks their target-aware error and cleanup paths.
 fn assert_mixed_throw_error_assembly(target: &str) {
     let source = r#"<?php

@@ -38,9 +38,11 @@ pub(crate) const FLOAT_WINDOW_BYTES: usize = 64;
 pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
 
 /// Keeps runtime helper bounds and the capacity read by nested host boundaries identical.
-pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
-    // x86_64 helper comparisons need a signed 32-bit immediate; larger results use the heap.
-    heap_size.clamp(65_536, 1 << 30)
+pub(crate) fn scratch_capacity(_heap_size: usize) -> usize {
+    // The scratch buffer lives inside every `_rt_ctx` block at a fixed size, so the capacity
+    // is a layout constant rather than a function of `--heap-size`: a larger bound would let
+    // the helpers write past the per-context buffer. Larger results use the heap fallback.
+    super::super::ctx::CTX_CONCAT_BUF_CAPACITY
 }
 
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
@@ -106,8 +108,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
-    emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("b.hi __rt_concat_reserve_too_large");                  // report a PHP-style allocation overflow instead of writing past any buffer
 
@@ -121,8 +122,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     // -- when a lower runtime ceiling is active, charge heap + scratch + request --
     abi::emit_symbol_address(emitter, "x9", "_heap_limit");
     emitter.instruction("ldr x9, [x9]");                                        // load the runtime memory ceiling
-    abi::emit_symbol_address(emitter, "x10", "_heap_max");
-    emitter.instruction("ldr x10, [x10]");                                      // load the reserved arena capacity
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x10"); // load the reserved arena capacity
     emitter.instruction("cmp x9, x10");                                         // is a separate memory ceiling active?
     emitter.instruction("b.eq __rt_concat_reserve_budget_checked");             // no — the arena-sized scratch has its own capacity check
     abi::emit_symbol_address(emitter, "x10", "_gc_live");
@@ -132,7 +132,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x9");                                         // does the combined live total fit the ceiling?
     emitter.instruction("b.hi __rt_concat_reserve_budget_failed");              // no — report PHP's Allowed-memory fatal
     emitter.label("__rt_concat_reserve_budget_checked");
-    abi::emit_symbol_address(emitter, "x14", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x14");
     emitter.instruction("add x0, x14, x11");                                    // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
 
@@ -165,14 +165,13 @@ fn emit_concat_publish_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: concat_publish ---");
     emitter.label_global("__rt_concat_publish");
 
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x1, x9");                                     // compute the candidate scratch offset of the finished result
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("b.hs __rt_concat_publish_done");                       // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add x10, x10, x2");                                    // advance the scratch offset past the bytes this result actually wrote
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10");
 
     emitter.label("__rt_concat_publish_done");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched
@@ -198,7 +197,7 @@ fn emit_float_window_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x9", emitter.concat_capacity as i64); // load the scratch arena capacity
     emitter.instruction("cmp x11, x9");                                         // would the window cross the end of _concat_buf?
     emitter.instruction("b.hi __rt_float_window_spill");                        // a full scratch formats into the spill ring instead
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("add x0, x9, x10");                                     // the window starts at the scratch write offset
     emitter.instruction("ret");                                                 // return the scratch-backed window
     emitter.label("__rt_float_window_spill");
@@ -225,7 +224,7 @@ fn emit_float_window_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea r11, [r10 + {}]", FLOAT_WINDOW_BYTES));   // offset after reserving the formatter window
     emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
     emitter.instruction("ja __rt_float_window_spill_x86");                      // a full scratch formats into the spill ring instead
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("add r10, r9");                                         // the window starts at the scratch write offset
     emitter.instruction("ret");                                                 // return the scratch-backed window
     emitter.label("__rt_float_window_spill_x86");
@@ -261,8 +260,7 @@ fn emit_concat_grow_aarch64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov x0, x2");                                          // pass the requested new capacity to the reservation front end
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
-    emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the grown capacity impossible to satisfy?
     emitter.instruction("b.hi __rt_concat_grow_too_large");                     // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the larger owned accumulation buffer
@@ -325,8 +323,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("ja __rt_concat_reserve_too_large_x86");                // report a PHP-style allocation overflow instead of writing past any buffer
 
@@ -341,8 +338,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     // -- when a lower runtime ceiling is active, charge heap + scratch + request --
     abi::emit_symbol_address(emitter, "r8", "_heap_limit");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the runtime memory ceiling
-    abi::emit_symbol_address(emitter, "r10", "_heap_max");
-    emitter.instruction("cmp r8, QWORD PTR [r10]");                             // is a separate memory ceiling active?
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r10");
+    emitter.instruction("cmp r8, r10");                                                                   // is a separate memory ceiling active?
     emitter.instruction("je __rt_concat_reserve_budget_checked_x86");           // no — the arena-sized scratch has its own capacity check
     abi::emit_symbol_address(emitter, "r10", "_gc_live");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the live heap bytes
@@ -351,7 +348,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r8");                                         // does the combined live total fit the ceiling?
     emitter.instruction("ja __rt_concat_reserve_budget_failed_x86");            // no — report PHP's Allowed-memory fatal
     emitter.label("__rt_concat_reserve_budget_checked_x86");
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("lea rax, [r11 + r9]");                                 // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
 
@@ -377,15 +374,14 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: concat_publish ---");
     emitter.label_global("__rt_concat_publish");
 
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov r9, rax");                                         // copy the result pointer before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the finished result
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
     emitter.instruction("cmp r9, r8");                                          // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("jae __rt_concat_publish_done_x86");                    // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add r9, rdx");                                         // advance the scratch offset past the bytes this result actually wrote
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the updated concat scratch write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");
 
     emitter.label("__rt_concat_publish_done_x86");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched
@@ -404,8 +400,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov rax, rsi");                                        // pass the requested new capacity to the allocator
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // is the grown capacity impossible to satisfy?
     emitter.instruction("ja __rt_concat_grow_too_large_x86");                   // report a PHP-style allocation overflow instead of writing past any buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate the larger owned accumulation buffer
@@ -466,7 +461,7 @@ fn emit_concat_headroom_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat_headroom (guard) ---");
     emitter.label_global("__rt_concat_headroom");
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", emitter.concat_capacity as i64); // load the scratch capacity
     emitter.instruction("add x9, x9, x10");                                     // compute the one-past-end scratch address
     emitter.instruction("cmp x0, x9");                                          // is the write pointer already outside the arena?
@@ -499,7 +494,7 @@ fn emit_concat_headroom_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat_headroom (guard) ---");
     emitter.label_global("__rt_concat_headroom");
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the scratch capacity
     emitter.instruction("add r9, r8");                                          // compute the one-past-end scratch address
     emitter.instruction("cmp rdi, r9");                                         // is the write pointer already outside the arena?
@@ -701,7 +696,7 @@ mod tests {
             let window = window.split("--- runtime:").next().unwrap();
             assert!(window.contains("_float_spill_ring"), "{:?}", target.arch);
             assert!(window.contains("_float_spill_index"), "{:?}", target.arch);
-            assert!(window.contains("_concat_off"), "{:?}", target.arch);
+            assert!(window.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_CONCAT_OFF_OFFSET)), "{:?}", target.arch);
             assert!(!window.contains("mov QWORD PTR [r8], "), "{:?}: the window only reads _concat_off", target.arch);
         }
     }

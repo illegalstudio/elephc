@@ -27,6 +27,7 @@
 //!   answer, so it is also the one id `__rt_curl_easy_init` turns into PHP `false`.
 
 mod callbacks;
+mod output_sink;
 mod easy_body;
 mod easy_error;
 mod easy_free;
@@ -67,6 +68,7 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_version(emitter);
     emit_curl_easy_free(emitter);
     emit_curl_invoke_callback(emitter);
+    output_sink::emit_curl_output_sink(emitter);
     emit_curl_rethrow_pending(emitter);
     emit_curl_warn_unsupported_option(emitter);
     emit_curl_multi_warn_unsupported_option(emitter);

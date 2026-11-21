@@ -19,6 +19,8 @@
 //!
 //! Key details:
 //! - C ABI: `__rt_curl_invoke_callback(descriptor, curl_handle_object, spec) -> i64`.
+//! - Foreign callbacks save the host's ctx register, publish the runtime context before
+//!   allocation, and restore the host register on both ordinary and no-invoker returns.
 //!   `spec` is a bridge-owned `CallSpec` (`crates/elephc-curl/src/callbacks.rs`) with
 //!   fixed offsets — `argc@0`, `argv@8`, `result_kind@16`, `out_buf@24`, `out_cap@32`,
 //!   `out_len@40`, `status@48` — and `argv` is `argc` 24-byte `(tag, lo, hi)` triples in
@@ -87,16 +89,17 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.comment("--- runtime: curl_invoke_callback ---");
     emitter.label_global("__rt_curl_invoke_callback");
 
-    // Stack frame (304 bytes):
+    // Stack frame (320 bytes):
     //   [sp, #0]   = handler record (224 bytes): next@0, survivor@8, diag@16,
     //                jmp_buf@24 (matches TRY_HANDLER_* / __rt_throw_current).
     //   [sp, #224] = descriptor    [sp, #232] = CurlHandle object  [sp, #240] = spec
     //   [sp, #248] = args array    [sp, #256] = boxed args cell    [sp, #264] = boxed return
     //   [sp, #272] = loop index    [sp, #280] = integer result
-    //   [sp, #288] = saved x29     [sp, #296] = saved x30
-    emitter.instruction("sub sp, sp, #304");                                    // allocate the callback-adapter frame
-    emitter.instruction("stp x29, x30, [sp, #288]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #288");                                   // establish the adapter frame pointer
+    //   [sp, #288] = foreign x28   [sp, #304] = saved x29/x30
+    emitter.instruction("sub sp, sp, #320");                                    // allocate the callback-adapter frame and foreign ctx spill
+    emitter.instruction("stp x29, x30, [sp, #304]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #304");                                   // establish the adapter frame pointer
+    emitter.instruction("str x28, [sp, #288]");                                 // preserve the foreign caller's callee-saved context register
 
     emitter.instruction("str x0, [sp, #224]");                                  // save the callable descriptor pointer
     emitter.instruction("str x1, [sp, #232]");                                  // save the CurlHandle object pointer
@@ -104,6 +107,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #256]");                                 // no argument container allocated yet
     emitter.instruction("str xzr, [sp, #264]");                                 // no boxed return held yet
     emitter.instruction("str xzr, [sp, #280]");                                 // default integer result is 0
+    super::super::ctx::emit_ctx_publish(emitter);
 
     // -- a descriptor without a uniform invoker cannot be called: report "did nothing" --
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the invoker slot
@@ -187,6 +191,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #224]");                                  // arg0 = the callable descriptor
     emitter.instruction("ldr x1, [sp, #256]");                                  // arg1 = the boxed argument container
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // uniform invoker
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("blr x9");                                              // call the PHP callable → OWNED boxed Mixed return
     emitter.instruction("str x0, [sp, #264]");                                  // save the boxed return for decode + release
 
@@ -254,15 +259,17 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release it (cascades to the boxed args)
     emitter.label("__rt_curl_invoke_cb_done");
     emitter.instruction("ldr x0, [sp, #280]");                                  // the integer result the bridge reads
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the adapter frame
+    emitter.instruction("ldr x28, [sp, #288]");                                 // restore the foreign context register before crossing back to C
+    emitter.instruction("ldp x29, x30, [sp, #304]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #320");                                    // release the adapter frame
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 
     // -- fast path: no uniform invoker → nothing allocated, nothing to release --
     emitter.label("__rt_curl_invoke_cb_bail");
     emitter.instruction("mov x0, #0");                                          // report "the callable did nothing"
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the adapter frame
+    emitter.instruction("ldr x28, [sp, #288]");                                 // restore the foreign context register on the no-invoker path too
+    emitter.instruction("ldp x29, x30, [sp, #304]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #320");                                    // release the adapter frame
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 }
 
@@ -272,16 +279,18 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: curl_invoke_callback ---");
     emitter.label_global("__rt_curl_invoke_callback");
 
-    // Frame (288 bytes below rbp):
+    // Frame (304 bytes below rbp):
     //   [rbp-8]  descriptor   [rbp-16] CurlHandle object  [rbp-24] spec
     //   [rbp-32] args array   [rbp-40] boxed args cell    [rbp-48] boxed return
     //   [rbp-56] loop index   [rbp-64] integer result
+    //   [rbp-296] foreign r14
     //   [rbp-288] handler record (224 bytes): next@0, survivor@8, diag@16, jmp_buf@24
     //             → next=[rbp-288], survivor=[rbp-280], diag=[rbp-272], jmp_buf=[rbp-264].
-    //   push rbp + sub rsp,288 keeps rsp 16-aligned for the nested calls.
+    //   push rbp + sub rsp,304 keeps rsp 16-aligned for the nested calls.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the adapter frame pointer
-    emitter.instruction("sub rsp, 288");                                        // reserve the slots and the handler record
+    emitter.instruction("sub rsp, 304");                                        // reserve the slots, handler record and foreign ctx spill
+    emitter.instruction("mov QWORD PTR [rbp - 296], r14");                      // preserve the foreign caller's callee-saved context register
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the callable descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the CurlHandle object pointer
@@ -289,6 +298,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // no argument container allocated yet
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // no boxed return held yet
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default integer result is 0
+    super::super::ctx::emit_ctx_publish(emitter);
 
     // -- a descriptor without a uniform invoker cannot be called --
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the invoker slot
@@ -373,6 +383,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = the callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg1 = the boxed argument container
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("call r10");                                            // call the PHP callable → OWNED boxed Mixed return
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed return
 
@@ -442,14 +453,16 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release it (cascades to the boxed args)
     emitter.label("__rt_curl_invoke_cb_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // the integer result the bridge reads
-    emitter.instruction("add rsp, 288");                                        // release the adapter frame
+    emitter.instruction("mov r14, QWORD PTR [rbp - 296]");                      // restore the foreign context register before crossing back to C
+    emitter.instruction("add rsp, 304");                                        // release the adapter frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 
     // -- fast path: no uniform invoker → nothing allocated, nothing to release --
     emitter.label("__rt_curl_invoke_cb_bail_x86");
     emitter.instruction("xor eax, eax");                                        // report "the callable did nothing"
-    emitter.instruction("add rsp, 288");                                        // release the adapter frame
+    emitter.instruction("mov r14, QWORD PTR [rbp - 296]");                      // restore the foreign context register on the no-invoker path too
+    emitter.instruction("add rsp, 304");                                        // release the adapter frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the bridge trampoline
 }
@@ -566,6 +579,33 @@ pub fn emit_curl_rethrow_pending(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // no exception: the caller's result is intact
 
+        }
+    }
+}
+
+#[cfg(test)]
+mod foreign_context_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Foreign callback entries publish context before allocation and restore it on both exits.
+    #[test]
+    fn curl_callback_foreign_context_is_preserved_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.ctx_register = true;
+            emit_curl_invoke_callback(&mut emitter);
+            let asm = emitter.output();
+            let (save, restore) = if name == "linux-x86_64" {
+                ("mov QWORD PTR [rbp - 296], r14", "mov r14, QWORD PTR [rbp - 296]")
+            } else {
+                ("str x28, [sp, #288]", "ldr x28, [sp, #288]")
+            };
+            let saved = asm.find(save).expect("foreign context spill");
+            let published = asm.find("_rt_ctx").expect("context publish");
+            let allocated = asm.find("__rt_array_new").expect("callback arguments allocation");
+            assert!(saved < published && published < allocated, "{name}: foreign entry ordering");
+            assert_eq!(asm.matches(restore).count(), 2, "{name}: both callback exits restore the host register");
         }
     }
 }

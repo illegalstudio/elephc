@@ -128,6 +128,27 @@ pub unsafe extern "C" fn __elephc_eval_execute_with_deferred_catalog(
     }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Executes eval with an explicitly borrowed native arena, without changing the legacy ABI.
+///
+/// # Safety
+/// The five legacy arguments obey `__elephc_eval_execute`'s contract. `runtime_context`
+/// must identify the caller's live native arena for the entire synchronous activation.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_execute_in_context_v1(
+    ctx: *mut ElephcEvalContext,
+    scope: *mut ElephcEvalScope,
+    code_ptr: *const u8,
+    code_len: u64,
+    out: *mut ElephcEvalResult,
+    runtime_context: *mut std::ffi::c_void,
+) -> i32 {
+    if runtime_context.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let _activation = super::runtime_context::Activation::enter(runtime_context);
+    unsafe { __elephc_eval_execute(ctx, scope, code_ptr, code_len, out) }
+}
+
 /// Runs the eval ABI body after the exported wrapper has installed a panic boundary.
 ///
 /// # Safety

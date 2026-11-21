@@ -156,7 +156,13 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction], constant
         [include_str!("objects_index.c"), include_str!("objects_registry.c"), include_str!("objects_sync.c"),
             include_str!("objects_host.c"), include_str!("objects_lifecycle.c")].join("\n")
     };
-    registration = registration.replacen("static const zend_function_entry", &format!("{}\n{}\n{}\n{handlers}\n{class_registration}\n{objects}\nstatic const zend_function_entry", super::class_registration::prelude(classes), include_str!("transport.c"), include_str!("activation.c")), 1);
+    // activation.c reaches the stack floors as `_rt_ctx` fields, not process globals.
+    let ctx_offsets = format!(
+        "#define EP_CTX_STACK_LIMIT_OFFSET {}\n#define EP_CTX_STACK_LIMIT_MAIN_OFFSET {}\n",
+        crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_OFFSET,
+        crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_MAIN_OFFSET,
+    );
+    registration = registration.replacen("static const zend_function_entry", &format!("{}\n{}\n{ctx_offsets}{}\n{handlers}\n{class_registration}\n{objects}\nstatic const zend_function_entry", super::class_registration::prelude(classes), include_str!("transport.c"), include_str!("activation.c")), 1);
     registration = registration.replace("static const zend_function_entry elephc_functions[] = {\n    ZEND_FE_END",
         &format!("static const zend_function_entry elephc_functions[] = {{\n{entries}    ZEND_FE_END"));
     // Registration metadata was validated before inserting the C templates.

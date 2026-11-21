@@ -831,7 +831,7 @@ fn emit_aarch64_method_exception_boundary_push(
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));
     emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native methods
-    emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
+    abi::emit_branch_if_int_result_nonzero(emitter, escape_label);              // non-zero setjmp result means a method Throwable escaped
 }
 
 /// Emits an ARM64 boundary pop after a native method call returns to magician.
@@ -2723,6 +2723,9 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, name);
+    }
 }
 
 #[cfg(test)]

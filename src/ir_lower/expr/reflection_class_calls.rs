@@ -84,7 +84,8 @@ pub(super) fn lower_reflection_class_new_instance(
     if ctx.value_is_owning_temporary(class_name) {
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
-    take_prepublished_call_result(ctx, result_staging, object, expr.span)
+    let object = take_prepublished_call_result(ctx, result_staging, object, expr.span);
+    concrete_reflection_instance_result(ctx, object_expr, object, expr)
 }
 
 /// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
@@ -153,7 +154,7 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
     if ctx.value_is_owning_temporary(class_name) {
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
-    result
+    concrete_reflection_instance_result(ctx, object_expr, result, expr)
 }
 
 /// Returns whether `class_name` is one of the contract's internal-final classes.
@@ -162,6 +163,24 @@ fn is_final_internal_class(class_name: &str) -> bool {
     elephc_builtin_contract::INTERNAL_FINAL_CLASSES
         .iter()
         .any(|name| php_symbol_key(name) == key)
+}
+
+/// Extracts an independently owned concrete object when reflected construction proves its class.
+fn concrete_reflection_instance_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    boxed: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let Some(class) = object_expr.and_then(|object| reflection_class_reflected_class(ctx, object)) else {
+        return boxed;
+    };
+    let object = ctx.emit_value(
+        Op::RuntimeCall, vec![boxed.value], None, PhpType::Object(class),
+        effects_lookup::runtime_effects(), Some(expr.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    object
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

@@ -60,6 +60,7 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
         emitter, scratch, arg0,
         crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET,
     );
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     abi::emit_call_reg(emitter, scratch);
     abi::emit_store_to_address(emitter, result, stack, 72);
     abi::emit_reg_move(emitter, arg0, stack);
@@ -179,10 +180,13 @@ mod tests {
             let asm = emitter.output();
             for symbol in [
                 "__rt_error_handler_invoke:", "__rt_error_handler_restore:",
-                "_exc_call_frame_top", "__rt_callable_descriptor_release",
-                "_php_error_handler_context_release",
+                "__rt_callable_descriptor_release",
             ] {
                 assert!(asm.contains(symbol), "missing {symbol} for {target:?}");
+            }
+            for symbol in ["_exc_call_frame_top", "_php_error_handler_context_release"] {
+                let slot = crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+                assert!(asm.contains(&slot), "missing {symbol} for {target:?}");
             }
         }
     }

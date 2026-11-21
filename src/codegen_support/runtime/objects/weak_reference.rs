@@ -28,7 +28,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the object or Closure runtime tag
     emitter.instruction("mov x0, x1");                                          // weak identity is the borrowed payload allocation
     emitter.instruction("str x0, [sp, #16]");                                   // preserve the borrowed referent during allocation
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // derive the referent's direct-mapped heap offset
     emitter.instruction("lsr x10, x10, #4");                                    // select the referent's unique allocation granule
     abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
@@ -63,7 +63,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // return an independently owned nullable object cell
 
     emitter.label_global("__rt_weak_reference_retire");
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // derive the reclaimed object's allocation granule
     emitter.instruction("lsr x10, x10, #4");                                    // select its weak cache slot before storage reuse
     abi::emit_symbol_address(emitter, "x11", "_obj_weak_reference_index");
@@ -72,7 +72,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x12, #8]");                                  // invalidate the referent before freeing its bytes
     emitter.instruction("mov x10, #8");                                         // a cleared observer returns boxed null
     emitter.instruction("str x10, [x12, #16]");                                 // retire Closure tags together with their payload
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // restore the granule after preparing the null tag
     emitter.instruction("lsr x10, x10, #4");                                    // recover the cache index before unlinking
     emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // clear the cache before allocator granule reuse
@@ -87,7 +87,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_weak_reference_retire_done");                // other object layouts have no reverse cache edge
     emitter.instruction("ldr x12, [x0, #8]");                                   // inspect the wrapper's still-live referent
     emitter.instruction("cbz x12, __rt_weak_reference_retire_done");            // cleared wrappers have already lost their cache entry
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("sub x10, x12, x9");                                    // derive the surviving referent's allocation granule
     emitter.instruction("lsr x10, x10, #4");                                    // select the reverse non-owning cache slot
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // inspect the cached wrapper before unlinking it
@@ -109,7 +109,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the object or Closure runtime tag
     emitter.instruction("mov rax, rdi");                                        // index the borrowed payload rather than its Mixed cell
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the referent without acquiring an owner
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("mov r10, rax");                                        // copy the referent before computing its granule
     emitter.instruction("sub r10, r11");                                        // derive its heap-relative byte offset
     emitter.instruction("shr r10, 4");                                          // select the unique allocation granule
@@ -146,7 +146,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // return a newly owned nullable object cell
 
     emitter.label_global("__rt_weak_reference_retire");
-    abi::emit_symbol_address(emitter, "r9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r9");
     emitter.instruction("mov r10, rax");                                        // copy the object being reclaimed
     emitter.instruction("sub r10, r9");                                         // derive its heap-relative byte offset
     emitter.instruction("shr r10, 4");                                          // select its weak cache granule

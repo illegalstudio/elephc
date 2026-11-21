@@ -446,6 +446,10 @@ pub enum RuntimeFnId {
     SqrtSumRange,
     Tan,
     Tanh,
+    ElephcAsyncFd,
+    ElephcAsyncGcCollect,
+    ElephcAsyncMonitorEvent,
+    ElephcAsyncPoll,
     ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
@@ -1393,6 +1397,21 @@ impl RuntimeFnId {
             RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
             ),
+            RuntimeFnId::ElephcAsyncGcCollect => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::ElephcAsyncMonitorEvent => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::ElephcAsyncFd => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits(),
+            ),
+            RuntimeFnId::ElephcAsyncPoll => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits(),
+            ),
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
             RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
@@ -2076,6 +2095,19 @@ impl RuntimeFnId {
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
             | RuntimeFnId::Shuffle => MonitoringPolicy::GenericTiming,
+            RuntimeFnId::ElephcAsyncFd | RuntimeFnId::ElephcAsyncGcCollect => {
+                MonitoringPolicy::GenericTiming
+            }
+            RuntimeFnId::ElephcAsyncMonitorEvent => MonitoringPolicy::Infrastructure {
+                reason: "publishes scheduler state transitions to an optional dormant monitor",
+            },
+            // The reactor poll carries BLOCKING_IO: its whole span is time blocked in poll(2),
+            // so the wait is reported separately from self time.
+            RuntimeFnId::ElephcAsyncPoll => MonitoringPolicy::Io {
+                kind: IoKind::Descriptor,
+                wait: WaitPolicy::Measured,
+                trace_context: TraceContextPolicy::NotApplicable,
+            },
             RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -2635,6 +2667,16 @@ impl RuntimeFnId {
         )
     }
 
+    /// Returns whether this operation requires the optional Async poll adapter.
+    pub const fn uses_async_reactor_runtime(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::ElephcAsyncFd
+                | RuntimeFnId::ElephcAsyncMonitorEvent
+                | RuntimeFnId::ElephcAsyncPoll
+        )
+    }
+
     /// Returns whether this operation requires the optional shared mbstring runtime.
     pub const fn uses_mbstring_runtime(self) -> bool {
         self.mbstring_operation().is_some()
@@ -2799,6 +2841,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
+                | RuntimeFnId::ElephcAsyncFd
+                | RuntimeFnId::ElephcAsyncGcCollect
+                | RuntimeFnId::ElephcAsyncMonitorEvent
+                | RuntimeFnId::ElephcAsyncPoll
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -3176,8 +3222,10 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
-                | RuntimeFnId::PtrReadString
+                // Internal prelude alias of PtrReadString: both copy foreign bytes into a fresh
+                // owned PHP string and therefore share the same non-aliasing contract.
                 | RuntimeFnId::ElephcPtrReadString
+                | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
@@ -3206,6 +3254,11 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                // `unserialize()` constructs a fresh scalar box or container graph from the
+                // input bytes. No returned cell can alias the serialized string, so keeping an
+                // owned wire-string temporary alive with the default MayAliasArguments policy
+                // leaks one input buffer per decode (notably every repeated Parallel join).
+                | RuntimeFnId::Unserialize
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -3221,8 +3274,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
                 | RuntimeFnId::ElephcZvalUnpack
-                // Parsed values own their storage independently of the wire input and options.
-                | RuntimeFnId::Unserialize
                 // Success copies the owned output buffer into a Mixed string and releases
                 // that buffer. An invalid pattern or the removed `/e` modifier boxes PHP
                 // null. Neither cell aliases an argument.
@@ -3638,6 +3689,10 @@ impl RuntimeFnId {
             RuntimeFnId::SqrtSumRange => "sqrt_sum_range",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcAsyncFd => "__elephc_async_fd",
+            RuntimeFnId::ElephcAsyncGcCollect => "__elephc_async_gc_collect",
+            RuntimeFnId::ElephcAsyncMonitorEvent => "__elephc_async_monitor_event",
+            RuntimeFnId::ElephcAsyncPoll => "__elephc_async_poll",
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
                 "__elephc_clone_override_reference_guard"
             }
@@ -4091,10 +4146,16 @@ mod tests {
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }
-        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace, RuntimeFnId::Fread] {
+        for target in [
+            RuntimeFnId::StrRepeat,
+            RuntimeFnId::StrReplace,
+            RuntimeFnId::Fread,
+            RuntimeFnId::Serialize,
+        ] {
             assert_eq!(
                 target.result_ownership(),
-                BuiltinResultOwnership::Independent
+                BuiltinResultOwnership::Independent,
+                "{target:?} must use non-aliasing concat-storage ownership"
             );
         }
     }

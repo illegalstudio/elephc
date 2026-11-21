@@ -261,6 +261,7 @@ fn emit_visitor(emitter: &mut Emitter) {
         VISIT_INVOCATION_SCOPE,
     );
     install_visit_borrow(emitter);
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     restore_visit_borrow(emitter);
     store_callback_result(emitter);
@@ -583,7 +584,7 @@ mod tests {
             assert!(asm.contains("__rt_throw_current"), "{name}");
             assert!(asm.contains("__rt_array_walk_boxed_visit"), "{name}");
             assert!(asm.contains("__rt_unmanaged_reference_escape_error"), "{name}");
-            assert!(asm.matches("_rt_unmanaged_ref_borrow_top").count() >= 5, "{name}");
+            assert!(asm.matches(&crate::codegen_support::runtime::test_slot_ref(target.arch, "_rt_unmanaged_ref_borrow_top")).count() >= 5, "{name}");
             let callback_gate = asm
                 .split_once("__rt_array_walk_boxed:")
                 .unwrap()
@@ -660,8 +661,9 @@ mod tests {
                 invoke_path[invoked..].contains(result_store),
                 "{name}: callback results must not overwrite the argument owner or borrow head\n{asm}"
             );
-            let registered = invoke_path[..invoked].rfind("_rt_unmanaged_ref_borrow_top").unwrap();
-            let restored = invoke_path[invoked..].find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let borrow_top = crate::codegen_support::runtime::test_slot_ref(target.arch, "_rt_unmanaged_ref_borrow_top");
+            let registered = invoke_path[..invoked].rfind(&borrow_top).unwrap();
+            let restored = invoke_path[invoked..].find(&borrow_top).unwrap();
             assert!(registered < invoked && restored > 0, "{name}: {asm}");
         }
     }

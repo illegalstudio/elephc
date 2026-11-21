@@ -28,6 +28,8 @@
 //!   slot's high word holds `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`) and counts only the rest,
 //!   as PHP does; an unset `Closure` property therefore serializes instead of throwing.
 
+use crate::codegen_support::abi::emit_symbol_address;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -66,7 +68,6 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
@@ -999,8 +1000,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 /// undoing the generic per-value increment for an array key (keys do not consume
 /// a PHP reference index). Clobbers x9/x10.
 fn emit_uncount_key_aarch64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "x9", "_ser_value_counter");
+        emit_symbol_address(emitter, "x9", "_ser_value_counter");
     emitter.instruction("ldr x10, [x9]");                                       // load the running value counter
     emitter.instruction("sub x10, x10, #1");                                    // a key does not consume an index
     emitter.instruction("str x10, [x9]");                                       // publish the corrected counter
@@ -1079,7 +1079,6 @@ fn emit_serialize_copy_run_aarch64(emitter: &mut Emitter, prefix: &str) {
 
 /// x86_64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
@@ -1984,8 +1983,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 /// the generic per-value increment for an array key (keys do not consume a PHP
 /// reference index). Clobbers r10/rax.
 fn emit_uncount_key_x86_64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "r10", "_ser_value_counter");
+        emit_symbol_address(emitter, "r10", "_ser_value_counter");
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the running value counter
     emitter.instruction("sub rax, 1");                                          // a key does not consume an index
     emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the corrected counter

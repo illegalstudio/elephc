@@ -467,6 +467,21 @@ impl<'f> Builder<'f> {
         self.func.instructions.get(inst.as_raw() as usize)
     }
 
+    /// Turns an already emitted instruction into a `nop`, keeping its position and span.
+    pub fn neutralize_instruction(&mut self, inst: InstId) {
+        if let Some(inst) = self.func.instructions.get_mut(inst.as_raw() as usize) {
+            inst.op = Op::Nop;
+            inst.operands.clear();
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
+        }
+    }
+
+    /// Returns the id the next emitted instruction will receive.
+    pub fn next_instruction_id(&self) -> InstId {
+        InstId::from_raw(self.func.instructions.len() as u32)
+    }
+
     /// Returns the current insertion block when one is selected.
     pub fn insertion_block(&self) -> Option<BlockId> {
         self.current

@@ -239,9 +239,23 @@ C::$nullable->items[] = 3;
         let guard = function.instructions.iter().position(|inst|
             inst.op == crate::ir::Op::IsNull).unwrap();
         assert!(last_print < guard, "{target}: {name} operands precede the null guard");
-        assert!(function.blocks.iter().any(|block|
-            block.name == "property.write.null" && matches!(block.terminator,
-                Some(crate::ir::Terminator::Throw { .. }))), "{target}: {name} catchable Error");
+        // The Error is built through ordinary call-argument evaluation, which may split its
+        // block (a computed message owns a snapshot). Every path from the null guard must still
+        // end in the throw: it reaches a Throw terminator and never a Return.
+        let null = function.blocks.iter().find(|block| block.name == "property.write.null").unwrap();
+        let (mut pending, mut seen) = (vec![null.id], std::collections::HashSet::new());
+        let (mut throws, mut returns) = (false, false);
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) { continue; }
+            let block = function.block(id).unwrap();
+            match &block.terminator {
+                Some(crate::ir::Terminator::Throw { .. }) => throws = true,
+                Some(crate::ir::Terminator::Return { .. }) => returns = true,
+                Some(terminator) => pending.extend(crate::ir_passes::successors(terminator)),
+                None => {}
+            }
+        }
+        assert!(throws && !returns, "{target}: {name} catchable Error");
     }
     let coalesce = module.functions.iter().find(|function| function.name == "writeCoalesce").unwrap();
     assert!(coalesce.instructions.iter().any(|inst|

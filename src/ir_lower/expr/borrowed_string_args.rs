@@ -67,6 +67,8 @@ pub(super) fn try_lower(
         }
     }
     let mut sources = vec![None; plan.source_args.len()];
+    // Every admitted argument is a pure read, so none needs a snapshot against a later one.
+    let previous_snapshot_mode = std::mem::replace(&mut ctx.elide_argument_snapshots, true);
     for (source_index, param_idx, expr) in reads {
         let value = if let ExprKind::PropertyAccess { object, property } = &expr.kind {
             let object = lower_expr(ctx, object);
@@ -88,6 +90,7 @@ pub(super) fn try_lower(
         PlannedRegularArg::Default(expr) => lower_arg_with_signature(ctx, sig, index, expr),
         PlannedRegularArg::SpreadElement { .. } => unreachable!(),
     }).collect() };
+    ctx.elide_argument_snapshots = previous_snapshot_mode;
     if operands.is_empty() { return None; }
     for operand in &operands {
         if ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str

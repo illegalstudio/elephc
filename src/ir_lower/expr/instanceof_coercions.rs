@@ -211,6 +211,10 @@ pub(crate) fn coerce_to_string_at_span(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Bool {
+        return ctx.emit_value(Op::BoolToStr, vec![value.value], None, PhpType::Str,
+            Op::BoolToStr.default_effects(), span);
+    }
     if matches!(ctx.builder.value_php_type(value.value), PhpType::Resource(_)) {
         return ctx.emit_value(
             Op::ResourceToStr,

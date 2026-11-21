@@ -18,21 +18,29 @@ use elephc_mbstring::abi::*;
 fn entry(emitter: &mut Emitter, name: &str, runtime: &str, arguments: usize) {
     emitter.label_global(&emitter.target.extern_symbol(name));
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve the fixture's C return linkage
+        emitter.instruction("stp x29, x30, [sp, #-32]!");                       // preserve the fixture's C return linkage and the host's context register
+        emitter.instruction("str x28, [sp, #16]");                              // park the host's callee-saved context register
+        abi::emit_symbol_address(emitter, "x28", "fixture_ctx");                // install the fixture's per-context block for the runtime helper
         if matches!(name, "mb_test_persist" | "mb_test_literal" | "mb_test_lower" | "mb_test_upper") {
             emitter.instruction("mov x2, x1");                                  // adapt the C byte count to native string persistence
             emitter.instruction("mov x1, x0");                                  // adapt the C source pointer to native string persistence
         }
         abi::emit_call_label(emitter, runtime);
         if matches!(name, "mb_test_persist" | "mb_test_lower" | "mb_test_upper") { emitter.instruction("mov x0, x1"); } // return native string ownership through the C pointer result
-        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore fixture linkage after the real native helper returns
+        emitter.instruction("ldr x28, [sp, #16]");                              // hand the host's context register back
+        emitter.instruction("ldp x29, x30, [sp], #32");                         // restore fixture linkage after the real native helper returns
     } else {
         emitter.instruction("push rbp");                                        // preserve the C frame and align the fixture call site
         emitter.instruction("mov rbp, rsp");                                    // establish the C entry's stable frame
+        emitter.instruction("push r14");                                        // park the host's callee-saved context register
+        emitter.instruction("sub rsp, 8");                                      // keep the nested native call 16-byte aligned
+        abi::emit_symbol_address(emitter, "r14", "fixture_ctx");                // install the fixture's per-context block for the runtime helper
         if arguments >= 3 { emitter.instruction("mov rcx, rdx"); }              // preserve the third C argument before staging the native second register
         if arguments >= 2 { emitter.instruction("mov rdx, rsi"); }              // adapt byte length or source pointer to the native convention
         if arguments >= 1 { emitter.instruction("mov rax, rdi"); }              // adapt the owner or destination pointer to the native convention
         abi::emit_call_label(emitter, runtime);
+        emitter.instruction("add rsp, 8");                                      // release the alignment pad
+        emitter.instruction("pop r14");                                         // hand the host's context register back
         emitter.instruction("pop rbp");                                         // restore the fixture's C linkage after the native return
     }
     emitter.instruction("ret");                                                 // return only after the real native operation completes
@@ -48,13 +56,16 @@ fn register_probe(emitter: &mut Emitter) {
         for register in (8..16).step_by(2) {
             emitter.instruction(&format!("stp q{register}, q{}, [sp, #{}]", register + 1, 32 + (register - 8) * 16));// preserve C callee-saved lanes before filling test vectors
         }
+        emitter.instruction("str x28, [sp, #144]");                             // park the host's callee-saved context register
+        abi::emit_symbol_address(emitter, "x28", "fixture_ctx");                // the hook reads its activity flag through the context register
         abi::emit_symbol_address(emitter, "x19", "_ini_register_snapshots");
         for register in 3..18 { emitter.instruction(&format!("mov x{register}, #{}", register + 101)); }// assign distinct volatile integer sentinels
         for register in 0..32 { emitter.instruction(&format!("movi v{register}.16b, #{}", register + 17)); }// initialize both halves of every vector with distinct bytes
     } else {
         emitter.instruction("push rbp");                                        // retain C frame linkage before filling volatile registers
         emitter.instruction("push rbx");                                        // preserve the snapshot base register owned by the C caller
-        emitter.instruction("sub rsp, 8");                                      // align the fixture's nested native call
+        emitter.instruction("push r14");                                        // park the host's context register and align the fixture's nested native call
+        abi::emit_symbol_address(emitter, "r14", "fixture_ctx");                // the hook reads its activity flag through the context register
         abi::emit_symbol_address(emitter, "rbx", "_ini_register_snapshots");
         emitter.instruction("mov rcx, rdx");                                    // retain the incoming identity as the native third argument
         emitter.instruction("mov rdx, rsi");                                    // adapt the incoming byte length to native bind
@@ -83,14 +94,49 @@ fn register_probe(emitter: &mut Emitter) {
         for register in (8..16).step_by(2) {
             emitter.instruction(&format!("ldp q{register}, q{}, [sp, #{}]", register + 1, 32 + (register - 8) * 16));// restore the C caller's original callee-saved vectors
         }
+        emitter.instruction("ldr x28, [sp, #144]");                             // hand the host's context register back
         emitter.instruction("ldp x19, x20, [sp, #16]");                         // restore the fixture's C base registers
         emitter.instruction("ldp x29, x30, [sp], #160");                        // restore linkage and release the probe frame
     } else {
-        emitter.instruction("add rsp, 8");                                      // release alignment before restoring the C caller
+        emitter.instruction("pop r14");                                         // hand the host's context register back and release alignment
         emitter.instruction("pop rbx");                                         // restore the original callee-saved base register
         emitter.instruction("pop rbp");                                         // restore original C linkage
     }
     emitter.instruction("ret");                                                 // let independent C checks compare the snapshots
+}
+
+/// Lets the C host reach the eval literal constructor with the fixture's context installed.
+fn string_literal_entry(emitter: &mut Emitter) {
+    emitter.label_global(&emitter.target.extern_symbol("fixture_string_literal"));
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction("stp x29, x30, [sp, #-32]!");                       // preserve the fixture's C return linkage and the host's context register
+        emitter.instruction("str x28, [sp, #16]");                              // park the host's callee-saved context register
+        abi::emit_symbol_address(emitter, "x28", "fixture_ctx");                // install the fixture's per-context block for the runtime helper
+        emitter.bl_c("__elephc_eval_value_string_literal");
+        emitter.instruction("ldr x28, [sp, #16]");                              // hand the host's context register back
+        emitter.instruction("ldp x29, x30, [sp], #32");                         // restore fixture linkage after the constructor returns
+    } else {
+        emitter.instruction("push rbp");                                        // preserve the C frame and align the fixture call site
+        emitter.instruction("mov rbp, rsp");                                    // establish the C entry's stable frame
+        emitter.instruction("push r14");                                        // park the host's callee-saved context register
+        emitter.instruction("sub rsp, 8");                                      // keep the nested call 16-byte aligned
+        abi::emit_symbol_address(emitter, "r14", "fixture_ctx");                // install the fixture's per-context block for the runtime helper
+        emitter.bl_c("__elephc_eval_value_string_literal");
+        emitter.instruction("add rsp, 8");                                      // release the alignment pad
+        emitter.instruction("pop r14");                                         // hand the host's context register back
+        emitter.instruction("pop rbp");                                         // restore the fixture's C linkage after the constructor returns
+    }
+    emitter.instruction("ret");                                                 // return the constructed literal cell to the C host
+}
+
+/// Names the per-context slots the C fixture's allocator shares with the emitted runtime.
+fn fixture_ctx_defines(target: Target) -> Vec<String> {
+    use crate::codegen_support::runtime::ctx::*;
+    let ini_active = per_context_symbol_offset(&Emitter::new(target), "_mbstring_ini_native_active").expect("the INI activity flag is a context slot");
+    [("FIXTURE_CTX_SIZE", CTX_SIZE), ("FIXTURE_HEAP_OFF", CTX_HEAP_OFF_OFFSET), ("FIXTURE_HEAP_BASE", CTX_HEAP_BASE_OFFSET),
+        ("FIXTURE_HEAP_MAX", CTX_HEAP_MAX_OFFSET), ("FIXTURE_GC_LIVE", CTX_GC_LIVE_OFFSET),
+        ("FIXTURE_OBJ_HANDLE_INDEX", CTX_OBJ_HANDLE_INDEX_PTR_OFFSET), ("FIXTURE_INI_ACTIVE", ini_active)]
+        .iter().map(|(name, value)| format!("-D{name}={value}")).collect()
 }
 
 /// Builds the tested hooks and real persistence/free helpers with independent C allocation support.
@@ -102,6 +148,7 @@ fn fixture(target: Target) -> String {
     emit(&mut emitter);
     crate::codegen_support::runtime::eval_bridge::string_literal::emit(&mut emitter);
     register_probe(&mut emitter);
+    string_literal_entry(&mut emitter);
     crate::codegen_support::runtime::strings::emit_str_persist(&mut emitter, true);
     crate::codegen_support::runtime::strings::emit_strtolower(&mut emitter, true);
     crate::codegen_support::runtime::strings::emit_strtoupper(&mut emitter, true);
@@ -142,6 +189,7 @@ fn mbstring_ini_native_identity_survives_persistence_and_final_free() {
     let library = directory.join("native.so");
     let output = Command::new("cc").current_dir(&directory)
         .arg(if target.platform == Platform::MacOS { "-dynamiclib" } else { "-shared" })
+        .args(fixture_ctx_defines(target))
         .args(["-fPIC", "-Wall", "-Wextra", "-Werror", "native.c", "native.s", "-o"]).arg(&library).output().unwrap();
     assert!(output.status.success(), "native identity fixture build failed: {}", String::from_utf8_lossy(&output.stderr));
     let name = CString::new(library.as_os_str().as_bytes()).unwrap();

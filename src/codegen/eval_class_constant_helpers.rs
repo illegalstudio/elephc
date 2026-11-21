@@ -1555,4 +1555,7 @@ fn slot_miss_label(module: &Module, slot: &EvalClassConstantSlot, mode: &str) ->
 fn label_c_global(module: &Module, emitter: &mut Emitter, symbol: &str) {
     let label = module.target.extern_symbol(symbol);
     emitter.label_global(&label);
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, symbol);
+    }
 }

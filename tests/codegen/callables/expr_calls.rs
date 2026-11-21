@@ -1768,6 +1768,27 @@ unset($adapter, $handler, $error);
     );
 }
 
+/// A malformed boxed callback is catchable and releases its owner graph without out-of-bounds reads.
+#[test]
+fn test_short_boxed_callable_array_type_error_is_catchable_and_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Handler { public function greet(string $id): string { return $id; } }
+class Adapter {
+    public mixed $cb;
+    public function __construct(mixed $cb) { $this->cb = $cb; }
+    public function run(): string { return (string) call_user_func($this->cb, "id"); }
+}
+$handler = new Handler();
+$adapter = new Adapter([$handler]);
+try { echo $adapter->run(); }
+catch (TypeError $error) { echo "caught"; unset($error); }
+unset($adapter, $handler);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Regression: a builtin reached through `call_user_func()` must be typed from its own
 /// descriptor, not from the checker's result type for the `call_user_func()` call itself.
 ///

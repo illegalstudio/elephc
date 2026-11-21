@@ -25,7 +25,7 @@ pub(crate) fn emit_weak_map(emitter: &mut Emitter) {
 fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #-32]!");                           // preserve the caller during the optional PHP callback
     emitter.instruction("str x0, [sp, #16]");                                   // retain only the borrowed object address in scratch
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // derive the key's direct-mapped allocation offset
     emitter.instruction("lsr x10, x10, #4");                                    // select its weak observer granule
     abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
@@ -51,7 +51,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve aligned receiver scratch
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the borrowed C-ABI object argument
     emitter.instruction("mov rax, rdi");                                        // select the internal runtime pointer convention
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("mov r10, rax");                                        // copy the key before deriving its granule
     emitter.instruction("sub r10, r11");                                        // derive the key's heap-relative offset
     emitter.instruction("shr r10, 4");                                          // select its weak observer granule

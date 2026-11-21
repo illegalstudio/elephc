@@ -164,8 +164,9 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.find(&target.extern_symbol("_setjmp")).unwrap() < asm.find("__rt_call_object_destructor").unwrap(), "{name}");
             let catch = asm.split("__rt_gc_destructor_caught:\n").nth(1).unwrap();
-            assert!(catch.find("_gc_pending_throw").unwrap() < catch.find("__rt_exception_chain").unwrap(), "{name}");
-            assert!(asm.contains("_rt_diag_suppression") && asm.contains("_exc_call_frame_top"), "{name}");
+            let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+            assert!(catch.find(&slot("_gc_pending_throw")).unwrap() < catch.find("__rt_exception_chain").unwrap(), "{name}");
+            assert!(asm.contains(&slot("_rt_diag_suppression")) && asm.contains(&slot("_exc_call_frame_top")), "{name}");
             assert!(asm.contains("__rt_gc_rethrow_pending:") && asm.contains("__rt_throw_current"), "{name}");
         }
     }

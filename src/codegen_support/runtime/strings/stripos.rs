@@ -42,7 +42,7 @@ pub fn emit_stripos(emitter: &mut Emitter) {
 /// - `x24` = current candidate offset
 /// - `x25`/`x26` = first needle byte, original and folded
 /// - `x27` = accepted candidate offset
-/// - `x28` = needle comparison index
+/// - `x12` = needle comparison index
 fn emit_stripos_aarch64(e: &mut Emitter) {
     e.blank();
     e.comment("--- runtime: stripos ---");
@@ -57,7 +57,7 @@ fn emit_stripos_aarch64(e: &mut Emitter) {
     e.instruction("stp x21, x22, [sp, #16]");                                   // preserve the needle pointer and length
     e.instruction("stp x23, x24, [sp, #32]");                                   // preserve the last candidate and current offset
     e.instruction("stp x25, x26, [sp, #48]");                                   // preserve both first-byte case variants
-    e.instruction("stp x27, x28, [sp, #64]");                                   // preserve the candidate and comparison index
+    e.instruction("str x27, [sp, #64]");                                      // preserve the candidate and comparison index
     e.instruction("mov x19, x1");                                               // x19 = haystack pointer
     e.instruction("mov x20, x2");                                               // x20 = haystack length
     e.instruction("mov x21, x3");                                               // x21 = needle pointer
@@ -105,8 +105,8 @@ fn emit_stripos_aarch64(e: &mut Emitter) {
     e.instruction("mov x27, x0");                                               // the folded candidate is the only one
     e.label("__rt_stripos_dual_have");
     e.instruction("sub x27, x27, x19");                                         // convert the candidate pointer into an offset
-    e.instruction("mov x28, #1");                                               // remember the dual-scan mode
-    e.instruction("str x28, [sp, #80]");                                        // publish the scan mode for the retry path
+    e.instruction("mov x12, #1");                                               // remember the dual-scan mode
+    e.instruction("str x12, [sp, #80]");                                        // publish the scan mode for the retry path
     e.instruction("b __rt_stripos_compare");                                    // compare the full needle at this candidate
 
     // -- candidate scan for a first byte with no second case variant --
@@ -123,19 +123,19 @@ fn emit_stripos_aarch64(e: &mut Emitter) {
     e.label("__rt_stripos_compare");
     e.instruction("cmp x27, x23");                                              // does the full needle still fit here?
     e.instruction("b.gt __rt_stripos_notfound");                                // a candidate past the window cannot match
-    e.instruction("mov x28, xzr");                                              // start the needle comparison at index zero
+    e.instruction("mov x12, xzr");                                              // start the needle comparison at index zero
     abi::emit_symbol_address(e, "x15", "_ascii_lower");                        // ASCII lowercase lookup table
     e.label("__rt_stripos_compare_loop");
-    e.instruction("cmp x28, x22");                                              // has the whole needle matched?
+    e.instruction("cmp x12, x22");                                              // has the whole needle matched?
     e.instruction("b.hs __rt_stripos_found");                                   // all needle bytes matched
-    e.instruction("add x9, x27, x28");                                          // compute the haystack index of this needle byte
+    e.instruction("add x9, x27, x12");                                          // compute the haystack index of this needle byte
     e.instruction("ldrb w10, [x19, x9]");                                       // load the haystack byte
     e.instruction("ldrb w10, [x15, x10]");                                      // fold it through the lowercase table
-    e.instruction("ldrb w11, [x21, x28]");                                      // load the needle byte
+    e.instruction("ldrb w11, [x21, x12]");                                      // load the needle byte
     e.instruction("ldrb w11, [x15, x11]");                                      // fold it through the lowercase table
     e.instruction("cmp w10, w11");                                              // compare the folded haystack and needle bytes
     e.instruction("b.ne __rt_stripos_next");                                    // abandon this candidate on the first mismatch
-    e.instruction("add x28, x28, #1");                                          // advance to the next needle byte
+    e.instruction("add x12, x12, #1");                                          // advance to the next needle byte
     e.instruction("b __rt_stripos_compare_loop");                               // keep comparing the current candidate
 
     // -- advance past the failed candidate and choose the scan mode again --
@@ -158,7 +158,7 @@ fn emit_stripos_aarch64(e: &mut Emitter) {
     e.instruction("ldp x21, x22, [sp, #16]");                                   // restore the needle pointer and length
     e.instruction("ldp x23, x24, [sp, #32]");                                   // restore the last candidate and current offset
     e.instruction("ldp x25, x26, [sp, #48]");                                   // restore both first-byte case variants
-    e.instruction("ldp x27, x28, [sp, #64]");                                   // restore the candidate and comparison index
+    e.instruction("ldr x27, [sp, #64]");                                      // restore the candidate and comparison index
     e.instruction("ldp x29, x30, [sp, #96]");                                   // restore the caller frame and return address
     e.instruction("add sp, sp, #112");                                          // release the search frame
     e.instruction("ret");                                                       // return the match offset or -1

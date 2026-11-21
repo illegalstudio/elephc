@@ -26,6 +26,9 @@ pub(crate) fn emit_status(emitter: &mut Emitter, name: &str, body: fn(&mut Emitt
 fn emit_inner(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status: bool) {
     assert_eq!(TRY_HANDLER_SLOT_SIZE, 224, "protected callback spills follow the complete native handler");
     emitter.label_global(name);
+    if emitter.eval_foreign_context {
+        super::super::eval_bridge::emit_foreign_context_gateway(emitter, name);
+    }
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter, name, body, body_status); }
     else { x86_64(emitter, name, body, body_status); }
 }

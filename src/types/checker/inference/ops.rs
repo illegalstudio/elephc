@@ -592,6 +592,8 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
+        let previous_closure_span = self.current_closure_span;
+        self.current_closure_span = Some(expr.span);
         let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
             params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
         let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
@@ -611,6 +613,7 @@ impl Checker {
                 Ok(())
             },
         ));
+        self.current_closure_span = previous_closure_span;
         // The enclosing body's walk repeats when this closure denies a view.
         let closure_scope = self.current_loop_storage_scope.clone();
         self.end_promotable_walk(&closure_scope);

@@ -2638,4 +2638,7 @@ fn emit_set_owner_attrs_property_x86_64(
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, name);
+    }
 }

@@ -61,7 +61,7 @@ pub(crate) fn install_dynamic_object_destructor_hook() {
             __elephc_eval_dynamic_object_clone as *const () as usize,
         );
         runtime_hooks::install_closure_bind_hook(
-            crate::ffi::callables::__elephc_eval_closure_bind_this as *const () as usize,
+            crate::ffi::callables::__elephc_eval_closure_bind_this_in_context_v1 as *const () as usize,
         );
     }
 }

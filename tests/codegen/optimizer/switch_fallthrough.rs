@@ -155,4 +155,3 @@ echo after_mid_default(9), after_mid_default(0), after_mid_default(5), "\n";
     );
     assert_eq!(out, "50 75 2 25 21020\n");
 }
-

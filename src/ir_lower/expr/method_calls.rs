@@ -102,6 +102,48 @@ pub(super) fn lower_method_call(
         return null_value;
     }
     if op == Op::MethodCall {
+        if let Some(message) = super::reflection_capabilities::reflected_capability_denial(
+            ctx, object_expr, method,
+        ) {
+            return super::reflection_capabilities::lower_reflection_capability_denial(
+                ctx, object, args, &message, expr,
+            );
+        }
+        if matches!(php_symbol_key(method).as_str(), "invoke" | "invokeargs")
+            && singular_object_class(&ctx.builder.value_php_type(object.value))
+                .is_some_and(|(class, _)| class.eq_ignore_ascii_case("ReflectionMethod"))
+            && reflection_method_reflected_target(ctx, object_expr).is_none()
+        {
+            // This native path cannot invoke a runtime-shaped reflected target.
+            // Refuse explicitly instead of falling into a placeholder returning null.
+            return super::reflection_capabilities::lower_reflection_capability_denial(
+                ctx, object, args, "Runtime-shaped ReflectionMethod invocation is not supported", expr,
+            );
+        }
+    }
+    // An opaque receiver has no single signature with which to normalize source
+    // arguments. Fixed-arity backend dispatch cannot synthesize defaults or a
+    // variadic collector for each possible runtime class. Reuse the descriptor
+    // invocation boundary, which binds against the actual method's signature.
+    if op == Op::MethodCall && mixed_method_requires_descriptor(ctx, object.value, method) {
+        return lower_nullable_regular_method_call(ctx, object, method, args, expr);
+    }
+    if op == Op::MethodCall && is_parallel_task_group_spawn(ctx, object.value, method) {
+        let spawned = lower_parallel_spawn(ctx, object, args, expr);
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return spawned;
+    }
+    if op == Op::MethodCall && matches!(php_symbol_key(method).as_str(), "spawn" | "every")
+        && singular_object_class(&ctx.builder.value_php_type(object.value))
+            .is_some_and(|(class, _)| class.trim_start_matches('\\').eq_ignore_ascii_case("Elephc\\Task\\TaskGroup"))
+        && ctx.extern_functions.contains_key("elephc_parallel_job_input_php_prepare")
+        && !args.is_empty()
+    {
+        // The synthetic PHP local consumes an owning receiver after retaining
+        // it; releasing the original again would retire the same owner twice.
+        return super::task_dispatch::lower_runtime_task_submission(ctx, object, method, args, expr);
+    }
+    if op == Op::MethodCall {
         if let Some(value) =
             lower_reflection_function_invoke_call(ctx, Some(object_expr), method, args, expr)
         {
@@ -206,6 +248,21 @@ pub(super) fn lower_method_call(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    let user_owner = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .and_then(|(class, _)| {
+            let class = class.trim_start_matches('\\');
+            // Fiber switching consumes transferred receivers/arguments in its
+            // private runtime ABI, including escape. It is not a user-method
+            // call and must not also get this caller-side cleanup handler.
+            if php_symbol_key(class) == "fiber" || crate::types::builtin_classes::intrinsic_class_names()
+                .any(|intrinsic| php_symbol_key(intrinsic) == php_symbol_key(class)) {
+                return None;
+            }
+            let info = ctx.classes.get(class)?;
+            let key = php_symbol_key(dispatch_method);
+            let implementation = info.method_impl_classes.get(&key).map(String::as_str).unwrap_or(class);
+            Some(format!("{implementation}::{key}"))
+        });
     // A by-reference-returning method transfers a lease that must outlive this caller's
     // argument and receiver cleanup, so its staging is published before the arguments.
     let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
@@ -214,7 +271,23 @@ pub(super) fn lower_method_call(
     // and the result is only an SSA temporary until this staging holds it. Both the result type
     // and the alias summary are resolved from the receiver and the method alone, so they are
     // available here, before any argument expression runs.
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let return_alias = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\__scheduler"
+                && php_symbol_key(dispatch_method) == "runroot" =>
+        {
+            ReturnArgAlias::None
+        }
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\taskgroup"
+                && php_symbol_key(dispatch_method) == "spawn" =>
+        {
+            ReturnArgAlias::None
+        }
+        _ => method_return_arg_alias(ctx, object.value, dispatch_method),
+    };
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
@@ -224,7 +297,11 @@ pub(super) fn lower_method_call(
     };
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
-    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    let (object, receiver_owner) = if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        (object, None)
+    } else {
+        root_method_receiver(ctx, object, expr.span)
+    };
     emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     let reference_property_guard_mark = ctx.reference_property_guards.len();
@@ -243,7 +320,11 @@ pub(super) fn lower_method_call(
     let call_args = ref_place_rewrite
         .as_ref()
         .map_or(args, |rewrite| rewrite.args.as_slice());
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let arg_values = if let Some(owner) = &user_owner {
+        lower_args_with_eir_user_function_signature(ctx, owner, sig.as_ref(), call_args)
+    } else {
+        lower_args_with_eir_signature(ctx, sig.as_ref(), call_args)
+    };
     ctx.call_description = previous_description;
     // php-src initializes the reflected class once the arguments are evaluated, whether the
     // static property exists or not.
@@ -286,7 +367,7 @@ pub(super) fn lower_method_call(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
@@ -315,6 +396,8 @@ pub(super) fn lower_method_call(
     }
     if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
+    } else if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
     } else {
         release_owning_receiver_temporary(ctx, object, expr.span);
     }
@@ -336,6 +419,47 @@ pub(super) fn emit_native_factory_method_lookup(
     let data = ctx.intern_string(method);
     ctx.emit_void(Op::MethodLookup, vec![object.value], Some(Immediate::Data(data)),
         Op::MethodLookup.default_effects(), Some(span));
+}
+
+/// Selects the dedicated spawn lowering only when the compiler's Parallel bridge is present.
+fn is_parallel_task_group_spawn(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> bool {
+    // A user program can legally declare a same-named class when it has not opted into the
+    // Parallel prelude. The dedicated worker ABI exists only with that prelude's bridge extern,
+    // so the class name alone must never select special lowering.
+    if php_symbol_key(method) != "spawn"
+        || !ctx
+            .extern_functions
+            .contains_key("elephc_parallel_job_input_php_prepare")
+    {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(object).codegen_repr(),
+        PhpType::Object(ref class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\parallel\\taskgroup"
+    )
+}
+
+/// Returns whether a Fiber switching method transfers an owning receiver temporary to runtime.
+pub(super) fn fiber_switch_transfers_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(ref class_name) if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+    ) && matches!(php_symbol_key(method).as_str(), "start" | "resume" | "throw")
+        && ctx.value_is_owning_temporary(object)
+        // A named local owns its own frame slot and must keep that ownership until its
+        // explicit unset/epilogue. The Fiber ABI only consumes expression temporaries whose
+        // ordinary post-call release would otherwise be skipped by a switch/longjmp.
+        && !matches!(ctx.builder.value_defining_op(object.value), Some(Op::LoadLocal))
 }
 
 /// Returns whether a receiver type carries PHP's `false` failure sentinel.
@@ -469,6 +593,28 @@ pub(super) fn method_is_fiber_start(
     php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
 }
 
+/// Identifies opaque receiver calls whose runtime method must bind source arguments.
+pub(super) fn mixed_method_requires_descriptor(
+    ctx: &LoweringContext<'_, '_>, object: crate::ir::ValueId, method: &str,
+) -> bool {
+    let receiver_type = ctx.builder.value_php_type(object);
+    if receiver_type.codegen_repr() != PhpType::Mixed
+        || singular_object_class(&receiver_type).is_some()
+        || method_signature(ctx, object, method).is_some()
+    {
+        return false;
+    }
+    // Variadic targets are handled earlier by `selected_native_methods`, which selects the
+    // exact runtime class and builds the collector; its fallback arm must keep the ordinary
+    // opaque dispatch for unknown and non-variadic classes.
+    let key = php_symbol_key(method);
+    ctx.classes.values().any(|class| {
+        class.methods.get(&key).is_some_and(|signature| {
+            signature.variadic.is_none() && signature.defaults.iter().any(Option::is_some)
+        })
+    })
+}
+
 /// Lowers `?Object->method()` calls so null receivers fatal before argument evaluation.
 pub(super) fn lower_nullable_regular_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -532,9 +678,11 @@ pub(super) fn lower_nullable_regular_method_call(
     });
 
     ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     terminate_method_call_on_null(ctx, method);
 
     ctx.builder.position_at_end(false_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     terminate_method_call_on_false(ctx, method);
 
     ctx.builder.position_at_end(call_block);

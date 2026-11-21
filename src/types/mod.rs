@@ -35,6 +35,7 @@ mod ffi;
 pub(crate) mod param_binding;
 /// PHP type spelling shared by parameter and property diagnostics.
 pub(crate) mod diagnostic_names;
+pub(crate) mod parallel_transfer;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.

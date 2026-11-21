@@ -37,7 +37,7 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length
     emitter.instruction("mov x0, x2");                                          // the reversed result has exactly the source length
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf"); // classify the reservation by its arena offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9"); // classify the reservation by its arena offset
     emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the arena capacity
     emitter.instruction("cmp x10, x11");                                        // is the reservation outside the scratch window?
@@ -241,13 +241,13 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved source pointer storage
     emitter.instruction("push r12");                                            // preserve callee-saved source length storage
     emitter.instruction("push r13");                                            // preserve callee-saved destination cursor storage
-    emitter.instruction("push r14");                                            // preserve callee-saved destination start storage
+    emitter.instruction("sub rsp, 8");                                          // spill slot for the destination start: r14 is the reserved ctx register and rbx already holds the source pointer
     emitter.instruction("push r15");                                            // preserve callee-saved cluster-end storage
     emitter.instruction("mov rbx, rax");                                        // keep the source string pointer stable across decoder calls
     emitter.instruction("mov r12, rdx");                                        // keep the source string length stable across decoder calls
     emitter.instruction("mov rax, r12");                                        // the reversed result has exactly the source length
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf"); // classify the reservation by its arena offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8"); // classify the reservation by its arena offset
     emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", emitter.concat_capacity as i64); // load the arena capacity
@@ -257,7 +257,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r8");                         // let persistence adopt the reservation
     emitter.label("__rt_grapheme_strrev_mark_done_x");
     emitter.instruction("mov r13, rax");                                        // destination cursor
-    emitter.instruction("mov r14, rax");                                        // preserve destination start for the returned string pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                                       // preserve destination start for the returned string pointer
     emitter.instruction("mov rcx, r12");                                        // scan_end = source length in bytes
 
     emitter.label("__rt_grapheme_strrev_loop_x");
@@ -310,25 +310,25 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_grapheme_strrev_loop_x");                     // continue with the previous source grapheme cluster
 
     emitter.label("__rt_grapheme_strrev_done_x");
-    emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                                       // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset only for scratch-backed results
-    emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                                       // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage
     emitter.instruction("ret");                                                 // return the reversed string in rax/rdx
 
     emitter.label("__rt_grapheme_strrev_fail_x");
-    emitter.instruction("mov rax, r14");                                        // release the reservation that will not be returned
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                                       // release the reservation that will not be returned
     emitter.instruction("call __rt_heap_free_safe");                            // no-op for scratch-backed reservations
     emitter.instruction("xor eax, eax");                                        // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("xor edx, edx");                                        // failure length is zero
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage on failure
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage on failure
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot on failure
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage on failure
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage on failure
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage on failure

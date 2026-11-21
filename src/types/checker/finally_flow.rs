@@ -47,12 +47,27 @@ impl Checker {
         match thrown {
             PhpType::Object(name) if self.object_type_implements_throwable(name)
                 || self.object_type_may_be_eval_declared(name) => Ok(()),
+            // PHP compiles `throw $e` for a `?Throwable` and raises "Can only throw objects" when
+            // it is null; the boxed throw path validates the runtime value the same way.
+            PhpType::Union(members) if self.union_is_nullable_throwable(members) => Ok(()),
             PhpType::Mixed if self.eval_barrier_active => Ok(()),
             PhpType::Object(_) => Err(CompileError::new(span,
                 "Type error: throw requires an object implementing Throwable")),
             _ => Err(CompileError::new(span, "Type error: throw requires an object value")),
         }
     }
+
+    /// Accepts null plus Throwable objects only, so a union with any other value stays refused.
+    fn union_is_nullable_throwable(&self, members: &[PhpType]) -> bool {
+        members.iter().any(|member| matches!(member, PhpType::Object(_)))
+            && members.iter().all(|member| match member {
+                PhpType::Void => true,
+                PhpType::Object(name) => self.object_type_implements_throwable(name)
+                    || self.object_type_may_be_eval_declared(name),
+                _ => false,
+            })
+    }
+
     /// Opens a catch boundary even when it has no finally of its own.
     pub(super) fn begin_finally_region(&mut self, catch_types: Vec<Vec<String>>, has_finally: bool) {
         self.finally_flow_frames.push(FinallyFlowFrame {

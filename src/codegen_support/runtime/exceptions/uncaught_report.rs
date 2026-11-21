@@ -608,7 +608,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the head register
     emitter.instruction("push r12");                                            // preserve the tail register
     emitter.instruction("push r13");                                            // preserve the count register
-    emitter.instruction("push r14");                                            // preserve the scan-cursor register
+    emitter.instruction("sub rsp, 8");                                          // reserve the scan-cursor slot (r14 is the reserved ctx register)
     emitter.instruction("push r15");                                            // preserve the scan-budget register
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned for calls
     emitter.instruction("mov rbx, rax");                                        // head of the chain: the thrown exception
@@ -620,16 +620,16 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the chain end?
     emitter.instruction("jz __rt_uncaught_chain_length_done");                  // the chain ended without repeating
     emitter.instruction("mov r12, rax");                                        // candidate link to accept
-    emitter.instruction("mov r14, rbx");                                        // scan the accepted prefix from the head
+    emitter.instruction("mov QWORD PTR [rbp - 32], rbx");                                        // scan the accepted prefix from the head
     emitter.instruction("mov r15, r13");                                        // which holds this many links
     emitter.label("__rt_uncaught_chain_length_scan");
-    emitter.instruction("cmp r14, r12");                                        // was the candidate already accepted?
+    emitter.instruction("cmp QWORD PTR [rbp - 32], r12");                                        // was the candidate already accepted?
     emitter.instruction("je __rt_uncaught_chain_length_done");                  // a cycle: stop before printing it again
     emitter.instruction("sub r15, 1");                                          // one fewer accepted link left to compare
     emitter.instruction("jz __rt_uncaught_chain_length_accept");                // the whole prefix differs: accept the candidate
-    emitter.instruction("mov rax, r14");                                        // step the scan cursor
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                                        // step the scan cursor
     emitter.instruction("call __rt_throwable_previous");                        // to the next accepted link
-    emitter.instruction("mov r14, rax");                                        // keep the advanced scan cursor
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                                        // keep the advanced scan cursor
     emitter.instruction("jmp __rt_uncaught_chain_length_scan");                 // compare the candidate with it
     emitter.label("__rt_uncaught_chain_length_accept");
     emitter.instruction("add r13, 1");                                          // count the accepted link
@@ -638,7 +638,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r13");                                        // return the number of links to render
     emitter.instruction("add rsp, 8");                                          // drop the alignment pad
     emitter.instruction("pop r15");                                             // restore the scan-budget register
-    emitter.instruction("pop r14");                                             // restore the scan-cursor register
+    emitter.instruction("add rsp, 8");                                          // release the scan-cursor slot
     emitter.instruction("pop r13");                                             // restore the count register
     emitter.instruction("pop r12");                                             // restore the tail register
     emitter.instruction("pop rbx");                                             // restore the head register
@@ -996,7 +996,7 @@ mod tests {
         emit_report_uncaught_exception(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains("__rt_uncaught_write_trace:\n"));
-        assert!(asm.contains("_exc_call_frame_top"));
+        assert!(asm.contains(&crate::codegen_support::runtime::test_slot_ref(Arch::AArch64, "_exc_call_frame_top")));
         assert!(asm.contains("ldr x10, [x0, #24]"));
         assert!(asm.contains("blr x10"));
         assert!(asm.contains("b.eq __rt_uncaught_write_trace_next"));
@@ -1071,7 +1071,7 @@ mod tests {
         emit_report_uncaught_exception(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains("__rt_uncaught_write_trace:\n"));
-        assert!(asm.contains("_exc_call_frame_top"));
+        assert!(asm.contains(&crate::codegen_support::runtime::test_slot_ref(Arch::X86_64, "_exc_call_frame_top")));
         assert!(asm.contains("mov r10, QWORD PTR [rdi + 24]"));
         assert!(asm.contains("call r10"));
         assert!(asm.contains("cmp QWORD PTR [rdi + 16], rdi"));

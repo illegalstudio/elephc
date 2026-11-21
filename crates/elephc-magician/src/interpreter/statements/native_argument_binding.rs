@@ -18,6 +18,8 @@
 //!   count, the true required count, and whether the variadic slot is source-declared. Hidden
 //!   slots additionally register an empty name, which keeps them unreachable by a named argument
 //!   and invisible to Reflection even if a caller reached this code with no shape at all.
+//! - By-value collectors match EIR's associative transport from allocation onward, including
+//!   empty and hidden surplus collectors. Reference collectors retain indexed cell storage.
 
 use super::*;
 use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
@@ -268,7 +270,13 @@ pub(super) fn bind_native_signature_args(
 
     let filled = (|| {
         if let Some(index) = variadic_index {
-            let array = values.array_new(args.len())?;
+            let array = if signature.param_by_ref(index) {
+                values.array_new(args.len())?
+            } else {
+                // Generated method/constructor signatures use Hash(Mixed) for by-value tails;
+                // waiting for a string key to promote an indexed array leaves empty tails wrong.
+                values.assoc_new(args.len())?
+            };
             bound_args[index] = Some(BoundMethodArg {
                 value: array,
                 ref_target: None,

@@ -158,14 +158,19 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         // Keep instruction effects so intra-function passes retain and order bookkeeping.
         // Acquisition and retirement remain separate, potentially observable instructions.
         if matches!(instruction.op,
-            Op::ConcatReset | Op::PushCallOperandOwner | Op::PopCallOperandOwner)
+            Op::ConcatReset | Op::PushCallOperandOwner | Op::PopCallOperandOwner
+                | Op::TryPushHandler | Op::TryPopHandler | Op::CatchBind)
         {
             continue;
         }
         if instruction.op == Op::ReleaseLocalSlot
             && matches!(instruction.immediate, Some(Immediate::LocalSlot(slot))
-                if borrowed_roots.contains(&slot))
+                if borrowed_roots.contains(&slot) || function.locals
+                    .get(slot.as_raw() as usize)
+                    .is_some_and(|local| local.php_type.codegen_repr() == PhpType::Str))
         {
+            // A string slot owns a plain buffer: retiring it frees heap memory and can never
+            // run a destructor, so a call-operand lease on a string stays frame-private.
             // The unchanged parameter or its caller still owns the payload at this release.
             // Keep the instruction's full effects; only the caller-visible summary is narrower.
             effects |= Op::Release.default_effects();
@@ -175,6 +180,11 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
     }
     for block in &function.blocks {
         effects |= match block.terminator.as_ref() {
+            // Rethrowing the exception a frame-local handler just caught only forwards it.
+            Some(Terminator::Throw { value }) if function.value(*value).is_some_and(|v| matches!(
+                v.def, crate::ir::ValueDef::Instruction { inst, .. }
+                    if function.instruction(inst).is_some_and(|i| i.op == Op::CatchBind)))
+                => Effects::MAY_THROW,
             Some(Terminator::Throw { .. }) => Effects::MAY_THROW | Effects::WRITES_GLOBAL,
             Some(Terminator::Fatal { .. }) => Effects::MAY_FATAL,
             Some(Terminator::GeneratorSuspend { .. }) => {

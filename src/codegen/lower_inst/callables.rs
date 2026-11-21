@@ -18,7 +18,9 @@ use crate::codegen::{
     emit_release_pushed_refcounted_temp_after_array_push,
 };
 use crate::ir::{Instruction, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, label_fragment, php_symbol_key};
+use crate::names::{
+    function_symbol, label_fragment, php_symbol_key, static_method_symbol,
+};
 use crate::parser::ast::Visibility;
 use crate::types::{FunctionSig, PhpType};
 
@@ -27,7 +29,8 @@ use super::super::shared_state::RuntimeInstanceMethodDescriptorTemplate;
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
-    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks_guarding_result,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_ref_arg_writebacks_guarding_result,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_in_class,
@@ -35,7 +38,8 @@ use super::{
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
-    runtime_builtin_wrapper_sig, store_compiled_call_result,
+    materialize_static_method_call_args_with_refs, runtime_builtin_wrapper_sig,
+    store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -113,6 +117,603 @@ enum CallableArraySource {
     RawArray(ValueId),
     /// The value's local slot holds a boxed `Mixed` indexed array; unbox to reach it.
     BoxedArray(ValueId),
+}
+
+/// Lowers the compiler-only guard before dynamic callback arguments are evaluated.
+pub(super) fn lower_parallel_fiber_suspend_callable_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_fiber_suspend_callable_guard(ctx, inst, "elephc\\parallel\\taskgroup")
+}
+
+/// Lowers Async's indirect Fiber suspension guard using its scheduler class metadata.
+pub(super) fn lower_async_fiber_suspend_callable_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_fiber_suspend_callable_guard(ctx, inst, "elephc\\async\\__scheduler")
+}
+
+/// Dispatches callable-shape guards while retaining pending operands until guard completion.
+fn lower_fiber_suspend_callable_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    guard_class_key: &str,
+) -> Result<()> {
+    let callback = expect_operand(inst, 0)?;
+    let pending_values = inst.operands.iter().skip(1).copied().collect::<Vec<_>>();
+    let Some((task_group_name, task_group_id)) = ctx
+        .module
+        .class_infos
+        .iter()
+        .find(|(name, _)| php_symbol_key(name) == guard_class_key)
+        .map(|(name, info)| (name.clone(), info.class_id))
+    else {
+        return Err(CodegenIrError::unsupported(
+            format!("Fiber callable guard without {} metadata", guard_class_key),
+        ));
+    };
+
+    match ctx.value_php_type(callback)?.codegen_repr() {
+        PhpType::Str => emit_parallel_fiber_suspend_string_guard(
+            ctx,
+            callback,
+            &task_group_name,
+            task_group_id,
+            &pending_values,
+        )?,
+        PhpType::Array(_) => emit_parallel_taskgroup_guard_method_call(
+            ctx,
+            &task_group_name,
+            task_group_id,
+            "__isFiberSuspendCallableArray",
+            &[callback],
+            &pending_values,
+        )?,
+        PhpType::Callable => emit_parallel_fiber_suspend_descriptor_guard(
+            ctx,
+            callback,
+            &task_group_name,
+            task_group_id,
+            &pending_values,
+        )?,
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_parallel_fiber_suspend_mixed_guard(
+                ctx,
+                callback,
+                &task_group_name,
+                task_group_id,
+                &pending_values,
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Calls one private TaskGroup static guard through the normal target-aware ABI materializer.
+fn emit_parallel_taskgroup_guard_method_call(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id: u64,
+    method_name: &str,
+    args: &[ValueId],
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let method_key = php_symbol_key(method_name);
+    let is_callback_guard = method_key == php_symbol_key("__assertFiberSuspendCallableAllowed");
+    let no_active_scope = if (method_key == php_symbol_key("__assertFiberSuspendAllowed")
+        || is_callback_guard)
+        && !pending_values.is_empty()
+    {
+        let no_active = ctx.next_label("fiber_guard_no_active_scope");
+        if php_symbol_key(class_name) == "elephc\\async\\__scheduler" {
+            emit_static_bool_guard_condition(
+                ctx,
+                class_name,
+                class_id,
+                "__isAsyncTaskActive",
+                &no_active,
+            )?;
+        } else {
+            let check_worker = ctx.next_label("parallel_guard_check_worker_active");
+            let check_async = ctx.next_label("parallel_guard_check_async_active");
+            let release_pending = ctx.next_label("parallel_guard_release_pending");
+            let parent_scope_active = ctx
+                .emitter
+                .target
+                .extern_symbol("elephc_parallel_parent_scope_active");
+            abi::emit_call_label(ctx.emitter, &parent_scope_active);
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &check_worker);
+            abi::emit_jump(ctx.emitter, &release_pending);
+            ctx.emitter.label(&check_worker);
+            let worker_active = ctx
+                .emitter
+                .target
+                .extern_symbol("elephc_parallel_worker_active");
+            abi::emit_call_label(ctx.emitter, &worker_active);
+            if is_callback_guard {
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &check_async);
+                abi::emit_jump(ctx.emitter, &release_pending);
+                ctx.emitter.label(&check_async);
+                if let Some((async_class_name, async_class_id)) = ctx
+                    .module
+                    .class_infos
+                    .iter()
+                    .find(|(name, _)| php_symbol_key(name) == "elephc\\async\\__scheduler")
+                    .map(|(name, info)| (name.clone(), info.class_id))
+                {
+                    emit_static_bool_guard_condition(
+                        ctx,
+                        &async_class_name,
+                        async_class_id,
+                        "__isAsyncTaskActive",
+                        &no_active,
+                    )?;
+                    abi::emit_jump(ctx.emitter, &release_pending);
+                } else {
+                    abi::emit_jump(ctx.emitter, &no_active);
+                }
+            } else {
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &no_active);
+            }
+            ctx.emitter.label(&release_pending);
+        }
+        for value in pending_values.iter().rev() {
+            super::ownership::emit_release_value(ctx, *value)?;
+        }
+        Some(no_active)
+    } else {
+        None
+    };
+    let signature = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.static_methods.get(&method_key))
+        .cloned()
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "Parallel TaskGroup guard method {} is missing",
+                method_name
+            ))
+        })?;
+    // These backend guards supply source-visible fixed arguments. An opaque
+    // eval/backtrace can append a generated collector to the physical method;
+    // enter the shared source adapter instead of dropping that ABI parameter.
+    let source_signature = crate::codegen_support::source_method_adapters::source_visible_signature(&signature)
+        .map_err(CodegenIrError::invalid_module)?;
+    let entry = crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+        class_name, &method_key, &signature,
+        crate::codegen_support::source_method_adapters::MethodKind::Static,
+    ).map_err(CodegenIrError::invalid_module)?;
+    let param_types = source_signature
+        .params
+        .iter()
+        .map(|(_, ty)| ty.codegen_repr())
+        .collect::<Vec<_>>();
+    let call_args = materialize_static_method_call_args_with_refs(
+        ctx,
+        &super::CalledClassIdArg::Immediate(class_id),
+        args,
+        &param_types,
+        &source_signature.ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &entry);
+    let predicate_result = signature.return_type.codegen_repr() == PhpType::Bool;
+    let predicate_reg = abi::nested_call_reg(ctx.emitter);
+    if predicate_result {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("mov {predicate_reg}, x0")), // preserve the boolean result across temporary cleanups
+            Arch::X86_64 => ctx.emitter.instruction(&format!("mov {predicate_reg}, rax")), // preserve the boolean result across temporary cleanups
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    if predicate_result {
+        let done_label = ctx.next_label("parallel_callable_array_predicate_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("cbz {predicate_reg}, {done_label}")); // the callback array does not name Fiber::suspend
+            }
+            Arch::X86_64 => {
+                ctx.emitter
+                    .instruction(&format!("test {predicate_reg}, {predicate_reg}")); // did the callback array name Fiber::suspend?
+                ctx.emitter
+                    .instruction(&format!("je {done_label}")); // a false predicate needs no scope guard
+            }
+        }
+        emit_parallel_taskgroup_guard_method_call(
+            ctx,
+            class_name,
+            class_id,
+            "__assertFiberSuspendCallableAllowed",
+            &[],
+            pending_values,
+        )?;
+        ctx.emitter.label(&done_label);
+    }
+    if let Some(no_active_scope) = no_active_scope {
+        ctx.emitter.label(&no_active_scope);
+    }
+    Ok(())
+}
+
+/// Calls a private/public static boolean guard and branches around cleanup when it is false.
+fn emit_static_bool_guard_condition(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id: u64,
+    method_name: &str,
+    false_label: &str,
+) -> Result<()> {
+    let method_key = php_symbol_key(method_name);
+    let signature = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.static_methods.get(&method_key))
+        .cloned()
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "Static guard method {}::{} is missing",
+                class_name, method_name
+            ))
+        })?;
+    let source_signature = crate::codegen_support::source_method_adapters::source_visible_signature(&signature)
+        .map_err(CodegenIrError::invalid_module)?;
+    let entry = crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+        class_name, &method_key, &signature,
+        crate::codegen_support::source_method_adapters::MethodKind::Static,
+    ).map_err(CodegenIrError::invalid_module)?;
+    let param_types = source_signature
+        .params
+        .iter()
+        .map(|(_, ty)| ty.codegen_repr())
+        .collect::<Vec<_>>();
+    let call_args = materialize_static_method_call_args_with_refs(
+        ctx,
+        &super::CalledClassIdArg::Immediate(class_id),
+        &[],
+        &param_types,
+        &source_signature.ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &entry);
+    let predicate_reg = abi::nested_call_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("mov {predicate_reg}, x0")), // preserve the active-scope predicate across cleanup
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov {predicate_reg}, rax")), // preserve the active-scope predicate across cleanup
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {predicate_reg}, {false_label}")), // leave pending owners intact when no guard applies
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {predicate_reg}, {predicate_reg}")); // is this scheduler guard active?
+            ctx.emitter.instruction(&format!("je {false_label}"));              // leave pending owners intact when no guard applies
+        }
+    }
+    Ok(())
+}
+
+/// Compares a runtime callback string before user arguments are lowered.
+fn emit_parallel_fiber_suspend_string_guard(
+    ctx: &mut FunctionContext<'_>,
+    callback: ValueId,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(callback, name_ptr, name_len)?;
+    emit_parallel_fiber_suspend_name_guard(
+        ctx,
+        name_ptr,
+        name_len,
+        task_group_name,
+        task_group_id,
+        pending_values,
+    )
+}
+
+/// Compares a runtime name pair and invokes the locked guard only on a Fiber suspend match.
+fn emit_parallel_fiber_suspend_name_guard(
+    ctx: &mut FunctionContext<'_>,
+    name_ptr: &str,
+    name_len: &str,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let done_label = ctx.next_label("parallel_fiber_string_guard_done");
+    for candidate in [b"Fiber::suspend".as_slice(), b"\\Fiber::suspend".as_slice()] {
+        let next_candidate = ctx.next_label("parallel_fiber_string_guard_next");
+        let matched_label = ctx.next_label("parallel_fiber_string_guard_match");
+        emit_parallel_fiber_suspend_name_compare(
+            ctx,
+            name_ptr,
+            name_len,
+            candidate,
+            &matched_label,
+            &next_candidate,
+        );
+        ctx.emitter.label(&matched_label);
+        emit_parallel_taskgroup_guard_method_call(
+            ctx,
+            task_group_name,
+            task_group_id,
+            "__assertFiberSuspendCallableAllowed",
+            &[],
+            pending_values,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_candidate);
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Runs the array callback predicate over a borrowed array pointer from a Mixed cell.
+fn emit_parallel_fiber_suspend_mixed_array_guard(
+    ctx: &mut FunctionContext<'_>,
+    array_reg: &str,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let predicate = static_method_symbol(
+        task_group_name,
+        &php_symbol_key("__isFiberSuspendCallableArray"),
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        task_group_id as i64,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("mov x1, {array_reg}")), // pass the borrowed array after the hidden class id
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov rsi, {array_reg}")), // pass the borrowed array after the hidden class id
+    }
+    abi::emit_call_label(ctx.emitter, &predicate);
+    let no_match = ctx.next_label("parallel_fiber_mixed_array_no_match");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {no_match}")), // no Fiber::suspend match means no scope check
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the callable array name Fiber::suspend?
+            ctx.emitter.instruction(&format!("je {no_match}"));                 // skip the scope check when the predicate is false
+        }
+    }
+    emit_parallel_taskgroup_guard_method_call(
+        ctx,
+        task_group_name,
+        task_group_id,
+        "__assertFiberSuspendCallableAllowed",
+        &[],
+        pending_values,
+    )?;
+    ctx.emitter.label(&no_match);
+    Ok(())
+}
+
+/// Checks a first-class static-method descriptor's recorded callable name.
+fn emit_parallel_fiber_suspend_descriptor_guard(
+    ctx: &mut FunctionContext<'_>,
+    callback: ValueId,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(callback, descriptor_reg)?;
+    emit_parallel_fiber_suspend_descriptor_name_guard(
+        ctx,
+        descriptor_reg,
+        task_group_name,
+        task_group_id,
+        pending_values,
+    )
+}
+
+/// Checks each callable-capable Mixed payload shape before lowering user arguments.
+fn emit_parallel_fiber_suspend_mixed_guard(
+    ctx: &mut FunctionContext<'_>,
+    callback: ValueId,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let done_label = ctx.next_label("parallel_fiber_mixed_guard_done");
+    let string_label = ctx.next_label("parallel_fiber_mixed_string");
+    let array_label = ctx.next_label("parallel_fiber_mixed_array_callback");
+    let descriptor_label = ctx.next_label("parallel_fiber_mixed_descriptor");
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(callback, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the Mixed callback a string?
+            ctx.emitter
+                .instruction(&format!("b.eq {string_label}")); // compare the string callback name
+            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // does Mixed contain a callable array?
+            ctx.emitter
+                .instruction(&format!("b.eq {array_label}")); // inspect the two callable-array selectors
+            ctx.emitter
+                .instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the Mixed value a first-class callable descriptor?
+            ctx.emitter
+                .instruction(&format!("b.eq {descriptor_label}")); // inspect first-class callable metadata
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&string_label);
+            emit_parallel_fiber_suspend_name_guard(
+                ctx,
+                "x1",
+                "x2",
+                task_group_name,
+                task_group_id,
+                pending_values,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&array_label);
+            ctx.emitter.instruction(&format!("mov {descriptor_reg}, x1"));      // preserve the borrowed callable-array pointer
+            emit_parallel_fiber_suspend_mixed_array_guard(
+                ctx,
+                descriptor_reg,
+                task_group_name,
+                task_group_id,
+                pending_values,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&descriptor_label);
+            ctx.emitter.instruction(&format!("mov {descriptor_reg}, x1"));      // keep the descriptor across string comparison
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // is the Mixed callback a string?
+            ctx.emitter
+                .instruction(&format!("je {string_label}")); // compare the string callback name
+            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)); // does Mixed contain a callable array?
+            ctx.emitter
+                .instruction(&format!("je {array_label}")); // inspect the two callable-array selectors
+            ctx.emitter
+                .instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // is the Mixed value a first-class callable descriptor?
+            ctx.emitter
+                .instruction(&format!("je {descriptor_label}")); // inspect first-class callable metadata
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&string_label);
+            emit_parallel_fiber_suspend_name_guard(
+                ctx,
+                "rdi",
+                "rdx",
+                task_group_name,
+                task_group_id,
+                pending_values,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&array_label);
+            ctx.emitter.instruction(&format!("mov {descriptor_reg}, rdi"));     // preserve the borrowed callable-array pointer
+            emit_parallel_fiber_suspend_mixed_array_guard(
+                ctx,
+                descriptor_reg,
+                task_group_name,
+                task_group_id,
+                pending_values,
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&descriptor_label);
+            ctx.emitter.instruction(&format!("mov {descriptor_reg}, rdi"));     // keep the descriptor across string comparison
+        }
+    }
+    emit_parallel_fiber_suspend_descriptor_name_guard(
+        ctx,
+        descriptor_reg,
+        task_group_name,
+        task_group_id,
+        pending_values,
+    )?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Compares static descriptor name metadata and invokes the locked Parallel Error on a match.
+fn emit_parallel_fiber_suspend_descriptor_name_guard(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_reg: &str,
+    task_group_name: &str,
+    task_group_id: u64,
+    pending_values: &[ValueId],
+) -> Result<()> {
+    let (name_ptr, name_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x10", "x11"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {name_ptr}, [{descriptor_reg}, #{}]", callable_descriptor::CALLABLE_DESC_PHP_NAME_OFFSET)); // load the descriptor's PHP-visible callable name
+            ctx.emitter.instruction(&format!("ldr {name_len}, [{descriptor_reg}, #{}]", callable_descriptor::CALLABLE_DESC_PHP_NAME_LEN_OFFSET)); // load the callable-name byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {name_ptr}, QWORD PTR [{descriptor_reg} + {}]", callable_descriptor::CALLABLE_DESC_PHP_NAME_OFFSET)); // load the descriptor's PHP-visible callable name
+            ctx.emitter.instruction(&format!("mov {name_len}, QWORD PTR [{descriptor_reg} + {}]", callable_descriptor::CALLABLE_DESC_PHP_NAME_LEN_OFFSET)); // load the callable-name byte length
+        }
+    }
+    emit_parallel_fiber_suspend_name_guard(
+        ctx,
+        name_ptr,
+        name_len,
+        task_group_name,
+        task_group_id,
+        pending_values,
+    )
+}
+
+/// Compares one descriptor name against a case-insensitive PHP callable spelling.
+fn emit_parallel_fiber_suspend_name_compare(
+    ctx: &mut FunctionContext<'_>,
+    name_ptr: &str,
+    name_len: &str,
+    candidate: &[u8],
+    matched_label: &str,
+    next_label: &str,
+) {
+    let (candidate_label, candidate_len) = ctx.data.add_string(candidate);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", candidate_len as i64);
+            ctx.emitter
+                .instruction(&format!("cmp {name_len}, x9")); // require an exact PHP callable-name length
+            ctx.emitter
+                .instruction(&format!("b.ne {next_label}")); // skip this spelling when lengths differ
+            abi::emit_push_reg_pair(ctx.emitter, name_ptr, name_len);
+            abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter
+                .instruction("cmp x0, #0"); // compare callable names case-insensitively
+            let mismatch_label = ctx.next_label("parallel_fiber_name_mismatch");
+            ctx.emitter
+                .instruction(&format!("b.ne {mismatch_label}")); // restore the saved name on mismatch
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_jump(ctx.emitter, matched_label);
+            ctx.emitter.label(&mismatch_label);
+            abi::emit_pop_reg_pair(ctx.emitter, name_ptr, name_len);           // restore caller-saved callback name registers before trying the next spelling
+            abi::emit_jump(ctx.emitter, next_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r9", candidate_len as i64);
+            ctx.emitter
+                .instruction(&format!("cmp {name_len}, r9")); // require an exact PHP callable-name length
+            ctx.emitter
+                .instruction(&format!("jne {next_label}")); // skip this spelling when lengths differ
+            abi::emit_push_reg_pair(ctx.emitter, name_ptr, name_len);
+            abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter
+                .instruction("test rax, rax"); // compare callable names case-insensitively
+            let mismatch_label = ctx.next_label("parallel_fiber_name_mismatch");
+            ctx.emitter
+                .instruction(&format!("jne {mismatch_label}")); // restore the saved name on mismatch
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_jump(ctx.emitter, matched_label);
+            ctx.emitter.label(&mismatch_label);
+            abi::emit_pop_reg_pair(ctx.emitter, name_ptr, name_len);           // restore caller-saved callback name registers before trying the next spelling
+            abi::emit_jump(ctx.emitter, next_label);
+        }
+    }
 }
 
 /// Lowers `$callable(...)` calls when the callable is a runtime string function name.
@@ -1094,6 +1695,11 @@ fn runtime_callable_name_is_reachable(
     candidate_names.iter().any(|candidate| candidate == &key)
 }
 
+/// Parallel bridge externs are compiler capabilities, never PHP runtime-name callables.
+fn runtime_extern_is_user_callable(name: &str) -> bool {
+    !php_symbol_key(name.trim_start_matches('\\')).starts_with("elephc_parallel_")
+}
+
 /// Builds runtime descriptor cases for extern functions declared in the EIR module.
 fn runtime_extern_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
@@ -1104,7 +1710,9 @@ fn runtime_extern_descriptor_cases(
 
     let mut cases = Vec::new();
     for decl in decls {
-        if !runtime_callable_name_is_reachable(&decl.name, candidate_names) {
+        if !runtime_extern_is_user_callable(&decl.name)
+            || !runtime_callable_name_is_reachable(&decl.name, candidate_names)
+        {
             continue;
         }
         let wrapper_sig = crate::types::callable_wrapper_sig(&extern_decl_signature(decl));
@@ -1131,6 +1739,33 @@ fn runtime_extern_descriptor_cases(
         });
     }
     Ok(cases)
+}
+
+#[cfg(test)]
+mod runtime_extern_descriptor_tests {
+    //! Purpose:
+    //! Regression tests for excluding compiler-only Parallel FFI from PHP string-call dispatch.
+    //!
+    //! Called from:
+    //! - `cargo test --lib` through the Rust test harness.
+    //!
+    //! Key details:
+    //! - PHP callable names are case-insensitive, so the internal bridge prefix check must be too.
+
+    use super::runtime_extern_is_user_callable;
+
+    /// Hides the compiler-only Parallel FFI prefix from case-insensitive PHP callable lookup.
+    #[test]
+    fn parallel_bridge_externs_are_not_user_callable() {
+        assert!(!runtime_extern_is_user_callable(
+            "elephc_parallel_php_buffer_free"
+        ));
+        assert!(!runtime_extern_is_user_callable(
+            "ELEPHC_PARALLEL_PARENT_SCOPE_LEAVE"
+        ));
+        assert!(runtime_extern_is_user_callable("fopen"));
+        assert!(runtime_extern_is_user_callable("elephc_custom_bridge_call"));
+    }
 }
 
 /// Converts an EIR extern declaration into the PHP-facing wrapper signature.
@@ -2903,31 +3538,10 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     }
 }
 
-/// Emits the fatal path for runtime callable arrays without a matching method.
+/// Rejects an invalid or inaccessible runtime callable without bypassing PHP unwind cleanup.
 fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
-    let (message_label, message_len) = ctx
-        .data
-        .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the callable-array failure diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the callable-array diagnostic byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the callable-array failure diagnostic to stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the callable-array diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
+    super::exceptions::emit_type_error(ctx,
+        "Callable array does not resolve to an accessible invokable target");
 }
 
 /// Lowers a callable descriptor call through its uniform invoker slot.
@@ -2988,6 +3602,7 @@ pub(super) fn emit_descriptor_reg_invoker_call_with_args(
         visible_args,
         op_name,
         false,
+        super::instruction_helpers::instruction_strict_types(inst),
     )?;
     store_descriptor_invoker_result(ctx, inst)
 }
@@ -2999,6 +3614,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_args(
     visible_args: &[ValueId],
     op_name: &str,
     release_runtime_descriptor: bool,
+    strict_types: bool,
 ) -> Result<()> {
     let invoker_reg = abi::symbol_scratch_reg(ctx.emitter);
     callable_descriptor::emit_load_invoker_from_descriptor(
@@ -3018,7 +3634,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_args(
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
-    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor, strict_types);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
@@ -3039,6 +3655,7 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg(
         op_name,
         release_runtime_descriptor,
         true,
+        super::instruction_helpers::instruction_strict_types(inst),
     )?;
     store_descriptor_invoker_result(ctx, inst)
 }
@@ -3051,6 +3668,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
     op_name: &str,
     release_runtime_descriptor: bool,
     argument_owned_by_eir: bool,
+    strict_types: bool,
 ) -> Result<()> {
     // An EIR owner guards and releases its source around the enclosing call, so the backend only
     // owns its normalized copy. Legacy runtime-only consumers can still transfer a prebuilt box.
@@ -3061,6 +3679,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
             arg_mixed,
             op_name,
             release_runtime_descriptor,
+            strict_types,
         );
     }
 
@@ -3070,6 +3689,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
         arg_mixed,
         op_name,
         release_runtime_descriptor,
+        strict_types,
     )
 }
 
@@ -3080,6 +3700,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
     arg_mixed: ValueId,
     op_name: &str,
     release_runtime_descriptor: bool,
+    strict_types: bool,
 ) -> Result<()> {
     let invoker_reg = abi::symbol_scratch_reg(ctx.emitter);
     callable_descriptor::emit_load_invoker_from_descriptor(
@@ -3100,7 +3721,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
-    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor, strict_types);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
@@ -3112,6 +3733,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
     arg_container: ValueId,
     op_name: &str,
     release_runtime_descriptor: bool,
+    strict_types: bool,
 ) -> Result<()> {
     let invoker_reg = abi::symbol_scratch_reg(ctx.emitter);
     callable_descriptor::emit_load_invoker_from_descriptor(
@@ -3131,13 +3753,15 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
-    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor, strict_types);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
 /// Transfers normalized arguments and any temporary descriptor to the bounded invocation helper.
-fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descriptor: bool) {
+fn emit_owned_descriptor_args_boundary(
+    ctx: &mut FunctionContext<'_>, owns_descriptor: bool, strict_types: bool,
+) {
     let entry = if owns_descriptor {
         "__rt_callable_invoke_owned_descriptor_args"
     } else {
@@ -3150,6 +3774,7 @@ fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descr
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         ctx.callable_invocation_profile(),
     );
+    callable_descriptor::emit_invoker_binding_policy(ctx.emitter, strict_types);
     abi::emit_call_label(ctx.emitter, entry);
 }
 
@@ -3281,7 +3906,12 @@ fn emit_normalized_invoker_arg_container(
     let container_ty = ctx.value_php_type(arg_container)?.codegen_repr();
     let dest_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     match container_ty {
-        PhpType::Array(elem_ty) => {
+        PhpType::Array(ref elem_ty) => {
+            if elem_ty.codegen_repr() == PhpType::Mixed {
+                ctx.load_value_to_result(arg_container)?;
+                emit_box_current_value_as_mixed(ctx.emitter, &container_ty);
+                return Ok(());
+            }
             ctx.load_value_to_reg(arg_container, dest_reg)?;
             callable_invoker_args::emit_clone_indexed_array_for_invoker(
                 dest_reg,
@@ -3296,7 +3926,12 @@ fn emit_normalized_invoker_arg_container(
             );
             Ok(())
         }
-        PhpType::AssocArray { value, .. } => {
+        PhpType::AssocArray { ref value, .. } => {
+            if value.codegen_repr() == PhpType::Mixed {
+                ctx.load_value_to_result(arg_container)?;
+                emit_box_current_value_as_mixed(ctx.emitter, &container_ty);
+                return Ok(());
+            }
             ctx.load_value_to_reg(arg_container, dest_reg)?;
             callable_invoker_args::emit_clone_assoc_array_for_invoker_with_value_type(
                 dest_reg,

@@ -28,11 +28,14 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    let previous = emitter.eval_foreign_context;
+    emitter.eval_foreign_context = true;
     emit_eval_value_runtime(emitter, features);
     emit_object_clone_shallow_eval_export(emitter);
     emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
     owner_frames::emit(emitter);
+    emitter.eval_foreign_context = previous;
 }
 
 /// Emits self-contained value wrappers shared by native eval fragments and Magician.
@@ -139,6 +142,8 @@ mod release_boundary;
 mod bit_not;
 mod scope_release;
 mod owner_frames;
+mod foreign_context;
+pub(crate) use foreign_context::emit_gateway as emit_foreign_context_gateway;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -219,6 +224,9 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter, features: RuntimeFeatures) {
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+    if emitter.eval_foreign_context {
+        foreign_context::emit_gateway(emitter, name);
+    }
 }
 
 /// Exposes GC controls, bounding collection exceptions before returning to Rust.
@@ -543,13 +551,13 @@ mod tests {
     ///
     /// The full four-line body is pinned rather than `contains("mov x2, #5")`, which
     /// `mov x2, #50` also satisfies. `mov x2, #5` next to a `b` (never a `bl`) is also the
-    /// tail-branch shape this helper needs: it takes no frame and saves no link register.
+    /// tail-branch shape the native body needs after its context-aware C gateway.
     #[test]
     fn aarch64_boxes_eval_hash_contexts_as_inert_kind_five() {
         let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
         assert!(
             asm.contains(
-                "__elephc_eval_value_hash_context:\n\
+                "__rt_eval_context_body_eval_value_hash_context:\n\
                  \x20   mov x1, x0\n\
                  \x20   mov x0, #9\n\
                  \x20   mov x2, #5\n\
@@ -570,7 +578,7 @@ mod tests {
         let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
         assert!(
             asm.contains(
-                "__elephc_eval_value_hash_context:\n\
+                "__rt_eval_context_body_eval_value_hash_context:\n\
                  \x20   mov eax, 9\n\
                  \x20   mov esi, 5\n\
                  \x20   jmp __rt_mixed_from_value\n"

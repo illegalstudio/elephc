@@ -10,6 +10,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
+//! - Compiler-injected Async descriptor waits enable the libc poll adapter;
+//!   programs that never use the Async prelude retain no reactor symbol.
 //! - Lowered mbstring calls enable the shared encoding bridge. Dynamic eval uses
 //!   the same archive, so settings and caches have a single owner.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
@@ -45,6 +47,10 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
+    /// True when compiler-injected Async methods can call the libc poll adapter.
+    pub async_reactor: bool,
+    /// True when lowered code submits isolated Parallel worker jobs.
+    pub parallel_execution: bool,
     /// True when lowered code can call the optional mbstring bridge.
     pub mbstring: bool,
     /// True when matching operations require the managed Oniguruma provider.
@@ -99,10 +105,19 @@ pub struct RuntimeFeatures {
     /// `RuntimeFnId::Opendir` — the only producer of resource kind 4.
     ///
     /// Scope cleanup releases such a handle through `__rt_closedir`, whose two paths (libc `DIR*`
-    /// and the `glob://` handle minted by `__rt_opendir_glob`) between them imported `closedir`,
+    /// and the glob:// handle minted by `__rt_opendir_glob`) between them imported `closedir`,
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when the runtime routes per-context state (concat scratch, heap bump
+    /// offset, free list, small bins) through the reserved ctx register
+    /// (`x28` AArch64 / `r14` x86_64) instead of global `.comm` symbols.
+    ///
+    /// Spike feature for the sandbox-threads plan: the emitted runtime installs
+    /// `__rt_ctx_init` in the main prologue and every ctx-gated helper reads its
+    /// mutable state relative to the ctx register, so a future per-thread
+    /// context only swaps the register contents.
+    pub ctx_register: bool,
     /// True when native code can push, pop, inspect, or restore a PHP error or exception
     /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
     pub handler_state: bool,
@@ -147,12 +162,17 @@ impl RuntimeFeatures {
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
             | ((self.native_reference_validation as u64) << 16)
+            | ((self.ctx_register as u64) << 17)
+            | ((self.async_reactor as u64) << 18)
+            | ((self.parallel_execution as u64) << 19)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {
             regex: false,
+            async_reactor: false,
+            parallel_execution: false,
             mbstring: false,
             mbregex: false,
             mbstring_mime: false,
@@ -166,6 +186,11 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            // NOT an optional family: per-context addressing is how this compiler emits.
+            // `none()` means no optional feature families, and a `false` here made every
+            // caller that builds a minimal runtime produce one the user object cannot
+            // link against.
+            ctx_register: true,
             handler_state: false,
             object_clone: false,
             native_reference_validation: false,
@@ -177,6 +202,8 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
+            async_reactor: true,
+            parallel_execution: true,
             mbstring: true,
             mbregex: true,
             mbstring_mime: true,
@@ -190,6 +217,7 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            ctx_register: true,
             handler_state: true,
             object_clone: true,
             native_reference_validation: true,
@@ -1184,7 +1212,10 @@ mod tests {
     fn test_native_reference_validation_selects_an_independent_bridge_and_cache_bit() {
         let features = RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() };
         assert!(!features.eval_bridge);
-        assert_eq!(features.cache_key_bits(), 1 << 16);
+        // Bit 16 is the reference-validation bit; the base set already carries the always-on
+        // ctx-register bit (17), so the key is that baseline plus bit 16 and nothing else.
+        assert_eq!(RuntimeFeatures::none().cache_key_bits() & (1 << 16), 0);
+        assert_eq!(features.cache_key_bits(), RuntimeFeatures::none().cache_key_bits() | (1 << 16));
         let expected = vec![LinkRequirement::Bridge("elephc_reference")];
         assert_eq!(link_requirements_for_runtime_features(features), expected);
         assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {

@@ -239,10 +239,11 @@ mod tests {
             } else {
                 ["[rsp + 24]", "[rsp + 32]", "[rsp + 40]"]
             };
+            let emitter_arch = emitter.target.arch;
             let asm = emitter.output();
             assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
             assert!(asm.contains("__rt_cleanup_call_operand_descriptor"), "{target}");
-            assert!(asm.matches("_exc_call_frame_top").count() >= 6, "{target}");
+            assert!(asm.matches(&crate::codegen_support::runtime::ctx::test_field_ref(emitter_arch, crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET)).count() >= 6, "{target}");
             for offset in offsets { assert!(asm.contains(offset), "{target}: {offset}"); }
         }
     }

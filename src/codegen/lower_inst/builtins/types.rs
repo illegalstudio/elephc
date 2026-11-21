@@ -1058,7 +1058,7 @@ pub(crate) fn lower_get_resource_id(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_id", 1)?;
     let value = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, value, "get_resource_id")?;
+    super::io::load_resource_identity_to_result(ctx, value, "get_resource_id")?;
     emit_resource_display_id_to_int(ctx);
     store_if_result(ctx, inst)
 }

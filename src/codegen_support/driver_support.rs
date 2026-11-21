@@ -118,6 +118,9 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         (false, true) => Emitter::new_staticlib(target),
         (false, false) => Emitter::new(target),
     };
+    // The ctx-register feature selects per-context addressing in every shared
+    // emitter that branches on it; the feature bit itself keys the runtime cache.
+    emitter.ctx_register = features.ctx_register;
     emitter.dead_strip = dead_strip;
     // The result arena shares the program's memory budget: a larger heap means a
     // larger scratch arena, so encoders are not capped at the historical 64 KiB.

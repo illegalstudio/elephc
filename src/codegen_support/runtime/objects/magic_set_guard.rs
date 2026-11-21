@@ -178,13 +178,15 @@ mod tests {
             "linux-aarch64",
             "linux-x86_64",
         ] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+            let mut emitter = Emitter::new(target);
             emit_magic_set_guard(&mut emitter);
             let asm = emitter.output();
             assert!(asm.contains("__rt_magic_set_guard_push:"), "{name}");
             assert!(asm.contains("__rt_magic_set_guard_pop:"), "{name}");
-            assert!(asm.contains("_magic_set_guard_head"), "{name}");
-            assert!(!asm.contains("_fiber_current"), "{name}");
+            assert!(asm.contains(&slot("_magic_set_guard_head")), "{name}");
+            assert!(!asm.contains(&slot("_fiber_current")), "{name}");
         }
     }
 }

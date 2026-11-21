@@ -16,10 +16,13 @@ use crate::codegen_support::runtime::arrays::gc_candidates::{load, op, restore, 
 pub(crate) const FORCE_CLOSE_OFFSET: i32 = 224;
 
 /// Emits destruction, marker absorption and forbidden suspension errors on both ABIs.
-pub(crate) fn emit(e: &mut Emitter) {
+///
+/// `generator` says whether Generator support is compiled in; without it only a Fiber can
+/// reach the forbidden-switch error, so the runtime never consults generator class metadata.
+pub(crate) fn emit(e: &mut Emitter, generator: bool) {
     close(e);
     absorb(e);
-    error(e);
+    error(e, generator);
 }
 
 /// Executes the existing suspension point's exceptional continuation under protected cleanup.
@@ -92,16 +95,20 @@ pub(super) fn suspend_guard(e: &mut Emitter) {
 }
 
 /// Constructs PHP's distinct Generator Error or FiberError after releasing a rejected yield value.
-fn error(e: &mut Emitter) {
+fn error(e: &mut Emitter, generator: bool) {
     e.label_global("__rt_coroutine_close_error");
     abi::emit_frame_prologue(e, 48);
     if e.target.arch == Arch::X86_64 { op(e, "", "mov rax, rdi", "release the consumed suspension argument through the native GC ABI"); }
     abi::emit_call_label(e, "__rt_decref_any");
-    load(e, "x9", "r10", "_fiber_current");
-    op(e, "ldr x9, [x9]", "mov r10, QWORD PTR [r10]", "choose PHP's forced-close diagnostic from the current native class");
-    load(e, "x10", "r11", "_generator_class_id");
-    op(e, "cmp x9, x10", "cmp r10, r11", "Generator yield and Fiber suspend have distinct Error subclasses");
-    op(e, "b.ne __rt_coroutine_close_fiber_error", "jne __rt_coroutine_close_fiber_error", "use FiberError for a suspended Fiber's forbidden switch");
+    if generator {
+        load(e, "x9", "r10", "_fiber_current");
+        op(e, "ldr x9, [x9]", "mov r10, QWORD PTR [r10]", "choose PHP's forced-close diagnostic from the current native class");
+        load(e, "x10", "r11", "_generator_class_id");
+        op(e, "cmp x9, x10", "cmp r10, r11", "Generator yield and Fiber suspend have distinct Error subclasses");
+        op(e, "b.ne __rt_coroutine_close_fiber_error", "jne __rt_coroutine_close_fiber_error", "use FiberError for a suspended Fiber's forbidden switch");
+    } else {
+        abi::emit_jump(e, "__rt_coroutine_close_fiber_error");                 // without Generator support only a Fiber can reach this error
+    }
     let cases = [("_spl_error_class_id", "_generator_msg_force_close", 53), ("_fiber_error_class_id", "_fiber_msg_force_close", 38)];
     for (index, (class, message, length)) in cases.into_iter().enumerate() {
         if index == 1 { e.label("__rt_coroutine_close_fiber_error"); }

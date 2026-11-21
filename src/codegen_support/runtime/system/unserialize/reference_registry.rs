@@ -77,10 +77,16 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_register_array(&mut emitter);
+            let target = emitter.target;
             let asm = emitter.output();
-            assert!(asm.find("65536").unwrap() < asm.find("_unser_values").unwrap(), "{name}");
-            assert!(asm.find("_unser_values").unwrap() < asm.find("__rt_incref").unwrap(), "{name}");
+            let mut registry = Emitter::new(target);
+            let registry_reg = if target.arch == Arch::AArch64 { "x11" } else { "r11" };
+            abi::emit_symbol_address(&mut registry, registry_reg, "_unser_values");
+            let publication = asm.find(registry.output().trim()).expect("context-owned registry address");
+            assert!(asm.find("65536").unwrap() < publication, "{name}");
+            assert!(publication < asm.find("__rt_incref").unwrap(), "{name}");
             assert!(asm.find("__rt_incref").unwrap() < asm.find("__rt_unserialize_defer_data").unwrap(), "{name}");
+            assert!(!asm.contains("_unser_values"), "{name}: decoder registry must not address a shared global");
         }
     }
 }

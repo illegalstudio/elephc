@@ -13,6 +13,7 @@ mod shared_selectors;
 mod branch_reach;
 mod callable_strings;
 mod declared_callable_values;
+mod descriptor_param_binding;
 mod closure_array_returns;
 mod closure_call_returns;
 mod closure_binding_scopes;

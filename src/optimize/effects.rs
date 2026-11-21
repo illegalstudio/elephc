@@ -27,6 +27,11 @@ pub(super) use calls::{
     static_method_call_effect,
 };
 
+/// Resolves the effect of a statically described callable value, including conditional aliases.
+pub(in crate::optimize) fn callable_value_effect(expr: &Expr) -> Effect {
+    aliases::callable_alias_from_expr(expr).unwrap_or_else(|| calls::expr_call_effect(expr))
+}
+
 /// Returns true when a binary operator can raise a catchable PHP error at runtime.
 ///
 /// PHP 8 arithmetic is not exception-free: `/` and `%` raise `DivisionByZeroError` for a zero
@@ -116,7 +121,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Echo(expr) => output_effect(expr_effect(expr)),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
             => expr_effect(expr),
         StmtKind::Return(Some(expr)) => {
@@ -124,6 +128,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             if super::return_boundaries::active_return_boundary_may_throw(expr) {
                 effect.with_may_throw()
             } else { effect }
+        }
+        StmtKind::StaticVar { init: expr, .. } => {
+            expr_effect(expr).with_process_global_storage()
         }
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { name, value }
@@ -135,24 +142,35 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             } else { effect }
         }
         StmtKind::StaticPropertyAssign { value, .. } => expr_effect(value)
-            .with_side_effects().with_may_throw().with_writes_globals(),
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals()
+            .with_process_global_storage(),
         // The source can call PHP or resolve a property, and rebinding can retire a target
         // whose destructor throws or changes globals. Keep the enclosing exception boundary.
         StmtKind::RefAssign { source, .. } => expr_effect(source)
             .with_side_effects()
             .with_may_throw()
             .with_writes_globals(),
-        StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
+        StmtKind::ArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
+        StmtKind::StaticPropertyArrayPush { value, .. } => expr_effect(value)
+            .with_side_effects()
+            .with_may_throw()
+            .with_process_global_storage(),
         StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::PropertyArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_effect(index)
                 .combine(expr_effect(value))
                 .with_side_effects()
                 .with_may_throw()
         }
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => expr_effect(index)
+            .combine(expr_effect(value))
+            .with_side_effects()
+            .with_may_throw()
+            .with_process_global_storage(),
         StmtKind::NestedArrayAssign { target, value } => {
             expr_effect(target)
                 .combine(expr_effect(value))
@@ -260,7 +278,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         // Declaring `global` conservatively counts as writing global storage
         // (a declaration almost always precedes a write). The bit stays out of
         // `is_observable`, so the declaration itself remains removable.
-        StmtKind::Global { .. } => Effect::PURE.with_writes_globals(),
+        StmtKind::Global { .. } => Effect::PURE
+            .with_writes_globals()
+            .with_process_global_storage(),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -518,7 +538,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .with_may_throw()
                     .with_writes_globals(),
             }),
-        ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
+        ExprKind::StaticPropertyAccess { .. } => Effect::PURE
+            .with_may_throw()
+            .with_process_global_storage(),
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ScopedConstantAccess { name, .. }
@@ -526,6 +548,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 || super::class_constant_may_deprecate(name) =>
         {
             Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+        }
+        ExprKind::ScopedConstantAccess { receiver, name }
+            if crate::optimize::parallel_enum_case_access_is_process_global(receiver, name) =>
+        {
+            Effect::PURE.with_process_global_runtime_state()
         }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
         // A nullable or `mixed` receiver raises PHP's `Cannot use "::class" on null`

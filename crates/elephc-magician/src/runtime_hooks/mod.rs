@@ -128,7 +128,7 @@ pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
 /// Installs the eval closure `$this` rebinding callback into the generated runtime.
 ///
 /// # Safety
-/// `callback` must be the address of a function with the `__elephc_eval_closure_bind_this` ABI.
+/// `callback` must have the five-argument `__elephc_eval_closure_bind_this_in_context_v1` ABI.
 #[cfg(not(test))]
 pub(crate) unsafe fn install_closure_bind_hook(callback: usize) {
     unsafe {

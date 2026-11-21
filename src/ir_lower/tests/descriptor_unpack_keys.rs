@@ -93,6 +93,25 @@ fn else_block_name<'a>(function: &'a Function, block: &BasicBlock) -> Option<&'a
     }
 }
 
+/// Follows fixed-message construction continuations without permitting writes or normal escape.
+fn rejection_reaches_throw<'a>(function: &'a Function, mut block: &'a BasicBlock) -> Result<(), String> {
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        if !visited.insert(block.id) { return Err(format!("rejection cycle at {:?}", block.id)); }
+        let ops = block_ops(function, block);
+        if ops.contains(&Op::DescriptorArgSet) { return Err(format!("rejection writes in {}", block.name)); }
+        let duplicate = ops.contains(&Op::ThrowNamedParameterOverwrite);
+        match block.terminator.as_ref() {
+            Some(Terminator::Throw { .. }) if !duplicate => return Ok(()),
+            Some(Terminator::Unreachable) if duplicate => return Ok(()),
+            Some(Terminator::Br { target, .. }) => {
+                block = &function.blocks[target.as_raw() as usize];
+            }
+            _ => return Err(format!("rejection ends in {} ({:?}) with {ops:?}", block.name, block.terminator)),
+        }
+    }
+}
+
 /// A boxed unpack source is never read through an indexed array header on any target.
 ///
 /// This is the failing EIR validation in CI stated as a structural property: an `Op::ArrayLen`
@@ -169,16 +188,9 @@ fn boxed_descriptor_unpack_guards_precede_every_write_on_every_target() {
                 // A fixed-wording guard constructs its own `Error`. The duplicate-name guard
                 // cannot: the offending name is a run-time key, so it calls the shared runtime
                 // thrower and the block ends unreachable behind that call.
-                let duplicate = block_ops(&function, block)
-                    .contains(&Op::ThrowNamedParameterOverwrite);
-                assert!(
-                    match block.terminator {
-                        Some(Terminator::Throw { .. }) => !duplicate,
-                        Some(Terminator::Unreachable) => duplicate,
-                        _ => false,
-                    },
-                    "{target}/{name}: an unpack guard rejection throws",
-                );
+                rejection_reaches_throw(&function, block).unwrap_or_else(|error| {
+                    panic!("{target}/{name}: an unpack guard rejection throws: {error}");
+                });
             }
             assert!(
                 function
@@ -196,12 +208,13 @@ fn boxed_descriptor_unpack_guards_precede_every_write_on_every_target() {
                 unpackability,
                 "{target}/{name}: a non-iterable source is rejected before iteration",
             );
-            assert!(
-                blocks_named(&function, "descriptor.unpack.key.invalid")
-                    .iter()
-                    .all(|block| matches!(block.terminator, Some(Terminator::Throw { .. }))),
-                "{target}/{name}: an unusable key throws instead of binding",
-            );
+            let invalid = blocks_named(&function, "descriptor.unpack.key.invalid");
+            assert!(!invalid.is_empty(), "{target}/{name}: invalid key rejection must exist");
+            for block in invalid {
+                rejection_reaches_throw(&function, block).unwrap_or_else(|error| {
+                    panic!("{target}/{name}: an unusable key throws instead of binding: {error}");
+                });
+            }
         }
     }
 }

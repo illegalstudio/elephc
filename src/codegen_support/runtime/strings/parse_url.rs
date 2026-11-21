@@ -119,8 +119,7 @@ fn emit_parse_url_throw_component_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x10, x11, [x0, #8]");                              // install message pointer and byte length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     emitter.instruction("str xzr, [x0, #40]");                                  // previous exception defaults to null
-    abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]");                                        // publish the active ValueError for the unwinder
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the active ValueError for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before unwinding
     emitter.instruction("add sp, sp, #64");                                     // discard the throw-helper frame
     emitter.instruction("b __rt_throw_current");                                // enter the catchable exception path without returning

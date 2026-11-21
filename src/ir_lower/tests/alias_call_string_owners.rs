@@ -88,6 +88,14 @@ function scratch_call(string $base): string {
         assert_eq!(sections.len(), stores.len(), "{target}: store annotations must match the mapped stores in this straight-line function");
         let mut parked = 0;
         let mut assigned = 0;
+        // The concat offset is the first per-context slot, addressed through the ctx register.
+        let off = crate::codegen_support::runtime::ctx::CTX_CONCAT_OFF_OFFSET;
+        let touches_concat_off = |section: &str| {
+            section.contains("concat_off")
+                || section.contains(&format!("[x28, #{off}]"))
+                || section.contains(&format!("[r14 + {off}]"))
+                || (off == 0 && section.contains("[r14]"))
+        };
         for (store, section) in stores.iter().zip(sections) {
             let Some(Immediate::LocalSlot(slot)) = store.immediate else { panic!("store slot"); };
             let value = store.operands[0];
@@ -98,11 +106,11 @@ function scratch_call(string $base): string {
             match function.locals[slot.as_raw() as usize].kind {
                 LocalKind::OwnedTemp => {
                     parked += 1;
-                    assert!(!section.contains("concat_off"), "{target}: operand parking rewound sibling scratch storage: {section}");
+                    assert!(!touches_concat_off(section), "{target}: operand parking rewound sibling scratch storage: {section}");
                 }
                 LocalKind::PhpLocal => {
                     assigned += 1;
-                    assert!(section.contains("concat_off"), "{target}: PHP assignment must still bound scratch growth: {section}");
+                    assert!(touches_concat_off(section), "{target}: PHP assignment must still bound scratch growth: {section}");
                 }
                 _ => {}
             }

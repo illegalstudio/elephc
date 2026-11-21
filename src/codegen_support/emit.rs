@@ -36,6 +36,17 @@ pub struct Emitter {
     pub cdylib_boundary: bool,
     /// Routes final output to a malloc-only producer callback, never to the host stdout fd.
     pub phpext_output: bool,
+    /// When `true`, runtime helpers route per-context state (heap bump offset,
+    /// free list, small bins, concat scratch) through the reserved ctx register
+    /// (`x28` AArch64 / `r14` x86_64) instead of global `.comm` symbols.
+    ///
+    /// Sandbox-threads spike mode: selected by `RuntimeFeatures::ctx_register`,
+    /// mirrored here so shared emitters can branch per emission. The Emitter
+    /// flag is authoritative for runtime text; the feature bit drives emission
+    /// selection and the runtime-cache key.
+    pub ctx_register: bool,
+    /// Enables context-aware C value gateways only while emitting the Rust eval bridge.
+    pub eval_foreign_context: bool,
     /// When `true`, macOS runtime emission is prepared for per-symbol dead
     /// stripping: `label()` records each internal label name in
     /// `internal_labels` so the final assembly can rename them to Mach-O
@@ -79,6 +90,8 @@ impl Emitter {
             concat_capacity: 65_536,
             cdylib_boundary: false,
             phpext_output: false,
+            ctx_register: true,
+            eval_foreign_context: false,
             dead_strip: false,
             exit_hook: None,
             internal_labels: HashSet::new(),

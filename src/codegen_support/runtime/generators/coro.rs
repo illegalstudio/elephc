@@ -215,9 +215,9 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("push r12");                                            // preserve r12 (generator object cache)
     emitter.instruction("push r13");                                            // preserve r13 (parked boxed value)
-    emitter.instruction("push r14");                                            // preserve r14 (parked boxed key)
+    emitter.instruction("push r15");                                            // preserve r15 (parked boxed key)
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
-    emitter.instruction("mov r14, rdi");                                        // r14 = boxed key cell (NULL means auto-increment)
+    emitter.instruction("mov r15, rdi");                                        // r15 = boxed key cell (NULL means auto-increment)
     emitter.instruction("mov r13, rsi");                                        // r13 = boxed yielded value (ownership moving into the generator)
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = the generator coroutine currently running
 
@@ -227,10 +227,10 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_mixed");                              // release the previous last_value (NULL is safe)
 
     // -- record the key: explicit cell, or a boxed auto-increment integer --
-    emitter.instruction("test r14, r14");                                       // was an explicit key supplied?
+    emitter.instruction("test r15, r15");                                       // was an explicit key supplied?
     emitter.instruction("jz __rt_gen_suspend_auto_key");                        // branch to the auto-key path when no explicit key was supplied
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rax = previous last_key occupant
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r14", GEN_LAST_KEY_OFFSET)); // store the explicit yielded key
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r15", GEN_LAST_KEY_OFFSET)); // store the explicit yielded key
     emitter.instruction("call __rt_decref_mixed");                              // release the previous last_key (NULL is safe)
     emitter.instruction("jmp __rt_gen_suspend_yield");                          // skip the auto-key path
 
@@ -254,7 +254,7 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
 
     // -- epilogue: rax already holds the resumer-delivered value (owned) --
     emitter.instruction("add rsp, 8");                                          // release the alignment pad
-    emitter.instruction("pop r14");                                             // restore caller's r14
+    emitter.instruction("pop r15");                                             // restore caller's r15
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -336,6 +336,9 @@ fn arm64_ensure_started(emitter: &mut Emitter, tag: &str) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // has the generator been started yet?
     emitter.instruction(&format!("b.ne {}", started));                          // skip the lazy start when already running/suspended/terminated
     emitter.instruction("mov x0, x19");                                         // pass the generator coroutine to the starter
+    emitter.instruction("mov x1, #0");                                          // generator ownership remains with the accessor caller
+    emitter.instruction("mov x2, #0");                                          // ordinary generator access has no auxiliary Throwable
+    emitter.instruction("mov x3, #0");                                          // keep the private auxiliary ownership flag defined
     emitter.instruction("bl __rt_fiber_start");                                 // run the body up to its first yield (or termination)
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value (generators yield via gen_last_value)
     emitter.label(&started);
@@ -392,6 +395,9 @@ fn emit_gen_next_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // has the generator started yet?
     emitter.instruction("b.ne __rt_gen_next_resume");                           // started generators advance through resume
     emitter.instruction("mov x0, x19");                                         // pass the generator to the starter
+    emitter.instruction("mov x1, #0");                                          // generator ownership remains with the accessor caller
+    emitter.instruction("mov x2, #0");                                          // next() has no auxiliary Throwable
+    emitter.instruction("mov x3, #0");                                          // keep the private auxiliary ownership flag defined
     emitter.instruction("bl __rt_fiber_start");                                 // run the body up to its first yield
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.instruction("b __rt_gen_next_done");                                // first start already advanced to a yield
@@ -400,6 +406,8 @@ fn emit_gen_next_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_gen_next_done");                             // terminated generators are a no-op
     emitter.instruction("mov x0, x19");                                         // pass the generator to the resumer
     emitter.instruction("mov x1, #0");                                          // deliver a null sent value (plain next())
+    emitter.instruction("mov x2, #0");                                          // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("mov x3, #0");                                          // no Mixed cell is transferred for next()
     emitter.instruction("bl __rt_fiber_resume");                                // advance to the next yield (or termination)
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.label("__rt_gen_next_done");
@@ -417,6 +425,9 @@ fn emit_gen_send_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("b.ne __rt_gen_send_resume");                           // started generators skip the implicit first start
     emitter.instruction("mov x0, x19");                                         // pass the generator to the starter
+    emitter.instruction("mov x1, #0");                                          // generator ownership remains with the accessor caller
+    emitter.instruction("mov x2, #0");                                          // send() has no auxiliary Throwable
+    emitter.instruction("mov x3, #0");                                          // keep the private auxiliary ownership flag defined
     emitter.instruction("bl __rt_fiber_start");                                 // implicitly advance to the first yield before delivering the value
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.label("__rt_gen_send_resume");
@@ -425,6 +436,8 @@ fn emit_gen_send_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_gen_send_null");                             // terminated generators return null from send()
     emitter.instruction("mov x0, x19");                                         // pass the generator to the resumer
     emitter.instruction("mov x1, x20");                                         // deliver the sent value to the suspended yield
+    emitter.instruction("mov x2, #0");                                          // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("mov x3, #0");                                          // send() already validated the state before transferring
     emitter.instruction("bl __rt_fiber_resume");                                // resume the generator with the sent value
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the resume
@@ -448,10 +461,14 @@ fn emit_gen_throw_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_throw ---");
     emitter.label_global("__rt_gen_throw");
     arm64_acc_prologue2(emitter);
+    emitter.instruction("str x2, [sp]");                                        // preserve whether EIR owns the injected Throwable
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = generator state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("b.ne __rt_gen_throw_inject");                          // started generators skip the implicit first start
     emitter.instruction("mov x0, x19");                                         // pass the generator to the starter
+    emitter.instruction("mov x1, #0");                                          // generator ownership remains with the accessor caller
+    emitter.instruction("mov x2, x20");                                         // pass the pending Throwable for escaped-start cleanup
+    emitter.instruction("ldr x3, [sp]");                                        // transfer its owner only if EIR owns the argument
     emitter.instruction("bl __rt_fiber_start");                                 // implicitly advance to the first yield before injecting
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.label("__rt_gen_throw_inject");
@@ -460,6 +477,8 @@ fn emit_gen_throw_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_gen_throw_null");                            // nothing to inject into a finished generator
     emitter.instruction("mov x0, x19");                                         // pass the generator to the thrower
     emitter.instruction("mov x1, x20");                                         // deliver the Throwable to inject at the yield
+    emitter.instruction("mov x2, #0");                                          // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("ldr x3, [sp]");                                        // transfer the Throwable owner if EIR owns the argument
     emitter.instruction("bl __rt_fiber_throw");                                 // re-raise the exception inside the generator (or escape to us)
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused suspend value
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the injected exception was handled
@@ -540,6 +559,9 @@ fn x86_ensure_started(emitter: &mut Emitter, tag: &str) {
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // has the generator been started yet?
     emitter.instruction(&format!("jne {}", started));                           // skip the lazy start when already running/suspended/terminated
     emitter.instruction("mov rdi, r12");                                        // pass the generator coroutine to the starter
+    emitter.instruction("xor esi, esi");                                        // generator ownership remains with the accessor caller
+    emitter.instruction("xor edx, edx");                                        // ordinary generator access has no auxiliary Throwable
+    emitter.instruction("xor ecx, ecx");                                        // keep the private auxiliary ownership flag defined
     emitter.instruction("call __rt_fiber_start");                               // run the body up to its first yield (or termination)
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value (generators yield via gen_last_value)
     emitter.label(&started);
@@ -588,6 +610,9 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // has the generator started yet?
     emitter.instruction("jne __rt_gen_next_resume");                            // started generators advance through resume
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the starter
+    emitter.instruction("xor esi, esi");                                        // generator ownership remains with the accessor caller
+    emitter.instruction("xor edx, edx");                                        // next() has no auxiliary Throwable
+    emitter.instruction("xor ecx, ecx");                                        // keep the private auxiliary ownership flag defined
     emitter.instruction("call __rt_fiber_start");                               // run the body up to its first yield
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.instruction("jmp __rt_gen_next_done");                              // first start already advanced to a yield
@@ -596,6 +621,8 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_gen_next_done");                              // terminated generators are a no-op
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the resumer
     emitter.instruction("xor esi, esi");                                        // deliver a null sent value (plain next())
+    emitter.instruction("xor edx, edx");                                        // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("xor ecx, ecx");                                        // no Mixed cell is transferred for next()
     emitter.instruction("call __rt_fiber_resume");                              // advance to the next yield (or termination)
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.label("__rt_gen_next_done");
@@ -610,6 +637,9 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("jne __rt_gen_send_resume");                            // started generators skip the implicit first start
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the starter
+    emitter.instruction("xor esi, esi");                                        // generator ownership remains with the accessor caller
+    emitter.instruction("xor edx, edx");                                        // send() has no auxiliary Throwable
+    emitter.instruction("xor ecx, ecx");                                        // keep the private auxiliary ownership flag defined
     emitter.instruction("call __rt_fiber_start");                               // implicitly advance to the first yield before delivering the value
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.label("__rt_gen_send_resume");
@@ -618,6 +648,8 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_gen_send_null");                              // terminated generators return null from send()
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the resumer
     emitter.instruction("mov rsi, r13");                                        // deliver the sent value to the suspended yield
+    emitter.instruction("xor edx, edx");                                        // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("xor ecx, ecx");                                        // send() already validated the state before transferring
     emitter.instruction("call __rt_fiber_resume");                              // resume the generator with the sent value
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the resume
@@ -636,10 +668,15 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_throw ---");
     emitter.label_global("__rt_gen_throw");
     x86_acc_prologue2(emitter);
+    emitter.instruction("sub rsp, 16");                                         // keep calls aligned and save the injected Throwable ownership flag
+    emitter.instruction("mov QWORD PTR [rsp], rdx");                            // preserve whether EIR owns the injected Throwable
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("jne __rt_gen_throw_inject");                           // started generators skip the implicit first start
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the starter
+    emitter.instruction("xor esi, esi");                                        // generator ownership remains with the accessor caller
+    emitter.instruction("mov rdx, r13");                                        // pass the pending Throwable for escaped-start cleanup
+    emitter.instruction("mov rcx, QWORD PTR [rsp]");                            // transfer its owner only if EIR owns the argument
     emitter.instruction("call __rt_fiber_start");                               // implicitly advance to the first yield before injecting
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.label("__rt_gen_throw_inject");
@@ -648,6 +685,8 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_gen_throw_null");                             // nothing to inject into a finished generator
     emitter.instruction("mov rdi, r12");                                        // pass the generator to the thrower
     emitter.instruction("mov rsi, r13");                                        // deliver the Throwable to inject at the yield
+    emitter.instruction("xor edx, edx");                                        // the generator Fiber is borrowed by this runtime helper
+    emitter.instruction("mov rcx, QWORD PTR [rsp]");                            // transfer the Throwable owner if EIR owns the argument
     emitter.instruction("call __rt_fiber_throw");                               // re-raise the exception inside the generator (or escape to us)
     emitter.instruction("call __rt_decref_mixed");                              // release the unused suspend value
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the injected exception was handled
@@ -659,6 +698,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gen_throw_null");
     emitter.instruction("xor eax, eax");                                        // throw() returns null when the generator is finished
     emitter.label("__rt_gen_throw_done");
+    emitter.instruction("add rsp, 16");                                         // release the saved ownership slot before restoring the accessor frame
     x86_acc_epilogue2(emitter);
 
     // rewind
@@ -702,6 +742,9 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // has the inner generator started yet?
     emitter.instruction("b.ne __rt_gen_delegate_loop");                         // skip the lazy start when already advanced
     emitter.instruction("mov x0, x19");                                         // pass the inner generator to the starter
+    emitter.instruction("mov x1, #0");                                          // inner generator ownership remains in the outer generator
+    emitter.instruction("mov x2, #0");                                          // delegated starts have no auxiliary Throwable
+    emitter.instruction("mov x3, #0");                                          // keep the private auxiliary ownership flag defined
     emitter.instruction("bl __rt_fiber_start");                                 // run the inner body up to its first yield
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused inner suspend value
 
@@ -725,6 +768,8 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_gen_delegate_drop");                         // drop the sent value when the inner generator cannot resume
     emitter.instruction("mov x0, x19");                                         // pass the inner generator to the resumer
     emitter.instruction("mov x1, x20");                                         // forward the sent value into the inner generator
+    emitter.instruction("mov x2, #0");                                          // the inner generator Fiber remains borrowed
+    emitter.instruction("mov x3, #0");                                          // delegated send state was checked before this call
     emitter.instruction("bl __rt_fiber_resume");                                // advance the inner generator to its next yield (or termination)
     emitter.instruction("bl __rt_decref_mixed");                                // release the unused inner suspend value
     emitter.instruction("b __rt_gen_delegate_loop");                            // continue delegating to the inner generator
@@ -758,6 +803,9 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // has the inner generator started yet?
     emitter.instruction("jne __rt_gen_delegate_loop");                          // skip the lazy start when already advanced
     emitter.instruction("mov rdi, r12");                                        // pass the inner generator to the starter
+    emitter.instruction("xor esi, esi");                                        // inner generator ownership remains in the outer generator
+    emitter.instruction("xor edx, edx");                                        // delegated starts have no auxiliary Throwable
+    emitter.instruction("xor ecx, ecx");                                        // keep the private auxiliary ownership flag defined
     emitter.instruction("call __rt_fiber_start");                               // run the inner body up to its first yield (suspend value left in rax)
     emitter.instruction("call __rt_decref_mixed");                              // release the unused inner suspend value
 
@@ -779,6 +827,8 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_gen_delegate_drop");                          // drop the sent value when the inner generator cannot resume
     emitter.instruction("mov rdi, r12");                                        // pass the inner generator to the resumer
     emitter.instruction("mov rsi, r13");                                        // forward the sent value into the inner generator
+    emitter.instruction("xor edx, edx");                                        // the inner generator Fiber remains borrowed
+    emitter.instruction("xor ecx, ecx");                                        // delegated send state was checked before this call
     emitter.instruction("call __rt_fiber_resume");                              // advance the inner generator to its next yield
     emitter.instruction("call __rt_decref_mixed");                              // release the unused inner suspend value
     emitter.instruction("jmp __rt_gen_delegate_loop");                          // continue delegating to the inner generator

@@ -1687,6 +1687,7 @@ fn emit_descriptor_apply_callback_invocation(
             "iterator_apply",
             false,
             false,
+            false,
         )?;
     } else {
         callables::emit_descriptor_reg_invoker_mixed_result_with_args(
@@ -1694,6 +1695,7 @@ fn emit_descriptor_apply_callback_invocation(
             descriptor_reg,
             &[],
             "iterator_apply",
+            false,
             false,
         )?;
     }

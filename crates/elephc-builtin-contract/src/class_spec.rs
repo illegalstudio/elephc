@@ -54,6 +54,44 @@ pub enum ClassRoute {
     LanguageIntrinsic,
 }
 
+/// Reflection authority for a builtin object independently of ordinary PHP visibility.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClassReflectionPolicy {
+    /// PHP reflection may access private storage and methods according to its usual rules.
+    Php,
+    /// Native authority is scope-owned: no reflective construction, storage access or private calls.
+    OpaqueCapability,
+}
+
+/// The capability-sensitive operation performed after Reflection resolves its target class.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReflectionOperation {
+    /// Allocate an object, with or without calling its constructor.
+    Construct,
+    /// Read or modify actual instance/static storage, including raw property APIs.
+    Storage,
+    /// Invoke or extract a method closure; its actual visibility comes from target metadata.
+    Method { public: bool },
+}
+
+impl ClassReflectionPolicy {
+    /// Leaves metadata inspection and public method invocation usable on opaque handles.
+    pub const fn allows(self, operation: ReflectionOperation) -> bool {
+        match self {
+            Self::Php => true,
+            Self::OpaqueCapability => matches!(operation, ReflectionOperation::Method { public: true }),
+        }
+    }
+}
+
+/// Shared denial for native and eval consumers; class lookup is canonical and case-insensitive.
+pub fn reflection_capability_denial(class_name: &str, operation: ReflectionOperation) -> Option<String> {
+    let contract = crate::lookup_class(class_name)?;
+    (!contract.reflection.allows(operation)).then(|| format!(
+        "Cannot access scope-owned capability {} through Reflection", contract.name,
+    ))
+}
+
 /// Canonical backend-neutral contract for one PHP builtin class-like.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassContract {
@@ -102,8 +140,40 @@ pub struct ClassContract {
     /// `None` exposes every declared method, matching userland classes. `Some` is a reviewed
     /// php-src surface; compiler lowering can still call every declared adapter internally.
     pub php_visible_methods: Option<&'static [&'static str]>,
+    /// Reflection must never manufacture or expose a scope-owned native capability.
+    pub reflection: ClassReflectionPolicy,
     /// PHP manual fragment (`class.arrayiterator`), when one exists.
     pub php_manual: Option<&'static str>,
+}
+
+#[cfg(test)]
+mod reflection_policy_tests {
+    use super::*;
+
+    /// Ordinary builtin and user classes retain private Reflection access.
+    #[test]
+    fn reflection_policy_preserves_php_classes() {
+        for name in ["DateTime", "stdClass", "MyApplication\\PeriodicControl"] {
+            for operation in [ReflectionOperation::Construct, ReflectionOperation::Storage,
+                ReflectionOperation::Method { public: false }]
+            {
+                assert!(reflection_capability_denial(name, operation).is_none());
+            }
+        }
+    }
+
+    /// Policy is attached to the actual contract, not a short class name or caller scope.
+    #[test]
+    fn reflection_policy_seals_periodic_authority_but_allows_public_calls() {
+        for name in ["Elephc\\Task\\PeriodicControl", "\\eLePhC\\tAsK\\pErIoDiCcOnTrOl"] {
+            for operation in [ReflectionOperation::Construct, ReflectionOperation::Storage,
+                ReflectionOperation::Method { public: false }]
+            {
+                assert!(reflection_capability_denial(name, operation).is_some());
+            }
+            assert!(reflection_capability_denial(name, ReflectionOperation::Method { public: true }).is_none());
+        }
+    }
 }
 
 impl ClassContract {

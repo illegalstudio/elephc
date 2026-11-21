@@ -14,14 +14,14 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 pub(crate) fn emit_update(emitter: &mut Emitter, live: bool) {
     if emitter.target.arch == Arch::X86_64 {
         // -- locate and update the exact payload-base bit --
-        abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
         emitter.instruction("mov rdx, rax");                                    // copy the payload before deriving its heap-relative offset
         emitter.instruction("sub rdx, r8");                                     // derive the payload's heap-relative byte offset
         if !live {
             emitter.instruction("cmp rdx, 16");                                 // reject pointers below the first managed payload
             emitter.instruction("jb __rt_heap_free_base_retired");              // leave foreign pointers outside the side table
-            abi::emit_symbol_address(emitter, "r8", "_heap_off");
-            emitter.instruction("cmp rdx, QWORD PTR [r8]");                     // require a payload inside the current heap extent
+            crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r8");
+            emitter.instruction("cmp rdx, r8");                                                    // require a payload inside the current heap extent
             emitter.instruction("jae __rt_heap_free_base_retired");             // avoid indexing the bitmap with a foreign pointer
         }
         emitter.instruction("mov rcx, rdx");                                    // preserve the offset for the granule-bit calculation
@@ -41,7 +41,7 @@ pub(crate) fn emit_update(emitter: &mut Emitter, live: bool) {
         return;
     }
     // -- locate and update the exact payload-base bit --
-    abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
     emitter.instruction("sub x13, x0, x12");                                    // derive the payload's heap-relative byte offset
     emitter.instruction("lsr x14, x13, #6");                                    // select one bitmap byte for each 64 heap bytes
     emitter.instruction("lsr x13, x13, #3");                                    // convert the byte offset to its 8-byte granule index
@@ -66,12 +66,12 @@ pub(crate) fn emit_free_guard(emitter: &mut Emitter) {
         abi::emit_load_symbol_to_reg(emitter, "r8", "_web_heap_guard_enabled", 0);
         emitter.instruction("test r8, r8");                                     // keep CLI frees on their established path
         emitter.instruction("jz __rt_heap_free_web_guard_done");                // web ownership checks are opt-in
-        abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
         emitter.instruction("mov rdx, rax");                                    // preserve the payload while deriving its bitmap index
         emitter.instruction("sub rdx, r8");                                     // compute the heap-relative byte offset
         emitter.instruction("cmp rdx, 16");                                     // exclude addresses below the first managed payload
         emitter.instruction("jb __rt_heap_free_web_guard_done");                // foreign pointers do not index the side table
-        abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_off", 0);
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r8");
         emitter.instruction("cmp rdx, r8");                                     // bound the bitmap index by the active arena extent
         emitter.instruction("jae __rt_heap_free_web_guard_done");               // preserve the existing handling outside that extent
         emitter.instruction("test rdx, 7");                                     // an exact payload base must be aligned
@@ -88,7 +88,7 @@ pub(crate) fn emit_free_guard(emitter: &mut Emitter) {
     } else {
         abi::emit_load_symbol_to_reg(emitter, "x12", "_web_heap_guard_enabled", 0);
         emitter.instruction("cbz x12, __rt_heap_free_web_guard_done");          // keep CLI frees on their established path
-        abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
         emitter.instruction("sub x13, x0, x12");                                // derive the offset already bounded by heap_free's entry checks
         emitter.instruction("tst x13, #7");                                     // require an exact aligned payload base
         emitter.instruction("b.ne __rt_heap_free_cache_small_duplicate");       // reject interior pointers before metadata retirement
@@ -107,7 +107,7 @@ pub(crate) fn emit_free_guard(emitter: &mut Emitter) {
 pub(crate) fn emit_reset(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         // -- clear every bitmap byte covered by the previous request's arena --
-        abi::emit_load_symbol_to_reg(emitter, "rcx", "_heap_off", 0);
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx");
         emitter.instruction("add rcx, 63");                                     // round the used heap extent to bitmap bytes
         emitter.instruction("shr rcx, 6");                                      // derive the number of bitmap bytes to clear
         abi::emit_symbol_address(emitter, "r8", "_heap_live_bases");
@@ -119,7 +119,7 @@ pub(crate) fn emit_reset(emitter: &mut Emitter) {
         emitter.instruction("jmp __rt_web_reset_live_base_loop");               // clear the remaining used bitmap bytes
     } else {
         // -- clear every bitmap byte covered by the previous request's arena --
-        abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_off", 0);
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x9");
         emitter.instruction("add x9, x9, #63");                                 // round the used heap extent to bitmap bytes
         emitter.instruction("lsr x9, x9, #6");                                  // derive the number of bitmap bytes to clear
         abi::emit_symbol_address(emitter, "x10", "_heap_live_bases");

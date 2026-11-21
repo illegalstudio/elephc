@@ -46,12 +46,6 @@ fi
 TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-x86_64-$WORKTREE_SHA-$$}"
 KEEP_TARGET_VOLUME="${ELEPHC_KEEP_DOCKER_TARGET_VOLUME:-0}"
 DOCKERFILE="$PROJECT_DIR/Dockerfile.test-linux-x86_64"
-DOCKER_ROOT="$(docker info -f '{{.DockerRootDir}}')"
-AVAILABLE_KIB="$(df -Pk "$DOCKER_ROOT" | awk 'NR == 2 {print $4}')"
-if (( AVAILABLE_KIB < MIN_FREE_KIB )); then
-    echo "Docker has less than $MIN_FREE_GIB GiB free; refusing to start the test." >&2
-    exit 1
-fi
 if command -v sha256sum >/dev/null 2>&1; then
     DOCKERFILE_SHA="$(sha256sum "$DOCKERFILE" | awk '{print $1}')"
 else
@@ -82,6 +76,12 @@ if $REBUILD || [ "$IMAGE_DOCKERFILE_SHA" != "$DOCKERFILE_SHA" ]; then
         -t "$IMAGE" \
         -f "$DOCKERFILE" \
         "$PROJECT_DIR"
+fi
+
+AVAILABLE_KIB="$(docker_test_available_kib "$IMAGE" "$PLATFORM")"
+if (( AVAILABLE_KIB < MIN_FREE_KIB )); then
+    echo "Docker has less than $MIN_FREE_GIB GiB free; refusing to start the test." >&2
+    exit 1
 fi
 
 GUARD_DIR="$(mktemp -d)"
@@ -122,7 +122,7 @@ trap 'exit 143' TERM
 # missing artifact into a loud failure in tests/codegen/xml instead of a skip.
 # The corresponding FILEINFO variables enable native tests and forbid fileinfo skips.
 # shellcheck disable=SC2016 # Expanded by the container shell.
-DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tidy -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-instr -p elephc-probe -p elephc-curl -p elephc-uri -p elephc-zend \
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tidy -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-instr -p elephc-parallel -p elephc-probe -p elephc-curl -p elephc-uri -p elephc-zend \
     && cargo build --bin elephc \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/xml/elephc.toml \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/fileinfo/elephc.toml \

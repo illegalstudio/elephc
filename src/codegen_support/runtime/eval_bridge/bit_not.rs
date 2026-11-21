@@ -46,8 +46,9 @@ mod tests {
             let operation = asm.find("__rt_mixed_bit_not").unwrap();
             let caught = asm.find(&format!("{entry}_throw:\n")).unwrap();
             assert!(handler < operation && operation < caught, "{name}: {asm}");
-            assert!(asm.contains("_exc_handler_top") && asm.contains("_exc_call_frame_top"), "{name}");
-            assert!(asm.contains("_rt_diag_suppression") && asm.contains("_gc_release_suppressed"), "{name}");
+            let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+            assert!(asm.contains(&slot("_exc_handler_top")) && asm.contains(&slot("_exc_call_frame_top")), "{name}");
+            assert!(asm.contains(&slot("_rt_diag_suppression")) && asm.contains(&slot("_gc_release_suppressed")), "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}: a throw must return pending status");
         }
     }

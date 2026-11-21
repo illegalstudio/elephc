@@ -322,7 +322,9 @@ mod tests {
         assert!(arm.contains("add x23, x23, x2"), "{arm}");
 
         let x64 = strip_tags_asm(Target::new(Platform::Linux, Arch::X86_64));
-        assert!(x64.contains("mov BYTE PTR [rbx], r15b"), "{x64}");
+        // r15 holds the scan cursor (r14 is the reserved ctx register), so the retained byte
+        // travels through dl while the output cursor stays in rbx.
+        assert!(x64.contains("mov BYTE PTR [rbx], dl"), "{x64}");
         assert!(x64.contains("add rbx, rcx"), "{x64}");
     }
 

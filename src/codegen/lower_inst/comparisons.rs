@@ -123,6 +123,33 @@ pub(super) fn lower_strict_eq(
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    // A flow-narrowed object read can still materialize null from a widened
+    // local on a path where no object assignment occurred (for example catches).
+    // Do not fold object/null comparisons solely from the read's projected type.
+    let object_null = match (&lhs_ty, &rhs_ty) {
+        (PhpType::Object(_), PhpType::Void | PhpType::Never) => Some(lhs),
+        (PhpType::Void | PhpType::Never, PhpType::Object(_)) => Some(rhs),
+        _ => None,
+    };
+    if let Some(object) = object_null {
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        let scratch = match ctx.emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
+        crate::codegen_support::sentinels::emit_normalize_null_container_to_zero(
+            ctx.emitter, abi::int_result_reg(ctx.emitter), scratch,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                          // test the canonical null object pointer
+                ctx.emitter.instruction(&format!("cset x0, {}", if is_equal { "eq" } else { "ne" })); // materialize strict object/null equality or inequality
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // test the canonical null object pointer
+                ctx.emitter.instruction(if is_equal { "sete al" } else { "setne al" }); // materialize strict object/null equality or inequality
+                ctx.emitter.instruction("movzx rax, al");                       // widen the predicate to the integer result ABI
+            }
+        }
+        return store_if_result(ctx, inst);
+    }
     if is_array_like(&lhs_ty) && is_array_like(&rhs_ty) {
         // Two concrete array/hash operands compare by deep PHP structure, not pointer identity or
         // static element type; the static element types may even differ (e.g. `Array(Int)` vs the

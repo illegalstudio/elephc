@@ -55,7 +55,8 @@ mod tests {
             let arch = emitter.target.arch;
             let asm = emitter.output();
             let invoke = asm.find("__rt_cleanup_invoke").unwrap();
-            let publish = asm.rfind("_exc_value").unwrap();
+            let exc_value = crate::codegen_support::runtime::test_slot_ref(arch, "_exc_value");
+            let publish = asm.rfind(&exc_value).unwrap();
             let (caught_store, caught_reload) = match arch {
                 crate::codegen_support::platform::Arch::AArch64 => (
                     "stur x0, [x29, #-32]",
@@ -70,7 +71,7 @@ mod tests {
             };
             let save = asm.find(caught_store).unwrap();
             let reload = asm.rfind(caught_reload).unwrap();
-            assert!(asm.find("_exc_value").unwrap() < invoke, "{name}");
+            assert!(asm.find(&exc_value).unwrap() < invoke, "{name}");
             assert!(invoke < save && save < publish && publish < reload, "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
         }

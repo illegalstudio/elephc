@@ -266,7 +266,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // save callee-saved rbx (precision counter)
     emitter.instruction("push r12");                                            // save callee-saved r12 (sign flag)
     emitter.instruction("push r13");                                            // save callee-saved r13 (exponent)
-    emitter.instruction("push r14");                                            // save callee-saved r14 (result start pointer)
+    emitter.instruction("push r15");                                            // save callee-saved r15 (result start pointer)
     emitter.instruction("sub rsp, 96");                                         // reserve scratch buffer, saved-double slot, exp char
     emitter.instruction("mov DWORD PTR [rsp + 80], edi");                       // stash exponent char param ('e' json / 'E' serialize)
     emitter.instruction("movsd QWORD PTR [rsp + 64], xmm0");                    // save the input double for re-formatting and compare
@@ -334,7 +334,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- zero-padded integer form: the shortest digits followed by (E - p) zeros --
     emitter.label("__rt_json_ftoa_intpad_x");
     emitter.instruction("call __rt_float_window");                              // bounded window in r10: the scratch tail, or a spill slot when the scratch is nearly full
-    emitter.instruction("mov r14, r10");                                        // remember the result start pointer
+    emitter.instruction("mov r15, r10");                                        // remember the result start pointer
     emitter.instruction("test r12, r12");                                       // is the value negative?
     emitter.instruction("jz __rt_json_ftoa_intpad_first_x");                    // skip sign when non-negative
     emitter.instruction("mov BYTE PTR [r10], 45");                              // emit '-'
@@ -366,7 +366,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("dec rcx");                                             // one fewer trailing zero to emit
     emitter.instruction("jmp __rt_json_ftoa_intpad_zloop_x");                   // continue padding
     emitter.label("__rt_json_ftoa_intpad_end_x");
-    emitter.instruction("mov rax, r14");                                        // result pointer = start
+    emitter.instruction("mov rax, r15");                                        // result pointer = start
     emitter.instruction("mov rdx, r10");                                        // cursor (one past the last byte)
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
     emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past the emitted bytes when the window is the scratch
@@ -374,7 +374,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_ftoa_exp_x");
     emitter.instruction("call __rt_float_window");                              // bounded window in r10: the scratch tail, or a spill slot when the scratch is nearly full
-    emitter.instruction("mov r14, r10");                                        // remember the result start pointer
+    emitter.instruction("mov r15, r10");                                        // remember the result start pointer
     emitter.instruction("test r12, r12");                                       // is the value negative?
     emitter.instruction("jz __rt_json_ftoa_exp_first_x");                       // skip sign when non-negative
     emitter.instruction("mov BYTE PTR [r10], 45");                              // emit '-'
@@ -445,14 +445,14 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea ecx, [r11 + 48]");                                 // ones digit to ASCII
     emitter.instruction("mov BYTE PTR [r10], cl");                              // emit ones digit
     emitter.instruction("inc r10");                                             // advance the cursor
-    emitter.instruction("mov rax, r14");                                        // result pointer = start
+    emitter.instruction("mov rax, r15");                                        // result pointer = start
     emitter.instruction("mov rdx, r10");                                        // cursor (one past the last byte)
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
     emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past the emitted bytes when the window is the scratch
 
     emitter.label("__rt_json_ftoa_done_x");
     emitter.instruction("add rsp, 96");                                         // release the scratch frame
-    emitter.instruction("pop r14");                                             // restore callee-saved r14
+    emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12
     emitter.instruction("pop rbx");                                             // restore callee-saved rbx

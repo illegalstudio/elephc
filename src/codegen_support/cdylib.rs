@@ -295,7 +295,7 @@ fn emit_clear_error_inline(emitter: &mut Emitter) {
 
 /// Restores the process-global concat scratch cursor between native host calls.
 fn emit_reset_concat_inline(emitter: &mut Emitter) {
-    emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }
 
 /// Stores one small integer in a fixed cdylib state symbol.
@@ -430,7 +430,11 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("_concat_capacity"), "{target:?}: {asm}");
             assert!(!asm.contains("65536"), "nested entry must not bake in the old bound: {asm}");
-            for (heap, capacity) in [(16_384, 65_536), (524_288, 524_288), (1usize << 31, 1usize << 30)] {
+            // The scratch lives inline in every `_rt_ctx` block at a fixed size (the layout, the
+            // pooled-context stride and ~200 addressing sites depend on it), so the published
+            // bound is the layout constant for every `--heap-size`; larger results use the heap.
+            let ctx_capacity = crate::codegen_support::runtime::ctx::CTX_CONCAT_BUF_CAPACITY;
+            for (heap, capacity) in [(16_384, ctx_capacity), (524_288, ctx_capacity), (1usize << 31, ctx_capacity)] {
                 let data = crate::codegen_support::runtime::emit_runtime_data_fixed(
                     heap, target, crate::codegen::compile_php_version(),
                 );
@@ -593,7 +597,7 @@ mod tests {
             let init_end = asm[init_start..].find(&shutdown_label).unwrap() + init_start;
             let init = &asm[init_start..init_end];
             let (save, call, restore) = match target.arch {
-                Arch::AArch64 => ("stp x29, x30, [sp, #0]", "bl __rt_stack_limit_init", "ldp x29, x30, [x9]"),
+                Arch::AArch64 => ("stp x29, x30, [sp, #16]", "bl __rt_stack_limit_init", "ldp x29, x30, [x9]"),
                 Arch::X86_64 => ("push rbp", "call __rt_stack_limit_init", "leave"),
             };
             let save = init.find(save).unwrap();
@@ -718,7 +722,7 @@ mod tests {
             let publish = boundary.find("__rt_cleanup_call_operand_owner").unwrap();
             let call_body = boundary.find("_fn_roundtrip").unwrap();
             let detach = boundary[call_body..]
-                .find("_exc_call_frame_top")
+                .find(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET))
                 .map(|offset| offset + call_body)
                 .unwrap();
             let release = boundary[call_body..]

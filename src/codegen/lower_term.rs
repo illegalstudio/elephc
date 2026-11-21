@@ -189,8 +189,25 @@ pub(super) fn lower_terminator(
 pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
     if matches!(ty.codegen_repr(), PhpType::Object(_)) {
-        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        // A nullable object slot shares the pointer representation: a parameter's null is a
+        // zero pointer, while a slot assigned `null` holds the in-band NULL_SENTINEL.
+        // PHP raises a catchable Error for `throw null` rather than unwinding a null value.
+        let null_label = ctx.next_label("throw_object_null");
+        let done_label = ctx.next_label("throw_object_done");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let scratch_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x9",
+            Arch::X86_64 => "r10",
+        };
+        crate::codegen::sentinels::emit_branch_if_null_container(
+            ctx.emitter, result_reg, scratch_reg, &null_label,
+        );
+        abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
         abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        super::lower_inst::exceptions::emit_error(ctx, "Can only throw objects");
+        ctx.emitter.label(&done_label);
         return Ok(());
     }
     if matches!(ty.codegen_repr(), PhpType::Mixed) {
@@ -908,7 +925,13 @@ mod tests {
     fn throw_terminator_enters_runtime_unwinder() {
         let asm = generate_throw_terminator_main_asm(Target::new(Platform::Linux, Arch::X86_64));
 
-        assert!(asm.contains("mov QWORD PTR [rip + _exc_value], rax"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "mov QWORD PTR [r14 + {}], rax",
+                crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("call __rt_throw_current"), "{asm}");
     }
 
@@ -917,7 +940,13 @@ mod tests {
     fn throw_exception_opcode_enters_runtime_unwinder() {
         let asm = generate_throw_exception_opcode_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("_exc_value"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "str x0, [x28, #{}]",
+                crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("bl __rt_throw_current"), "{asm}");
     }
 

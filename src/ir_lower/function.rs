@@ -26,7 +26,7 @@ use crate::parser::ast::{
 use crate::names::Name;
 use crate::span::Span;
 use crate::types::{
-    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, ExternFunctionSig, FunctionSig,
     PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
 
@@ -39,6 +39,8 @@ pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable, lower_prepared_builtin_callable};
 mod interface_adapters;
 pub(crate) use interface_adapters::lower_optional_interface_adapters;
+mod parallel_factory;
+pub(crate) use parallel_factory::lower_parallel_submission_factory;
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(
@@ -118,6 +120,7 @@ pub(crate) fn lower_main(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -222,7 +225,7 @@ pub(crate) fn lower_user_function(
     // name the original, and `function_exists()` never lists the clone.
     function.source_name = crate::generics::promotable_clones::promotable_clone_source_name(name)
         .map(str::to_string);
-    function.source_signature = Some(source_signature(name, &eir_signature));
+    function.source_signature = Some(source_signature(name, signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     function.source_defaults = params.iter().map(|(_, _, default, _)| default.clone()).collect();
     function.attribute_names = check_result
@@ -274,6 +277,7 @@ pub(crate) fn lower_user_function(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -319,10 +323,11 @@ pub(crate) fn lower_class_method(
         .and_then(|class| method_signature(class, method_name, is_static))
         .cloned()
         .unwrap_or(fallback);
+    let eir_signature = eir_signature_with_associative_variadic_storage(&signature);
     let name = format!("{}::{}", class_name, method_name);
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let method_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
+    let method_body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.clone(),
         return_ir_type(&method_body_return_type),
@@ -336,9 +341,9 @@ pub(crate) fn lower_class_method(
         ..FunctionFlags::default()
     };
     function.source_signature = Some(source_signature(&name, &signature));
-    function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let mut env = env_from_signature(&signature, web);
-    let mut body_params = signature.params.clone();
+    function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
+    let mut env = env_from_signature(&eir_signature, web);
+    let mut body_params = eir_signature.params.clone();
     if is_static {
         // The hidden late-static-binding argument keeps its leading position and its `Int`
         // type; only the NAME is the marked one from `crate::names`, so the slot stays
@@ -366,7 +371,7 @@ pub(crate) fn lower_class_method(
         env.insert("this".to_string(), this_type.clone());
         body_params.insert(0, ("this".to_string(), this_type));
     }
-    function.params.extend(function_params(&signature));
+    function.params.extend(function_params(&eir_signature));
     mark_generator_if_needed(
         &mut function,
         body,
@@ -406,6 +411,7 @@ pub(crate) fn lower_class_method(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -416,7 +422,7 @@ pub(crate) fn lower_class_method(
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
-        signature.declared_return,
+        eir_signature.declared_return,
         &body_params,
         None,
         false,
@@ -536,6 +542,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &bind_kill_sites,
         &ref_detach_sites,
         &retype_sites,
@@ -675,6 +682,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &bind_kill_sites,
         &ref_detach_sites,
         &retype_sites,
@@ -801,6 +809,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -1189,6 +1198,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -1318,6 +1328,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.generic_call_sites,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.ref_cell_mixed_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
@@ -1548,6 +1559,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.generic_call_sites,
             &check_result.loop_storage_types,
             &check_result.string_incdec_locals,
+            &check_result.ref_cell_mixed_locals,
             &check_result.local_bind_kill_sites,
             &check_result.local_ref_detach_sites,
             &check_result.local_retype_sites,
@@ -1617,6 +1629,7 @@ pub(crate) fn lower_closure_function(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1631,6 +1644,7 @@ pub(crate) fn lower_closure_function(
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -1667,6 +1681,7 @@ pub(crate) fn lower_closure_function_with_context(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1683,6 +1698,7 @@ pub(crate) fn lower_closure_function_with_context(
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -1734,9 +1750,10 @@ fn lower_closure_function_with_signature(
     closure_defaults::lower_helpers(parent, name, &signature);
     // Closure descriptors adapt boxed eval reference markers to the declared payload slot.
     // Keep the closure body on that same concrete ABI so descriptor and callee agree.
+    let eir_signature = eir_signature_with_associative_variadic_storage(&signature);
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
-    let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
+    let closure_body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&closure_body_return_type),
@@ -1751,21 +1768,21 @@ fn lower_closure_function_with_signature(
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
-    function.params = function_params(&signature);
+    function.params = function_params(&eir_signature);
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
-    function.signature = Some(eir_runtime_metadata_signature(&signature));
+    function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     mark_generator_if_needed(
         &mut function,
         body,
         signature.is_generator,
     );
-    let env = env_with_closure_captures(&signature, logical_captures, parent.web);
-    let lowered_params = params_with_closure_captures(&signature, logical_captures);
+    let env = env_with_closure_captures(&eir_signature, logical_captures, parent.web);
+    let lowered_params = params_with_closure_captures(&eir_signature, logical_captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
-        signature: signature.clone(),
+        signature: eir_signature.clone(),
         captures: logical_captures
             .iter()
             .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
@@ -1817,6 +1834,7 @@ fn lower_closure_function_with_signature(
         parent.generic_call_sites,
         parent.loop_storage_types,
         parent.string_incdec_locals,
+        parent.ref_cell_mixed_locals,
         parent.bind_kill_sites,
         parent.ref_detach_sites,
         parent.retype_sites,
@@ -1827,7 +1845,7 @@ fn lower_closure_function_with_signature(
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
-        signature.declared_return,
+        eir_signature.declared_return,
         &lowered_params,
         recursive_binding,
         false,
@@ -1839,6 +1857,340 @@ fn lower_closure_function_with_signature(
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
     signature
+}
+
+/// Builds one native-worker callback around a statically known Parallel task closure.
+///
+/// The callback receives only the numeric job id from Rust. It reconstructs the copied
+/// `[arguments..., captures...]` payload inside the worker context, invokes the statically resolved
+/// task target directly, and publishes a freshly serialized result before returning.
+pub(crate) fn lower_parallel_worker_function(
+    parent: &mut LoweringContext<'_, '_>,
+    worker_name: &str,
+    task_name: &str,
+    task_signature: &FunctionSig,
+    sources: &[(PhpType, bool, bool)],
+    register_task_function: bool,
+) {
+    use crate::synthetic_class::{
+        e_binop, e_call, e_index, e_instance_of, e_int, e_var, s_assign, s_expr, s_if, s_return,
+        s_try,
+    };
+
+    let span = Span::synthetic();
+    let job_signature = FunctionSig {
+        params: vec![("jobId".to_string(), PhpType::Int)],
+        param_type_exprs: vec![Some(TypeExpr::Int)],
+        param_attributes: vec![Vec::new()],
+        defaults: vec![None],
+        return_type: PhpType::Int,
+        declared_return: true,
+        by_ref_return: false,
+        ref_params: vec![false],
+        declared_params: vec![true],
+        variadic: None,
+        deprecation: None,
+        is_generator: false,
+    };
+    let mut body = vec![
+        s_assign(
+            "status",
+            e_call(
+                "elephc_parallel_job_input_php_prepare",
+                vec![e_var("jobId")],
+            ),
+        ),
+        s_if(
+            e_binop(
+                e_var("status"),
+                BinOp::StrictNotEq,
+                e_int(0),
+            ),
+            vec![
+                s_if(
+                    e_binop(
+                        e_var("status"),
+                        BinOp::StrictEq,
+                        e_int(i64::from(
+                            elephc_parallel_contract::PARALLEL_TRANSFER_ALLOCATION_FAILED,
+                        )),
+                    ),
+                    vec![s_return(e_int(
+                        elephc_parallel_contract::PARALLEL_WORKER_ARENA_EXHAUSTED,
+                    ))],
+                    Vec::new(),
+                    None,
+                ),
+                s_return(e_int(
+                    elephc_parallel_contract::PARALLEL_WORKER_TRANSFER_DECODE,
+                )),
+            ],
+            Vec::new(),
+            None,
+        ),
+    ];
+    let mut payload_index = 0i64;
+    let visible_source_count = task_signature.params.len();
+    let mut reconstruction = vec![s_assign(
+        "payload",
+        crate::synthetic_class::e_static_call(
+            "Elephc\\Parallel\\Future",
+            "__takePreparedValue",
+            vec![],
+        ),
+    )];
+    let mut call_args = Vec::with_capacity(sources.len());
+    for (index, (php_type, cancellation, _)) in sources.iter().enumerate() {
+        let reconstructed = if *cancellation {
+            let local = format!("parallelCancellation{index}");
+            reconstruction.push(s_assign(
+                &local,
+                crate::synthetic_class::e_new_fq(
+                    "Elephc\\Async\\Cancellation",
+                    vec![crate::synthetic_class::e_new_fq(
+                        "Elephc\\Async\\__CancellationState",
+                        vec![e_var("jobId")],
+                    )],
+                ),
+            ));
+            e_var(&local)
+        } else {
+            let indexed = e_index(e_var("payload"), e_int(payload_index));
+            payload_index += 1;
+            if matches!(php_type.codegen_repr(), PhpType::Object(ref class)
+                if crate::types::parallel_transfer::is_periodic_control(class))
+            {
+                let local = format!("parallelPeriodicControl{index}");
+                reconstruction.push(s_assign(&local, crate::synthetic_class::e_static_call(
+                    "Elephc\\Task\\PeriodicControl", "__fromNativeId", vec![indexed])));
+                e_var(&local)
+            } else { indexed }
+        };
+        call_args.push(reconstructed);
+    }
+    if sources.is_empty() {
+        // A zero-argument task has no need to retain the decoded empty transfer array while it
+        // executes. Free it before entering task code so a worker-local fatal `longjmp` cannot
+        // leave the otherwise unreachable staging container in the context arena.
+        reconstruction.push(s_expr(e_call("unset", vec![e_var("payload")])));
+    }
+    reconstruction.push(s_assign("result", e_call(task_name, call_args)));
+    reconstruction.push(s_assign(
+        "status",
+        crate::synthetic_class::e_static_call(
+            "Elephc\\Parallel\\TaskGroup",
+            "__completeJobValue",
+            vec![e_var("jobId"), e_var("result")],
+        ),
+    ));
+    reconstruction.push(s_if(
+        e_binop(e_var("status"), BinOp::StrictNotEq, e_int(0)),
+        vec![
+            s_if(
+                e_binop(
+                    e_var("status"),
+                    BinOp::StrictEq,
+                    e_int(i64::from(
+                        elephc_parallel_contract::PARALLEL_TRANSFER_ALLOCATION_FAILED,
+                    )),
+                ),
+                vec![s_return(e_int(
+                    elephc_parallel_contract::PARALLEL_WORKER_ARENA_EXHAUSTED,
+                ))],
+                Vec::new(),
+                None,
+            ),
+            s_return(e_int(
+                elephc_parallel_contract::PARALLEL_WORKER_TRANSFER_ENCODE,
+            )),
+        ],
+        Vec::new(),
+        None,
+    ));
+    reconstruction.push(s_return(e_int(0)));
+    body.push(s_try(
+        reconstruction,
+        vec![(
+            vec!["\\Throwable"],
+            Some("failure"),
+            vec![
+                s_if(
+                    e_binop(
+                        e_instance_of(
+                            e_var("failure"),
+                            "\\Elephc\\Async\\CancelledException",
+                        ),
+                        BinOp::And,
+                        e_binop(
+                            e_call(
+                                "elephc_parallel_job_cancellation_requested",
+                                vec![e_var("jobId")],
+                            ),
+                            BinOp::StrictEq,
+                            e_int(1),
+                        ),
+                    ),
+                    vec![
+                        s_expr(e_call("unset", vec![e_var("payload")])),
+                        s_expr(e_call("unset", vec![e_var("result")])),
+                        s_expr(e_call("unset", vec![e_var("failure")])),
+                        s_return(e_int(0)),
+                    ],
+                    Vec::new(),
+                    None,
+                ),
+                s_assign(
+                    "status",
+                    crate::synthetic_class::e_static_call(
+                        "Elephc\\Parallel\\TaskGroup",
+                        "__failJobValue",
+                        vec![e_var("jobId"), e_var("failure")],
+                    ),
+                ),
+                s_expr(e_call("unset", vec![e_var("payload")])),
+                s_expr(e_call("unset", vec![e_var("result")])),
+                // `__failJobValue()` copies the Throwable into a data-only native envelope.
+                // The worker must then drop the caught PHP object before returning, otherwise
+                // its still-owned local keeps the isolated context dirty through release.
+                s_expr(e_call("unset", vec![e_var("failure")])),
+                s_if(
+                    e_binop(e_var("status"), BinOp::StrictNotEq, e_int(0)),
+                    vec![
+                        s_if(
+                            e_binop(
+                                e_var("status"),
+                                BinOp::StrictEq,
+                                e_int(i64::from(
+                                    elephc_parallel_contract::PARALLEL_TRANSFER_ALLOCATION_FAILED,
+                                )),
+                            ),
+                            vec![s_return(e_int(
+                                elephc_parallel_contract::PARALLEL_WORKER_ARENA_EXHAUSTED,
+                            ))],
+                            Vec::new(),
+                            None,
+                        ),
+                        s_return(e_int(
+                            elephc_parallel_contract::PARALLEL_WORKER_TRANSFER_ENCODE,
+                        )),
+                    ],
+                    Vec::new(),
+                    None,
+                ),
+                s_return(e_int(0)),
+            ],
+        )],
+        None,
+    ));
+    for stmt in &mut body {
+        stmt.span = span;
+    }
+
+    let mut worker_task_signature = task_signature.clone();
+    for (index, (php_type, _, by_ref)) in sources
+        .iter()
+        .skip(visible_source_count)
+        .enumerate()
+    {
+        worker_task_signature
+            .params
+            .push((format!("__capture{index}"), php_type.clone()));
+        worker_task_signature.param_type_exprs.push(None);
+        worker_task_signature.param_attributes.push(Vec::new());
+        worker_task_signature.defaults.push(None);
+        worker_task_signature.ref_params.push(*by_ref);
+        worker_task_signature.declared_params.push(true);
+    }
+    let mut functions = parent.functions.clone();
+    if register_task_function {
+        functions.insert(task_name.to_string(), worker_task_signature);
+    }
+    // Worker callbacks are synthesized after the frontend has checked the source prelude. The
+    // preparation bridge is therefore absent when reachability prunes its declaration from the
+    // caller-visible AST, even though this generated body invokes it. Seed the typed extern here
+    // so `lower_function_call()` emits `ExternCall` instead of misclassifying it as a language
+    // construct.
+    let mut extern_functions = parent.extern_functions.clone();
+    extern_functions
+        .entry("elephc_parallel_job_input_php_prepare".to_string())
+        .or_insert_with(|| ExternFunctionSig {
+            name: "elephc_parallel_job_input_php_prepare".to_string(),
+            params: vec![("jobId".to_string(), PhpType::Int)],
+            abi_params: vec![crate::types::ExternAbiType::Int { bits: 64, signed: true }],
+            return_type: PhpType::Int,
+            abi_return: crate::types::ExternAbiType::Int { bits: 64, signed: true },
+            library: Some("elephc_parallel".to_string()),
+        });
+    extern_functions
+        .entry("elephc_parallel_job_cancellation_requested".to_string())
+        .or_insert_with(|| ExternFunctionSig {
+            name: "elephc_parallel_job_cancellation_requested".to_string(),
+            params: vec![("jobId".to_string(), PhpType::Int)],
+            abi_params: vec![crate::types::ExternAbiType::Int { bits: 64, signed: true }],
+            return_type: PhpType::Int,
+            abi_return: crate::types::ExternAbiType::Int { bits: 64, signed: true },
+            library: Some("elephc_parallel".to_string()),
+        });
+    let mut function = Function::new(worker_name.to_string(), IrType::I64, PhpType::Int);
+    function.flags.is_synthetic = true;
+    function.params = function_params(&job_signature);
+    function.source_signature = Some(source_signature(worker_name, &job_signature));
+    function.signature = Some(eir_runtime_metadata_signature(&job_signature));
+    let closures = lower_body_into_function(
+        &mut function,
+        None,
+        parent.data,
+        &body,
+        env_from_signature(&job_signature, parent.web),
+        parent.top_level_env.clone(),
+        &functions,
+        &extern_functions,
+        parent.extern_globals,
+        parent.callable_param_sigs,
+        parent.return_alias_summaries,
+        parent.fiber_return_sigs,
+        parent.classes,
+        parent.enums,
+        parent.interfaces,
+        parent.declared_trait_names,
+        parent.declared_trait_methods,
+        parent.declared_trait_properties,
+        parent.packed_classes,
+        parent.extern_classes,
+        parent.throw_access_sites,
+        parent.builtin_call_types,
+        parent.closure_generator_spans,
+        parent.array_push_property_plans,
+        parent.member_receiver_types,
+        parent.array_append_element_types,
+        parent.local_value_read_types,
+        parent.boxed_reference_promotion_sites,
+        parent.first_class_builtin_call_types,
+        parent.generic_call_sites,
+        parent.loop_storage_types,
+        parent.string_incdec_locals,
+        parent.ref_cell_mixed_locals,
+        parent.bind_kill_sites,
+        parent.ref_detach_sites,
+        parent.retype_sites,
+        parent.mixed_storage_store_sites,
+        parent.sparse_key_write_sites,
+        parent.promotable_arrays,
+        format!("{worker_name}::parallel"),
+        &parent.constants,
+        None,
+        PhpType::Int,
+        true,
+        &[("jobId".to_string(), PhpType::Int)],
+        None,
+        false,
+        collect_global_var_names(&body),
+        None,
+        parent.source_path().map(str::to_string),
+        None,
+        parent.web,
+    );
+    parent.extend_closures(std::iter::once(function).chain(closures));
 }
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
@@ -1885,6 +2237,7 @@ fn lower_body_into_function(
     generic_call_sites: &std::collections::HashMap<(String, Span), String>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
+    ref_cell_mixed_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     ref_detach_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
@@ -1943,7 +2296,7 @@ fn lower_body_into_function(
             throw_access_sites, builtin_call_types, closure_generator_spans,
             array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
-            loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
+            loop_storage_types, string_incdec_locals, ref_cell_mixed_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
             loop_storage_scope.clone(), constants,
             current_class.clone(), PhpType::Void, false, params, None, false,
@@ -2058,6 +2411,7 @@ fn lower_body_into_function(
         generic_call_sites,
         loop_storage_types,
         string_incdec_locals,
+        ref_cell_mixed_locals,
         bind_kill_sites,
         ref_detach_sites,
         retype_sites,
@@ -2107,7 +2461,7 @@ fn lower_body_into_function(
     if let Some(name) = reference_variadic {
         ctx.mark_reference_marker_array_local(&name);
     }
-    // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
+    // PHP passes arrays and boxed values BY VALUE. The call site hands the callee a `+0` borrow of the caller's
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
@@ -2484,6 +2838,58 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             crate::types::dynamic_params::dynamic_param_container_return_type(&eir_signature.return_type)
         };
     }
+    eir_signature_with_associative_variadic_storage(&eir_signature)
+}
+
+/// Uses associative EIR storage for a variadic capture, which may contain numeric or string keys.
+pub(crate) fn eir_signature_with_associative_variadic_storage(
+    signature: &FunctionSig,
+) -> FunctionSig {
+    let mut eir_signature = signature.clone();
+    if !eir_signature.declared_return
+        && eir_signature.variadic.is_some()
+        && matches!(
+            eir_signature.return_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        eir_signature.return_type = PhpType::Mixed;
+    }
+    let Some(variadic_name) = eir_signature.variadic.as_deref() else {
+        return eir_signature;
+    };
+    let Some(variadic_index) = eir_signature
+        .params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+    else {
+        return eir_signature;
+    };
+    if eir_signature
+        .ref_params
+        .get(variadic_index)
+        .copied()
+        .unwrap_or(false)
+    {
+        return eir_signature;
+    }
+    let value_type = eir_signature
+        .params
+        .get(variadic_index)
+        .map(|(_, param_type)| match param_type.codegen_repr() {
+            PhpType::Array(element) => *element,
+            PhpType::AssocArray { value, .. } => *value,
+            other => other,
+        })
+        .unwrap_or(PhpType::Mixed);
+    let variadic_was_declared = eir_signature.declared_params.get(variadic_index).copied().unwrap_or(false);
+    if let Some(type_expr) = eir_signature
+        .param_type_exprs
+        .get_mut(variadic_index)
+        .filter(|type_expr| variadic_was_declared && type_expr.is_none())
+    {
+        *type_expr = php_type_to_type_expr(&value_type);
+    }
     eir_signature
 }
 
@@ -2521,6 +2927,43 @@ fn logical_object_reference_body_signature(
         }
     }
     body_signature
+}
+
+/// Reifies a variadic element storage type when the source signature omitted its type expression.
+fn php_type_to_type_expr(php_type: &PhpType) -> Option<TypeExpr> {
+    Some(match php_type.codegen_repr() {
+        PhpType::Int => TypeExpr::Int,
+        PhpType::Float => TypeExpr::Float,
+        PhpType::Bool => TypeExpr::Bool,
+        PhpType::False => TypeExpr::False,
+        PhpType::Str => TypeExpr::Str,
+        PhpType::Void => TypeExpr::Void,
+        PhpType::Never => TypeExpr::Never,
+        PhpType::Iterable => TypeExpr::Iterable,
+        PhpType::Array(element) => {
+            TypeExpr::Array(Box::new(php_type_to_type_expr(&element)?))
+        }
+        PhpType::AssocArray { .. } => TypeExpr::Named(Name::unqualified("array")),
+        PhpType::Callable | PhpType::DeclaredCallable => TypeExpr::Named(Name::unqualified("callable")),
+        PhpType::Narrow(_) => return None,
+        PhpType::Object(name) => TypeExpr::Named(Name::unqualified(&name)),
+        PhpType::Pointer(name) => {
+            TypeExpr::Ptr(name.map(|name| Name::unqualified(&name)))
+        }
+        PhpType::Buffer(element) => {
+            TypeExpr::Buffer(Box::new(php_type_to_type_expr(&element)?))
+        }
+        PhpType::Union(members) => TypeExpr::Union(
+            members
+                .iter()
+                .map(php_type_to_type_expr)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        PhpType::Mixed => TypeExpr::Named(Name::unqualified("mixed")),
+        PhpType::Packed(name) => TypeExpr::Named(Name::unqualified(&name)),
+        PhpType::Resource(_) => TypeExpr::Int,
+        PhpType::TaggedScalar => TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Void]),
+    })
 }
 
 /// Marks boxed ABI parameters as materialization targets for reused runtime invokers.
@@ -2668,6 +3111,7 @@ fn closure_signature_from_ast(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -2682,6 +3126,15 @@ fn closure_signature_from_ast(
     for default in &mut signature.defaults {
         *default = crate::types::checker::normalize_lexical_callable_default(default, owner, parent)
             .expect("closure defaults passed lexical validation before EIR lowering");
+    }
+    if let (Some(name), Some(declared)) = (variadic, variadic_type) {
+        if let Some(index) = signature.params.iter().position(|(param, _)| param == name) {
+            signature.param_type_exprs[index] = Some(declared.clone());
+            signature.declared_params[index] = true;
+            if !variadic_by_ref {
+                signature.params[index].1 = PhpType::Array(Box::new(type_expr_to_php_type(declared)));
+            }
+        }
     }
     signature.is_generator = source_is_generator
         || crate::types::checker::yield_validation::body_contains_yield(body);

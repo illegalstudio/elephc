@@ -17,7 +17,8 @@ pub use crate::context::ElephcEvalContext;
 pub use crate::scope::ElephcEvalScope;
 
 /// ABI version shared by generated call sites and the eval bridge.
-pub const ABI_VERSION: u32 = 2;
+// Version 4 carries lexical invocation scope and scalar binding policy independently.
+pub const ABI_VERSION: u32 = 4;
 
 /// Scope-entry ABI flag indicating that a variable has a visible value.
 pub const SCOPE_FLAG_PRESENT: u32 = 1 << 0;

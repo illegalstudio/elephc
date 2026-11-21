@@ -218,6 +218,8 @@ pub enum Immediate {
     I64(i64),
     F64(f64),
     Bool(bool),
+    /// Physical invocation policy, independent of descriptor creation and visibility.
+    CallableProfile { strict_php: bool, strict_types: bool },
     /// Reports PHP's array-key diagnostic while converting a float to an integer key.
     FloatKeyDiagnostic,
     /// Converts a string offset with runtime cast diagnostics for boxed values.
@@ -1173,6 +1175,9 @@ pub enum Op {
     MixedClone,
     InvokerRefArg,
     MixedUnbox,
+    StringArgumentGuard,
+    StrictStringArgumentGuard,
+    StringBindingAccepted,
     MixedTagOf,
     ArrayToMixed,
     /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
@@ -1310,6 +1315,9 @@ pub enum Op {
     DynamicObjectNewWithoutConstructorMixed,
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
+    /// Copies a locally serialized Parallel payload into a native job and submits one generated
+    /// worker callback. Operand: PHP serialized byte string. Immediate: worker function name.
+    ParallelSpawn,
     /// Normalizes any supported PHP callable form into an owned descriptor.
     /// Bool selects scoped factory validation: true throws Error, false throws TypeError.
     NormalizeCallable,
@@ -1703,7 +1711,7 @@ impl Op {
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
-            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
+            IsNull | IsTruthy | TypePredicate | MixedUnbox | StringBindingAccepted | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString | BufferGetResolved => {
                 E::READS_HEAP | E::MAY_FATAL
@@ -1865,7 +1873,7 @@ impl Op {
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
             | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt
-            | PropertyBoundaryCheckedToInt => {
+            | PropertyBoundaryCheckedToInt | StringArgumentGuard | StrictStringArgumentGuard => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -1891,7 +1899,8 @@ impl Op {
             | ExprCall
             | CallableDescriptorInvoke
             | PipeCall
-            | FiberRuntimeCall => E::all().difference(E::REFCOUNT_OP),
+            | FiberRuntimeCall
+            | ParallelSpawn => E::all().difference(E::REFCOUNT_OP),
             ExternCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
@@ -2097,6 +2106,9 @@ impl Op {
             MixedClone => "mixed_clone",
             InvokerRefArg => "invoker_ref_arg",
             MixedUnbox => "mixed_unbox",
+            StringArgumentGuard => "string_argument_guard",
+            StrictStringArgumentGuard => "strict_string_argument_guard",
+            StringBindingAccepted => "string_binding_accepted",
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
             ArrayToPointerWords => "array_to_pointer_words",
@@ -2173,6 +2185,7 @@ impl Op {
                 "dynamic_object_new_without_constructor_mixed"
             }
             CallablePtr => "callable_ptr",
+            ParallelSpawn => "parallel_spawn",
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",

@@ -541,7 +541,9 @@ mod tests {
     #[test]
     fn debug_info_helpers_emit_on_all_targets() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+            let mut emitter = Emitter::new(target);
             emit_obj_debuginfo_fetch(&mut emitter);
             emit_vd_debuginfo_object(&mut emitter);
             emit_pr_debuginfo_object(&mut emitter);
@@ -553,9 +555,9 @@ mod tests {
             assert!(fetch.contains("__rt_debuginfo_fatal"), "{name}");
             assert!(!fetch.contains("__rt_throw_current"), "{name}");
             assert!(fetch.contains("_debuginfo_null_prefix") && fetch.contains("_debuginfo_null_suffix"), "{name}");
-            assert!(fetch.contains("_debuginfo_guard") && fetch.contains("_exc_handler_top"), "{name}");
-            assert!(!fetch.contains("_exc_call_frame_top"), "{name}");
-            assert!(fetch.contains("_print_r_mode") && fetch.contains("_print_r_ptr"), "{name}");
+            assert!(fetch.contains("_debuginfo_guard") && fetch.contains(&slot("_exc_handler_top")), "{name}");
+            assert!(!fetch.contains(&slot("_exc_call_frame_top")), "{name}");
+            assert!(fetch.contains(&slot("_print_r_mode")) && fetch.contains(&slot("_print_r_ptr")), "{name}");
             assert!(renderers.contains("__rt_var_dump_open_object_n"), "{name}");
             assert!(renderers.contains("__rt_print_r_hash"), "{name}");
             assert_eq!(renderers.matches("__rt_decref_any").count(), 2, "{name}");
@@ -566,12 +568,14 @@ mod tests {
     #[test]
     fn print_r_capture_save_transfers_owner_on_all_targets() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
             emit_print_r_capture_save(&mut emitter);
             emit_print_r_capture_restore(&mut emitter);
             let asm = emitter.output();
             for symbol in ["_print_r_ptr", "_print_r_cap", "_print_r_off", "_print_r_mode"] {
-                assert!(asm.matches(symbol).count() >= 3, "{name}: {symbol}");
+                let slot = crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+                assert!(asm.matches(&slot).count() >= 3, "{name}: {symbol}");
             }
             assert!(asm.contains("__rt_pr_abort"), "{name}");
             assert!(!asm.contains("malloc") && !asm.contains("memcpy"), "{name}");

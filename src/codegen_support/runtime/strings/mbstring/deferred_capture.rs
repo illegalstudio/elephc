@@ -170,7 +170,10 @@ mod tests {
 
             assert!(assembly.contains(DRAIN), "missing deferred drain for {name}");
             if target.arch == Arch::AArch64 {
-                assert!(assembly.contains("str x10, [x9]"), "missing safe queue publication for {name}");
+                // The queue fields are context slots, so the value register stores straight through x28
+                // and no symbol-address scratch exists to be clobbered.
+                let queue_head = crate::codegen_support::runtime::test_slot_ref(target.arch, ACTIVE);
+                assert!(assembly.contains(&format!("str x10, [{queue_head}]")), "missing safe queue publication for {name}");
                 assert!(!assembly.contains("str x9, [x9]"), "self-clobbering queue publication for {name}");
             } else {
                 assert!(assembly.contains("r10"), "missing x86 queue scratch for {name}");

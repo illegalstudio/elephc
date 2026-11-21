@@ -24,6 +24,7 @@ mod reflection_class_members;
 mod reflection_constant_collections;
 mod reflection_default_properties;
 mod reflection_mirror_references;
+mod foreign_context;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {

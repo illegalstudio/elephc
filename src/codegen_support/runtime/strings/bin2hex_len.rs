@@ -12,7 +12,7 @@
 //! - ABI: AArch64 x1/x2 = source pointer/length; x86_64 rax/rdx = source. Result in
 //!   x0/rax; the source pointer is not read.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_bin2hex_len` helper for the active target.
 pub fn emit_bin2hex_len(emitter: &mut Emitter) {
@@ -30,8 +30,7 @@ fn emit_bin2hex_len_aarch64(e: &mut Emitter) {
     e.label_global("__rt_bin2hex_len");
     e.instruction("adds x0, x2, x2");                                            // result length = 2 * source length
     e.instruction("b.cs __rt_bin2hex_len_overflow");                            // reject a wrapped size
-    abi::emit_symbol_address(e, "x9", "_heap_max");
-    e.instruction("ldr x9, [x9]");                                               // load the configured heap bound
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(e, "x9"); // load the configured heap bound
     e.instruction("cmp x0, x9");                                                 // would bin2hex() exceed the heap?
     e.instruction("b.hi __rt_bin2hex_len_overflow");                             // report the same allocation fatal
     e.instruction("ret");                                                        // return the exact result length
@@ -47,8 +46,7 @@ fn emit_bin2hex_len_x86_64(e: &mut Emitter) {
     e.instruction("mov rax, rdx");                                               // start from the source byte count
     e.instruction("add rax, rax");                                               // result length = 2 * source length
     e.instruction("jc __rt_bin2hex_len_overflow_x86_64");                        // reject a wrapped size
-    abi::emit_symbol_address(e, "r9", "_heap_max");
-    e.instruction("mov r9, QWORD PTR [r9]");                                     // load the configured heap bound
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(e, "r9"); // load the configured heap bound
     e.instruction("cmp rax, r9");                                                // would bin2hex() exceed the heap?
     e.instruction("ja __rt_bin2hex_len_overflow_x86_64");                        // report the same allocation fatal
     e.instruction("ret");                                                        // return the exact result length

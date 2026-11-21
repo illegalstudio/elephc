@@ -27,6 +27,27 @@ elephc supports Fibers on the three executable/release hosts: macOS ARM64, Linux
 
 `FiberError` is modeled as an `Error` subclass, matching PHP. `catch (FiberError $e)`, `catch (Error $e)`, and `catch (Throwable $e)` all apply; `catch (Exception $e)` does not. As in reference PHP, the class is reserved for the engine: `new FiberError(...)` is refused — elephc reports it at compile time where PHP raises `Error: The "FiberError" class is reserved for internal use and cannot be manually instantiated` at run time.
 
+When the Parallel runtime is present, user-level `Fiber::suspend()` is rejected with `Error` while a
+Parallel scope is active on the current OS thread or while running in a Parallel worker. The guard
+runs before evaluating the suspend value for direct and statically resolved calls. Dynamic
+invocation also checks callable strings, callable arrays (including `[$fiber, "suspend"]`),
+first-class callable descriptors, and `mixed` values. Supported higher-order builtins
+(`array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `array_walk_recursive()`, and
+`usort()`) check callbacks at their PHP argument position; `array_map()` also accepts any callback
+expression in its first argument position. Earlier operands are evaluated in source order, and
+owned temporaries are released if the callback is rejected. Later operands are skipped after
+rejection (for example, `array_filter()` evaluates its input before checking the callback).
+`preg_replace_callback()` evaluates its pattern before the callback guard and skips the subject
+after rejection; the shared descriptor-invoker check is a final backstop. Ordinary callback targets
+continue normally. Async's internal scheduler yields are handled separately by `TaskGroup`.
+
+In an Async task, a dynamically resolved `Fiber::suspend` callback is rejected with
+`Error("Fiber::suspend() is not a scheduler wakeup inside an Elephc Async task")` before callback
+dispatch, even when the Parallel runtime is not linked. In a program with both extensions, the
+callback-specific guard checks Async task state when no Parallel scope or worker is active. This does
+not change direct static `Fiber::suspend()` in an Async task: it still suspends without registering a
+scheduler wake, so live tasks with no other wake source end in the documented Async deadlock error.
+
 ## Lifecycle states
 
 A fiber moves through four states in order, never going backwards:

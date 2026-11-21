@@ -969,6 +969,44 @@ try { NeverEnumImplementation::Ready->stop(); } catch (Error $error) { echo "cau
     assert_eq!(out, "caught");
 }
 
+/// The unified task execution modes are distinct stable unit-enum singletons.
+#[test]
+fn task_execution_enum_cases_and_identity() {
+    let out = compile_and_run(r#"<?php
+use Elephc\Task\Execution;
+$cases = Execution::cases();
+echo count($cases), "|", $cases[0]->name, "|", $cases[1]->name, "|";
+echo $cases[0] === Execution::Async ? "A" : "bad";
+echo $cases[1] === Execution::Parallel ? "P" : "bad";
+echo Execution::Async !== Execution::Parallel ? "distinct" : "bad";
+"#);
+    assert_eq!(out, "2|Async|Parallel|APdistinct");
+}
+
+/// Execution modes retain their enum type through arguments, returns and namespace aliases.
+#[test]
+fn task_execution_enum_typed_alias_and_return() {
+    let out = compile_and_run(r#"<?php
+namespace TaskExample;
+use Elephc\Task\Execution as Mode;
+function selectMode(Mode $mode): Mode { return $mode; }
+echo selectMode(Mode::Parallel)->name, "|";
+echo enum_exists('Elephc\\Task\\Execution') ? "enum" : "missing";
+"#);
+    assert_eq!(out, "Parallel|enum");
+}
+
+/// Native enum metadata exposes the same execution singleton to dynamic eval.
+#[test]
+fn task_execution_enum_eval_native_identity() {
+    let out = compile_and_run(r#"<?php
+$native = \Elephc\Task\Execution::Async;
+$dynamic = eval('return \\Elephc\\Task\\Execution::Async;');
+echo $dynamic->name, "|", $dynamic === $native ? "same" : "different";
+"#);
+    assert_eq!(out, "Async|same");
+}
+
 /// Class-name constant expressions survive enum schema construction as string backing values.
 #[test]
 fn test_backed_enum_values_accept_named_class_constant_expressions() {

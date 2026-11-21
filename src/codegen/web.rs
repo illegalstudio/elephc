@@ -424,9 +424,8 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
     crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_call_label(emitter, "__rt_heap_bins_clear");
+    crate::codegen_support::runtime::ctx::emit_heap_arena_reset_state(emitter);
     // A request that called `ini_set('memory_limit', …)` moved `_heap_limit`; the next
     // request must start from the compile-time ceiling again, exactly like PHP's INI reset.
     abi::emit_load_symbol_to_reg(
@@ -481,22 +480,42 @@ mod handler_reset_tests {
     #[test]
     fn web_arena_reset_reconciles_allocation_counters_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
             emit_heap_arena_reset(&mut emitter);
             let asm = emitter.output();
-            let heap_reset = asm.rfind("__rt_heap_bins_clear").unwrap();
-            let bases = asm.find("_heap_live_bases").unwrap();
-            let extent_reset = asm.rfind("_heap_off").unwrap();
-            let allocs = asm.find("_gc_allocs").unwrap();
-            let frees = asm.find("_gc_frees").unwrap();
-            let live = asm.find("_gc_live").unwrap();
-            let peak = asm.find("_gc_peak").expect("the live-byte watermark is reset per request");
-            assert!(heap_reset < allocs && allocs < frees && frees < live && live < peak, "{name}");
+            // `__rt_heap_bins_clear` empties the whole bin table; the context reset then zeroes
+            // the bump offset and the ordered free list, which closes the heap reset.
+            let free_list = crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET;
+            let free_list_zero = match target.arch {
+                crate::codegen_support::platform::Arch::AArch64 => format!("str xzr, [x28, #{free_list}]"),
+                crate::codegen_support::platform::Arch::X86_64 => format!("mov QWORD PTR [r14 + {free_list}], 0"),
+            };
+            let heap_reset = asm.rfind(&free_list_zero).expect("context-owned free-list reset");
+            let mut counters = [Emitter::new(target), Emitter::new(target), Emitter::new(target)];
+            let value = abi::int_result_reg(&counters[0]);
+            abi::emit_load_symbol_to_reg(&mut counters[0], value, "_gc_allocs", 0);
+            abi::emit_store_reg_to_symbol(&mut counters[1], value, "_gc_frees", 0);
+            abi::emit_store_zero_to_symbol(&mut counters[2], "_gc_live", 0);
+            let [allocs_probe, frees_probe, live_probe] = counters;
+            let allocs = asm.find(allocs_probe.output().trim()).expect("context allocation total read");
+            let frees = asm.find(frees_probe.output().trim()).expect("context cumulative frees write");
+            let live = asm.find(live_probe.output().trim()).expect("context live-block reset");
+            assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            assert!(!asm.contains("__rt_heap_alloc"), "{name}");
+            // The per-request peak watermark starts over with the arena, through the context.
+            let mut peak_probe = Emitter::new(target);
+            abi::emit_store_zero_to_symbol(&mut peak_probe, "_gc_peak", 0);
+            let peak = asm.find(peak_probe.output().trim()).expect("the live-byte watermark is reset per request");
+            assert!(live < peak, "{name}");
             let startup_limit = asm.find("_heap_limit_startup").expect("the startup ceiling is restored");
             let reset_limit = asm.rfind("_heap_limit").expect("the runtime ceiling is reset");
             assert!(startup_limit < reset_limit, "{name}: the startup ceiling must feed the reset");
-            assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
-            assert!(!asm.contains("__rt_heap_alloc"), "{name}");
+            let bases = asm.find("_heap_live_bases").expect("live bases are retired");
+            let bins_clear = asm.find("__rt_heap_bins_clear").expect("binned block marks are cleared");
+            assert!(bases < bins_clear && bins_clear < heap_reset, "{name}: live bases retire before the extent resets");
+            assert!(!asm.contains("_heap_small_bins") && !asm.contains("_gc_allocs"),
+                "{name}: request counters must not address shared globals");
         }
     }
 
@@ -544,27 +563,36 @@ mod handler_reset_tests {
         ] {
             let mut emitter = Emitter::new(target);
             emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
+            let routed = emitter.ctx_register;
             let asm = emitter.output();
-            let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            // Request state lives in context slots; every other symbol is still a process global.
+            let sym = |name: &str| -> String {
+                if routed && crate::codegen_support::runtime::ctx::per_context_symbol_offset(&Emitter::new(target), name).is_some() {
+                    format!("{}]", crate::codegen_support::runtime::ctx::test_symbol_ref(target.arch, name))
+                } else {
+                    name.to_string()
+                }
+            };
+            let borrowed_refs = asm.find(&sym("_rt_unmanaged_ref_borrow_top")).unwrap();
             let validation_pins = asm.find("_rt_reference_validation_pins_top").unwrap();
-            let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
-            let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
-            let output_level = asm.find("_ob_level").unwrap();
-            let print_r_mode = asm.find("_print_r_mode").unwrap();
-            let print_r_ptr = asm.find("_print_r_ptr").unwrap();
-            let print_r_cap = asm.find("_print_r_cap").unwrap();
+            let magic_set_guards = asm.find(&sym("_magic_set_guard_head")).unwrap();
+            let saved_magic_set_guards = asm.find(&sym("_fiber_main_saved_magic_set_guard")).unwrap();
+            let output_level = asm.find(&sym("_ob_level")).unwrap();
+            let print_r_mode = asm.find(&sym("_print_r_mode")).unwrap();
+            let print_r_ptr = asm.find(&sym("_print_r_ptr")).unwrap();
+            let print_r_cap = asm.find(&sym("_print_r_cap")).unwrap();
             let stream_context = asm.find("_stream_context_options").unwrap();
-            let final_output_level = asm.rfind("_ob_level").unwrap();
-            let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
-            let final_print_r_ptr = asm.rfind("_print_r_ptr").unwrap();
-            let final_print_r_cap = asm.rfind("_print_r_cap").unwrap();
+            let final_output_level = asm.rfind(&sym("_ob_level")).unwrap();
+            let final_print_r_mode = asm.rfind(&sym("_print_r_mode")).unwrap();
+            let final_print_r_ptr = asm.rfind(&sym("_print_r_ptr")).unwrap();
+            let final_print_r_cap = asm.rfind(&sym("_print_r_cap")).unwrap();
             let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
             let registrations = asm.find("__rt_stream_registry_cleanup").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
-            let heap = asm.find("_heap_off").unwrap();
+            let heap = asm.find("__rt_heap_bins_clear").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
-                assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
+                assert!(asm.find(&sym(symbol)).unwrap() < inventory, "{target:?}: {symbol}");
             }
             assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
             assert!(validation_pins < inventory, "{target:?}: stale validation records must clear first");
@@ -776,5 +804,5 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }

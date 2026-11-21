@@ -278,6 +278,7 @@ mod tests {
         operators: Some(&OPERATORS),
         dynamic_properties_deprecated: false,
         dump_dynamic_properties_first: false,
+        reflection: elephc_builtin_contract::ClassReflectionPolicy::Php,
     };
 
     /// A nondecimal internal contract selects its own methods and preserves strict identity.

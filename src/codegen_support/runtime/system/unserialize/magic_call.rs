@@ -7,6 +7,7 @@
 //! Key details:
 //! - The decoder owns one data slot, containing either its original hash or an acquired box.
 //! - The parser context retains hydration data until all wire back-references have been decoded.
+//! - The newly decoded result box remains unwind-visible while its PHP hook runs.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -48,12 +49,18 @@ pub(super) fn emit_unserialize_magic_call(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, data);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
     super::parser_owners::emit_transfer_data(emitter);
+    // The recursive parser frame is 272 bytes below its link on AArch64, so the stable result box at sp+96 is x29-176.
+    let result_box = if emitter.target.arch == Arch::AArch64 { 176 } else { 96 };
+    let owner_address = abi::tertiary_scratch_reg(emitter);
+    abi::emit_frame_slot_address(emitter, owner_address, result_box);
+    abi::emit_push_call_operand_owner(emitter, owner_address, false);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), object);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), data);
     abi::emit_store_zero_to_local_slot(emitter, data);
     abi::load_at_offset(emitter, scratch, method);
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), scratch);
     abi::emit_call_label(emitter, "__rt_unserialize_invoke_modern");
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.comment("unserialize data remains owned until the parser context completes");
 }
 
@@ -75,7 +82,10 @@ mod tests {
             assert!(boxed < rooted && rooted < invoked, "{name}: {asm}");
             let clear = if name == "linux-x86_64" { "mov QWORD PTR [rbp - 80], 0" } else { "stur xzr, [x29, #-192]" };
             assert!(asm[rooted..invoked].contains(clear), "{name}: {asm}");
-            assert!(!asm.contains("__rt_decref_any"), "{name}: keep back-reference targets alive");
+            let published = asm.find("__rt_cleanup_call_operand_owner").expect("decoded result unwind root");
+            let detached = asm.find("detach temporary call operand owner").expect("normal result transfer");
+            assert!(rooted < published && published < invoked && invoked < detached, "{name}: {asm}");
+            assert!(!asm.contains("__rt_decref_any"), "{name}: normal completion keeps the returned box alive");
         }
     }
 }

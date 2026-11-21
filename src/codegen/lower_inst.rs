@@ -55,6 +55,7 @@ mod mixed_narrowing;
 mod numeric_payloads;
 mod numeric_comparisons;
 mod numeric_cast;
+mod string_argument_guard;
 mod externs;
 mod floats;
 mod hashes;
@@ -62,6 +63,7 @@ mod offset_unset;
 mod closure_binding;
 mod iterators;
 mod objects;
+mod parallel;
 mod ownership;
 mod pointers;
 mod scalar_widths;
@@ -315,6 +317,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MixedBox => lower_mixed_box(ctx, &inst),
         Op::MixedClone => lower_mixed_clone(ctx, &inst),
         Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
+        Op::StringArgumentGuard | Op::StrictStringArgumentGuard => string_argument_guard::lower(ctx, &inst),
+        Op::StringBindingAccepted => string_argument_guard::lower_predicate(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::ArrayToPointerWords => arrays::lower_array_to_pointer_words(ctx, &inst),
@@ -383,6 +387,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
         }
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
+        Op::ParallelSpawn => parallel::lower_parallel_spawn(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
         Op::DynamicClassIsAbstract => objects::lower_dynamic_class_is_abstract(ctx, &inst),

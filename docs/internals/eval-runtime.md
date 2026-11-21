@@ -354,6 +354,50 @@ active through handler replacement and pin cleanup. Full validation then covers
 cyclic containers, globals, detached handlers, and scope writes before a throw.
 Ordinary scope synchronization and throwable propagation use the same paths.
 
+### Native arena across Rust callbacks
+
+The arena-borrowing execute entry `__elephc_eval_execute_in_context_v1` wraps the legacy
+`__elephc_eval_execute`, so it keeps eager global-class imports, while
+`__elephc_eval_execute_with_deferred_catalog` (step 7 above) is the path that may run
+before the native catalog is published.
+
+The Magician `EvalContext` holds interpreter metadata; it is not the native heap
+arena. Generated interpreter execution supplies the caller's actual arena from
+the reserved context register (`x28` on AArch64, `r14` on x86_64). Rust records a
+borrowed, thread-local activation and restores the previous activation on return
+or panic. Rust may use a callee-saved register internally, so its value during a
+Rust-to-native callback cannot establish native arena identity.
+
+Generated value/member C gateways and eval's Rust-entered AOT free-function
+descriptor invokers install that captured pointer before touching native state,
+preserve C arguments, and restore the foreign caller's context register after
+the native body. Callback-adapter descriptor allocation uses the same gateway.
+Ordinary native descriptor invokers keep their original entry and do not acquire
+a Magician TLS dependency.
+
+A closure can be invoked after the `eval()` activation that created it returns.
+Generated callable-array dispatch therefore uses
+`__elephc_eval_callable_call_array_in_context_v1`, whose fifth C argument borrows
+the current caller arena for that invocation. It does not depend on an earlier
+execute activation still being live. The legacy five-argument execute and
+four-argument callback exports remain available; descriptor ABI v4 is unchanged.
+This synchronous activation does not own an arena, extend metadata lifetimes,
+or authorize transferring eval callbacks or heap values between worker arenas.
+
+Post-barrier callable probes likewise use
+`__elephc_eval_is_callable_in_context_v1`, adding the caller arena as a third
+C argument. This applies both to the EIR `is_callable` probe and to dynamic
+callback-descriptor materialization; a previous execute activation is not needed.
+
+Native `Closure::bind` rebinding of eval adapters installs its five-argument
+Rust callback through `__elephc_eval_install_closure_bind_hook_v2`. Its distinct
+context-aware slot supplies the current arena to
+`__elephc_eval_closure_bind_this_in_context_v1`. The v1 installer and separate
+four-argument hook remain available as a legacy fallback. Installing either
+version clears the other slot, including for a null callback, so replacement
+cannot silently select a stale callback signature. Native closure descriptors
+continue through their existing capture-shape path without a Magician dependency.
+
 Magician has no direct PCRE2 symbols in its base static library. If the final
 EIR module requires the regex runtime, generated eval setup registers the
 managed `elephc_pcre2_v1_*` shim callbacks before creating the context.

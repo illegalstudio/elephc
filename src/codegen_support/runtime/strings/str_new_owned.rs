@@ -15,7 +15,7 @@
 //! - Callers must save their live state first: the allocator clobbers caller-saved
 //!   registers on both targets.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels};
+use crate::codegen_support::{emit::Emitter, platform::Arch, sentinels};
 
 /// Emits the direct owned-string allocation helper for the active target.
 pub fn emit_str_new_owned(emitter: &mut Emitter) {
@@ -32,8 +32,7 @@ fn emit_str_new_owned_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_new_owned ---");
     emitter.label_global("__rt_str_new_owned");
 
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
-    emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for one result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9"); // load the configured heap capacity as the upper bound for one result
     emitter.instruction("cmp x0, x9");                                          // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("b.hi __rt_str_new_owned_too_large");                   // report a PHP-style allocation overflow instead of returning truncated storage
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the allocator call
@@ -54,8 +53,7 @@ fn emit_str_new_owned_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_new_owned ---");
     emitter.label_global("__rt_str_new_owned");
 
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for one result
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8"); // load the configured heap capacity as the upper bound for one result
     emitter.instruction("cmp rax, r8");                                         // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("ja __rt_str_new_owned_too_large_x86");                 // report a PHP-style allocation overflow instead of returning truncated storage
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and realign the stack for the allocator call

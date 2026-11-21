@@ -22,9 +22,9 @@ pub(super) fn emit_probe(emitter: &mut Emitter) {
             emitter.instruction("b.eq __rt_hash_set_persistent_write");         // preserve the wrapper and update its child
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r14], 7");                      // persistent references use a nested Mixed box
+            emitter.instruction("cmp QWORD PTR [r15], 7");                      // persistent references use a nested Mixed box
             emitter.instruction("jne __rt_hash_set_check_reference_x");         // ordinary boxes keep the existing replacement path
-            emitter.instruction("cmp QWORD PTR [r14 + 16], 1");                 // only marker one carries PHP reference identity
+            emitter.instruction("cmp QWORD PTR [r15 + 16], 1");                 // only marker one carries PHP reference identity
             emitter.instruction("je __rt_hash_set_persistent_write_x");         // preserve the wrapper and update its child
         }
     }

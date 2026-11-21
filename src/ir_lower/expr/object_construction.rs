@@ -117,7 +117,7 @@ pub(super) fn lower_new_object(
     let call_args = ref_place_rewrite
         .as_ref()
         .map_or(args, |rewrite| rewrite.args.as_slice());
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands = lower_args_with_eir_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     // Publish AFTER argument evaluation: a nested construction executed by an argument

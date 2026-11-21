@@ -24,10 +24,10 @@ pub fn emit_pclose(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pclose ---");
     emitter.label_global("__rt_pclose");
-
     emitter.instruction("sub sp, sp, #16");                                     // minimal frame for the libc call
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("bl __rt_stream_owner_clear");                          // detach the pipe descriptor before pclose can recycle it
 
     // -- look up the FILE* recorded for this descriptor --
     abi::emit_symbol_address(emitter, "x9", "_popen_files");
@@ -53,9 +53,10 @@ fn emit_pclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pclose ---");
     emitter.label_global("__rt_pclose");
-
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // copy the descriptor into the ownership-helper result register
+    emitter.instruction("call __rt_stream_owner_clear");                        // detach the pipe descriptor before pclose can recycle it
 
     // -- look up the FILE* recorded for this descriptor --
     abi::emit_symbol_address(emitter, "r9", "_popen_files");                    // base of the fd->FILE* table

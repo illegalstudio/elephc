@@ -5,8 +5,11 @@
 
 struct object { unsigned owners; };
 struct cell { uint64_t tag, lo, hi; };
-__attribute__((visibility("hidden"))) void *pending __asm__("_exc_value");
-extern int publish(void *, struct cell *) __asm__("__rt_mbstring_publish_throw");
+/* The runtime publishes through the context register, so the fixture lends it a private context
+ * whose only meaningful field is the pending-exception slot. */
+void *fixture_ctx[4096] __asm__("fixture_ctx");
+#define pending (fixture_ctx[FIXTURE_EXC_VALUE_OFFSET / 8])
+extern int publish(void *, struct cell *) __asm__("fixture_publish");
 int release_owner(void *, struct cell *) __asm__("__rt_mbstring_release");
 static unsigned retained, released;
 static int release_status;

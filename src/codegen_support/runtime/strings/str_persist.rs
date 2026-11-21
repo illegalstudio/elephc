@@ -30,12 +30,11 @@ fn emit_transient_base_probe(emitter: &mut Emitter) {
         emitter.label("__rt_str_transient_base");
         emitter.instruction("test rax, rax");                                   // null pointers cannot name a managed payload base
         emitter.instruction("jz __rt_str_transient_base_zero_x86");             // reject null before reading allocator state
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
         emitter.instruction("lea rcx, [r8 + 16]");                              // compute the first possible payload base
         emitter.instruction("cmp rax, rcx");                                    // is the candidate below the first payload?
         emitter.instruction("jb __rt_str_transient_base_zero_x86");             // static and foreign pointers are not transient blocks
-        crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-        emitter.instruction("mov r9, QWORD PTR [r9]");                          // load the live bump extent
+        crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r9"); // load the live bump extent
         emitter.instruction("add r9, r8");                                      // derive the current heap end
         emitter.instruction("cmp rax, r9");                                     // is the candidate outside the live heap window?
         emitter.instruction("jae __rt_str_transient_base_zero_x86");            // reject pointers at or beyond the heap end
@@ -70,12 +69,11 @@ fn emit_transient_base_probe(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_transient_base ---");
     emitter.label_shared("__rt_str_transient_base");
     emitter.instruction("cbz x0, __rt_str_transient_base_zero");                // null pointers cannot name a managed payload base
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("add x13, x9, #16");                                    // compute the first possible payload base
     emitter.instruction("cmp x0, x13");                                         // is the candidate below the first payload?
     emitter.instruction("b.lo __rt_str_transient_base_zero");                   // static and foreign pointers are not transient blocks
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the live bump extent
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // load the live bump extent
     emitter.instruction("add x10, x9, x10");                                    // derive the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the candidate outside the live heap window?
     emitter.instruction("b.hs __rt_str_transient_base_zero");                   // reject pointers at or beyond the heap end
@@ -428,8 +426,8 @@ mod tests {
                 .map(|end| start + end)
                 .unwrap_or(asm.len());
             let probe = &asm[start..end];
-            assert!(probe.contains("_heap_buf"), "{name}: {probe}");
-            assert!(probe.contains("_heap_off"), "{name}: {probe}");
+            assert!(probe.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_BASE_OFFSET)), "{name}: {probe}");
+            assert!(probe.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET)), "{name}: {probe}");
             assert!(probe.contains("_heap_live_bases"), "{name}: {probe}");
             assert!(!probe.contains("transient_base_scan"), "{name}: {probe}");
             if target.arch == Arch::X86_64 {

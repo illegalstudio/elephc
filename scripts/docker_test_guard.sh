@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # Monitor a running Docker test container's Cargo target volume and free space.
 
+# Measure the daemon filesystem, not DockerRootDir on a possibly different client host.
+# Call after preparing the test image and before creating the Cargo target volume.
+docker_test_available_kib() {
+    local image="$1" platform="$2" available
+    if ! available="$(docker run --rm --platform "$platform" --entrypoint sh "$image" \
+        -c 'set -e; df -Pk / | awk "NR == 2 {print \$4}"')"; then
+        echo "Cannot check the Docker daemon filesystem's free space." >&2
+        return 1
+    fi
+    if [[ ! "$available" =~ ^[0-9]+$ ]]; then
+        echo "Invalid Docker free-space measurement." >&2
+        return 1
+    fi
+    printf '%s\n' "$available"
+}
+
 docker_test_guard() {
     local container_name="$1"
     local limit_marker="$2"

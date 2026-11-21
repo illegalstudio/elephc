@@ -130,6 +130,31 @@ $f->resume(99);
     assert_eq!(out, "got=99");
 }
 
+/// A Fiber payload reached through `mixed` must use the dedicated switch ABI too.
+/// In particular, the private receiver-ownership argument must not inherit a
+/// stale register value and release the Fiber while its Mixed owner is still live.
+#[test]
+fn test_mixed_fiber_receiver_survives_start_resume_and_get_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class MixedFiberBox { public mixed $fiber; }
+
+$box = new MixedFiberBox();
+$box->fiber = new Fiber(function (): string {
+    $value = Fiber::suspend("yield");
+    return $value;
+});
+echo $box->fiber->start();
+echo "/";
+$resumed = $box->fiber->resume("return");
+echo is_null($resumed) ? "null" : $resumed;
+echo "/";
+echo $box->fiber->getReturn();
+"#,
+    );
+    assert_eq!(out, "yield/null/return");
+}
+
 /// Verifies that resume delivers a nested array value to the suspend call and that
 /// array indexing into the received value works correctly (regression for Mixed
 /// cell payload handling).
@@ -367,6 +392,30 @@ echo "done";
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
     assert_eq!(out.stdout, "done");
+}
+
+/// Verifies that the Fiber boundary does not release a dynamic-invoker argument
+/// container that the descriptor invoker has already consumed while rethrowing.
+#[test]
+fn test_dynamic_fiber_callable_failure_releases_its_argument_container_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$body = function (): void {
+    throw new RuntimeException("dynamic-fiber");
+};
+$fiber = new Fiber($body);
+try {
+    $fiber->start();
+} catch (RuntimeException $caught) {
+    echo $caught->getMessage();
+    unset($caught);
+}
+unset($fiber);
+unset($body);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "dynamic-fiber");
 }
 
 /// Verifies that a Fiber with a suspend value, when discarded (unset) after start(),

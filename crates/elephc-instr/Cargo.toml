@@ -13,4 +13,5 @@ crate-type = ["staticlib", "rlib"]
 
 # libc provides clock_gettime(CLOCK_MONOTONIC) for the low-overhead timer.
 [dependencies]
+elephc-monitoring-contract = { path = "../elephc-monitoring-contract" }
 libc = "0.2"

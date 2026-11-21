@@ -56,6 +56,7 @@ env:
     -p elephc-reference
     -p elephc-web
     -p elephc-instr
+    -p elephc-parallel
     -p elephc-probe
     -p elephc-curl
     -p elephc-zend

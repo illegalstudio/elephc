@@ -58,3 +58,5 @@ mod mixed_sourced_typed_param_limitation;
 
 #[path = "objects/computed_incdec.rs"]
 mod computed_incdec;
+#[path = "objects/mixed_method_arguments.rs"]
+mod mixed_method_arguments;

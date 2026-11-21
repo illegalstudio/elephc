@@ -9,6 +9,142 @@
 
 use crate::support::*;
 
+/// Successful serialized strings remain independent across later calls and retire after each loop.
+#[test]
+fn test_serialize_concat_results_remain_stable_and_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $wire = serialize($i);
+    $next = serialize($i + 1);
+    echo $wire, "|", $next;
+    unset($wire, $next);
+}
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    let expected = (0..20).map(|i| format!("i:{i};|i:{};", i + 1)).collect::<String>();
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing hydration hooks retire the unreturned decoded object and its result box.
+#[test]
+fn test_throwing_unserialize_hook_retires_decoded_result() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Guarded {
+    private int $id = 1;
+    public function __unserialize(array $data): void { unset($data); throw new Error("restored"); }
+}
+try { unserialize('O:7:"Guarded":0:{}'); }
+catch (Error $error) { echo $error->getMessage(); unset($error); }
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "restored", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing serialization hooks release the builtin's by-value receiver snapshot.
+#[test]
+fn test_throwing_serialize_hook_retires_input_snapshot() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Guarded {
+    private int $id = 1;
+    public function __serialize(): array { throw new Error("serialized"); }
+}
+$guard = new Guarded();
+try { serialize($guard); }
+catch (Error $error) { echo $error->getMessage(); unset($error); }
+unset($guard);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "serialized", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Invalid runtime callable-array selection raises TypeError and cleans argument/receiver roots.
+#[test]
+fn test_inaccessible_runtime_callable_array_is_catchable_and_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CallbackOwner {
+    private function hidden(): void { echo "inaccessible"; }
+    public function visible(): void { echo "visible"; }
+}
+$owner = new CallbackOwner();
+$method = $argc > 0 ? "hidden" : "visible";
+try { call_user_func([$owner, $method]); }
+catch (TypeError $error) { echo "caught"; unset($error); }
+unset($owner);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An owned nullable receiver is cleaned when its call escapes into a retirement finalizer.
+#[test]
+fn test_throwing_nullable_receiver_and_finally_retirement_keep_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Item { public function fail(): void { throw new RuntimeException("boom"); } }
+class Owner {
+    private array $items = [];
+    public function create(): Item { $item = new Item(); $this->items[] = $item; return $item; }
+    public function retire(Item $item): void {
+        $removed = array_splice($this->items, 0, 1); unset($removed);
+    }
+}
+function execute(Owner $owner): void {
+    $item = null;
+    try { $item = $owner->create(); $item->fail(); }
+    finally { if ($item instanceof Item) { $owner->retire($item); } unset($item); }
+}
+$owner = new Owner();
+try { execute($owner); } catch (Throwable $error) { echo $error->getMessage(); unset($error); }
+unset($owner);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "boom", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An object local assigned by an earlier catch retains its null value when that catch is skipped.
+#[test]
+fn test_two_catch_failure_selection_preserves_nullable_object_comparisons() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function initialFailure(bool $fail): void { if ($fail) { throw new RuntimeException("first"); } }
+function selectFailure(bool $first): void {
+    $failure = null;
+    try { initialFailure($first); }
+    catch (Throwable $caught) { $failure = $caught; unset($caught); }
+    try { throw new RuntimeException("second"); }
+    catch (Throwable $next) {
+        if ($failure === null && null === $failure) { $failure = $next; }
+        unset($next);
+    }
+    if ($failure !== null && null !== $failure) { throw $failure; }
+}
+try { selectFailure(false); } catch (Throwable $error) { echo $error->getMessage(), "|"; unset($error); }
+try { selectFailure(true); } catch (Throwable $error) { echo $error->getMessage(); unset($error); }
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "second|first", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing a nullable object local transfers its Mixed box instead of freeing it first.
+#[test]
+fn test_throw_nullable_object_local_preserves_exception_box() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function relay(?Throwable $error): void {
+    if ($error instanceof Throwable) { throw $error; }
+}
+try { relay(new RuntimeException("retained")); }
+catch (RuntimeException $caught) { echo $caught->getMessage(); unset($caught); }
+relay(null);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "retained", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Descendants preserve properties and custom constructor behavior inherited through user parents.
 #[test]
 fn test_throwable_grandchildren_preserve_inherited_storage_and_constructor() {
@@ -1101,6 +1237,29 @@ echo overwritten();
     assert_eq!(out, "9");
 }
 
+/// A call to an inherited builtin exception constructor must not specialize an unrelated
+/// constructor override at the same parameter index in a descendant class.
+#[test]
+fn test_builtin_exception_constructor_inference_does_not_retype_child_override() {
+    let out = compile_and_run(
+        r#"<?php
+final class CustomFailure extends RuntimeException {
+    private array $items;
+    public function __construct(array $items) {
+        $this->message = "custom";
+        $this->code = 0;
+        $this->items = $items;
+    }
+    public function countItems(): int { return count($this->items); }
+}
+new RuntimeException("base", 17);
+$failure = new CustomFailure([1, 2]);
+echo $failure->getMessage(), "|", $failure->countItems();
+"#,
+    );
+    assert_eq!(out, "custom|2");
+}
+
 /// Exception's seven accessors are final, while its constructor and string conversion stay overridable.
 #[test]
 fn test_exception_method_finality_matches_php() {
@@ -1284,4 +1443,32 @@ echo "n=$n\n";
          iter CAUGHT:iter2\n\
          n=3\n"
     );
+}
+
+/// `throw` on a nullable Throwable raises PHP's catchable Error for both null spellings:
+/// a null parameter arrives as a zero pointer, a slot assigned `null` holds the in-band sentinel.
+#[test]
+fn test_throw_nullable_throwable_null_raises_catchable_error() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function from_slot(bool $fail): void {
+    $failure = null;
+    try { if ($fail) { throw new RuntimeException("boom"); } } catch (Throwable $caught) { $failure = $caught; }
+    try { throw $failure; } catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+}
+function from_param(?Throwable $t): void {
+    try { throw $t; } catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+}
+from_slot(true);
+from_slot(false);
+from_param(new LogicException("x"));
+from_param(null);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "RuntimeException:boom|Error:Can only throw objects|LogicException:x|Error:Can only throw objects|",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

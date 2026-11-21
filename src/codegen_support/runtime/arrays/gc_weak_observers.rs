@@ -42,7 +42,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("and x10, x10, #0xff");                             // isolate the graph node's heap kind
         emitter.instruction("cmp x10, #4");                                     // only ordinary objects can be weak map keys
         emitter.instruction("b.ne __rt_gc_weak_next");                          // container pins only protect callback data
-        abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
         emitter.instruction("sub x10, x0, x9");                                 // derive the candidate's weak-cache granule
         emitter.instruction("lsr x10, x10, #4");                                // convert the byte offset to its direct cache index
         abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
@@ -61,7 +61,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("and r10d, 0xff");                                  // isolate the graph-node heap kind
         emitter.instruction("cmp r10d, 4");                                     // only ordinary objects can be weak map keys
         emitter.instruction("jne __rt_gc_weak_next");                           // container pins only protect callback data
-        abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+        crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
         emitter.instruction("mov r10, rax");                                    // preserve the receiver while deriving its direct cache index
         emitter.instruction("sub r10, r11");                                    // derive its heap-relative allocation offset
         emitter.instruction("shr r10, 4");                                      // convert the byte offset to a weak-cache granule

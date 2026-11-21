@@ -61,6 +61,7 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "cmp x0, #256" } else { "cmp rax, 256" }); // metadata tables cover only the bounded descriptor range
         ctx.emitter.instruction(&format!("{} {native_close_label}", if ctx.emitter.target.arch == Arch::AArch64 { "b.ge" } else { "jge" })); // ordinary higher descriptors still close without indexing side tables
     }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_owner_clear");
     emit_zlib_flush_on_close_for_current_fd(ctx);
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);
@@ -230,9 +231,8 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, format, "fprintf format")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("mov x0, #{}", inst.operands.len() - 2)
-            );                                                                  // pass the number of packed fprintf operands
+            let argument_count = inst.operands.len() - 2;
+            ctx.emitter.instruction(&format!("mov x0, #{}", argument_count));   // pass the number of packed fprintf operands
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 2) as i64);

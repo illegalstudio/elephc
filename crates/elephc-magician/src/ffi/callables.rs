@@ -56,6 +56,25 @@ pub unsafe extern "C" fn __elephc_eval_callable_parameter_is_by_ref(
     }).unwrap_or(0)
 }
 
+/// Probes callability under a borrowed native arena, including after an eval barrier.
+///
+/// # Safety
+/// The first two arguments obey `__elephc_eval_is_callable`'s contract;
+/// `runtime_context` identifies the caller's live arena for this synchronous probe.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_is_callable_in_context_v1(
+    ctx: *mut ElephcEvalContext,
+    callback: *mut RuntimeCell,
+    runtime_context: *mut std::ffi::c_void,
+) -> i32 {
+    std::panic::catch_unwind(|| {
+        if runtime_context.is_null() { return 0; }
+        let _activation = super::runtime_context::Activation::enter(runtime_context);
+        unsafe { __elephc_eval_is_callable(ctx, callback) }
+    }).unwrap_or(0)
+}
+
 /// Dispatches a callback value with a PHP argument array through the eval context.
 ///
 /// # Safety
@@ -73,6 +92,30 @@ pub unsafe extern "C" fn __elephc_eval_callable_call_array(
         eval_callable_call_array_inner(ctx, callback, arg_array, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Dispatches a callback under the actual native caller arena, including after eval returns.
+///
+/// # Safety
+/// The first four arguments obey `__elephc_eval_callable_call_array`'s contract.
+/// `runtime_context` borrows the caller's live arena for this synchronous invocation.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_callable_call_array_in_context_v1(
+    ctx: *mut ElephcEvalContext,
+    callback: *mut RuntimeCell,
+    arg_array: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+    runtime_context: *mut std::ffi::c_void,
+) -> i32 {
+    std::panic::catch_unwind(|| {
+        if runtime_context.is_null() {
+            unsafe { clear_result(out); }
+            return EvalStatus::RuntimeFatal.code();
+        }
+        let _activation = super::runtime_context::Activation::enter(runtime_context);
+        unsafe { __elephc_eval_callable_call_array(ctx, callback, arg_array, out) }
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Rebinds `$this` on an eval `Closure` object for the generated `Closure::bind` runtime.
@@ -96,6 +139,28 @@ pub unsafe extern "C" fn __elephc_eval_closure_bind_this(
 ) -> u64 {
     std::panic::catch_unwind(|| unsafe { eval_closure_bind_this_inner(ctx, closure, new_this, out) })
         .unwrap_or(0)
+}
+
+/// Rebinds an eval closure under the native caller's arena through the versioned v2 hook.
+///
+/// # Safety
+/// The first four arguments obey `__elephc_eval_closure_bind_this`'s contract;
+/// `runtime_context` borrows the current native arena throughout rebinding and cleanup.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_closure_bind_this_in_context_v1(
+    ctx: *mut ElephcEvalContext,
+    closure: *mut RuntimeCell,
+    new_this: *mut RuntimeCell,
+    out: *mut *mut RuntimeCell,
+    runtime_context: *mut std::ffi::c_void,
+) -> u64 {
+    std::panic::catch_unwind(|| {
+        if !out.is_null() { unsafe { *out = std::ptr::null_mut(); } }
+        if runtime_context.is_null() { return 0; }
+        let _activation = super::runtime_context::Activation::enter(runtime_context);
+        unsafe { __elephc_eval_closure_bind_this(ctx, closure, new_this, out) }
+    }).unwrap_or(0)
 }
 
 /// Runs the closure rebinding ABI body after installing a panic boundary.

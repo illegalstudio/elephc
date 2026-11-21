@@ -168,6 +168,54 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             out.push_str(&format!("\n{}.build()", pad(depth + 1)));
             out
         }
+        StmtKind::EnumDecl {
+            name,
+            generics,
+            backing_type,
+            cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
+        } => {
+            assert!(generics.is_none(), "generic enums are not modelled by this prelude transcriber");
+            assert!(trait_uses.is_empty(), "enum trait uses are not modelled");
+            assert!(methods.is_empty(), "enum methods are not modelled");
+            assert!(constants.is_empty(), "enum constants are not modelled");
+            let mut out = format!("{}enum_decl({})", pad(depth), lit(name));
+            if let Some(ty) = backing_type {
+                out.push_str(&format!("\n{}.backed({})", pad(depth + 1), ty_expr(ty)));
+            }
+            for interface in implements {
+                out.push_str(&format!(
+                    "\n{}.implements({})",
+                    pad(depth + 1),
+                    lit(&name_source(interface))
+                ));
+            }
+            for case in cases {
+                assert!(
+                    case.attributes.is_empty(),
+                    "attributes on enum cases are not modelled: {}",
+                    case.name
+                );
+                match &case.value {
+                    Some(value) => out.push_str(&format!(
+                        "\n{}.case_value({}, {})",
+                        pad(depth + 1),
+                        lit(&case.name),
+                        expr(value, depth + 2)
+                    )),
+                    None => out.push_str(&format!(
+                        "\n{}.case({})",
+                        pad(depth + 1),
+                        lit(&case.name)
+                    )),
+                }
+            }
+            out.push_str(&format!("\n{}.build()", pad(depth + 1)));
+            out
+        }
         StmtKind::ClassDecl {
             generics: _,
             name,
@@ -1541,6 +1589,10 @@ class Demo implements Iterator {
         return ($flag == 1) ? $_v : false;
     }
 }
+enum DemoKind: int {
+    case Ready = 1;
+    case Done = 2;
+}
 function demo_make(int $h) {
     return new Demo($h);
 }
@@ -1591,6 +1643,9 @@ function demo_match($value) {
             "e_pre_inc(\"_j\")",
             "e_pre_dec(\"_j\")",
             "e_error_suppress(e_call(\"file_get_contents\", vec![e_var(\"path\")]))",
+            "enum_decl(\"DemoKind\")",
+            ".backed(TypeExpr::Int)",
+            ".case_value(\"Ready\", e_int(1))",
         ] {
             assert!(
                 rendered.contains(needle),

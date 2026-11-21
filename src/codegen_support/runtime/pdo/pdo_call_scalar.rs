@@ -202,6 +202,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #240]");                                  // arg0 = descriptor pointer
     emitter.instruction("ldr x1, [sp, #280]");                                  // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("blr x9");                                              // invoke callable(...args) → OWNED boxed Mixed return in x0
     emitter.instruction("str x0, [sp, #288]");                                  // save the boxed return for decode + release
 
@@ -435,6 +436,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = descriptor pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("call r10");                                            // invoke callable(...args) → OWNED boxed Mixed return in rax
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the boxed return for decode + release
 

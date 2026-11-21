@@ -84,9 +84,9 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_date_decomposed_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the returned struct tm pointer so each format-token branch can reload the decomposed calendar fields
 
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the formatted date output
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // load the current concat-buffer offset before appending the formatted date output
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // preserve the original concat-buffer offset for the final global offset update
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer used for transient string results
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");                     // load the base address of the shared concat buffer used for transient string results
     emitter.instruction("add r9, r8");                                          // compute the initial write cursor inside the concat buffer from the saved relative offset
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the live write cursor so every token helper can append to the same destination buffer
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the formatted string start pointer for the final return value
@@ -645,7 +645,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // compute the formatted-string length from the distance between the output cursor and the start pointer
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the original concat-buffer offset that was active before formatting started
     emitter.instruction("add r8, rdx");                                         // advance the global concat-buffer offset by the number of bytes written by the formatter
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer offset for later transient string helpers
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the updated concat-buffer offset for later transient string helpers
     emitter.instruction("add rsp, 160");                                        // release the formatter locals, scratch, and c/r save slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the formatted date string
     emitter.instruction("ret");                                                 // return the formatted date string pointer and length through the standard x86_64 string result registers

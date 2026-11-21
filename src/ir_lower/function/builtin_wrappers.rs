@@ -179,6 +179,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         // independent site tables to forward, and a builtin wrapper has neither.
         &Default::default(),
         &Default::default(),
+        &Default::default(), // the synthetic body has no mixed-storage assignment sites
         &Default::default(), // sparse key write sites
         &Default::default(), // promotable arrays
         label.to_string(),

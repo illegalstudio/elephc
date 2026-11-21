@@ -482,7 +482,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 /// Emits the x86_64 implementation of `__rt_preg_replace_callback`.
 ///
 /// Mirrors the AArch64 contract with System V registers. The accumulated result lives in a
-/// dedicated growable heap buffer (`r12` base, `r13` write cursor, `r14` capacity), so a callback
+/// dedicated growable heap buffer (`r12` base, `r13` write cursor, `r15` capacity; `r14` is the reserved ctx register), so a callback
 /// may freely use the shared scratch arena without forcing a copy of the output per match.
 fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let handle_off = 0;
@@ -511,10 +511,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let output_cap_off = callback_result_len_off + 8;
     let saved_r12_off = output_cap_off + 8;
     let saved_r13_off = saved_r12_off + 8;
-    let saved_r14_off = saved_r13_off + 8;
+    let saved_r15_off = saved_r13_off + 8;
     // Same 224-byte handler record as the AArch64 path. `push rbp` already
     // accounts for the return address, so the record is the tail of the frame.
-    let handler_off = (saved_r14_off + 8 + 15) & !15;
+    let handler_off = (saved_r15_off + 8 + 15) & !15;
     let stack_size = (handler_off
         + crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE
         + 15)
@@ -530,7 +530,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the handle, offset pairs, and callback state
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r12", saved_r12_off)); // preserve the caller's output base register
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", saved_r13_off)); // preserve the caller's output write register
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r14", saved_r14_off)); // preserve the caller's output capacity register
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r15", saved_r15_off)); // preserve the caller's output capacity register
 
     // -- save all inputs --
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", pattern_ptr_off)); // preserve pattern pointer across regex helper calls
@@ -629,10 +629,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the output block so growth can release it
     emitter.instruction("mov r12, rax");                                        // output base pointer
     emitter.instruction("mov r13, rax");                                        // output write cursor
-    emitter.instruction("mov r14, 4096");                                       // output capacity in bytes
+    emitter.instruction("mov r15, 4096");                                       // output capacity in bytes
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r12", output_start_off)); // save final output start pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", output_write_off)); // initialize final output write pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r14", output_cap_off)); // initialize output capacity
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r15", output_cap_off)); // initialize output capacity
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); // load subject C-string start
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize current regex search cursor
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", callback_result_ptr_off)); // no callback result is owned yet
@@ -873,7 +873,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_boxed_linux_x86_64");
     emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", saved_r12_off)); // restore the caller's output base register
     emitter.instruction(&format!("mov r13, QWORD PTR [rsp + {}]", saved_r13_off)); // restore the caller's output write register
-    emitter.instruction(&format!("mov r14, QWORD PTR [rsp + {}]", saved_r14_off)); // restore the caller's output capacity register
+    emitter.instruction(&format!("mov r15, QWORD PTR [rsp + {}]", saved_r15_off)); // restore the caller's output capacity register
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release preg_replace_callback stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code

@@ -24,6 +24,9 @@ mod locals_retype_fixtures;
 
 mod codegen {
     mod echo_vars;
+    mod mixed_sparse_writes;
+    mod mixed_value_copies;
+    mod string_parameter_boundaries;
     mod scalar_strings;
     mod array_basics;
     mod float_sort;

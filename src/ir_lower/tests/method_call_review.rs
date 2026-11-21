@@ -35,8 +35,15 @@ reviewTargetDispatch(new ReviewTargetHook());
     assert_eq!(function.value(call.operands[2]).unwrap().php_type.codegen_repr(), PhpType::Mixed,
         "{target}: hook args cannot depend on a specialized element type");
     let argument = function.instructions.iter().find(|inst| inst.result == Some(call.operands[2])).unwrap();
-    let Some(Immediate::LocalSlot(slot)) = argument.immediate else {
-        panic!("{target}: the argument container needs a published local owner");
+    // The argument is either a direct local load or a lease stored into its own call-owner slot
+    // (argument snapshots acquire the container, then publish that independent lease).
+    let slot = match argument.immediate {
+        Some(Immediate::LocalSlot(slot)) => slot,
+        _ => function.instructions.iter().find_map(|inst| match inst.immediate {
+            Some(Immediate::LocalSlot(slot)) if inst.op == Op::StoreLocal
+                && inst.operands == [call.operands[2]] => Some(slot),
+            _ => None,
+        }).unwrap_or_else(|| panic!("{target}: the argument container needs a published local owner")),
     };
     assert!(function.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner
         && inst.immediate == Some(Immediate::LocalSlot(slot))),

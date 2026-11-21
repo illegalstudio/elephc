@@ -14,23 +14,26 @@ static size_t live_allocations;
 const char allocation_error[] __asm__("_arr_cap_err_msg") = "allocation error";
 const char append_error[] __asm__("_hash_append_err_msg") = "Cannot add element to the array as the next element is already occupied";
 const uint64_t error_class_id __asm__("_spl_error_class_id") = 123;
-uint64_t *exception __asm__("_exc_value");
+/* The runtime reaches the active exception through the context register, so the fixture lends it a
+ * private context whose only meaningful field is the exception slot. */
+uint64_t *fixture_ctx[4096] __asm__("fixture_ctx");
+#define exception (fixture_ctx[FIXTURE_EXC_VALUE_OFFSET / 8])
 void *guard_top __asm__("_hash_write_guard_top");
 static jmp_buf append_handler;
 
 extern struct hash *hash_new(uint64_t, uint64_t) __asm__("__rt_hash_new");
 extern struct hash *grow(struct hash *) __asm__("__rt_hash_grow");
 extern struct hash *grow_owned(struct hash *) __asm__("fixture_grow_owned");
-extern struct hash *insert(struct hash *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) __asm__("__rt_hash_insert_owned");
+extern struct hash *insert(struct hash *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) __asm__("fixture_insert");
 extern struct entry *lookup(struct hash *, uint64_t) __asm__("fixture_lookup");
 extern struct hash *unique(struct hash *) __asm__("__rt_hash_ensure_unique");
 extern struct hash *pin(struct hash *) __asm__("__rt_hash_pin");
 extern void unpin(struct hash *) __asm__("__rt_hash_unpin");
-extern struct hash *set(struct hash *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) __asm__("__rt_hash_set");
+extern struct hash *set(struct hash *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) __asm__("fixture_set");
 extern struct hash *unset(struct hash *, uint64_t, uint64_t) __asm__("__rt_hash_unset");
-extern struct hash *append(struct hash *, uint64_t, uint64_t, uint64_t) __asm__("__rt_hash_append");
-extern struct next_index next_index(struct hash *) __asm__("__rt_hash_try_next_index");
-extern int64_t required_index(struct hash *) __asm__("__rt_hash_next_index");
+extern struct hash *append(struct hash *, uint64_t, uint64_t, uint64_t) __asm__("fixture_append");
+extern struct next_index next_index(struct hash *) __asm__("fixture_try_next_index");
+extern int64_t required_index(struct hash *) __asm__("fixture_next_index");
 
 void *fixture_allocate(size_t) __asm__("fixture_allocate");
 void fixture_free(void *) __asm__("fixture_free");

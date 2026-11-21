@@ -21,19 +21,19 @@ static uint64_t copies, frees;
 
 HIDDEN _Alignas(16) unsigned char heap[16384] __asm__("_heap_buf");
 HIDDEN unsigned char live_bases[sizeof(heap) / 64] __asm__("_heap_live_bases");
-HIDDEN uint64_t offset __asm__("_heap_off");
-HIDDEN uint64_t live __asm__("_gc_live");
-HIDDEN uint64_t free_count __asm__("_gc_frees");
+/* The runtime keeps allocator and GC state in its per-context block, reached through the context
+ * register. The fixture owns that block, and every emitted entry below installs it. */
+HIDDEN _Alignas(4096) uint64_t fixture_ctx[FIXTURE_CTX_SIZE / 8] __asm__("fixture_ctx");
+#define CTX_WORD(field) (fixture_ctx[(field) / 8])
+#define offset CTX_WORD(FIXTURE_HEAP_OFF)
+#define live CTX_WORD(FIXTURE_GC_LIVE)
 HIDDEN uint64_t debug __asm__("_heap_debug_enabled");
 HIDDEN uint64_t guard __asm__("_web_heap_guard_enabled");
-HIDDEN void *free_list __asm__("_heap_free_list");
-/* One head per exact 8-byte payload class up to HEAP_BIN_MAX (2048 bytes). */
-HIDDEN void *bins[256] __asm__("_heap_small_bins");
 /* One bin mark per 16-byte granule of the heap above. */
 HIDDEN unsigned char bin_marks[16384 / 16 + 2] __asm__("_heap_bin_marks");
 HIDDEN uint32_t object_handles[1024] __asm__("_obj_handle_index");
 HIDDEN void *array_reference_retire __asm__("_elephc_eval_array_reference_retire_fn");
-HIDDEN uint64_t active __asm__("_mbstring_ini_native_active");
+#define active CTX_WORD(FIXTURE_INI_ACTIVE)
 HIDDEN _Alignas(16) unsigned char snapshots[2][672] __asm__("_ini_register_snapshots");
 HIDDEN const char double_free[] __asm__("_heap_dbg_double_free_msg") = "unexpected double free";
 extern void mb_test_registers(void *, uint64_t, uint64_t);
@@ -44,7 +44,7 @@ extern void *mb_test_lower(const void *, uint64_t);
 extern void *mb_test_upper(const void *, uint64_t);
 extern void mb_test_free(void *);
 extern void mb_test_reset(void);
-extern struct cell *__elephc_eval_value_string_literal(const void *, uint64_t);
+extern struct cell *fixture_string_literal(const void *, uint64_t);
 
 /* Allocates from an independent bounded bump arena with the real runtime's uniform header. */
 void *mb_test_allocate(uint64_t size) {
@@ -138,6 +138,9 @@ static struct result import(const unsigned char *bytes, uint64_t length) {
 /* Runs real assembly persistence, last-owner retirement, address reuse, and dormant request reset. */
 int mb_test_native(void *const *callbacks) {
     functions = callbacks;
+    CTX_WORD(FIXTURE_HEAP_BASE) = (uint64_t)(uintptr_t)heap;
+    CTX_WORD(FIXTURE_HEAP_MAX) = sizeof(heap);
+    CTX_WORD(FIXTURE_OBJ_HANDLE_INDEX) = (uint64_t)(uintptr_t)object_handles;
     CHECK(((reset_fn)functions[8])() == 0);
     /* Binding an imported identity must mark a destination that has no fresh/persist origin. */
     void *bound = mb_test_allocate(5);
@@ -192,8 +195,8 @@ int mb_test_native(void *const *callbacks) {
     mb_test_reset();
     CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(identity) == 1);
     char input[] = "ASCII";
-    struct cell *first = __elephc_eval_value_string_literal(input, 5);
-    struct cell *second = __elephc_eval_value_string_literal(input, 5);
+    struct cell *first = fixture_string_literal(input, 5);
+    struct cell *second = fixture_string_literal(input, 5);
     memset(input, 'X', 5);
     identity = ((lookup_fn)functions[12])((uintptr_t)first->bytes, first->length);
     CHECK(identity != 0 && memcmp(first->bytes, literal, 5) == 0);

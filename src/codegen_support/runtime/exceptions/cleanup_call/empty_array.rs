@@ -29,12 +29,11 @@ fn emit_aarch64(emitter: &mut Emitter, protected: &str, direct: &str) {
     abi::emit_symbol_address(emitter, "x9", "__rt_decref_array");
     emitter.instruction("cmp x0, x9");                                          // only the original typed indexed-array dispatcher has this proof
     emitter.instruction(&format!("b.ne {protected}"));                          // arbitrary callbacks keep the protected path
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("add x10, x9, #16");                                    // the first payload follows the uniform heap header
     emitter.instruction("cmp x1, x10");                                         // reject null, literals, sentinels and foreign payloads
     emitter.instruction(&format!("b.lo {protected}"));                          // do not read a header below the managed payload range
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // preserve the heap base in x9 while loading its bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // preserve the heap base in x9 while loading its bump offset
     emitter.instruction("add x10, x9, x10");                                    // derive the allocated heap end
     emitter.instruction("cmp x1, x10");                                         // require an address within managed storage
     emitter.instruction(&format!("b.hs {protected}"));                          // out-of-range values retain existing behavior
@@ -58,11 +57,11 @@ fn emit_x86(emitter: &mut Emitter, protected: &str, direct: &str) {
     abi::emit_symbol_address(emitter, "r9", "__rt_decref_array");
     emitter.instruction("cmp rdi, r9");                                         // only the typed indexed-array dispatcher qualifies here
     emitter.instruction(&format!("jne {protected}"));                           // other callbacks retain their existing handler
-    abi::emit_symbol_address(emitter, "r9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r9");
     emitter.instruction("lea r10, [r9 + 16]");                                  // locate the first valid payload after the uniform header
     emitter.instruction("cmp rsi, r10");                                        // reject null, static and sentinel payloads
     emitter.instruction(&format!("jb {protected}"));                            // leave foreign values on the protected path
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_off", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r10");
     emitter.instruction("add r10, r9");                                         // derive the allocated heap end
     emitter.instruction("cmp rsi, r10");                                        // validate the payload before borrowing its header
     emitter.instruction(&format!("jae {protected}"));                           // out-of-range storage cannot qualify

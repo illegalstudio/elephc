@@ -369,6 +369,11 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::task_prelude::inject_types(resolved, true, &mut prelude_inventory);
+    let resolved =
+        elephc::async_prelude::inject_if_used(resolved, true, &mut prelude_inventory);
+    let resolved =
+        elephc::parallel_prelude::inject_if_used(resolved, true, &mut prelude_inventory);
     let resolved =
         elephc::pdo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the

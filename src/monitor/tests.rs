@@ -1157,6 +1157,21 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert!(html.contains("Net wait"), "{html}");
     }
 
+    /// Renders task/scope lineage, state durations, wake counts and trace identity from scheduler dumps.
+    #[test]
+    fn renders_scheduler_state_accounting_and_lineage() {
+        let dump = "elephc-instr-scheduler: domain=async scope=3 task=4294967297 parent=-1 group_task=4294967297 state=completed transitions=7 runnable_ns=40000 running_ns=50000 blocked_ns=60000 cancellation_ns=0 wake_spawn=1 wake_yield=0 wake_dependency=0 wake_timer=1 wake_io_ready=0 wake_io_timeout=0 wake_cancellation=0 ctx=0xabc worker=7 trace=trace-id span=span-id\n";
+        let table = scheduler_table(dump);
+        assert!(table.contains("scheduler tasks — 1 task"), "{table}");
+        assert!(table.contains("async scope 3  task 4294967297"), "{table}");
+        assert!(table.contains("parent -1"), "{table}");
+        assert!(table.contains("runnable 40.0 µs"), "{table}");
+        assert!(table.contains("running 50.0 µs"), "{table}");
+        assert!(table.contains("blocked 60.0 µs"), "{table}");
+        assert!(table.contains("wakes spawn:1,timer:1"), "{table}");
+        assert!(table.contains("trace trace-id span span-id"), "{table}");
+    }
+
     /// Logs written by the first monitoring implementation still load as direct metrics.
     #[test]
     fn parses_legacy_direct_network_metrics() {
@@ -2101,6 +2116,7 @@ elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
             "elephc-instr-edge: a -> b count=1 ns=2",
             "elephc-instr-query: 3 SELECT ?",
             "elephc-instr-query-dropped: 2",
+            "elephc-instr-scheduler: domain=async task=1 state=completed",
             "elephc-instr-trace: wrote /tmp/t.json",
             "elephc-probe: {main};hot 12",
             "elephc-probe-io: 4",

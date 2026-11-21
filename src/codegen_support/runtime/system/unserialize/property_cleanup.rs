@@ -80,7 +80,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rax");                                            // preserve the parsed box across the payload retain
     emitter.instruction("mov rax, rdi");                                        // __rt_incref consumes its argument in rax
     emitter.instruction("call __rt_incref");                                    // give the property slot its own container owner
-    emitter.instruction("pop rax");                                             // restore the parsed box for the context deferral
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the parsed box from its save slot for the context deferral
+    emitter.instruction("add rsp, 8");                                          // release the parsed-box save slot
     abi::emit_jump(emitter, "__rt_unserialize_defer_data");                     // keep the registry box alive until the context completes
     emitter.label("__rt_unser_finish_stored_prop_string_x");
     abi::emit_jump(emitter, "__rt_heap_free");                                  // free the shell; the property slot owns the string payload

@@ -68,7 +68,9 @@ pub(super) fn lower_static_callable_call(
             let reference_property_guard_mark = ctx.reference_property_guards.len();
             begin_call_argument_evaluation(ctx);
             let previous_description = ctx.call_description.replace(function_name.clone());
-            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            let mut operands = lower_args_with_eir_user_function_signature(
+                ctx, &function_name, sig.as_ref(), callback_args,
+            );
             ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
@@ -205,7 +207,9 @@ pub(super) fn lower_static_callable_call(
                     .then(|| ctx.builder.function().display_name.clone()).flatten())
                 .unwrap_or_else(|| "{closure}".to_string());
             let previous_description = ctx.call_description.replace(label);
-            let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let mut arg_values = lower_args_with_eir_user_function_signature(
+                ctx, &name, Some(&signature), callback_args,
+            );
             ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
@@ -432,6 +436,9 @@ pub(super) fn lower_bound_closure_immediate_call(
     let result = lower_static_callable_call(ctx, bound, args, expr)
         .expect("a directly callable bound closure lowers its call");
     stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    let result = discard_result_before_callback(
+        ctx, result_staging.as_ref(), result, descriptor_owner, expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

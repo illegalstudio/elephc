@@ -651,6 +651,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         return 1;
     }
     print!("{}", instrument_table(&graph));
+    print!("{}", scheduler_table(&stderr));
     let this_run = if cmd.apm {
         print_cli_run(cmd, &output.status, wall_ns, super::apm::io_of(&graph))
     } else {

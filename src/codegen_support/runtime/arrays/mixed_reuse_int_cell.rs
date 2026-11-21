@@ -40,11 +40,10 @@ pub fn emit_mixed_reuse_int_cell(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [x0]");                                        // load the cell the Mixed local currently owns
     emitter.instruction("cbz x9, __rt_mric_fresh");                             // an empty slot has no cell to reuse
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x10");
     emitter.instruction("cmp x9, x10");                                         // is the cell below the managed heap?
     emitter.instruction("b.lo __rt_mric_fresh");                                // frame-local and static cells are never rewritten
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_off");
-    emitter.instruction("ldr x11, [x11]");                                      // load the current heap extent
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x11"); // load the current heap extent
     emitter.instruction("add x11, x10, x11");                                   // compute the managed heap end
     emitter.instruction("cmp x9, x11");                                         // is the cell at or beyond the heap end?
     emitter.instruction("b.hs __rt_mric_fresh");                                // foreign pointers are never rewritten
@@ -83,12 +82,11 @@ fn emit_mixed_reuse_int_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the cell the Mixed local currently owns
     emitter.instruction("test rax, rax");                                       // does the slot hold a cell at all?
     emitter.instruction("jz __rt_mric_fresh_x86");                              // an empty slot has no cell to reuse
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
     emitter.instruction("cmp rax, r11");                                        // is the cell below the managed heap?
     emitter.instruction("jb __rt_mric_fresh_x86");                              // frame-local and static cells are never rewritten
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current heap extent
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // load the current heap extent
     emitter.instruction("add r11, r10");                                        // compute the managed heap end
     emitter.instruction("cmp rax, r11");                                        // is the cell at or beyond the heap end?
     emitter.instruction("jae __rt_mric_fresh_x86");                             // foreign pointers are never rewritten

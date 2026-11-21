@@ -122,11 +122,17 @@ mod tests {
                 } else {
                     ("mov r13, QWORD PTR [r13]", "call r10")
                 };
+                let target = emitter.target;
                 let asm = emitter.output();
                 let detach = asm.find(detach).unwrap();
                 let call = asm.find(call).unwrap();
                 assert!(detach < call, "{name}, PIC={pic}");
-                assert!(asm[detach..call].contains("_exc_call_frame_top"), "{name}, PIC={pic}");
+                let cursor = if target.arch == Arch::AArch64 { "x20" } else { "r13" };
+                let mut publication = Emitter::new(target);
+                publication.pic_data_refs = pic;
+                abi::emit_store_reg_to_symbol(&mut publication, cursor, "_exc_call_frame_top", 0);
+                assert!(asm[detach..call].contains(publication.output().trim()), "{name}, PIC={pic}");
+                assert!(!asm.contains("_exc_call_frame_top"), "{name}, PIC={pic}: unwind top must be context-owned");
             }
         }
     }

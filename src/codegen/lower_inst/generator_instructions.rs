@@ -37,7 +37,7 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     };
     let key_operand = if n >= 2 { Some(inst.operands[0]) } else { None };
 
-    // -- materialize the yielded value as an owned Mixed cell and park it --
+    // -- transfer an owned yielded temporary into its persistent Mixed cell --
     match value_operand {
         Some(value) if yield_cell_transfers_ownership(ctx, value)? => {
             ctx.load_value_to_result(value)?;
@@ -190,6 +190,16 @@ pub(super) fn lower_generator_intrinsic(
             intrinsic.kind()
         ))
     })?;
+    if intrinsic.kind() == IntrinsicCallKind::GeneratorThrow {
+        let thrown = inst.operands.get(1).copied().ok_or_else(|| {
+            CodegenIrError::missing_entry("Generator::throw Throwable operand", 1)
+        })?;
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 2),
+            i64::from(ctx.value_ownership(thrown)? == Ownership::Owned),
+        ); // tell the runtime whether the exception argument has a caller cleanup after return
+    }
     abi::emit_call_label(ctx.emitter, helper);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
@@ -218,4 +228,3 @@ pub(super) fn generator_intrinsic_return_type(intrinsic: IntrinsicCall) -> PhpTy
         _ => PhpType::Mixed,
     }
 }
-
