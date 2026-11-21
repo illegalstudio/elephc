@@ -432,7 +432,7 @@ fn strict_profile_runtime_cache_identity_covers_all_features() {
             .find("cache_path.exists()")
             .expect("runtime cache lookup remains explicit");
         let generation = source
-            .find("generate_runtime_with_features_mode")
+            .find("generate_runtime_with_semantics")
             .expect("runtime assembly generator remains explicit");
 
         assert!(
