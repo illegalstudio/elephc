@@ -318,6 +318,77 @@ The widening is driven by evidence, not by the entry type alone: a loop that
 never assigns the local leaves it `null`, so a null local a loop only reads is
 untouched (issue #562).
 
+A keyed write does not widen the value payload of a local **declared**
+`array<K, V>` with a concrete `V`. The fixed point runs before the body's guards
+are known, so it can only type a guarded value `mixed`:
+`if (!is_bool($v)) { throw … } $map[$k] = $v;` used to record an
+`array<K, mixed>` contract and box the declared map for the whole loop, where the
+same write outside a loop is checked against the declaration. The body check
+decides instead: the value is the declared type at the write, or
+`check_array_assign` reports `cannot store … into $map declared as …`. Appends
+keep their widening rule.
+
+### Element value views
+
+A value can be one type to the checker and a boxed `Mixed` cell to EIR. The
+by-value binding of a `foreach` over a hash is always handed out boxed, a
+guard-narrowed `mixed` local keeps its boxed slot, and a branch merge
+(`$c ? $v : 0`) materializes in a boxed temp. Each is still `int`, `float`,
+`bool`, `string` or a concrete array in the type environment.
+
+Writing such a value as a container element is where the two layers used to part:
+EIR widened the container to boxed payloads for the boxed operand, the checker
+kept the concrete element type, and everything compiled against the checker's
+type read boxed cells as raw payloads. A typed property store was refused by the
+backend; a return, a parameter and a declared local were not, so
+`function f() { $src = ['a' => 5]; $out = []; foreach ($src as $v) { $out[] = $v; } return $out; }`
+returned a list `implode()` printed as pointers.
+
+`record_element_value_view()` (`src/types/checker/element_values.rs`) therefore
+records, for every value written by `$a[] = …`, `$a[$k] = …` or an array literal
+element, the type the checker proved for it, keyed by the body scope and the
+value's span (`CheckResult::element_value_views`). EIR lowering projects a boxed
+operand to that type before it is stored (see
+[The IR](the-ir.md#conversions-and-boxing)), so the container keeps the storage
+its checked type promises.
+
+The checked type of a local is not always a proof of what its cell holds. In
+permissive mode `$t = null; if ($c) { $t = "s"; }` reads `string` afterwards,
+while the boxed cell can still hold the `null`, and casting that box would store
+`""`. A view is therefore published only for a value the checker can prove:
+
+- **The type** is `int`, `float`, `bool` or `string`, or the value is a `foreach`
+  binding whose own storage is a concrete array or hash. A type guard proves a
+  value is an array, never which layout the array has.
+- **A plain local** must be flow-stable, definitely bound, and either
+  - the key or by-value value variable of an array `foreach` still being
+    checked, not stored to since it was bound (it holds an element of the
+    source), or
+  - read inside an open guard region that has not stored it, or after a guard
+    that exits on every other path (`if (!is_bool($v)) { throw … }`): the guard
+    tested the runtime tag.
+
+  The loop binding and the kept complement are recorded in
+  `Checker::proven_local_views` and end at the first store to the name; a loop
+  binding also ends with its loop, after which the name holds whatever it held
+  before a source that turned out to be empty.
+- **A branch merge** (`?:`, `??`) is as proven as its arms, and a literal arm is
+  its own type. Any other expression publishes nothing: its operand is concrete
+  already, or boxed for a reason this pass cannot see.
+- **Every authoritative visit** to the site agrees. A conflicting visit disables
+  the site for good, and loop-storage probes publish nothing.
+
+A `global` binding and a local a closure captured by reference are boxed cells
+other code can rewrite, so their checked type is neither the stored operand nor
+a proof. `Checker::element_storage_type` makes such a source contribute `mixed`
+to the element type of the container it is written into, for scalar and array
+payloads: the checker's container widens exactly where lowering boxes it. A
+keyed write of one into a declared map is refused by name, with the cast that
+fixes it.
+
+A value the checker types `mixed`, or a type the container does not store, is
+not affected: both layers still widen the container together.
+
 ## Expression type inference
 
 The type checker computes the type of every expression:
