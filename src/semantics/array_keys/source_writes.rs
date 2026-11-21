@@ -162,7 +162,11 @@ impl ArrayFact {
             return missing_element(write_parent);
         }
         if write_parent && candidates.iter().all(|value| value.is_write_array_parent()) {
-            return ValueFact::Known(PhpType::php_array());
+            return candidates
+                .into_iter()
+                .cloned()
+                .reduce(merge_value_facts)
+                .unwrap_or(ValueFact::Unknown);
         }
         ValueFact::Unknown
     }
@@ -1334,6 +1338,10 @@ fn static_receiver_name(
 fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     if left == right {
         left
+    } else if let (ValueFact::Array(left), ValueFact::Array(right)) = (&left, &right) {
+        merge_array_facts(left, right)
+            .map(ValueFact::Array)
+            .unwrap_or_else(|| ValueFact::Known(PhpType::php_array()))
     } else if let (Some(left), Some(right)) = (left.value_type(), right.value_type()) {
         if left == right {
             ValueFact::Known(left)
@@ -1343,6 +1351,29 @@ fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     } else {
         ValueFact::Unknown
     }
+}
+
+/// Merges equal-key shapes recursively while retaining their common projection depth.
+fn merge_array_facts(left: &ArrayFact, right: &ArrayFact) -> Option<ArrayFact> {
+    if left.maximum_integer != right.maximum_integer || left.entries.len() != right.entries.len() {
+        return None;
+    }
+    let mut entries = Vec::with_capacity(left.entries.len());
+    for ((left_key, left_value), (right_key, right_value)) in
+        left.entries.iter().zip(&right.entries)
+    {
+        if left_key != right_key {
+            return None;
+        }
+        entries.push((
+            left_key.clone(),
+            merge_value_facts(left_value.clone(), right_value.clone()),
+        ));
+    }
+    Some(ArrayFact {
+        entries,
+        maximum_integer: left.maximum_integer,
+    })
 }
 
 /// Projects literal identity and explicit-cast categories used by source-only key validation.
