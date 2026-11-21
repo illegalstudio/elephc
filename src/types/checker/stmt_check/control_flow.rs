@@ -492,6 +492,13 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
+                // An array source binds each name to one of its own keys or elements, which is
+                // what lets a boxed read of the binding be projected (`element_values`). The
+                // proof ends with the loop: afterwards the name holds whatever it held before a
+                // source that turned out to be empty.
+                let bound_views = self.bind_foreach_views(
+                    &arr_ty, key_var.as_deref(), value_var, *value_by_ref, env,
+                );
                 if *value_by_ref && (matches!(arr_ty, PhpType::Object(_))
                     || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
                     return Err(CompileError::new(
@@ -503,6 +510,7 @@ impl Checker {
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
                 let errors = self.check_break_continue_target_body(stmt, body, env);
+                self.end_foreach_views(bound_views);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -796,6 +804,11 @@ impl Checker {
                 for saved_origin in saved_origins.into_iter().rev() {
                     self.exit_flow_narrowing(saved_origin);
                 }
+                let kept_guard_names: Vec<String> = if keep_complement_after_if {
+                    saved_vars.iter().map(|(name, _)| name.clone()).collect()
+                } else {
+                    Vec::new()
+                };
                 if keep_complement_after_if {
                     self.keep_conditional_views(&mut flow, env, saved_vars.into_iter().map(|(name, _)| name));
                 }
@@ -803,6 +816,10 @@ impl Checker {
                     self.keep_conditional_views(&mut flow, env, std::iter::once(key));
                 }
                 self.finish_statement_conditional_flow(flow, env);
+                // Every other path left the construct, so the kept complement is what the guard
+                // tested at run time: a proof a boxed read may be projected to. Recorded after
+                // the join, which ends the proofs of every local the construct touched.
+                self.record_kept_guard_views(kept_guard_names.iter().map(String::as_str), env);
 
                 if errors.is_empty() {
                     Ok(())

@@ -464,6 +464,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checker-proved element types at declared-array append sites, scoped to each body.
     pub array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
+    /// Checked scalar views of values that form container elements, scoped to each body.
+    pub element_value_views: &'m crate::types::ElementValueViews,
     /// Checked integer value views, separate from the physical local/reference contract.
     pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
@@ -685,6 +687,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
+        element_value_views: &'m crate::types::ElementValueViews,
         local_value_read_types: &'m crate::types::LocalValueReadTypes,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -759,6 +762,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             array_push_property_plans,
             member_receiver_types,
             array_append_element_types,
+            element_value_views,
             local_value_read_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,

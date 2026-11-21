@@ -50,6 +50,25 @@ pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 /// Value reads keyed by body scope, source span and local name; visits join conservatively.
 pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
 
+/// The type the checker proved for one value that becomes a container element.
+///
+/// EIR keeps a hash `foreach` binding, a guard-narrowed `mixed` local and a branch merge as
+/// boxed cells, so the operand's storage alone cannot tell lowering which payload the
+/// checker's container type promises.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ElementValueView {
+    /// The checked type: `int`, `float`, `bool`, `string`, or a local's concrete array or hash.
+    pub ty: PhpType,
+    /// The local the value reads directly, when the value is one plain variable.
+    ///
+    /// A span can be shared by a synthesized node and its first operand, so the read of a
+    /// local is projected only where the view was recorded for that same local.
+    pub local: Option<String>,
+}
+
+/// Element views keyed by body scope and value span; conflicting visits hold `None`.
+pub(crate) type ElementValueViews = HashMap<(String, Span), Option<ElementValueView>>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
 /// exception at runtime instead of a compile-time rejection.
@@ -234,6 +253,8 @@ pub struct CheckResult {
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Source-point element proofs for declared-array appends; conflicts disable projection.
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Checked scalar views of element-forming values; conflicting visits disable projection.
+    pub element_value_views: ElementValueViews,
     /// Source-point value read contracts; these never change a local's reference storage.
     pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.

@@ -111,6 +111,7 @@ fn lower_interface_adapter(
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types
         &Default::default(), // checked declared-array append elements
+        &Default::default(), // checked element value views
         &Default::default(), // checked integer read sites
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
