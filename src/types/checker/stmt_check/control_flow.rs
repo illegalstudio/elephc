@@ -640,6 +640,8 @@ impl Checker {
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                     let branch_entry_reads = self.snapshot_conditional_flow(env);
                     let branch_entry_bound = self.definitely_bound_locals.clone();
+                    let branch_entry_names: std::collections::HashSet<_> =
+                        env.keys().cloned().collect();
 
                     let guards = self.guard_narrowings(cond, env)?;
                     applied_any_guard |= !guards.is_empty();
@@ -697,6 +699,12 @@ impl Checker {
                     self.callable_array_target_versions = branch_entry_target_versions;
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     self.restore_statement_flow_storage(&flow, &branch_entry_reads);
+                    if self.body_cannot_fall_through(body) {
+                        // A local first created on a terminal arm has frame storage, but no
+                        // value reaches a sibling arm or the statement continuation. Keep the
+                        // physical flow record while removing that unreachable logical view.
+                        env.retain(|name, _| branch_entry_names.contains(name));
+                    }
                     self.restore_conditional_read_inputs(&branch_entry_reads, env);
                     self.definitely_bound_locals = branch_entry_bound;
                     for (var, previous) in &saved {

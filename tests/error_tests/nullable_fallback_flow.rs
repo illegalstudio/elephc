@@ -725,11 +725,12 @@ fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
     expect_error("<?php function needIndex(int $index): void {} function run(?int $input, bool $flag): void { if ($flag) { $value = $input; } needIndex($value); }", "expects int");
 }
 
-/// Reopening a stream in another branch removes absence without discarding fopen failure.
+/// Reopening a stream after a terminal branch starts a fresh binding on the only reaching path.
 #[test]
 fn test_nullable_fallback_flow_ci_rebound_stream_presence() {
     let source = "<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); return; } $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); }";
     check_source(source).unwrap();
+    check_source_strict(source).unwrap();
     expect_error("<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); } fclose($stream); }", "fclose() expects resource");
 }
 
