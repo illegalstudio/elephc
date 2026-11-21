@@ -11,7 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use elephc_memoir::values::{reference_registry::UNSERIALIZE_CAPACITY, reference_snapshot};
 
-const SNAPSHOT: reference_snapshot::Storage<'static> = reference_snapshot::Storage {
+pub(super) const SNAPSHOT: reference_snapshot::Storage<'static> = reference_snapshot::Storage {
     label_prefix: "__rt_unserialize",
     head: "_unser_context",
     mode: "_unser_allowed_mode",
@@ -46,18 +46,7 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_unserialize_begin_nested_in_budget");        // keep the conditional branch inside the context helper atom
     emitter.instruction("b __rt_unser_depth_fatal");                            // reject another snapshot through the shared fatal path
     emitter.label("__rt_unserialize_begin_nested_in_budget");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
-    emitter.instruction("ldr x10, [x9]");                                       // load the outer registry's logical value count
-    emitter.instruction("str x10, [sp]");                                       // preserve the logical count across context allocation
-    emitter.instruction(&format!("mov x11, #{UNSERIALIZE_CAPACITY}"));                                     // materialize the fixed registry capacity
-    emitter.instruction("cmp x10, x11");                                        // does the logical count exceed the physical registry?
-    emitter.instruction("csel x11, x10, x11, lo");                              // copy only the populated in-bounds registry prefix
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x12", "_unser_legacy_active", 0);
-    emitter.instruction("cbz x12, __rt_unserialize_begin_copy_count");          // ordinary nested hydration snapshots its own registry
-    emitter.instruction("mov x10, #-1");                                        // mark a shared legacy registry in the saved count slot
-    emitter.instruction("str x10, [sp]");                                       // retain the sharing marker across allocation
-    emitter.instruction("mov x11, #0");                                         // a shared registry needs no copied prefix
-    emitter.label("__rt_unserialize_begin_copy_count");
+    SNAPSHOT.emit_prepare_prefix(emitter, UNSERIALIZE_CAPACITY, "_unser_legacy_active", "__rt_unserialize_begin_copy_count");
     SNAPSHOT.emit_push(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_active");
     emitter.instruction("ldr x10, [x9]");                                       // reload the nesting count after allocation
@@ -90,12 +79,7 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_promote_legacy_data");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
     crate::codegen_support::abi::emit_store_to_sp(emitter, "x0", 16);
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_allowed_list");
-    emitter.instruction("ldr x0, [x9]");                                        // load this call's owned allow-list reference
-    emitter.instruction("str xzr, [x9]");                                       // unpublish the list before releasing its ownership
-    emitter.instruction("cbz x0, __rt_unserialize_end_list_done");              // skip refcount traffic when no allow-list was installed
-    emitter.instruction("bl __rt_decref_array");                                // release this call's allow-list ownership
-    emitter.label("__rt_unserialize_end_list_done");
+    SNAPSHOT.emit_retire_current_owner(emitter, "__rt_unserialize_end_list_done");
     SNAPSHOT.emit_restore_or_jump(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_active");
     emitter.instruction("ldr x11, [x9]");                                       // load the active nesting count
@@ -146,16 +130,7 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_unserialize_begin_nested_x");
     emitter.instruction("cmp r10, 256");                                        // has reentrant parser nesting reached its hard limit?
     emitter.instruction("jae __rt_unser_depth_fatal_x");                        // reject another snapshot before allocating bounded heap state
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_count]");             // load the outer registry's logical value count
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // preserve the logical count across context allocation
-    emitter.instruction(&format!("mov r11, {UNSERIALIZE_CAPACITY}"));                                      // materialize the fixed registry capacity
-    emitter.instruction("cmp r10, r11");                                        // does the logical count exceed the physical registry?
-    emitter.instruction("cmovb r11, r10");                                      // copy only the populated in-bounds registry prefix
-    emitter.instruction("cmp QWORD PTR [rip + _unser_legacy_active], 0");       // distinguish shared legacy payloads from ordinary nesting
-    emitter.instruction("je __rt_unserialize_begin_copy_count_x");              // ordinary calls preserve their registry prefix
-    emitter.instruction("mov QWORD PTR [rbp - 8], -1");                         // mark a shared registry in the saved count slot
-    emitter.instruction("xor r11d, r11d");                                      // shared references remain in the live table
-    emitter.label("__rt_unserialize_begin_copy_count_x");
+    SNAPSHOT.emit_prepare_prefix(emitter, UNSERIALIZE_CAPACITY, "_unser_legacy_active", "__rt_unserialize_begin_copy_count_x");
     SNAPSHOT.emit_push(emitter);
     emitter.instruction("add QWORD PTR [rip + _unser_active], 1");              // account for the nested parser
 
@@ -179,12 +154,7 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_promote_legacy_data");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
     crate::codegen_support::abi::store_at_offset(emitter, "rax", 24);
-    emitter.instruction("mov rax, QWORD PTR [rip + _unser_allowed_list]");      // load this call's owned allow-list reference
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // unpublish the list before releasing its ownership
-    emitter.instruction("test rax, rax");                                       // was an allow-list installed for this call?
-    emitter.instruction("jz __rt_unserialize_end_list_done_x");                 // skip refcount traffic when no list was installed
-    emitter.instruction("call __rt_decref_array");                              // release this call's allow-list ownership
-    emitter.label("__rt_unserialize_end_list_done_x");
+    SNAPSHOT.emit_retire_current_owner(emitter, "__rt_unserialize_end_list_done_x");
     SNAPSHOT.emit_restore_or_jump(emitter);
     emitter.instruction("sub QWORD PTR [rip + _unser_active], 1");              // account for the completed nested parser
     reference_snapshot::emit_release(emitter);

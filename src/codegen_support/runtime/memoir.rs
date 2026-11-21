@@ -153,9 +153,9 @@ impl elephc_memoir::MemoryContext for Emitter {
             fiber_start_args_offset: super::fibers::FIBER_START_ARGS_OFFSET,
             fiber_transfer_value_offset: super::fibers::FIBER_TRANSFER_VALUE_OFFSET,
             fiber_user_arg_max_offset: super::fibers::FIBER_USER_ARG_MAX_OFFSET,
-            gen_last_key_offset: super::generators::coro::GEN_LAST_KEY_OFFSET,
-            gen_last_value_offset: super::generators::coro::GEN_LAST_VALUE_OFFSET,
-            gen_return_value_offset: super::generators::coro::GEN_RETURN_VALUE_OFFSET,
+            gen_last_key_offset: elephc_memoir::coroutine_storage::GEN_LAST_KEY_OFFSET,
+            gen_last_value_offset: elephc_memoir::coroutine_storage::GEN_LAST_VALUE_OFFSET,
+            gen_return_value_offset: elephc_memoir::coroutine_storage::GEN_RETURN_VALUE_OFFSET,
         } }
     /// Supplies the compiler gc status selectors contract.
     fn gc_status_selectors(&self) -> GcStatusSelectors { GcStatusSelectors {

@@ -11,11 +11,12 @@
 use crate::layout::{CALLABLE_HEAP_KIND, x86_64_heap_kind_word};
 use crate::{abi, Arch, Emitter};
 
-/// Bytes in the fixed header before the first runtime capture.
-pub const HEADER_BYTES: usize = 64;
+pub use super::layout::HEADER_BYTES;
 
 /// Width of one runtime capture pair in the native descriptor.
 pub const CAPTURE_BYTES: usize = 16;
+/// Shift from runtime capture index to its byte displacement.
+pub const CAPTURE_SHIFT: u32 = CAPTURE_BYTES.trailing_zeros();
 
 /// Returns the offset of a selected capture pair.
 pub const fn capture_offset(index: usize) -> usize {

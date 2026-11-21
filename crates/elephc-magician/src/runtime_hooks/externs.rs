@@ -11,6 +11,7 @@
 //! - Symbols are provided by the main elephc runtime object when eval is enabled.
 //! - Null return pointers are translated to `EvalStatus::RuntimeFatal` by callers.
 
+use elephc_builtin_contract::callable_abi::{CallableParameterViewV1, CallableSignatureViewV1};
 use std::ffi::c_void;
 
 use crate::value::RuntimeCell;
@@ -24,6 +25,14 @@ unsafe extern "C" {
 
     /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
     pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
+    /// Projects a borrowed native descriptor without exposing its private word layout.
+    pub(super) fn __elephc_eval_callable_signature_v1(
+        descriptor: u64, output: *mut CallableSignatureViewV1,
+    ) -> i64;
+    /// Reads a visible parameter from the opaque table in a V1 signature view.
+    pub(super) fn __elephc_eval_callable_parameter_v1(
+        parameters: *const c_void, index: usize, output: *mut CallableParameterViewV1,
+    ) -> i64;
     /// Contains a three-argument descriptor invocation and transfers only a successful owned result.
     pub(super) fn __elephc_eval_invoke_native_callable_v2(
         callback: *mut RuntimeCell,

@@ -22,7 +22,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 pub(crate) use elephc_memoir::stacks::STACK_LIMIT_SYMBOL;
 
-pub(crate) use elephc_memoir::stacks::STACK_GUARD_RESERVE_BYTES;
+#[cfg(test)]
+use elephc_memoir::stacks::STACK_GUARD_RESERVE_BYTES;
 
 /// Measures the process stack using the target operating system's resource selector.
 pub fn emit_stack_limit_init(emitter: &mut Emitter) {

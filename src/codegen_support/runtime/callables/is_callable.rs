@@ -390,15 +390,15 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_string_slots");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload indexed array pointer for raw string slot reads
-    emitter.instruction("ldr x0, [x9, #24]");                                   // pass class-name string pointer from slot 0
-    emitter.instruction("ldr x1, [x9, #32]");                                   // pass class-name string length from slot 0
-    emitter.instruction("ldr x2, [x9, #40]");                                   // pass static method string pointer from slot 1
-    emitter.instruction("ldr x3, [x9, #48]");                                   // pass static method string length from slot 1
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x0", "x9", 0);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x1", "x9", 1);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x2", "x9", 2);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x3", "x9", 3);
     abi::emit_call_label(emitter, "__rt_is_callable_static_method_name");       // check whether raw string slots name a public static method
     emitter.instruction("b __rt_is_callable_array_done");                       // keep static method lookup result and restore frame
 
     emitter.label("__rt_is_callable_array_mixed_slots");
-    emitter.instruction("ldr x0, [x0, #24]");                                   // load boxed Mixed receiver slot
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x0", "x0", 0);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // unwrap receiver slot to runtime tag and payload
     emitter.instruction("cmp x0, #6");                                          // is the receiver slot an object?
     emitter.instruction("b.eq __rt_is_callable_array_receiver_object");         // object receivers use public instance method lookup
@@ -420,7 +420,7 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_method");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload indexed array pointer
-    emitter.instruction("ldr x0, [x9, #32]");                                   // load boxed Mixed method-name slot
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "x0", "x9", 1);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // unwrap method-name slot to runtime tag and payload
     emitter.instruction("cmp x0, #1");                                          // method slot must contain a string
     emitter.instruction("b.ne __rt_is_callable_array_false");                   // reject non-string method slots
@@ -1031,15 +1031,15 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_string_slots_x86_64");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload indexed array pointer for raw string slot reads
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 24]");                       // pass class-name string pointer from slot 0
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 32]");                       // pass class-name string length from slot 0
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 40]");                       // pass static method string pointer from slot 1
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 48]");                       // pass static method string length from slot 1
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rdi", "r10", 0);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rsi", "r10", 1);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rdx", "r10", 2);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rcx", "r10", 3);
     abi::emit_call_label(emitter, "__rt_is_callable_static_method_name");       // check whether raw string slots name a public static method
     emitter.instruction("jmp __rt_is_callable_array_done_x86_64");              // keep static method lookup result and restore frame
 
     emitter.label("__rt_is_callable_array_mixed_slots_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // load boxed Mixed receiver slot
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rax", "rdi", 0);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // unwrap receiver slot to runtime tag and payload
     emitter.instruction("cmp rax, 6");                                          // is the receiver slot an object?
     emitter.instruction("je __rt_is_callable_array_receiver_object_x86_64");    // object receivers use public instance method lookup
@@ -1059,7 +1059,7 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_method_x86_64");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload indexed array pointer
-    emitter.instruction("mov rax, QWORD PTR [r10 + 32]");                       // load boxed Mixed method-name slot
+    elephc_memoir::values::packed_slots::emit_load_packed_word(emitter, "rax", "r10", 1);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // unwrap method-name slot to runtime tag and payload
     emitter.instruction("cmp rax, 1");                                          // method slot must contain a string
     emitter.instruction("jne __rt_is_callable_array_false_x86_64");             // reject non-string method slots

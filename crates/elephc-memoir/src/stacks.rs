@@ -220,6 +220,42 @@ pub fn emit_publish_main_floor(emitter: &mut impl crate::TargetAbi, floor: &str)
     emitter.emit_store_reg_to_symbol(floor, STACK_LIMIT_MAIN_SYMBOL, 0);
 }
 
+/// Computes and publishes a coroutine's active floor before adopting its saved SP.
+pub fn emit_adopt_fiber_floor(emitter: &mut impl Emitter) {
+    use crate::coroutine_storage::FIBER_STACK_BASE_OFFSET;
+    const FIBER_STACK_FLOOR_OFFSET: i64 = FIBER_GUARD_PAGE_SIZE as i64 + STACK_GUARD_RESERVE_BYTES;
+
+    emitter.comment("adopt the target fiber's call-stack floor");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x14, [x0, #{}]", FIBER_STACK_BASE_OFFSET)); // x14 = low address of the target fiber's stack mapping
+            emitter.instruction("cbz x14, __rt_fiber_switch_limit_ready");      // an unallocated stack publishes zero and disables the guard
+            abi::emit_load_int_immediate(emitter, "x15", FIBER_STACK_FLOOR_OFFSET);
+            emitter.instruction("add x14, x14, x15");                           // skip the guard page and the shared reserve to get the usable floor
+            emitter.label("__rt_fiber_switch_limit_ready");
+            emit_publish_active_floor(emitter, "x14");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!(                                       // load the target fiber's stack-mapping floor
+                "mov rax, QWORD PTR [rdi + {}]",
+                FIBER_STACK_BASE_OFFSET
+            ));
+            emitter.instruction("test rax, rax");                               // did this fiber ever get a stack mapping?
+            emitter.instruction("jz __rt_fiber_switch_limit_ready");            // an unallocated stack publishes zero and disables the guard
+            emitter.instruction(&format!("add rax, {}", FIBER_STACK_FLOOR_OFFSET));     // skip the guard page and the shared reserve to get the usable floor
+            emitter.label("__rt_fiber_switch_limit_ready");
+            emit_publish_active_floor(emitter, "rax");
+        }
+    }
+}
+
+/// Emits the native C setter for a stack floor already selected by the PHP host.
+pub fn emit_phpext_stack_floor_setter(emitter: &mut impl Emitter) {
+    emitter.label_global(&emitter.extern_symbol("elephc_phpext_native_set_stack_floor"));
+    emit_publish_main_floor(emitter, emitter.int_arg_reg_name(0));
+    emitter.emit_return();
+}
+
 /// Restores the remembered thread stack floor after leaving a coroutine stack.
 pub fn emit_restore_main_floor(emitter: &mut impl crate::TargetAbi, scratch: &str) {
     emitter.emit_load_symbol_to_reg(scratch, STACK_LIMIT_MAIN_SYMBOL, 0);

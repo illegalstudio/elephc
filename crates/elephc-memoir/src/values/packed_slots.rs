@@ -370,6 +370,11 @@ fn emit_zero_x86_64(emitter: &mut impl Emitter, wide: bool, array_reg: &str, ind
 /// Byte offset of the first slot after the packed array header.
 pub const PACKED_PAYLOAD_OFFSET: usize = 24;
 
+/// Borrows one word from a packed payload whose logical length and representation were checked.
+pub fn emit_load_packed_word(emitter: &mut impl Emitter, destination: &str, array: &str, word: usize) {
+    emitter.emit_load_from_address(destination, array, PACKED_PAYLOAD_OFFSET + word * 8);
+}
+
 /// Forms the AArch64 payload base from a validated packed array pointer.
 pub fn emit_packed_payload_aarch64(emitter: &mut impl Emitter, destination: &str, array: &str) {
     emitter.instruction(&format!("add {destination}, {array}, #{PACKED_PAYLOAD_OFFSET}")); // skip the packed array header

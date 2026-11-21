@@ -32,8 +32,6 @@ pub(crate) struct EvalRefArgSlot {
     pub(crate) raw_refcounted_owned: bool,
 }
 
-const EVAL_REF_ARG_BYTES: usize = 32;
-
 /// Gives each mutable Mixed ref slot an owner only after all fallible argument preparation.
 /// Native assignment consumes this owner, while unchanged slots release it during writeback.
 pub(crate) fn emit_acquire_mixed_ref_args(
@@ -112,12 +110,12 @@ pub(crate) fn eval_ref_arg_slots(
             continue;
         }
         let reverse_index = total - seen - 1;
-        let base_offset = reverse_index * EVAL_REF_ARG_BYTES;
+        let (raw_offset, original_offset) = eval_writeback::argument_slot_offsets(reverse_index);
         slots.push(EvalRefArgSlot {
             param_index,
             param_ty: param_types[param_index].codegen_repr(),
-            raw_offset: base_offset,
-            original_offset: base_offset + 16,
+            raw_offset,
+            original_offset,
             raw_refcounted_owned,
         });
         seen += 1;
@@ -284,10 +282,10 @@ fn emit_aarch64_write_back_refcounted_typed_ref_arg(
         label_prefix, slot.param_index
     );
     let done_label = format!("{}_ref_{}_typed_done", label_prefix, slot.param_index);
-    emit_aarch64_branch_on_refcounted_raw_slot_change(
+    eval_writeback::emit_branch_on_argument_change(
         emitter,
-        slot,
-        stack_offset,
+        stack_offset + slot.raw_offset,
+        stack_offset + slot.original_offset,
         &changed_label,
         &unchanged_label,
     );
@@ -326,10 +324,10 @@ fn emit_x86_64_write_back_refcounted_typed_ref_arg(
         label_prefix, slot.param_index
     );
     let done_label = format!("{}_ref_{}_typed_done_x", label_prefix, slot.param_index);
-    emit_x86_64_branch_on_refcounted_raw_slot_change(
+    eval_writeback::emit_branch_on_argument_change(
         emitter,
-        slot,
-        stack_offset,
+        stack_offset + slot.raw_offset,
+        stack_offset + slot.original_offset,
         &changed_label,
         &unchanged_label,
     );
@@ -350,38 +348,6 @@ fn emit_x86_64_write_back_refcounted_typed_ref_arg(
         emit_x86_64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
     }
     emitter.label(&done_label);
-}
-
-/// Branches on whether an ARM64 refcounted raw ref slot differs from the eval cell.
-fn emit_aarch64_branch_on_refcounted_raw_slot_change(
-    emitter: &mut Emitter,
-    slot: &EvalRefArgSlot,
-    stack_offset: usize,
-    changed_label: &str,
-    unchanged_label: &str,
-) {
-    abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
-    abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
-    emitter.instruction("ldr x11, [x9, #8]");                                   // load the eval cell's current refcounted payload pointer
-    emitter.instruction("cmp x10, x11");                                        // did the native by-ref call replace the payload pointer?
-    emitter.instruction(&format!("b.ne {}", changed_label));                    // changed raw slots need boxing and eval-cell replacement
-    emitter.instruction(&format!("b {}", unchanged_label));                     // unchanged raw slots keep the existing eval cell payload
-}
-
-/// Branches on whether an x86_64 refcounted raw ref slot differs from the eval cell.
-fn emit_x86_64_branch_on_refcounted_raw_slot_change(
-    emitter: &mut Emitter,
-    slot: &EvalRefArgSlot,
-    stack_offset: usize,
-    changed_label: &str,
-    unchanged_label: &str,
-) {
-    abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
-    abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
-    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load the eval cell's current refcounted payload pointer
-    emitter.instruction("cmp r11, r9");                                         // did the native by-ref call replace the payload pointer?
-    emitter.instruction(&format!("jne {}", changed_label));                     // changed raw slots need boxing and eval-cell replacement
-    emitter.instruction(&format!("jmp {}", unchanged_label));                   // unchanged raw slots keep the existing eval cell payload
 }
 
 /// Releases the current ARM64 refcounted raw slot value.
@@ -574,18 +540,15 @@ fn emit_aarch64_release_refcounted_raw_slot(
 ) {
     let release_label = format!("{}_ref_{}_release_raw", label_prefix, slot.param_index);
     let done_label = format!("{}_ref_{}_release_raw_done", label_prefix, slot.param_index);
-    if !slot.raw_refcounted_owned {
-        abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
-        abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
-        emitter.instruction("ldr x11, [x9, #8]");                               // load the original eval cell payload for borrowed-slot comparison
-        emitter.instruction("cmp x10, x11");                                    // changed raw pointers are owned by the native assignment path
-        emitter.instruction(&format!("b.ne {}", release_label));                // release only raw heap values introduced by the native call
-        emitter.instruction(&format!("b {}", done_label));                      // keep borrowed original payloads owned by the eval cell
-    }
-    emitter.label(&release_label);
-    abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.raw_offset);
-    abi::emit_decref_if_refcounted(emitter, ty);
-    emitter.label(&done_label);
+    eval_writeback::emit_retire_argument_value(
+        emitter,
+        stack_offset + slot.raw_offset,
+        stack_offset + slot.original_offset,
+        slot.raw_refcounted_owned,
+        &release_label,
+        &done_label,
+        |emitter| abi::emit_decref_if_refcounted(emitter, ty),
+    );
 }
 
 /// Releases an x86_64 raw refcounted slot when it owns a value not retained by the eval cell.
@@ -598,18 +561,15 @@ fn emit_x86_64_release_refcounted_raw_slot(
 ) {
     let release_label = format!("{}_ref_{}_release_raw_x", label_prefix, slot.param_index);
     let done_label = format!("{}_ref_{}_release_raw_done_x", label_prefix, slot.param_index);
-    if !slot.raw_refcounted_owned {
-        abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
-        abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
-        emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                     // load the original eval cell payload for borrowed-slot comparison
-        emitter.instruction("cmp r11, r9");                                     // changed raw pointers are owned by the native assignment path
-        emitter.instruction(&format!("jne {}", release_label));                 // release only raw heap values introduced by the native call
-        emitter.instruction(&format!("jmp {}", done_label));                    // keep borrowed original payloads owned by the eval cell
-    }
-    emitter.label(&release_label);
-    abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
-    abi::emit_decref_if_refcounted(emitter, ty);
-    emitter.label(&done_label);
+    eval_writeback::emit_retire_argument_value(
+        emitter,
+        stack_offset + slot.raw_offset,
+        stack_offset + slot.original_offset,
+        slot.raw_refcounted_owned,
+        &release_label,
+        &done_label,
+        |emitter| abi::emit_decref_if_refcounted(emitter, ty),
+    );
 }
 
 #[cfg(test)]
