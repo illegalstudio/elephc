@@ -404,8 +404,9 @@ mod tests {
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
-        // random prelude's `__elephc_call_strict_types` reader.
-        assert_eq!(eval_internal, 143);
+        // random prelude's `__elephc_call_strict_types` reader, and the three compiled-pattern
+        // helpers the `preg_grep()` prelude calls.
+        assert_eq!(eval_internal, 146);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 381);
@@ -422,8 +423,9 @@ mod tests {
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
         // `preg_last_error` and `preg_last_error_msg` add two more, as does the internal
-        // `__elephc_set_memory_limit` setter.
-        assert_eq!(aot_registry, 842);
+        // `__elephc_set_memory_limit` setter. The `preg_grep()` prelude's three internal
+        // compiled-pattern helpers add three.
+        assert_eq!(aot_registry, 845);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -485,8 +487,9 @@ mod tests {
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
-        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`.
-        assert_eq!(unsupported, 524);
+        // `__elephc_call_strict_types` reader, `__elephc_set_memory_limit`, and the
+        // `preg_grep()` prelude's three internal compiled-pattern helpers.
+        assert_eq!(unsupported, 527);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
