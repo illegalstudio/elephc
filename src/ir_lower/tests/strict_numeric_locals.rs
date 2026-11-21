@@ -20,11 +20,15 @@ fn strict_local_value_membership_emits_on_every_target() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
         let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let contracts = checked.local_store_contracts.values()
+            .filter(|contract| contract.feature == StrictFeature::Locals)
+            .map(|contract| contract.ty.clone())
+            .chain(checked.local_store_contracts.origins.values().cloned())
+            .collect::<Vec<_>>();
         for expected in [crate::types::PhpType::Str, crate::types::PhpType::Bool,
             crate::types::PhpType::Void, crate::types::PhpType::Object("OriginalScalarBinding".into()),
             crate::types::PhpType::php_array()] {
-            assert!(checked.local_store_contracts.values().any(|contract|
-                contract.feature == StrictFeature::Locals && contract.ty == expected), "{name}: {expected}");
+            assert!(contracts.contains(&expected), "{name}: {expected}; contracts={contracts:?}");
         }
         let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
         assert!(!module.semantic_profile.contains(StrictFeature::ArrayTypes));
