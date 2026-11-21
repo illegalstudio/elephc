@@ -173,23 +173,20 @@ impl LiteralCursor<'_> {
                 part.push(Token::new(TokenKind::DollarIdent(name), line));
             }
             Some(ch) if ch == '-' || ch.is_ascii_digit() => {
-                let mut digits = String::new();
-                if ch == '-' {
-                    digits.push('-');
-                    self.bump_char();
-                }
-                while let Some(digit) = self.peek_char() {
-                    if !digit.is_ascii_digit() {
-                        break;
-                    }
-                    digits.push(digit);
-                    self.bump_char();
-                }
-                if digits == "-" { return Err(EvalParseError::InvalidNumber); }
-                let kind = match elephc_semantics::array_keys::php_integer_key(digits.as_bytes()) {
-                    Some(value) => TokenKind::Int(value),
-                    None => TokenKind::String(digits),
+                let Some((len, key)) = elephc_semantics::array_keys::scan_simple_interpolation_numeric_key(
+                    self.remaining().as_bytes(),
+                ) else {
+                    return Err(EvalParseError::InvalidNumber);
                 };
+                let kind = match key {
+                    elephc_semantics::array_keys::StringKey::Integer(value) => TokenKind::Int(value),
+                    elephc_semantics::array_keys::StringKey::String(value) => TokenKind::String(
+                        std::str::from_utf8(value)
+                            .expect("interpolation numeric spellings are ASCII")
+                            .to_owned(),
+                    ),
+                };
+                self.skip_bytes(len);
                 part.push(Token::new(kind, line));
             }
             _ => {

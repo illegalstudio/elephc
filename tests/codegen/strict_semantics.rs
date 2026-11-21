@@ -298,8 +298,13 @@ class StrictTextKeyProbe implements ArrayAccess {
 }
 $probe = new StrictTextKeyProbe();
 echo "|$probe[1]|$probe[01]|$probe[-0]|$probe[9223372036854775808]";
+echo "|$probe[-9223372036854775807]|$probe[-9223372036854775808]";
+echo "|$probe[0x10]|$probe[0b10]|$probe[0o10]|$probe[1_0]";
 "#;
-    assert_eq!(StrictFixture::new(source).run(&[]), "leading|negative|large|i:1|s:01|s:-0|s:9223372036854775808");
+    assert_eq!(
+        StrictFixture::new(source).run(&[]),
+        "leading|negative|large|i:1|s:01|s:-0|s:9223372036854775808|i:-9223372036854775807|s:-9223372036854775808|s:0x10|s:0b10|s:0o10|s:1_0"
+    );
 }
 
 /// Native and eval OPcache calls reuse a runtime-created script under the same explicit profile.

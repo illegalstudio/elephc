@@ -300,32 +300,26 @@ fn append_simple_offset_key(
             part.push(spanned(Token::Variable(name), span));
         }
         Some(c) if c == '-' || c.is_ascii_digit() => {
-            let mut digits = String::new();
-            if c == '-' {
-                digits.push('-');
-                input.advance_escape();
-            }
-            while let Some(ch) = input.peek_escape() {
-                if ch.is_ascii_digit() {
-                    digits.push(ch);
-                    input.advance_escape();
-                } else {
-                    break;
-                }
-            }
-            if digits == "-" {
+            let Some((len, key)) = elephc_semantics::array_keys::scan_simple_interpolation_numeric_key(
+                input.remaining().as_bytes(),
+            ) else {
                 return Err(CompileError::new(
                     span,
                     "Expected digits after '-' in string interpolation offset",
                 ));
-            }
+            };
+            let token = match key {
+                elephc_semantics::array_keys::StringKey::Integer(value) => Token::IntLiteral(value),
+                elephc_semantics::array_keys::StringKey::String(value) => Token::StringLiteral(
+                    std::str::from_utf8(value)
+                        .expect("interpolation numeric spellings are ASCII")
+                        .to_owned(),
+                ),
+            };
+            input.skip_bytes(len);
             // PHP's simple interpolation grammar canonicalizes integer-looking offsets
             // before ordinary array-key policy applies. Exact-key mode therefore keeps
             // noncanonical spellings but must still treat `1` as integer key 1.
-            let token = match elephc_semantics::array_keys::php_integer_key(digits.as_bytes()) {
-                Some(value) => Token::IntLiteral(value),
-                None => Token::StringLiteral(digits),
-            };
             part.push(spanned(token, span));
         }
         _ => {
@@ -337,6 +331,12 @@ fn append_simple_offset_key(
                 } else {
                     break;
                 }
+            }
+            if key.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "Expected an array offset in string interpolation",
+                ));
             }
             part.push(spanned(Token::StringLiteral(key), span));
         }
@@ -615,10 +615,48 @@ fn interpolation_ranges(content: &str) -> Vec<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    use super::Token;
+
     /// A lone minus is not an integer offset and must not become the string key `"-"`.
     #[test]
     fn simple_interpolation_rejects_lone_minus_offset() {
         assert!(crate::syntax::lexer::tokenize("<?php echo \"$items[-]\";").is_err());
+    }
+
+    /// An empty offset is invalid PHP syntax and must not become the empty-string key.
+    #[test]
+    fn simple_interpolation_rejects_empty_offset() {
+        assert!(crate::syntax::lexer::tokenize("<?php echo \"$items[]\";").is_err());
+    }
+
+    /// Numeric-looking offset text keeps PHP's integer-versus-string distinction.
+    #[test]
+    fn simple_interpolation_preserves_numeric_key_spellings() {
+        for spelling in ["-9223372036854775808", "0x10", "-0x10", "0b10", "0o10", "1_0"] {
+            let tokens = crate::syntax::lexer::tokenize(&format!(
+                "<?php echo \"$items[{spelling}]\";"
+            ))
+            .expect("numeric-looking interpolation offset should tokenize");
+            assert!(tokens.iter().any(|(token, _)| {
+                matches!(token, Token::StringLiteral(value) if value == spelling)
+            }));
+        }
+        let tokens = crate::syntax::lexer::tokenize(
+            "<?php echo \"$items[-9223372036854775807]\";",
+        )
+        .expect("in-range negative interpolation offset should tokenize");
+        assert!(tokens.iter().any(|(token, _)| {
+            *token == Token::IntLiteral(-9_223_372_036_854_775_807)
+        }));
+        for spelling in ["0x", "0b", "0o", "1_"] {
+            assert!(
+                crate::syntax::lexer::tokenize(&format!(
+                    "<?php echo \"$items[{spelling}]\";"
+                ))
+                .is_err(),
+                "{spelling}"
+            );
+        }
     }
 }
 

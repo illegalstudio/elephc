@@ -57,6 +57,20 @@ fn canonical_simple_offset_is_integer_in_every_array_key_profile() {
     }
 }
 
+/// Numeric-looking simple offsets retain the PHP key kind observed by `ArrayAccess`.
+#[test]
+fn numeric_simple_offsets_preserve_php_key_kinds() {
+    for spelling in ["-9223372036854775808", "0x10", "-0x10", "0b10", "0o10", "1_0"] {
+        let tokens = kinds(&format!(r#""$a[{spelling}]";"#));
+        assert!(tokens.contains(&TokenKind::String(spelling.to_owned())), "{spelling}: {tokens:?}");
+    }
+    let tokens = kinds(r#""$a[-9223372036854775807]";"#);
+    assert!(tokens.contains(&TokenKind::Int(-9_223_372_036_854_775_807)), "{tokens:?}");
+    for spelling in ["0x", "0b", "0o", "1_"] {
+        assert!(tokenize(&format!(r#""$a[{spelling}]";"#)).is_err(), "{spelling}");
+    }
+}
+
 /// Returns the parse error a fragment produces, failing the test if it tokenizes.
 fn error(source: &str) -> EvalParseError {
     tokenize(source).expect_err("fragment should be refused")

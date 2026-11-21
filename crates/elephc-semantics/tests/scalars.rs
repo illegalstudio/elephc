@@ -8,7 +8,9 @@
 //! - Expectations include exact integer limits and binary string keys.
 
 use elephc_semantics::{SemanticProfile, StrictFeature};
-use elephc_semantics::array_keys::{classify_string_key, php_integer_key, StringKey};
+use elephc_semantics::array_keys::{
+    classify_string_key, php_integer_key, scan_simple_interpolation_numeric_key, StringKey,
+};
 use elephc_semantics::numeric::{checked_float_to_int, checked_integer, checked_string_to_int, IntegerOp, NumericFailure};
 
 /// Numeric spellings retain their bytes and kind under the exact-key feature alone.
@@ -31,6 +33,25 @@ fn strict_scalar_php_key_controls_keep_canonical_limits() {
     for bytes in [b"-0".as_slice(), b"01", b"+1", b"1\0", b"", b"9223372036854775808", b"-9223372036854775809"] {
         assert_eq!(php_integer_key(bytes), None);
     }
+}
+
+/// Simple interpolation keeps PHP's accepted numeric width and ArrayAccess key kinds.
+#[test]
+fn strict_scalar_interpolation_numeric_keys_keep_source_identity() {
+    for (spelling, expected) in [
+        (b"1".as_slice(), StringKey::Integer(1)),
+        (b"-9223372036854775807", StringKey::Integer(-9_223_372_036_854_775_807)),
+        (b"-9223372036854775808", StringKey::String(b"-9223372036854775808")),
+        (b"0x10", StringKey::String(b"0x10")),
+        (b"-0b10", StringKey::String(b"-0b10")),
+        (b"0o10", StringKey::String(b"0o10")),
+        (b"1_0", StringKey::String(b"1_0")),
+    ] {
+        assert_eq!(scan_simple_interpolation_numeric_key(spelling), Some((spelling.len(), expected)));
+    }
+    assert_eq!(scan_simple_interpolation_numeric_key(b"-]"), None);
+    assert_eq!(scan_simple_interpolation_numeric_key(b"0x]"), Some((1, StringKey::Integer(0))));
+    assert_eq!(scan_simple_interpolation_numeric_key(b"1_]"), Some((1, StringKey::Integer(1))));
 }
 
 /// Arithmetic reports overflow without changing the successful result kind.
