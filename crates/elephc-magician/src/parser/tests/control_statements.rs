@@ -263,7 +263,7 @@ fn parse_fragment_rejects_unterminated_alternative_body() {
     assert!(parse_fragment(br#"switch ($a): case 1: $x = 1;"#).is_err());
 }
 
-/// Both profiles refuse reference foreach targets outside the interpreter fragment subset.
+/// Every profile refuses reference foreach targets outside the interpreter fragment subset.
 #[test]
 fn parse_reference_foreach_preserves_fragment_subset_boundary() {
     use elephc_semantics::{SemanticProfile, StrictFeature};
@@ -273,8 +273,8 @@ fn parse_reference_foreach_preserves_fragment_subset_boundary() {
         for source in [b"foreach ($items as &$item) {}".as_slice(),
             b"foreach ($items as $key => &$item) {}"] {
             let error = crate::parser::parse_fragment_with_semantics(source, profile).unwrap_err();
-            assert_eq!(error, EvalParseError::ExpectedVariable);
-            assert_eq!(error.status(), crate::errors::EvalStatus::ParseError);
+            assert_eq!(error, EvalParseError::UnsupportedConstruct);
+            assert_eq!(error.status(), crate::errors::EvalStatus::UnsupportedConstruct);
         }
     }
 }
