@@ -165,6 +165,9 @@ $result = (computedObjectFetchRoot()->rows[0][1] += 2);
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        assert!(module.class_methods.iter().any(|method|
+            method.name.eq_ignore_ascii_case("ArrayObject::offsetGet")),
+            "{target}: native ArrayObject runtime reads require their offsetGet body");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
