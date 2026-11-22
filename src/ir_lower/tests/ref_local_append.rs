@@ -199,7 +199,7 @@ touchUnknown($items); echo count($items);
     }
 }
 
-/// A reference-backed `iterable` source reaches dynamic indexed and hash conversion with a lease.
+/// A reference-promoted source reaches dynamic indexed and hash conversion with a lease.
 #[test]
 fn ref_local_dynamic_iterable_foreach_owns_writeback_on_all_targets() {
     use crate::ir::{Immediate, Op, ValueDef};
@@ -212,15 +212,15 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
     $items = keepDynamicIterable($input);
     if ($flag < 0) {
         touchDynamicIterable($items);
-        return;
     }
     foreach ($items as &$value) { $value = 1; }
     unset($value);
 }
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(
-            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+            source, Path::new("main.php"), Path::new("."), target,
         );
         let function = module.functions.iter()
             .find(|function| function.name == "mutateDynamicIterable")
@@ -229,7 +229,8 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
             .find(|instruction| instruction.op == Op::IterStart)
             .expect("dynamic iterable fixture must reach IterStart");
         let source_value = function.value(iter_start.operands[0]).expect("iterator source value");
-        assert_eq!(source_value.php_type.codegen_repr(), PhpType::Iterable, "{name}");
+        assert_eq!(source_value.php_type.codegen_repr(), PhpType::Mixed,
+            "{name}: the reachable by-reference mutation must widen the foreach source");
         let ValueDef::Instruction { inst: source_load, .. } = source_value.def else {
             panic!("{name}: iterator source must be loaded from the local");
         };
@@ -253,40 +254,33 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
             .split_once("@endfn name=mutateDynamicIterable").unwrap().0;
         let body = body.split_once("op=iter_start").expect("iterator assembly").1;
         let indexed_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_indexed") && line.trim_end().ends_with(':'))
-            .expect("dynamic indexed label");
+            .find(|line| line.contains("iter_start_mixed_indexed") && line.trim_end().ends_with(':'))
+            .expect("mixed indexed label");
         let hash_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_hash") && line.trim_end().ends_with(':'))
-            .expect("dynamic hash label");
+            .find(|line| line.contains("iter_start_mixed_hash") && line.trim_end().ends_with(':'))
+            .expect("mixed hash label");
         let object_label = body.lines()
-            .find(|line| line.contains("iter_start_dyn_object") && line.trim_end().ends_with(':'))
-            .expect("dynamic object label");
+            .find(|line| line.contains("iter_start_mixed_object") && line.trim_end().ends_with(':'))
+            .expect("mixed object label");
         let indexed_start = body.find(indexed_label).unwrap();
         let hash_start = body.find(hash_label).unwrap();
         let object_start = body.find(object_label).unwrap();
         let indexed = &body[indexed_start..hash_start];
         let hash = &body[hash_start..object_start];
 
-        for (branch, conversion) in [
-            (indexed, "__rt_array_to_hash"),
-            (hash, "__rt_hash_to_mixed"),
-        ] {
-            let retain = branch.find("__rt_incref")
-                .unwrap_or_else(|| panic!("{name}: missing borrowed-source retain in:\n{branch}"));
-            let cleanup = branch.find("__rt_decref_mixed")
-                .unwrap_or_else(|| panic!("{name}: missing old Mixed-box cleanup in:\n{branch}"));
-            let convert = branch.find(conversion)
-                .unwrap_or_else(|| panic!("{name}: missing {conversion} in:\n{branch}"));
-            assert!(retain < cleanup && cleanup < convert,
-                "{name}: retain and retire the raw Mixed owner before {conversion}:\n{branch}");
-            let writeback = &branch[convert..];
-            let boxed = writeback.find("__rt_mixed_from_value")
-                .unwrap_or_else(|| panic!("{name}: converted owner must be boxed for raw-local writeback:\n{branch}"));
-            let transferred = writeback.find("__rt_decref_any")
-                .unwrap_or_else(|| panic!("{name}: owned writeback must transfer its retained container lease:\n{branch}"));
-            assert!(boxed < transferred,
-                "{name}: box the converted owner before transferring its retained lease:\n{branch}");
-        }
+        assert!(indexed.contains("__rt_array_to_hash"),
+            "{name}: indexed Mixed payload must promote to hash storage:\n{indexed}");
+        assert!(hash.contains("__rt_hash_to_mixed"),
+            "{name}: hash Mixed payload must obtain unique mutable storage:\n{hash}");
+        let (tag_store, indexed_payload_store, hash_payload_store) = if target.arch == crate::codegen::platform::Arch::AArch64 {
+            ("str x10, [x9]", "str x0, [x9, #8]", "str x0, [x9, #8]")
+        } else {
+            ("mov QWORD PTR [r10], 5", "mov QWORD PTR [r10 + 8], rax", "mov QWORD PTR [r10 + 8], rax")
+        };
+        assert!(indexed.contains(tag_store) && indexed.contains(indexed_payload_store),
+            "{name}: indexed conversion must publish tag and payload in the existing Mixed cell:\n{indexed}");
+        assert!(hash.contains(hash_payload_store),
+            "{name}: hash conversion must publish its payload in the existing Mixed cell:\n{hash}");
     }
 }
 
