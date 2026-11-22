@@ -2276,3 +2276,39 @@ t(fn() => R::viaParent(box("e")));
         "Error: Call to private P::__construct() from global scope\nError: Call to private P::__construct() from global scope\nError: Call to protected Q::__construct() from global scope\nP(c)\nTypeError: P::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 3\nQ Q(d)\nTypeError: Q::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nQ Q(e)\n"
     );
 }
+
+/// A variadic constructor selected by `new $class($v)` or `new static($v)` checks its declared
+/// scalar parameters like any other: the generic dynamic-new path converted `null` to `""`
+/// before the constructor ran. The collected extra arguments still reach `$rest`, and a refusal
+/// releases them (`--heap-debug` leak summary clean).
+#[test]
+fn test_dynamic_construction_checks_a_variadic_constructor() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class A {
+    function __construct(string $s, ...$rest) { echo static::class, " A[", $s, "] ", count($rest), "\n"; }
+    static function make(mixed $v) { return new static($v, str_repeat("r", 30)); }
+}
+class B extends A { function __construct(int $n, string ...$rest) { echo "B ", $n, " ", implode(",", $rest), "\n"; } }
+class C { function __construct(string $s, int $n = 3, ...$rest) { echo "C [", $s, "] ", $n, " ", count($rest), "\n"; } }
+function make(string $c, mixed $v) { return new $c($v); }
+function make3(string $c, mixed $v) { return new $c($v, str_repeat("x", 30), "y"); }
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+t(fn() => make('A', null));
+t(fn() => make3('A', box(null)));
+t(fn() => make('A', box("ok")));
+t(fn() => make3('a', box("ok")));
+t(fn() => make('B', box(null)));
+t(fn() => make3('B', box("5")));
+t(fn() => A::make(null));
+t(fn() => B::make(box([1])));
+t(fn() => make('C', box(null)));
+t(fn() => make('C', box("c")));
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "A::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nA A[ok] 0\nA A[ok] 2\nB::__construct(): Argument #1 ($n) must be of type int, null given, called in F on line 9\nB 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,y\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 5\nB::__construct(): Argument #1 ($n) must be of type int, array given, called in F on line 5\nC::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nC [c] 3 0\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

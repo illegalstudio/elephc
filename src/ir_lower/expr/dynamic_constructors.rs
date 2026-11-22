@@ -264,7 +264,18 @@ fn dynamic_new_class_is_planning_candidate(
         return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
     }
     if sig.variadic.is_some() {
-        return false;
+        // The generic dynamic-new path converts a leading scalar argument before it reaches
+        // the constructor thunk, so a variadic constructor whose declared scalar parameter
+        // receives a runtime-typed positional argument is constructed through the fixed-class
+        // branch too (`__construct(string $s, ...$rest)` refuses `new $c($null)`). A hidden
+        // collector (eval, backtraces) is not a declared variadic and keeps the generic path.
+        return !crate::func_args::sig_collects_surplus_args(sig)
+            && !crate::func_args::sig_has_hidden_argc_param(sig)
+            && !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg)
+            && dynamic_new_args_need_scalar_guard(ctx, sig, args)
+            && dynamic_new_constructor_is_accessible(ctx, class_name)
+            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
     }
     if !dynamic_new_args_need_planning(sig, args)
         && !owns_promoted_references
