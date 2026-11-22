@@ -140,6 +140,9 @@ pub(crate) fn source_expression_may_throw(
     expr: &Expr,
     profile: elephc_semantics::SemanticProfile,
 ) -> bool {
+    if matches!(&expr.kind, ExprKind::IncludeValue { .. }) {
+        return true;
+    }
     let _profile = scoped_semantic_profile(profile);
     effects::expr_effect(expr).may_throw || !exception_flow::active_expr_thrown_types(expr).is_empty()
 }
@@ -149,6 +152,13 @@ pub(crate) fn source_statement_may_throw(
     stmt: &Stmt,
     profile: elephc_semantics::SemanticProfile,
 ) -> bool {
+    if matches!(
+        &stmt.kind,
+        StmtKind::Assign { value, .. } | StmtKind::Return(Some(value))
+            if matches!(&value.kind, ExprKind::IncludeValue { .. })
+    ) {
+        return true;
+    }
     let _profile = scoped_semantic_profile(profile);
     effects::stmt_may_throw(stmt)
 }

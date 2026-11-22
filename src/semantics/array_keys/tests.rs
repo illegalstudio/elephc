@@ -519,6 +519,18 @@ fn strict_array_key_source_validation_preserves_conservative_catch_paths() {
     }
 }
 
+/// Unresolved value-position includes remain conservative throw points before resolution.
+#[test]
+fn strict_array_key_source_validation_handles_value_includes_in_try_blocks() {
+    for source in [
+        "<?php try { $value = require 'config.php'; } catch (Throwable $error) {}",
+        "<?php function load_config(): mixed { try { return require 'config.php'; } catch (Throwable $error) { return null; } }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
 /// A nested loop audits one changed repeated entry before the refinement bound applies.
 #[test]
 fn strict_array_key_source_validation_audits_bounded_nested_replay() {
