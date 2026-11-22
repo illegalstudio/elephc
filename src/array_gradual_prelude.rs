@@ -662,7 +662,8 @@ fn decl_fn_elephc_array_merge_recursive_into() -> Stmt {
     //         if (is_string($key)) {
     //             if (array_key_exists($key, $dest)) {
     //                 $current = $dest[$key];
-    //                 if (!is_array($current)) { $current = [$current]; }
+    //                 if (!is_array($current)) { $current = is_object($current) ? (array) $current : [$current]; }
+    //                 if (is_object($value)) { $value = (array) $value; }
     //                 if (is_array($value)) { $current = self($current, $value); } else { $current[] = $value; }
     //                 $dest[$key] = $current;
     //             } else { $dest[$key] = $value; }
@@ -684,7 +685,18 @@ fn decl_fn_elephc_array_merge_recursive_into() -> Stmt {
                                 s_assign("current", e_index(e_var("dest"), e_var("key"))),
                                 s_if(
                                     e_not(e_call("is_array", vec![e_var("current")])),
-                                    vec![s_assign("current", e_array(vec![e_var("current")]))],
+                                    vec![s_if(
+                                        e_call("is_object", vec![e_var("current")]),
+                                        vec![s_assign("current", e_cast(CastType::Array, e_var("current")))],
+                                        vec![],
+                                        Some(vec![s_assign("current", e_array(vec![e_var("current")]))]),
+                                    )],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_call("is_object", vec![e_var("value")]),
+                                    vec![s_assign("value", e_cast(CastType::Array, e_var("value")))],
                                     vec![],
                                     None,
                                 ),
