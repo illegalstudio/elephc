@@ -275,3 +275,23 @@ eval($source);
     assert_eq!(out.stdout, "old|new:new|done|zzz|2", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A compiled call of an eval-created closure that takes a by-reference argument stores through
+/// the caller's slot, which keeps its own copy of the written value: the statement's reference
+/// stays with the closure's scope entry. Treating it as borrowed leaked the string and its box
+/// (the foreign by-reference closure shape behind the SimpleXML reference-argument leaks).
+#[test]
+fn test_eval_closure_by_reference_argument_assignment_releases_the_written_value() {
+    let source = r#"<?php
+function viaMixed(mixed $callback, mixed $x): void { $callback($x); echo $x, "|"; }
+function viaInt(mixed $callback, int $x): void { $callback($x); }
+eval('$foreignReference = function (&$value): void { $value = "ref"; };');
+viaMixed($foreignReference, 5);
+viaInt($foreignReference, 5);
+echo "end";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ref|end", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

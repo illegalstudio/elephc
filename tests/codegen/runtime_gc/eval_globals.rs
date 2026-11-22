@@ -340,3 +340,25 @@ echo 'ok';
     assert_eq!(out.stdout, "ok");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A literal eval fragment that writes a string global bound by `global $g` hands its result back
+/// after the native-binding clear, which reuses the eval temp cell: the result used to be read
+/// from that cell, so the clear's value view was released as the result and the global's string
+/// was freed under its owner.
+#[test]
+fn test_literal_eval_string_write_to_function_global_survives_the_binding_clear() {
+    let out = compile_cli_files_and_run(
+        &[("main.php", r#"<?php
+$shared = 'seed';
+function writeThroughEval(): void {
+    global $shared;
+    eval('$shared = "eval";');
+    echo $shared, ':';
+}
+writeThroughEval();
+echo $shared;
+"#)],
+        "main.php",
+    );
+    assert_eq!(out, "eval:eval");
+}

@@ -418,7 +418,11 @@ pub(in crate::interpreter) fn written_value_is_owned_by_entry(
         | EvalReferenceTarget::StaticLocal { .. }
         | EvalReferenceTarget::ObjectProperty { .. } => true,
         EvalReferenceTarget::Cell { .. } => true,
-        EvalReferenceTarget::StaticProperty { .. } | EvalReferenceTarget::InvokerSlot { .. } => false,
+        // The native slot gets its own retained copy of the value (a boxed Mixed handle, a
+        // string or heap word) or only its raw word, never the statement's reference, so the
+        // entry owns that reference and releases it with the scope.
+        EvalReferenceTarget::InvokerSlot { .. } => true,
+        EvalReferenceTarget::StaticProperty { .. } => false,
     })
 }
 
