@@ -161,6 +161,20 @@ pub fn check_with_options(
     result::check_with_options(program, options)
 }
 
+/// Runs the complete checker with a staged semantic profile for integration-test drivers.
+///
+/// This deliberately bypasses only the publication gate for pending guarantees. Production
+/// compilation continues through `check_with_target_and_options`, which rejects unpublished
+/// profiles before entering the checker.
+#[doc(hidden)]
+pub fn check_staged_semantics(
+    program: &crate::parser::ast::Program,
+    target: crate::codegen::platform::Target,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<CheckResult, crate::errors::CompileError> {
+    checker::check_staged_semantics(program, target, profile)
+}
+
 /// The checker/EIR scope key of the top-level program body.
 ///
 /// `#` is never part of a PHP identifier, so no user function (not even one named `main`) can

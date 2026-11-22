@@ -1680,7 +1680,6 @@ pub fn check_types_with_options(
 }
 
 /// Exercises the complete frontend for staged guarantees without weakening any public admission gate.
-#[cfg(test)]
 pub(crate) fn check_staged_semantics(program: &Program, target: Target, profile: elephc_semantics::SemanticProfile)
     -> Result<CheckResult, CompileError> {
     check_profiled_program(program, target, CheckOptions { semantic_profile: profile, strict_locals: false },

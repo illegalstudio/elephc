@@ -157,8 +157,7 @@ impl StrictFixture {
             }
             program = elephc::name_resolver::resolve(program).unwrap();
         }
-        let mut checked = elephc::types::check_with_target(&program, target()).unwrap();
-        checked.semantic_profile = profile;
+        let checked = elephc::types::check_staged_semantics(&program, target(), profile).unwrap();
         let _semantics = elephc::optimize::scoped_semantic_profile(profile);
         if optimize {
             program = elephc::optimize::fold_constants_for_target(program, target());
