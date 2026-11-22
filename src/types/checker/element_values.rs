@@ -27,9 +27,10 @@ use crate::types::{PhpType, TypeEnv};
 impl Checker {
     /// Records the type the checker proved for a value written as a container element.
     ///
-    /// The key is the value expression's own span inside the current body scope. A second
-    /// authoritative visit that proves a different view, or none, permanently disables the
-    /// site, which leaves lowering on its representation-preserving widening path.
+    /// The key is the current body scope, the value expression's own span and the local the
+    /// value reads directly (`None` when it is not one plain variable). A second authoritative
+    /// visit that proves a different view for that key, or none, permanently disables it,
+    /// which leaves lowering on its representation-preserving widening path.
     pub(crate) fn record_element_value_view(&mut self, value: &Expr, ty: &PhpType, env: &TypeEnv) {
         if !value.span.identifies_a_node()
             || self.member_receiver_analysis_scopes.iter().any(|(function, scope)| {

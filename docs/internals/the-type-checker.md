@@ -346,8 +346,11 @@ returned a list `implode()` printed as pointers.
 
 `record_element_value_view()` (`src/types/checker/element_values.rs`) therefore
 records, for every value written by `$a[] = …`, `$a[$k] = …` or an array literal
-element, the type the checker proved for it, keyed by the body scope and the
-value's span (`CheckResult::element_value_views`). EIR lowering projects a boxed
+element, the type the checker proved for it
+(`CheckResult::element_value_views`). The key is the body scope, the value's
+span and the local the value reads, `None` when the value is not one plain
+variable: a synthesized node can share its span with its first operand, so the
+local is part of a site's identity. EIR lowering projects a boxed
 operand to that type before it is stored (see
 [The IR](the-ir.md#conversions-and-boxing)), so the container keeps the storage
 its checked type promises.
@@ -385,7 +388,7 @@ while the boxed cell can still hold the `null`, and casting that box would store
   the call is not itself a proof. Any other expression publishes nothing: its
   operand is concrete already, or boxed for a reason this pass cannot see.
 - **Every authoritative visit** to the site agrees. A conflicting visit disables
-  the site for good, and loop-storage probes publish nothing.
+  that key for good, and loop-storage probes publish nothing.
 
 A `global` binding and a local a closure captured by reference are boxed cells
 other code can rewrite, so their checked type is neither the stored operand nor
