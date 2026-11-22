@@ -841,6 +841,13 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php function f() { __halt_compiler(); }",
         "<?php function f() { $s = \"{$a}\"; __halt_compiler(); }",
         "<?php\nfunction f() {\n__halt_compiler();\n}",
+        "<?php function f() { $x = match ($a) { __halt_compiler(); } }",
+        "<?php $x = match ($a) { __halt_compiler(); }",
+        "<?php function f() { C::{__halt_compiler()}; }",
+        "<?php function f() { $o->{__halt_compiler()}; }",
+        "<?php function f() { $o?->{__halt_compiler()}; }",
+        "<?php function f() { switch ($a) { __halt_compiler(); } }",
+        "<?php switch ($a): __halt_compiler(); endswitch;",
         "<?php class C { function m() { __halt_compiler(); } }",
         "<?php namespace N { __halt_compiler(); }",
         "<?php\nnamespace N {\n__halt_compiler();\n}",
@@ -1765,6 +1772,10 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "<?php class C { public $x { get { __halt_compiler(); } } }",
         "<?php $f = function () use ($a) { __halt_compiler(); };",
         "<?php function f() { $s = \"{$a}\"; __halt_compiler(); }",
+        "<?php function f() { class C { function m() { __halt_compiler(); } } }",
+        "<?php function f() { class C { public $x { get { __halt_compiler(); } } } }",
+        "<?php function f() { switch ($a) { case 1: __halt_compiler(); } }",
+        "<?php switch ($a): case 1: __halt_compiler(); endswitch;",
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
         assert_eq!(error.message, compile, "{source}");
@@ -1821,10 +1832,49 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "<?php class C { use T { __halt_compiler(); } }",
         "<?php fn() => __halt_compiler();",
         "<?= __halt_compiler();",
+        "<?php function f() { class C { __halt_compiler(); } }",
+        "<?php function f() { class C { use T { __halt_compiler(); } } }",
+        "<?php function f() { class C { public $x { __halt_compiler(); } } }",
+        "<?php function f() { $x = match ($a) { __halt_compiler(); } }",
+        "<?php function f() { C::{__halt_compiler()}; }",
+        "<?php function f() { $o->{__halt_compiler()}; }",
+        "<?php function f() { $o?->{__halt_compiler()}; }",
+        "<?php function f() { switch ($a) { __halt_compiler(); } }",
+        "<?php switch ($a): __halt_compiler(); endswitch;",
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
         assert!(!error.is_compile_error(), "{source}: {}", error.message);
         assert!(error.message.contains("__halt_compiler") || error.message.contains("__HALT_COMPILER"), "{source}: {}", error.message);
+    }
+    for (source, message) in [
+        (
+            "<?php function f() { $x = match ($a) { __halt_compiler(); } }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php function f() { C::{__halt_compiler()}; }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php function f() { $o->{__halt_compiler()}; }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php function f() { $o?->{__halt_compiler()}; }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php function f() { switch ($a) { __halt_compiler(); } }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
+        ),
+        (
+            "<?php switch ($a): __halt_compiler(); endswitch;",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"endswitch\" or \"case\" or \"default\"",
+        ),
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert_eq!(error.message, message, "{source}");
+        assert!(!error.is_compile_error(), "{source}");
     }
     assert!(tokenize(b"<?php __halt_compiler();", TOKEN_PARSE).is_ok());
     assert!(tokenize(b"<?php label: __halt_compiler();", TOKEN_PARSE).is_ok());

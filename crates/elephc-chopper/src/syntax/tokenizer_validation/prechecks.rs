@@ -1390,11 +1390,13 @@ pub(crate) fn close_tag_else_error<T: SourceToken>(source: &[u8], tokens: &[T]) 
 
 /// Returns whether an alternative-syntax header (`if (...)`, `while (...)`, ...) ends in `:`.
 pub(crate) fn alternative_header_colon<T: SourceToken>(tokens: &[T], keyword: usize) -> bool {
-    let Some(open) = next_significant_index(tokens, keyword)
-        .filter(|&index| tokens[index].id() == i64::from(b'('))
-    else {
-        return false;
-    };
+    alternative_header_colon_index(tokens, keyword).is_some()
+}
+
+/// Returns the `:` that closes an alternative-syntax header, when the header has one.
+fn alternative_header_colon_index<T: SourceToken>(tokens: &[T], keyword: usize) -> Option<usize> {
+    let open = next_significant_index(tokens, keyword)
+        .filter(|&index| tokens[index].id() == i64::from(b'('))?;
     let mut depth = 0usize;
     let mut cursor = open;
     while cursor < tokens.len() {
@@ -1409,7 +1411,7 @@ pub(crate) fn alternative_header_colon<T: SourceToken>(tokens: &[T], keyword: us
         }
         cursor += 1;
     }
-    next_significant_index(tokens, cursor).is_some_and(|next| tokens[next].id() == i64::from(b':'))
+    next_significant_index(tokens, cursor).filter(|&next| tokens[next].id() == i64::from(b':'))
 }
 
 /// Returns whether a control keyword is actually a member or declaration name.
@@ -1488,8 +1490,19 @@ enum HaltScope {
     Namespace { line: usize },
     /// `{$...}` or `${...}` interpolation. Its `}` must not close a real block.
     Interpolation,
-    /// `if/while/for/foreach/switch/declare (...):` until the matching `end*`.
+    /// `if/while/for/foreach/declare (...):` until the matching `end*`.
+    ///
+    /// `switch (...):` is `Switch` instead: a halt before the first `case` is a parse error.
     Alternative,
+    /// `match (...) {`. `open` is that `{`.
+    Match { open: usize },
+    /// A computed member brace: `::{`, `->{` or `?->{`.
+    Member,
+    /// `switch (...) {` or `switch (...):`. `gate` is that `{` or `:`.
+    ///
+    /// A halt immediately after `gate` is a parse error. A halt after `case` or `default`
+    /// is the outermost-scope CompileError. `alternative` selects the `endswitch` wording.
+    Switch { gate: usize, alternative: bool },
 }
 
 /// Returns whether `{` opens a trait adaptation block (`use Trait {`, `use A, B {`).
@@ -1526,8 +1539,18 @@ fn brace_is_trait_use<T: SourceToken>(tokens: &[T], open: usize) -> bool {
 /// Classifies a real `{` as a statement block, a class-like body or a namespace body.
 ///
 /// The namespace line is filled by the caller from the brace token. A property-hook container
-/// (`public $x {`) is not a statement list; the `get {` body inside it is.
+/// (`public $x {`) is not a statement list; the `get {` body inside it is. `match`, `switch`
+/// and a computed member stop at their own header, so an enclosing function does not win.
 fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
+    if let Some(previous) = previous_significant_index(tokens, open) {
+        let id = tokens[previous].id();
+        if id == tok::T_DOUBLE_COLON
+            || id == tok::T_OBJECT_OPERATOR
+            || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+        {
+            return HaltScope::Member;
+        }
+    }
     if brace_is_trait_use(tokens, open)
         || previous_significant_index(tokens, open)
             .is_some_and(|previous| tokens[previous].id() == tok::T_VARIABLE)
@@ -1542,6 +1565,12 @@ fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
         }
         if id == tok::T_CLASS || id == tok::T_INTERFACE || id == tok::T_TRAIT || id == tok::T_ENUM {
             return HaltScope::ClassLike;
+        }
+        if id == tok::T_MATCH && !control_keyword_is_name(tokens, previous) {
+            return HaltScope::Match { open };
+        }
+        if id == tok::T_SWITCH && !control_keyword_is_name(tokens, previous) {
+            return HaltScope::Switch { gate: open, alternative: false };
         }
         if id == tok::T_FUNCTION
             || id == tok::T_FN
@@ -1629,11 +1658,94 @@ fn halt_namespace_unclosed(source: &[u8], pos: usize, brace_line: usize) -> Vali
     ValidationError { message, pos, lexical: false }
 }
 
+/// Returns the innermost scope that decides a halt, ignoring string interpolation.
+fn innermost_halt_scope(scopes: &[HaltScope]) -> Option<&HaltScope> {
+    scopes.iter().rev().find(|scope| !matches!(scope, HaltScope::Interpolation))
+}
+
+/// Builds the parse or compile diagnostic for one `__halt_compiler` token.
+///
+/// `None` means the halt is in the outermost scope and stays valid. A class body, match arm
+/// list, computed member and a switch with no `case` yet stay parse errors even when a
+/// function around them is still open. The expectation text is PHP's for that container.
+fn halt_scope_failure<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    scopes: &[HaltScope],
+    index: usize,
+) -> Option<ValidationError> {
+    let statement = halt_is_statement_start(tokens, index);
+    let scope = innermost_halt_scope(scopes);
+    if statement {
+        match scope {
+            None => return None,
+            Some(HaltScope::Statement | HaltScope::Alternative) => {
+                return Some(ValidationError {
+                    message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
+                    pos: tokens[index].pos(),
+                    lexical: false,
+                });
+            }
+            Some(HaltScope::Namespace { line }) => {
+                return Some(halt_namespace_unclosed(source, tokens[index].pos(), *line));
+            }
+            Some(HaltScope::Switch { gate, alternative }) => {
+                let at_gate = previous_significant_index(tokens, index) == Some(*gate);
+                if !at_gate {
+                    return Some(ValidationError {
+                        message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
+                        pos: tokens[index].pos(),
+                        lexical: false,
+                    });
+                }
+                let expecting = if *alternative {
+                    "\"endswitch\" or \"case\" or \"default\""
+                } else {
+                    "\"case\" or \"default\" or \"}\""
+                };
+                return Some(halt_parse_error(source, tokens, index, Some(expecting)));
+            }
+            Some(HaltScope::Match { open }) => {
+                let at_open = previous_significant_index(tokens, index) == Some(*open);
+                let expecting = if at_open { Some("\"}\"") } else { None };
+                return Some(halt_parse_error(source, tokens, index, expecting));
+            }
+            Some(HaltScope::ClassLike | HaltScope::Member | HaltScope::Interpolation) => {}
+        }
+    }
+    Some(halt_parse_error(source, tokens, index, None))
+}
+
+/// Builds the unexpected-token diagnostic for a halt that is not a compile error.
+///
+/// The keyword spelling follows Zend, so `__HALT_COMPILER` is reported in lowercase. An
+/// expectation is added only for the containers whose PHP message names one.
+fn halt_parse_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    index: usize,
+    expecting: Option<&str>,
+) -> ValidationError {
+    let Some(expecting) = expecting else {
+        return token_at_index_error(source, tokens, index);
+    };
+    let token = &tokens[index];
+    let text = &source[token.pos()..token.pos() + token.len()];
+    let spelled = crate::scanner::keyword_diagnostic_spelling(token.id(), text)
+        .unwrap_or_else(|| String::from_utf8_lossy(text).into_owned());
+    ValidationError {
+        message: format!("syntax error, unexpected token \"{spelled}\", expecting {expecting}"),
+        pos: token.pos(),
+        lexical: false,
+    }
+}
+
 /// Rejects `__halt_compiler()` outside the outermost file scope.
 ///
-/// A statement inside a function, block or alternative-syntax body is PHP's `CompileError`.
-/// A braced namespace halts before its `}` and reports `Unclosed '{'`. A class body, an
-/// unbraced `if`, a ternary operand and a property initializer stay ordinary parse errors.
+/// The innermost non-interpolation scope decides. A statement inside a function, block or
+/// alternative-syntax body is PHP's `CompileError`. A braced namespace halts before its `}`
+/// and reports `Unclosed '{'`. A class body, match list, computed member, switch before its
+/// first case, unbraced `if` and property initializer stay ordinary parse errors.
 #[inline(never)]
 pub(crate) fn halt_compiler_scope_error<T: SourceToken>(
     source: &[u8],
@@ -1662,8 +1774,22 @@ pub(crate) fn halt_compiler_scope_error<T: SourceToken>(
             continue;
         }
         match alternative_scope_delta(tokens, index) {
+            1 if id == tok::T_SWITCH => {
+                if let Some(gate) = alternative_header_colon_index(tokens, index) {
+                    scopes.push(HaltScope::Switch { gate, alternative: true });
+                }
+                continue;
+            }
             1 => {
                 scopes.push(HaltScope::Alternative);
+                continue;
+            }
+            -1 if id == tok::T_ENDSWITCH => {
+                if let Some(position) = scopes.iter().rposition(|scope| {
+                    matches!(scope, HaltScope::Switch { alternative: true, .. })
+                }) {
+                    scopes.remove(position);
+                }
                 continue;
             }
             -1 => {
@@ -1680,31 +1806,9 @@ pub(crate) fn halt_compiler_scope_error<T: SourceToken>(
         if id != tok::T_HALT_COMPILER || halt_used_as_name(tokens, index) {
             continue;
         }
-        let pos = tokens[index].pos();
-        let statement = halt_is_statement_start(tokens, index);
-        let in_statement = scopes.iter().any(|scope| {
-            matches!(scope, HaltScope::Statement | HaltScope::Alternative)
-        });
-        if statement && in_statement {
-            return Some(ValidationError {
-                message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
-                pos,
-                lexical: false,
-            });
+        if let Some(error) = halt_scope_failure(source, tokens, &scopes, index) {
+            return Some(error);
         }
-        if statement && !scopes.iter().any(|scope| matches!(scope, HaltScope::ClassLike)) {
-            if let Some(line) = scopes.iter().rev().find_map(|scope| match scope {
-                HaltScope::Namespace { line } => Some(*line),
-                _ => None,
-            }) {
-                return Some(halt_namespace_unclosed(source, pos, line));
-            }
-        }
-        let blocking = scopes.iter().any(|scope| !matches!(scope, HaltScope::Interpolation));
-        if statement && !blocking {
-            continue;
-        }
-        return Some(token_at_index_error(source, tokens, index));
     }
     None
 }
