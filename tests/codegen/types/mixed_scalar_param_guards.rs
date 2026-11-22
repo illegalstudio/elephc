@@ -513,6 +513,40 @@ echo $n, "\n";
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
 
+/// A `Stringable` accepted by a deferred `string` check is converted after every argument was
+/// evaluated; when its `__toString()` throws, the box (a call result or a local) and the other
+/// owned operands must still be released by the unwinder, for functions and methods and
+/// whether the throwing conversion comes first or after an earlier string was converted.
+#[test]
+fn test_throwing_to_string_in_a_deferred_string_check_releases_the_box() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Boom {
+    public function __construct(private string $tag) {}
+    public function __toString(): string { throw new RuntimeException("boom " . $this->tag); }
+}
+class O { public function m(string $s, array $a): int { return 1; } }
+function box(mixed $v): mixed { return $v; }
+function f(string $s): int { return strlen($s); }
+function g(string $a, string $b, array $c): int { return 1; }
+$o = new O();
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    $v = box(new Boom(str_repeat("t", 40 + ($i & 3))));
+    try { f($v); } catch (RuntimeException $e) { $n++; }
+    try { f(box(new Boom(str_repeat("u", 40)))); } catch (RuntimeException $e) { $n++; }
+    try { g(box(new Boom("a")), box(str_repeat("v", 40)), [str_repeat("w", 40)]); } catch (RuntimeException $e) { $n++; }
+    try { g(box(str_repeat("x", 40)), box(new Boom("b")), [str_repeat("y", 40)]); } catch (RuntimeException $e) { $n++; }
+    try { $o->m(box(new Boom("c")), [str_repeat("z", 40)]); } catch (RuntimeException $e) { $n++; $last = $e->getMessage(); }
+}
+echo $n, " ", $last, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "15 boom c\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// PHP converts an accepted `string` argument while binding it, so in a runtime unpack a
 /// `Stringable`'s `__toString()` runs (and its exception wins) before a later parameter is
 /// checked or found missing. The in-order unpack check used to accept the object and only
