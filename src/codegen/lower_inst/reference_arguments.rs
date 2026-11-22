@@ -1518,6 +1518,14 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let result_ty = inst.result_php_type.codegen_repr();
     let borrowed = inst.result.is_some_and(|result|
         ctx.function.value(result).is_some_and(|value| value.ownership == Ownership::Borrowed));
+    if result_ty == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        restore_null_string_sentinel(ctx);
+        if !borrowed {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+        return store_if_result(ctx, inst);
+    }
     if borrowed {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
@@ -1525,6 +1533,40 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
         emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
     }
     store_if_result(ctx, inst)
+}
+
+/// Restores canonical Mixed null as the in-band marker used by typed string storage.
+///
+/// `__rt_mixed_unbox` returns `(tag, low, high)`, where null is tag 8 with zero payload words.
+/// A typed string boundary must retain the distinction between a missing array entry and a real
+/// empty string, so null becomes `NULL_SENTINEL` with length zero. Ordinary string payloads keep
+/// their pointer and length unchanged.
+fn restore_null_string_sentinel(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("mixed_unbox_string_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // did the boxed value unwrap to canonical PHP null?
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // real strings already occupy x1/x2
+            let pointer = abi::string_result_regs(ctx.emitter).0;
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                pointer,
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // did the boxed value unwrap to canonical PHP null?
+            ctx.emitter.instruction("mov rax, rdi");                            // move the ordinary string pointer into its result register
+            ctx.emitter.instruction(&format!("jne {done}"));                    // real strings keep the unboxed pointer and length
+            let pointer = abi::string_result_regs(ctx.emitter).0;
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                pointer,
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.

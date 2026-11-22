@@ -559,10 +559,15 @@ mod instruction_effect_tests {
         }
     }
 
-    /// Unboxing a descriptor or object must retain its payload, unlike scalar extraction.
+    /// Unboxing a descriptor, object, or string carries its ownership barrier unlike scalars.
     #[test]
     fn mixed_unbox_effects_require_exact_payload_ownership_barriers() {
-        for ty in [PhpType::Callable, PhpType::Object("Owner".to_owned()), PhpType::Int] {
+        for ty in [
+            PhpType::Callable,
+            PhpType::Object("Owner".to_owned()),
+            PhpType::Str,
+            PhpType::Int,
+        ] {
             let effects = Op::mixed_unbox_effects(&ty);
             let tracked = ty != PhpType::Int;
             assert_eq!(effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_HEAP), tracked);

@@ -50,3 +50,47 @@ fn mixed_object_unbox_respects_borrowed_ownership_on_every_target() {
         }
     }
 }
+
+/// String unboxes preserve canonical null as the typed missing-string marker on every target.
+#[test]
+fn mixed_string_unbox_restores_null_sentinel_and_owns_payload_on_every_target() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = Module::new(target);
+        let mut function = crate::codegen::shared_helper::helper_function("unbox_string", PhpType::Void);
+        {
+            let entry = function.entry;
+            let mut builder = crate::ir::Builder::new(&mut function);
+            builder.position_at_end(entry);
+            builder.emit_with_effects(
+                Op::MixedUnbox,
+                vec![crate::codegen::shared_helper::helper_value()],
+                None,
+                crate::ir::IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+                Op::mixed_unbox_effects(&PhpType::Str),
+                None,
+            ).expect("a string unbox produces a value");
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        let inst = function.instructions[0].clone();
+        let layout = crate::codegen::frame::layout_for_function(
+            &function, target, false, false, false,
+        );
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let mut shared = SharedCodegenState::default();
+        {
+            let mut ctx = FunctionContext::new(
+                &module, &function, &mut emitter, &mut data, &mut shared, layout,
+                false, false, false, None,
+            );
+            super::reference_arguments::lower_mixed_unbox(&mut ctx, &inst).unwrap();
+        }
+        let assembly = emitter.output();
+        assert!(assembly.contains("mixed_unbox_string_done"), "{name}: {assembly}");
+        assert!(assembly.contains("__rt_str_persist"), "{name}: {assembly}");
+        assert!(!assembly.contains("__rt_incref"), "{name}: {assembly}");
+    }
+}

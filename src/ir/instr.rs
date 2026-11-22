@@ -2052,12 +2052,16 @@ impl Op {
         }
     }
 
-    /// Returns the exact effects of extracting a concrete payload from a Mixed cell.
-    /// Heap payloads and callable descriptors acquire an independent runtime reference.
+    /// Returns the conservative effects of extracting a concrete payload from a Mixed cell.
+    /// Heap payloads and callable descriptors acquire an independent runtime reference. String
+    /// extraction may persist the borrowed payload when the result owns it, so every string
+    /// unbox carries that heap-write barrier even when a particular borrowed result skips it.
     pub fn mixed_unbox_effects(result_type: &PhpType) -> Effects {
         let result_type = result_type.codegen_repr();
         let effects = Self::MixedUnbox.default_effects();
-        if result_type.is_refcounted() || result_type == PhpType::Callable {
+        if result_type.is_refcounted()
+            || matches!(result_type, PhpType::Callable | PhpType::Str)
+        {
             effects | Effects::REFCOUNT_OP | Effects::WRITES_HEAP
         } else {
             effects

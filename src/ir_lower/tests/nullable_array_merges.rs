@@ -148,3 +148,40 @@ run_case();
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Untyped scalar passthrough restores a missing string after its boxed parameter boundary.
+#[test]
+fn untyped_string_passthrough_restores_missing_sentinel_on_all_targets() {
+    let source = r#"<?php
+function pass($value) { return $value; }
+function probe(int $key): void {
+    $values = [""];
+    $stored = $values[$key];
+    $returned = pass($stored);
+    var_dump($returned, (string)$returned);
+}
+probe($argc + 9);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "pass")
+            .expect("fixture must lower pass");
+        let unbox = function.instructions.iter().find(|inst| {
+            inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Str
+        }).expect("inferred string passthrough must extract its boxed parameter");
+        assert_eq!(
+            function.value(unbox.result.expect("unbox must produce a value")).unwrap().ownership,
+            crate::ir::Ownership::Owned,
+            "{target}: the returned string must own its extracted payload",
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let pass_assembly = assembly.split("@fn name=pass ").nth(1).unwrap()
+            .split("@endfn name=pass").next().unwrap();
+        assert!(pass_assembly.contains("__rt_mixed_unbox"), "{target}: missing mixed extraction");
+        assert!(pass_assembly.contains("__rt_str_persist"), "{target}: missing string owner");
+        assert!(pass_assembly.contains("mixed_unbox_string_done"),
+            "{target}: missing canonical-null sentinel restoration");
+    }
+}

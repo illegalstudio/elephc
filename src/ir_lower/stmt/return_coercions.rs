@@ -379,6 +379,23 @@ pub(super) fn coerce_to_string(
             Op::FToStr.default_effects(),
             span,
         ),
+        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
+            if !ctx.return_type_is_declared =>
+        {
+            // An inferred string result can still be PHP null when it forwards an untyped
+            // parameter that received a missing typed-array element. The parameter ABI boxes
+            // that sentinel as canonical Mixed null. This is an implicit storage boundary, not
+            // an explicit `(string)` cast, so extract it back into string storage and let
+            // MixedUnbox restore the missing-string sentinel instead of converting it to `""`.
+            ctx.emit_owned_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                PhpType::Str,
+                Op::mixed_unbox_effects(&PhpType::Str),
+                span,
+            )
+        }
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],
