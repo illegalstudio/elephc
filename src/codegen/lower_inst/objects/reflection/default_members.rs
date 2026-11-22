@@ -241,8 +241,10 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         )
         .filter(|_| has_type);
         let default_expr = sig.defaults.get(index).and_then(Option::as_ref);
-        let bound_default = sig.default_value(index);
-        let default_value = bound_default.as_ref()
+        // Invocation binds an omitted default to the declared parameter type, but reflection
+        // exposes the source expression's value. PHP therefore reports an integer class constant
+        // from a float parameter even though entering the function coerces that value to float.
+        let default_value = default_expr
             .map(|default| {
                 reflection_parameter_default_value(ctx, current_class, current_info, default)
             })
