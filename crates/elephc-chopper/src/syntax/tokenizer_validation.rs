@@ -428,7 +428,8 @@ fn prefer_reference_error(
 /// reports the real member after `::`), so only a separator between the two positions proves
 /// the parser reached an earlier statement. That separator does not apply when the parser's
 /// `Unclosed '{'` is the block `__halt_compiler()` already ended: the scanner stops there, the
-/// closing brace becomes inline HTML, and the halt diagnostic stays authoritative.
+/// closing brace becomes inline HTML, and the halt diagnostic stays authoritative. The same
+/// applies to `Unclosed '('` when the halt diagnostic is a `for` header clause.
 /// Unterminated backticks report at EOF and stay authoritative. A reference diagnostic may
 /// displace a later precheck only after comparing it with the original parser position. Later
 /// prechecks also yield to earlier parser errors inside the reference.
@@ -444,6 +445,7 @@ fn earlier_error<T: SourceToken>(
             || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
             || !statement_boundary_between(source, main.pos, precheck.pos)
             || halt_diagnostic_inside_unclosed_brace(tokens, precheck, &main)
+            || halt_for_header_inside_unclosed_paren(tokens, precheck, &main)
     });
     if let Some(reference) = reference {
         let preferred = precheck.as_ref().unwrap_or(&main);
@@ -501,10 +503,58 @@ fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
 }
 
 /// Returns whether the diagnostic is one of the halt-scope messages.
+///
+/// A parse error that names `__halt_compiler` counts too. The scanner has already stopped,
+/// so an enclosing `Unclosed '{'` is the missing closer after that halt, not an earlier fault.
 fn halt_scope_diagnostic(error: &ValidationError) -> bool {
     error.message == HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE
         || error.message == "Unclosed '{'"
         || error.message.starts_with("Unclosed '{' on line ")
+        || error.message.starts_with("syntax error, unexpected token \"__halt_compiler\"")
+}
+
+/// Returns whether a `for`-header halt diagnostic sits inside the `(` the parser left open.
+///
+/// `__halt_compiler();` ends tokenization, so the header's closing `)` becomes inline HTML.
+/// A semicolon that separates `for` clauses is inside that header, not an earlier statement.
+fn halt_for_header_inside_unclosed_paren<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '('"
+        || precheck.pos <= main.pos
+        || !for_header_halt_message(precheck)
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && token.id() == i64::from(b'(')
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if id == i64::from(b'(') {
+            depth += 1;
+        } else if id == i64::from(b')') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether `error` is the halt diagnostic for a `for` init, condition or update clause.
+fn for_header_halt_message(error: &ValidationError) -> bool {
+    error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \";\""
+        || error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \")\""
 }
 
 /// Returns whether `id` opens a brace the halt-scope walk treats as a real block.

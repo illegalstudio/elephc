@@ -1543,7 +1543,9 @@ fn brace_is_trait_use<T: SourceToken>(tokens: &[T], open: usize) -> bool {
 /// The namespace line is filled by the caller from the brace token. A property-hook container
 /// (`public $x {`) is not a statement list; the `get {` body inside it is. `match`, `switch`
 /// and a computed member stop at their own header, so an enclosing function does not win.
-/// `{` after `=>` is not a statement block either: PHP reports that brace before the halt.
+/// Parentheses and nested braces in that header are skipped, and `Foo::class` is not a
+/// class declaration. `{` after `=>` is not a statement block either: PHP reports that brace
+/// before the halt.
 fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     if let Some(previous) = previous_significant_index(tokens, open) {
         let id = tokens[previous].id();
@@ -1563,26 +1565,53 @@ fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     {
         return HaltScope::ClassLike;
     }
+    let mut depth = 0i32;
     let mut cursor = open;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+            cursor = previous;
+            continue;
+        }
+        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                if id == i64::from(b'{') {
+                    return HaltScope::Statement;
+                }
+            } else {
+                depth -= 1;
+                cursor = previous;
+                continue;
+            }
+        }
+        if depth > 0 {
+            cursor = previous;
+            continue;
+        }
         if id == tok::T_NAMESPACE {
             return HaltScope::Namespace { line: 0 };
         }
         if id == tok::T_CLASS || id == tok::T_INTERFACE || id == tok::T_TRAIT || id == tok::T_ENUM {
+            if control_keyword_is_name(tokens, previous) {
+                cursor = previous;
+                continue;
+            }
             return HaltScope::ClassLike;
         }
         if id == tok::T_MATCH && !control_keyword_is_name(tokens, previous) {
             return HaltScope::Match { open };
         }
         if id == tok::T_SWITCH && !control_keyword_is_name(tokens, previous) {
-            return HaltScope::Switch { gate: open, alternative: false };
+            return HaltScope::Switch {
+                gate: open,
+                alternative: false,
+            };
         }
         if id == tok::T_FUNCTION
             || id == tok::T_FN
             || id == i64::from(b';')
             || id == i64::from(b'{')
-            || id == i64::from(b'}')
         {
             return HaltScope::Statement;
         }
@@ -1625,19 +1654,250 @@ fn alternative_scope_delta<T: SourceToken>(tokens: &[T], index: usize) -> i8 {
 ///
 /// A ternary colon is an expression boundary, so `$a ? 1 : __halt_compiler()` stays a parse
 /// error even inside a function. A case, label or alternative-syntax colon starts a statement.
+/// A semicolon inside parentheses belongs to a `for` header or a bad expression, and a `}`
+/// that closes a match, closure, anonymous class or computed member does not end the statement.
 fn halt_is_statement_start<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     let Some(previous) = previous_significant_index(tokens, index) else {
         return true;
     };
     let id = tokens[previous].id();
-    if id == i64::from(b';')
-        || id == i64::from(b'{')
-        || id == i64::from(b'}')
-        || id == tok::T_OPEN_TAG
-    {
+    if id == i64::from(b';') {
+        return !semicolon_inside_parentheses(tokens, previous);
+    }
+    if id == i64::from(b'}') {
+        return brace_ends_statement(tokens, previous);
+    }
+    if id == i64::from(b'{') || id == tok::T_OPEN_TAG {
         return true;
     }
     id == i64::from(b':') && !ternary_colon_before_label(tokens, index)
+}
+
+/// Returns whether `semi` sits inside parentheses rather than between statements.
+///
+/// `for ($i = 0; __halt_compiler()` keeps that semicolon inside the header. `echo 1;` does not.
+fn semicolon_inside_parentheses<T: SourceToken>(tokens: &[T], semi: usize) -> bool {
+    let mut depth = 0i32;
+    let mut cursor = semi;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                return id == i64::from(b'(');
+            }
+            depth -= 1;
+        } else if depth == 0 && (id == i64::from(b';') || id == i64::from(b'{') || id == i64::from(b'}')) {
+            return false;
+        }
+        cursor = previous;
+    }
+    false
+}
+
+/// Returns whether `}` finishes a statement, so the next token can be a new one.
+///
+/// A match arm list, a closure expression, an anonymous class and a computed member still
+/// need a semicolon. A function, class, control or switch body does not.
+fn brace_ends_statement<T: SourceToken>(tokens: &[T], close: usize) -> bool {
+    let Some(open) = matching_open_brace(tokens, close) else {
+        return true;
+    };
+    if tokens[open].id() != i64::from(b'{') {
+        return false;
+    }
+    match halt_brace_kind(tokens, open) {
+        HaltScope::Match { .. } | HaltScope::ArrowBlock | HaltScope::Member => false,
+        HaltScope::ClassLike => !anonymous_class_brace(tokens, open),
+        HaltScope::Statement => !closure_expression_brace(tokens, open),
+        HaltScope::Namespace { .. }
+        | HaltScope::Switch { .. }
+        | HaltScope::Interpolation
+        | HaltScope::Alternative => true,
+    }
+}
+
+/// Returns the `{` or interpolation opener that `close` ends.
+fn matching_open_brace<T: SourceToken>(tokens: &[T], close: usize) -> Option<usize> {
+    if tokens.get(close).map(|token| token.id()) != Some(i64::from(b'}')) {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut cursor = close;
+    while cursor > 0 {
+        cursor -= 1;
+        let id = tokens[cursor].id();
+        if id == i64::from(b'}') {
+            depth += 1;
+            continue;
+        }
+        if is_halt_brace_open(id) {
+            if depth == 0 {
+                return Some(cursor);
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
+/// Returns whether `open` is the body of `new class`, including `extends` and arguments.
+fn anonymous_class_brace<T: SourceToken>(tokens: &[T], open: usize) -> bool {
+    let mut depth = 0i32;
+    let mut cursor = open;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+            cursor = previous;
+            continue;
+        }
+        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+            cursor = previous;
+            continue;
+        }
+        if depth == 0 && id == tok::T_CLASS && !control_keyword_is_name(tokens, previous) {
+            return previous_significant_index(tokens, previous)
+                .is_some_and(|before| tokens[before].id() == tok::T_NEW);
+        }
+        if depth == 0 && (id == i64::from(b';') || id == i64::from(b'{') || id == tok::T_FUNCTION) {
+            return false;
+        }
+        cursor = previous;
+    }
+    false
+}
+
+/// Returns whether `open` is a closure expression rather than a function declaration.
+///
+/// `function () use ($a) {}` and `static function () {}` after `=` stay expressions.
+/// `function g() {}` and `label: function g() {}` end at the brace.
+fn closure_expression_brace<T: SourceToken>(tokens: &[T], open: usize) -> bool {
+    let mut depth = 0i32;
+    let mut cursor = open;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+            cursor = previous;
+            continue;
+        }
+        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+            cursor = previous;
+            continue;
+        }
+        if depth == 0 && id == tok::T_FUNCTION {
+            return !function_keyword_is_declaration(tokens, previous);
+        }
+        if depth == 0
+            && (id == i64::from(b';')
+                || id == i64::from(b'{')
+                || id == tok::T_IF
+                || id == tok::T_WHILE
+                || id == tok::T_FOR
+                || id == tok::T_FOREACH
+                || id == tok::T_SWITCH)
+        {
+            return false;
+        }
+        cursor = previous;
+    }
+    false
+}
+
+/// Returns whether `function` at `index` declares a function or method.
+///
+/// A label colon does. A ternary colon does not: `$a ? function () {}` is an expression.
+fn function_keyword_is_declaration<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let Some(previous) = previous_significant_index(tokens, index) else {
+        return true;
+    };
+    if token_ends_statement(tokens, previous) {
+        return true;
+    }
+    if is_declaration_modifier(tokens[previous].id()) {
+        return modifier_starts_declaration(tokens, previous);
+    }
+    false
+}
+
+/// Returns whether a visibility, `static`, `abstract` or `final` starts a declaration.
+fn modifier_starts_declaration<T: SourceToken>(tokens: &[T], modifier: usize) -> bool {
+    let Some(previous) = previous_significant_index(tokens, modifier) else {
+        return true;
+    };
+    if token_ends_statement(tokens, previous) || is_declaration_modifier(tokens[previous].id()) {
+        return true;
+    }
+    false
+}
+
+/// Returns whether `index` is a semicolon, block edge, open tag or label colon.
+fn token_ends_statement<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let id = tokens[index].id();
+    if id == i64::from(b';') || id == i64::from(b'{') || id == i64::from(b'}') || id == tok::T_OPEN_TAG {
+        return true;
+    }
+    id == i64::from(b':')
+        && next_significant_index(tokens, index)
+            .is_some_and(|next| !ternary_colon_before_label(tokens, next))
+}
+
+/// Returns whether `id` can introduce a method or a nested function declaration.
+fn is_declaration_modifier(id: i64) -> bool {
+    const T_FINAL: i64 = elephc_builtin_contract::token_const_id("T_FINAL");
+    id == tok::T_PUBLIC
+        || id == tok::T_PROTECTED
+        || id == tok::T_PRIVATE
+        || id == tok::T_STATIC
+        || id == tok::T_ABSTRACT
+        || id == T_FINAL
+}
+
+/// Returns the `for` header expectation when the halt starts one of its three clauses.
+///
+/// The init and condition clauses expect `;`. The update clause expects `)`. A semicolon
+/// inside a call is not a `for` clause, so this returns none and the earlier error stands.
+fn for_header_halt_expectation<T: SourceToken>(tokens: &[T], halt: usize) -> Option<&'static str> {
+    let previous = previous_significant_index(tokens, halt)?;
+    let previous_id = tokens[previous].id();
+    if previous_id != i64::from(b';') && previous_id != i64::from(b'(') {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut semis = 0i32;
+    let mut cursor = halt;
+    while let Some(before) = previous_significant_index(tokens, cursor) {
+        let id = tokens[before].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                if id != i64::from(b'(') {
+                    return None;
+                }
+                let keyword = previous_significant_index(tokens, before)?;
+                if tokens[keyword].id() != tok::T_FOR || control_keyword_is_name(tokens, keyword) {
+                    return None;
+                }
+                return Some(if semis >= 2 { "\")\"" } else { "\";\"" });
+            }
+            depth -= 1;
+        } else if depth == 0 && id == i64::from(b';') {
+            semis += 1;
+        }
+        cursor = before;
+    }
+    None
 }
 
 /// Returns whether the halt word is a member or namespace name rather than the construct.
@@ -1695,7 +1955,8 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     let mut deferred = false;
     let mut anon_header = false;
     let mut previous_significant: Option<i64> = None;
-    for token in &tokens[open + 1..halt] {
+    for (offset, token) in tokens[open + 1..halt].iter().enumerate() {
+        let token_index = open + 1 + offset;
         let id = token.id();
         if is_trivia_token(id) {
             continue;
@@ -1719,8 +1980,10 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
         } else if id == i64::from(b'}') {
             brace -= 1;
         } else if paren == 0 && bracket == 0 && brace == 0 && id == tok::T_DOUBLE_ARROW {
-            after_arrow = true;
-            comma_closed_arm = false;
+            if !double_arrow_is_fn_arrow(tokens, token_index) {
+                after_arrow = true;
+                comma_closed_arm = false;
+            }
         } else if paren == 0 && bracket == 0 && brace == 0 && id == i64::from(b',') {
             comma_closed_arm = after_arrow;
             if after_arrow {
@@ -1754,6 +2017,9 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     }
     if previous_id == i64::from(b',') {
         return MatchHalt::Expect(if comma_closed_arm { "\"}\"" } else { "\"=>\"" });
+    }
+    if scoped_constant_name(tokens, previous) {
+        return MatchHalt::Expect(if after_arrow { "\"}\"" } else { "\"=>\"" });
     }
     if is_postfix_operator(previous_id) && !match_operand_complete(tokens, previous) {
         if postfix_operator_follows_operand(tokens, previous) {
@@ -1946,6 +2212,49 @@ fn postfix_lvalue<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     })
 }
 
+/// Returns whether `=>` at `index` belongs to an arrow function rather than a match arm.
+///
+/// `fn() => 1` and `fn(): int => 1` leave the match condition unfinished. The arm separator
+/// before that arrow function stays in force.
+fn double_arrow_is_fn_arrow<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let mut depth = 0i32;
+    let mut saw_paren = false;
+    let mut cursor = index;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+            depth += 1;
+        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+            if id == i64::from(b'(') && depth == 0 {
+                saw_paren = true;
+            }
+        } else if depth == 0 && id == tok::T_FN {
+            return saw_paren;
+        } else if depth == 0
+            && (id == i64::from(b';')
+                || id == i64::from(b',')
+                || id == tok::T_DOUBLE_ARROW
+                || id == tok::T_MATCH)
+        {
+            return false;
+        }
+        cursor = previous;
+    }
+    false
+}
+
+/// Returns whether `index` is a name written after `::`, including semi-reserved keywords.
+///
+/// `C::match`, `C::new` and `C::static` are constant fetches. They finish a match operand.
+fn scoped_constant_name<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index)
+        .is_some_and(|previous| tokens[previous].id() == tok::T_DOUBLE_COLON)
+}
+
 /// Builds the parse or compile diagnostic for one `__halt_compiler` token.
 ///
 /// `None` means this halt is not a precheck error. That is the outermost scope, and also a
@@ -1963,6 +2272,14 @@ fn halt_scope_failure<T: SourceToken>(
     let scope = innermost_halt_scope(scopes);
     if matches!(scope, Some(HaltScope::ArrowBlock)) {
         return None;
+    }
+    if matches!(
+        scope,
+        None | Some(HaltScope::Statement | HaltScope::Alternative)
+    ) {
+        if let Some(expecting) = for_header_halt_expectation(tokens, index) {
+            return Some(halt_parse_error(source, tokens, index, Some(expecting)));
+        }
     }
     if statement {
         match scope {
