@@ -106,23 +106,25 @@ pub(crate) fn emit_mt_rand_php_deprecation(
     ctx.builder.position_at_end(done);
 }
 
-/// Records `define("NAME", value)` constants for later source-order references.
+/// Records `define("NAME", value)` and prepares its declaration value for runtime storage.
 pub(super) fn register_static_define_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
     args: &[Expr],
-) {
+) -> Option<Vec<Expr>> {
     if php_symbol_key(name.as_str().trim_start_matches('\\')) != "define" || args.len() != 2 {
-        return;
+        return None;
     }
     let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
-        return;
+        return None;
     };
+    let value = crate::types::constant_binding::bind_value(args[1].clone(), &PhpType::Mixed);
     ctx.register_constant(
         constant_name.clone(),
-        crate::types::constant_binding::bind_value(args[1].clone(), &PhpType::Mixed),
+        value.clone(),
         constant_expr_type(&args[1].kind),
     );
+    Some(vec![args[0].clone(), value])
 }
 
 /// Lowers `defined("NAME")` to a compile-time boolean when the name is literal.
