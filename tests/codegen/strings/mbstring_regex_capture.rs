@@ -126,14 +126,18 @@ assign_capture(null);
     assert_eq!(compile_and_run(source), "bool(true)\na:a\n");
 }
 
-/// Refuses untracked parameter and property alias storage before emitting an unsafe wrapper pointer.
+/// Managed parameter and property aliases expose their canonical cells to mbstring capture.
 #[test]
-fn test_mbstring_regex_capture_unsupported_reference_forms() {
-    for source in [
-        "<?php function capture(mixed &$matches): bool { return mb_ereg('a', 'a', $matches); } function run(mixed $matches): void { var_dump(capture($matches)); } run(null);",
-        "<?php class CaptureBox { public mixed $value = null; } $matches = null; $alias =& $matches; $box = new CaptureBox(); $alias =& $box->value; var_dump(mb_ereg('a', 'a', $alias));",
-    ] {
-        let error = compile_source_expect_backend_error(source);
-        assert!(error.contains("mbstring output requires a managed Mixed local reference"), "{error}");
-    }
+fn test_mbstring_regex_capture_managed_reference_forms() {
+    let source = r#"<?php
+function capture(mixed &$matches): bool { return mb_ereg('a', 'a', $matches); }
+function run(mixed $matches): void { var_dump(capture($matches)); echo $matches[0], "\n"; }
+run(null);
+class CaptureBox { public mixed $value = null; }
+$box = new CaptureBox();
+$alias =& $box->value;
+var_dump(mb_ereg('a', 'a', $alias));
+echo $box->value[0], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "bool(true)\na\nbool(true)\na\n");
 }
