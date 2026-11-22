@@ -38,7 +38,11 @@ pub(super) fn lower_numeric_unary(
             if crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
                 return crate::ir_lower::checked_arithmetic::negate(ctx, value, expr.span);
             }
-            if matches!(inner.kind, ExprKind::IntLiteral(value) if value != i64::MIN) {
+            // The checker retains `int` only when this source expression cannot promote at
+            // runtime. Loop ranges and `$argc` facts are stronger than a literal-only test and
+            // keep the native negate path allocation-free. Potential `PHP_INT_MIN` values remain
+            // Mixed and reach the boxed PHP overflow helper below.
+            if fallback_expr_type(expr, ctx.semantic_profile).codegen_repr() == PhpType::Int {
                 return ctx.emit_value(Op::INeg, vec![value.value], None, PhpType::Int, Op::INeg.default_effects(), Some(expr.span));
             }
         }
