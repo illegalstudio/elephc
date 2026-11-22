@@ -24,8 +24,6 @@ use elephc_semantics::{array_keys::StringKey, SemanticProfile};
 thread_local! {
     /// Prevents repeated loop-entry refinement from multiplying across nested loop bodies.
     static LOOP_REFINEMENT_DEPTH: Cell<u8> = const { Cell::new(0) };
-    /// Keeps one exact catch replay from forking into conservative and exact descendants again.
-    static EXACT_CATCH_REPLAY_DEPTH: Cell<u8> = const { Cell::new(0) };
 }
 
 /// One exact literal key retained by a source array shape.
@@ -2096,6 +2094,21 @@ fn terminal_matches_catch(
     })
 }
 
+/// Reports whether one catch clause consumes every PHP throwable.
+fn catch_handles_every_throw(catch: &CatchClause) -> bool {
+    catch
+        .exception_types
+        .iter()
+        .any(|handler| normalized_class_name(handler.as_str()) == "throwable")
+}
+
+/// Reports whether an unknown implicit throw can reach one catch after earlier clauses.
+fn untracked_throw_may_reach_catch(catches: &[CatchClause], catch_index: usize) -> bool {
+    !catches[..catch_index]
+        .iter()
+        .any(catch_handles_every_throw)
+}
+
 /// Starts a catch with unknown facts for locals the try body may have changed before throwing.
 fn catch_entry_facts(
     entry: &LocalFacts,
@@ -2225,12 +2238,29 @@ fn stmt_has_untracked_throw(
             crate::optimize::source_expression_may_throw(array, profile)
                 || block_has_untracked_throw(body, properties, profile)
         }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            crate::optimize::source_expression_may_throw(subject, profile)
+                || cases.iter().any(|(labels, body)| {
+                    labels.iter().any(|label| {
+                        crate::optimize::source_expression_may_throw(label, profile)
+                            || source_switch_comparison_may_throw(subject, label, profile)
+                    }) || block_has_untracked_throw(body, properties, profile)
+                })
+                || default.as_ref().is_some_and(|body| {
+                    block_has_untracked_throw(body, properties, profile)
+                })
+        }
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
         } => {
-            block_has_untracked_throw(try_body, properties, profile)
+            (block_has_untracked_throw(try_body, properties, profile)
+                && !catches.iter().any(catch_handles_every_throw))
                 || catches
                     .iter()
                     .any(|catch| block_has_untracked_throw(&catch.body, properties, profile))
@@ -2240,6 +2270,15 @@ fn stmt_has_untracked_throw(
         }
         _ => crate::optimize::source_statement_may_throw(stmt, profile),
     }
+}
+
+/// Keeps literal-only switch comparisons out of the generic throwing statement fallback.
+fn source_switch_comparison_may_throw(
+    subject: &Expr,
+    label: &Expr,
+    profile: SemanticProfile,
+) -> bool {
+    source_expr_fact(subject, profile).is_none() || source_expr_fact(label, profile).is_none()
 }
 
 /// Excludes statements after the first unconditional control transfer from reachable facts.
@@ -2500,34 +2539,6 @@ impl Drop for LoopRefinementGuard<'_> {
     fn drop(&mut self) {
         self.depth.set(self.previous);
     }
-}
-
-/// Restores the previous exact-catch replay depth after one path finishes.
-struct ExactCatchReplayGuard<'a> {
-    depth: &'a Cell<u8>,
-    previous: u8,
-}
-
-impl Drop for ExactCatchReplayGuard<'_> {
-    /// Restores the thread-local depth on success, error, or unwinding.
-    fn drop(&mut self) {
-        self.depth.set(self.previous);
-    }
-}
-
-/// Runs one exact catch path whose nested catches keep exact descendants without reforking.
-fn replay_exact_catch<T>(replay: impl FnOnce() -> Result<T, CompileError>) -> Result<T, CompileError> {
-    EXACT_CATCH_REPLAY_DEPTH.with(|depth| {
-        let previous = depth.get();
-        depth.set(previous.saturating_add(1));
-        let _guard = ExactCatchReplayGuard { depth, previous };
-        replay()
-    })
-}
-
-/// Reports whether the current flow belongs to an exact catch replay.
-fn replaying_exact_catch() -> bool {
-    EXACT_CATCH_REPLAY_DEPTH.with(|depth| depth.get() > 0)
 }
 
 /// Replays one changed loop entry while bounding recursive replays in nested loops.
@@ -3355,10 +3366,11 @@ fn collect_try_flow(
         }
     }
     try_flow.terminals = escaping;
-    let exact_replay = replaying_exact_catch();
     let mut flows = vec![try_flow];
     let mut isolated_audit_flows = Vec::new();
-    for (catch, exact_entries) in catches.iter().zip(caught_entries) {
+    for (catch_index, (catch, exact_entries)) in
+        catches.iter().zip(caught_entries).enumerate()
+    {
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
         if let Some(variable) = &catch.variable {
@@ -3373,8 +3385,16 @@ fn collect_try_flow(
                 distinct_entries.push(exact_entry);
             }
         }
-        if distinct_entries.is_empty() {
-            flows.push(collect_loop_break_flow(
+        if has_untracked_throw
+            && untracked_throw_may_reach_catch(catches, catch_index)
+            && !distinct_entries.contains(&catch_entry)
+        {
+            distinct_entries.push(catch_entry.clone());
+        }
+        let Some(merged_entry) = (!distinct_entries.is_empty())
+            .then(|| merge_exits(&distinct_entries))
+        else {
+            isolated_audit_flows.push(collect_loop_break_flow(
                 &catch.body,
                 &catch_entry,
                 properties,
@@ -3382,59 +3402,14 @@ fn collect_try_flow(
                 current_class,
             )?);
             continue;
-        }
-        if has_untracked_throw {
-            flows.push(replay_exact_catch(|| {
-                collect_loop_break_flow(
-                    &catch.body,
-                    &catch_entry,
-                    properties,
-                    profile,
-                    current_class,
-                )
-            })?);
-            if exact_replay {
-                continue;
-            }
-            for exact_entry in distinct_entries {
-                if exact_entry == catch_entry {
-                    continue;
-                }
-                isolated_audit_flows.push(replay_exact_catch(|| {
-                    collect_loop_break_flow(
-                        &catch.body,
-                        &exact_entry,
-                        properties,
-                        profile,
-                        current_class,
-                    )
-                })?);
-            }
-            continue;
-        }
-        let catch_entry_is_exact = distinct_entries.contains(&catch_entry);
-        for exact_entry in distinct_entries {
-            flows.push(replay_exact_catch(|| {
-                collect_loop_break_flow(
-                &catch.body,
-                &exact_entry,
-                properties,
-                profile,
-                current_class,
-                )
-            })?);
-        }
-        if !exact_replay && !catch_entry_is_exact {
-            isolated_audit_flows.push(replay_exact_catch(|| {
-                collect_loop_break_flow(
-                    &catch.body,
-                    &catch_entry,
-                    properties,
-                    profile,
-                    current_class,
-                )
-            })?);
-        }
+        };
+        flows.push(collect_loop_break_flow(
+            &catch.body,
+            &merged_entry,
+            properties,
+            profile,
+            current_class,
+        )?);
     }
     let flow = merge_parallel_loop_flows(flows);
     if let Some(finally_body) = finally_body {

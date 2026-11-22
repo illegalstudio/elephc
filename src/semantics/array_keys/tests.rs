@@ -519,6 +519,27 @@ fn strict_array_key_source_validation_preserves_conservative_catch_paths() {
     }
 }
 
+/// Catch bodies merge exact and conservative entries that can reach the same handler.
+#[test]
+fn strict_array_key_source_validation_merges_reachable_catch_entries() {
+    for source in [
+        "<?php function dynamic_catch_payload(): mixed { return 1; } $values = [[1]]; try { if ($argc > 0) { throw new Exception(); } $values = dynamic_catch_payload(); throw new RuntimeException(); } catch (Exception $error) { $values[0][false] = 2; }",
+        "<?php function dynamic_finally_payload(): mixed { return 1; } $values = [[1]]; try { if ($argc > 0) { throw new Exception(); } $values = dynamic_finally_payload(); throw new RuntimeException(); } catch (Exception $error) {} finally { $values[0][false] = 2; }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    for source in [
+        "<?php function nested_caught_failure(): void { throw new Exception(); } $values = [1]; try { try { nested_caught_failure(); } catch (Throwable $ignored) {} $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;",
+        "<?php $values = [1]; try { switch (1) { case 1: break; } $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;",
+    ] {
+        let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .expect_err("every reachable caught path retains an invalid array receiver");
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Unresolved value-position includes remain conservative throw points before resolution.
 #[test]
 fn strict_array_key_source_validation_handles_value_includes_in_try_blocks() {
