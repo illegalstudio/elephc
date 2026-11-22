@@ -426,6 +426,24 @@ fn strict_array_key_source_validation_replays_finally_after_nested_terminals() {
     }
 }
 
+/// Matching catches consume throw facts before their fallthrough reaches finally.
+#[test]
+fn strict_array_key_source_validation_routes_caught_throws_before_finally() {
+    for source in [
+        "<?php $values = [1]; try { $values = [[1]]; throw new Exception(); } catch (Exception $error) { $values = [1]; } finally { $values[0][false] = 2; }",
+        "<?php class ChildFailure extends RuntimeException {} $values = [1]; try { $values = [[1]]; throw new ChildFailure(); } catch (Exception $error) { $values = [1]; } finally { $values[0][false] = 2; }",
+        "<?php function failure(): Throwable { return new Exception(); } $values = [1]; try { $values = [[1]]; throw failure(); } catch (Throwable $error) { $values = [1]; } finally { $values[0][false] = 2; }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    let source = "<?php $values = [1]; try { $values = [[1]]; throw new RuntimeException(); } catch (InvalidArgumentException $error) { $values = [1]; } finally { $values[0][false] = 2; }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("an unmatched throw must retain its terminal facts");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+}
+
 /// A nested loop audits one changed repeated entry before the refinement bound applies.
 #[test]
 fn strict_array_key_source_validation_audits_bounded_nested_replay() {

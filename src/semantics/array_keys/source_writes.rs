@@ -304,6 +304,7 @@ impl LocalFacts {
 #[derive(Default)]
 struct PropertyFacts {
     values: HashMap<(String, String), PhpType>,
+    parents: HashMap<String, String>,
 }
 
 /// Audits definite array writes before target-dependent folding can discard their branches.
@@ -1622,6 +1623,17 @@ fn apply_prelude_facts(
 /// Collects declared property contracts independently of executable source order.
 fn collect_properties(program: &[Stmt], facts: &mut PropertyFacts) {
     for stmt in program {
+        if let StmtKind::ClassDecl {
+            name,
+            extends: Some(parent),
+            ..
+        } = &stmt.kind
+        {
+            facts.parents.insert(
+                normalized_class_name(name),
+                normalized_class_name(parent.as_str()),
+            );
+        }
         match &stmt.kind {
             StmtKind::ClassDecl {
                 name,
@@ -1978,6 +1990,81 @@ fn branch_falls_through(body: &[Stmt]) -> bool {
     )
 }
 
+/// Produces the case-insensitive class key used by source-only catch matching.
+fn normalized_class_name(name: &str) -> String {
+    crate::names::php_symbol_key(name.trim_start_matches('\\'))
+}
+
+/// Retains an exact thrown class when the source expression proves one.
+fn source_throw_class(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Option<String> {
+    let Some(PhpType::Object(class)) =
+        infer_expr(expr, locals, properties, profile, current_class).value_type()
+    else {
+        return None;
+    };
+    (!class.is_empty()).then(|| normalized_class_name(&class))
+}
+
+/// Returns the next declared or builtin exception parent for source-only catch routing.
+fn source_exception_parent(class: &str, properties: &PropertyFacts) -> Option<String> {
+    if let Some(parent) = properties.parents.get(class) {
+        return Some(parent.clone());
+    }
+    if let Some((_, parent)) = crate::types::checker::SPL_EXCEPTION_HIERARCHY
+        .iter()
+        .find(|(candidate, _)| normalized_class_name(candidate) == class)
+    {
+        return Some(normalized_class_name(parent));
+    }
+    match class {
+        "exception" | "error" => Some("throwable".to_owned()),
+        _ => None,
+    }
+}
+
+/// Checks one exact thrown class against a catch type through the known parent chain.
+fn source_class_is_a(class: &str, target: &str, properties: &PropertyFacts) -> bool {
+    let target = normalized_class_name(target);
+    let mut current = normalized_class_name(class);
+    let mut seen = BTreeSet::new();
+    while seen.insert(current.clone()) {
+        if current == target {
+            return true;
+        }
+        let Some(parent) = source_exception_parent(&current, properties) else {
+            return false;
+        };
+        current = parent;
+    }
+    false
+}
+
+/// Reports whether a source throw is consumed by one of the following catch clauses.
+fn terminal_is_caught(
+    terminal: &TerminalFlow,
+    catches: &[CatchClause],
+    properties: &PropertyFacts,
+) -> bool {
+    let TerminalKind::Throw(class) = &terminal.kind else {
+        return false;
+    };
+    catches.iter().any(|catch| {
+        catch.exception_types.iter().any(|handler| {
+            let handler = handler.as_str();
+            class.as_deref().map_or_else(
+                || normalized_class_name(handler) == "throwable",
+                |class| source_class_is_a(class, handler, properties),
+            )
+        })
+    })
+}
+
 /// Starts a catch with unknown facts for locals the try body may have changed before throwing.
 fn catch_entry_facts(
     entry: &LocalFacts,
@@ -2080,8 +2167,22 @@ fn apply_foreach_reference_fact(
 struct SwitchFlow {
     exit: LocalFacts,
     outer_jumps: Vec<OuterLoopJump>,
-    terminals: Vec<LocalFacts>,
+    terminals: Vec<TerminalFlow>,
     can_fallthrough: bool,
+}
+
+/// The PHP control transfer whose source facts must resume after an enclosing finally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TerminalKind {
+    Return,
+    Throw(Option<String>),
+}
+
+/// Facts captured where one return or throw leaves the current statement list.
+#[derive(Clone)]
+struct TerminalFlow {
+    kind: TerminalKind,
+    facts: LocalFacts,
 }
 
 /// One statically proven switch entry, an exact miss, or an unresolved loose comparison.
@@ -2192,7 +2293,7 @@ fn validate_switch_flow(
     Ok(SwitchFlow {
         exit,
         outer_jumps,
-        terminals,
+        terminals: coalesce_terminal_flows(terminals),
         can_fallthrough,
     })
 }
@@ -2204,7 +2305,7 @@ struct LoopBreakFlow {
     exits: Vec<LocalFacts>,
     continues: Vec<LocalFacts>,
     outer_jumps: Vec<OuterLoopJump>,
-    terminals: Vec<LocalFacts>,
+    terminals: Vec<TerminalFlow>,
     complete: bool,
     audit_exit: LocalFacts,
 }
@@ -2282,7 +2383,7 @@ fn collect_repeated_loop_flow(
 struct NestedControlFlow {
     fallthrough: Option<LocalFacts>,
     outer_jumps: Vec<OuterLoopJump>,
-    terminals: Vec<LocalFacts>,
+    terminals: Vec<TerminalFlow>,
     audit_exit: LocalFacts,
 }
 
@@ -2368,7 +2469,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
-            let terminals = coalesce_flow_facts(terminals);
+            let terminals = coalesce_terminal_flows(terminals);
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -2531,7 +2632,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
-            let terminals = coalesce_flow_facts(terminals);
+            let terminals = coalesce_terminal_flows(terminals);
             let repeated_back_edge = repeated_flow.back_edge();
             let repeated_reaches_condition = repeated_back_edge.is_some();
             let repeated_condition = validate_condition_flow(
@@ -2667,7 +2768,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
-            let terminals = coalesce_flow_facts(terminals);
+            let terminals = coalesce_terminal_flows(terminals);
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -2808,9 +2909,26 @@ fn collect_loop_break_flow(
                     });
                 }
             }
-            StmtKind::Return(_) | StmtKind::Throw(_) => {
+            StmtKind::Return(_) => {
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
-                terminals.push(locals.clone());
+                terminals.push(TerminalFlow {
+                    kind: TerminalKind::Return,
+                    facts: locals.clone(),
+                });
+            }
+            StmtKind::Throw(expr) => {
+                let thrown_class = source_throw_class(
+                    expr,
+                    &locals,
+                    properties,
+                    profile,
+                    current_class,
+                );
+                validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
+                terminals.push(TerminalFlow {
+                    kind: TerminalKind::Throw(thrown_class),
+                    facts: locals.clone(),
+                });
             }
             StmtKind::If {
                 condition,
@@ -2981,7 +3099,7 @@ fn collect_loop_break_flow(
         exits,
         continues,
         outer_jumps,
-        terminals,
+        terminals: coalesce_terminal_flows(terminals),
         complete,
         audit_exit,
     })
@@ -3017,7 +3135,7 @@ fn merge_parallel_loop_flows(flows: Vec<LoopBreakFlow>) -> LoopBreakFlow {
         exits,
         continues,
         outer_jumps,
-        terminals,
+        terminals: coalesce_terminal_flows(terminals),
         complete,
         audit_exit,
     }
@@ -3033,13 +3151,17 @@ fn collect_try_flow(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<LoopBreakFlow, CompileError> {
-    let mut flows = vec![collect_loop_break_flow(
+    let mut try_flow = collect_loop_break_flow(
         try_body,
         entry,
         properties,
         profile,
         current_class,
-    )?];
+    )?;
+    try_flow
+        .terminals
+        .retain(|terminal| !terminal_is_caught(terminal, catches, properties));
+    let mut flows = vec![try_flow];
     for catch in catches {
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
@@ -3063,13 +3185,13 @@ fn collect_try_flow(
 }
 
 /// Control action resumed when a finally body falls through normally.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum LoopResume {
     Fallthrough,
     Break,
     Continue,
     Outer(OuterLoopJumpKind, usize),
-    Terminal,
+    Terminal(TerminalKind),
 }
 
 /// Applies one finally body to every distinct incoming loop-control category.
@@ -3094,8 +3216,8 @@ fn apply_loop_finally(
     for jump in flow.outer_jumps {
         paths.push((LoopResume::Outer(jump.kind, jump.levels), jump.facts));
     }
-    if !flow.terminals.is_empty() {
-        paths.push((LoopResume::Terminal, merge_exits(&flow.terminals)));
+    for terminal in coalesce_terminal_flows(flow.terminals) {
+        paths.push((LoopResume::Terminal(terminal.kind), terminal.facts));
     }
 
     let mut fallthroughs = Vec::new();
@@ -3131,7 +3253,10 @@ fn apply_loop_finally(
                 levels,
                 facts: fallthrough,
             }),
-            LoopResume::Terminal => terminals.push(fallthrough),
+            LoopResume::Terminal(kind) => terminals.push(TerminalFlow {
+                kind,
+                facts: fallthrough,
+            }),
         }
     }
     let audit_exit = if audit_exits.is_empty() {
@@ -3150,7 +3275,7 @@ fn apply_loop_finally(
         exits,
         continues,
         outer_jumps,
-        terminals,
+        terminals: coalesce_terminal_flows(terminals),
         complete,
         audit_exit,
     })
@@ -3257,7 +3382,7 @@ fn collect_loop_break_if(
         exits,
         continues,
         outer_jumps,
-        terminals,
+        terminals: coalesce_terminal_flows(terminals),
         complete,
         audit_exit,
     })
@@ -3271,13 +3396,20 @@ fn merge_optional_exits(
     (!exits.is_empty()).then(|| merge_exits(&exits))
 }
 
-/// Collapses indistinguishable control-flow paths before an enclosing loop can clone them.
-fn coalesce_flow_facts(facts: Vec<LocalFacts>) -> Vec<LocalFacts> {
-    if facts.is_empty() {
-        Vec::new()
-    } else {
-        vec![merge_exits(&facts)]
+/// Collapses facts for each terminal category before an enclosing loop can clone them.
+fn coalesce_terminal_flows(flows: Vec<TerminalFlow>) -> Vec<TerminalFlow> {
+    let mut coalesced: Vec<TerminalFlow> = Vec::new();
+    for flow in flows {
+        if let Some(existing) = coalesced
+            .iter_mut()
+            .find(|existing| existing.kind == flow.kind)
+        {
+            existing.facts = merge_exits(&[existing.facts.clone(), flow.facts]);
+        } else {
+            coalesced.push(flow);
+        }
     }
+    coalesced
 }
 
 /// Merges normal loop exits with exact break snapshots and degrades only unmodeled writes.
