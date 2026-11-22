@@ -908,6 +908,18 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php function f() { $x = new class(\"{$a}\") {} __halt_compiler(); }",
         "<?php function f() { $x = function ($a = \"{$b}\") { return 1; } __halt_compiler(); }",
         "<?php $x = match ($a) { fn($b = \"{$c}\") => 1 __halt_compiler() => 2 };",
+        "<?php function f() { __halt_compiler(1); }",
+        "<?php function f() { __halt_compiler($a); }",
+        "<?php function f() { __halt_compiler(1.5); }",
+        "<?php function f() { __halt_compiler('a'); }",
+        "<?php function f() { __halt_compiler(foo); }",
+        "<?php if (1): __halt_compiler(1); endif;",
+        "<?php switch ($a) { case 1: __halt_compiler(1); }",
+        "<?php namespace N { __halt_compiler(1); }",
+        "<?php\nnamespace N {\n__halt_compiler(1);\n}",
+        "<?php __halt_compiler(1);",
+        "<?php function f() { for ($i = 0; __halt_compiler(1); ) {} }",
+        "<?php switch ($a) { __halt_compiler(1); }",
         "<?php function f() { C::{__halt_compiler()}; }",
         "<?php function f() { $o->{__halt_compiler()}; }",
         "<?php function f() { $o?->{__halt_compiler()}; }",
@@ -1847,6 +1859,8 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "<?php function f() { function g() {} __halt_compiler(); }",
         "<?php function f() { class A {} __halt_compiler(); }",
         "<?php function f() { label: function g() {} __halt_compiler(); }",
+        "<?php function f() { __halt_compiler( ); }",
+        "<?php function f() { __halt_compiler(/*c*/); }",
         "<?php function f() { switch ($a) { case 1: echo 1; } __halt_compiler(); }",
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
@@ -2131,6 +2145,50 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "<?php $x = match ($a) { fn($b = \"{$c}\") => 1 __halt_compiler() => 2 };",
             "syntax error, unexpected token \"__halt_compiler\", expecting \"=>\"",
         ),
+        (
+            "<?php function f() { __halt_compiler(1); }",
+            "syntax error, unexpected integer \"1\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler($a); }",
+            "syntax error, unexpected variable \"$a\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(1.5); }",
+            "syntax error, unexpected floating-point number \"1.5\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler('a'); }",
+            "syntax error, unexpected single-quoted string \"a\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(foo); }",
+            "syntax error, unexpected identifier \"foo\", expecting \")\"",
+        ),
+        (
+            "<?php if (1): __halt_compiler(1); endif;",
+            "syntax error, unexpected integer \"1\", expecting \")\"",
+        ),
+        (
+            "<?php switch ($a) { case 1: __halt_compiler(1); }",
+            "syntax error, unexpected integer \"1\", expecting \")\"",
+        ),
+        (
+            "<?php namespace N { __halt_compiler(1); }",
+            "syntax error, unexpected integer \"1\", expecting \")\"",
+        ),
+        (
+            "<?php\nnamespace N {\n__halt_compiler(1);\n}",
+            "syntax error, unexpected integer \"1\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { for ($i = 0; __halt_compiler(1); ) {} }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \";\"",
+        ),
+        (
+            "<?php switch ($a) { __halt_compiler(1); }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
+        ),
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
         assert_eq!(error.message, message, "{source}");
@@ -2160,6 +2218,7 @@ fn tokenizer_php_src_halt_compiler_parse_errors() {
         (b"<?php __halt_compiler(".as_slice(), "Unclosed '('"),
         (b"<?php __halt_compiler a b c RAW".as_slice(), "syntax error, unexpected identifier \"a\", expecting \"(\""),
         (b"<?php __halt_compiler( )".as_slice(), "syntax error, unexpected end of file, expecting \";\""),
+        (b"<?php __halt_compiler(1);".as_slice(), "syntax error, unexpected integer \"1\", expecting \")\""),
     ] {
         let error = tokenize(source, TOKEN_PARSE).expect_err("malformed halt header must fail");
         assert_eq!(error.message, message, "{}", String::from_utf8_lossy(source));

@@ -2151,8 +2151,8 @@ fn match_operand_complete<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 /// Reports a switch halt, or defers when a real `case` or `default` has not started.
 ///
 /// Inline HTML and other tokens before the first label belong to `switch_case_html_error`
-/// or the parser. A halt after a label is the outermost-scope `CompileError`. The caller
-/// only uses this when the halt is in statement position.
+/// or the parser. A halt after a label is the outermost-scope `CompileError` when the call
+/// is `()`. An argument is the scanner's parse error at that argument.
 fn switch_halt_error<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
@@ -2172,11 +2172,35 @@ fn switch_halt_error<T: SourceToken>(
     if !switch_saw_label(tokens, gate, index) {
         return None;
     }
+    if let Some(error) = halt_argument_error(source, tokens, index) {
+        return Some(error);
+    }
     Some(ValidationError {
         message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
         pos: tokens[index].pos(),
         lexical: false,
     })
+}
+
+/// Returns the parse error for a token inside `__halt_compiler(…)`.
+///
+/// `()` with whitespace or a comment is still an empty call and returns none. `1`, `$a`
+/// or another token is reported at that token, with PHP's noun, so a scope diagnostic
+/// does not replace it.
+fn halt_argument_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    halt: usize,
+) -> Option<ValidationError> {
+    let open = next_significant_index(tokens, halt)?;
+    if tokens[open].id() != i64::from(b'(') {
+        return None;
+    }
+    let inner = next_significant_index(tokens, open)?;
+    if tokens[inner].id() == i64::from(b')') {
+        return None;
+    }
+    Some(token_noun_error(source, tokens, inner, "\")\""))
 }
 
 /// Returns whether this switch already opened a `case` or `default` before the halt.
@@ -2285,8 +2309,9 @@ fn scoped_constant_name<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 
 /// Builds the parse or compile diagnostic for one `__halt_compiler` token.
 ///
-/// `None` means this halt is not a precheck error. That is the outermost scope, and also a
-/// `{` after `=>`: PHP reports the brace, and a later halt must not replace that parse error.
+/// `None` means this halt is not a precheck error. That is the outermost scope, a `{` after
+/// `=>`, and a halt call whose parentheses contain an argument: the scanner reports that
+/// argument. PHP reports the brace for an arrow block, and a later halt must not replace it.
 /// A class body, match arm list, computed member and a switch with no `case` yet stay parse
 /// errors even when a function around them is still open. The expectation text is PHP's for
 /// that container.
@@ -2313,6 +2338,9 @@ fn halt_scope_failure<T: SourceToken>(
         match scope {
             None => return None,
             Some(HaltScope::Statement | HaltScope::Alternative) => {
+                if let Some(error) = halt_argument_error(source, tokens, index) {
+                    return Some(error);
+                }
                 return Some(ValidationError {
                     message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
                     pos: tokens[index].pos(),
@@ -2320,6 +2348,9 @@ fn halt_scope_failure<T: SourceToken>(
                 });
             }
             Some(HaltScope::Namespace { line }) => {
+                if let Some(error) = halt_argument_error(source, tokens, index) {
+                    return Some(error);
+                }
                 return Some(halt_namespace_unclosed(source, tokens[index].pos(), *line));
             }
             Some(HaltScope::Switch { gate, alternative }) => {

@@ -1420,6 +1420,9 @@ pub(crate) fn scan_compiler<C: CompilerOutput>(
 }
 
 /// Formats a PHP parser diagnostic for one unexpected token and an expected literal.
+///
+/// Numbers, variables and quoted strings use Zend's noun. A short punctuation token keeps
+/// the `token` noun. `T_EXIT` is always spelled `exit`.
 fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String {
     let text = &source[token.pos..token.pos + token.len];
     if token.id == id("T_STRING") {
@@ -1427,6 +1430,15 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
     } else if token.id == id("T_EXIT") {
         // Zend names T_EXIT `exit` even when the source spells it `die`.
         format!("syntax error, unexpected token \"exit\", expecting {expected}")
+    } else if token.id == id("T_LNUMBER") {
+        format!("syntax error, unexpected integer \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if token.id == id("T_DNUMBER") {
+        format!("syntax error, unexpected floating-point number \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if token.id == id("T_VARIABLE") {
+        format!("syntax error, unexpected variable \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if token.id == id("T_CONSTANT_ENCAPSED_STRING") {
+        let (noun, body) = quoted_string_noun(text);
+        format!("syntax error, unexpected {noun} \"{}\", expecting {expected}", String::from_utf8_lossy(body))
     } else if text.len() <= 3 {
         format!("syntax error, unexpected token \"{}\", expecting {expected}", String::from_utf8_lossy(text))
     } else {
@@ -1434,6 +1446,18 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
             "syntax error, unexpected token \"{}\", expecting {expected}",
             super::token_name(token.id).unwrap_or("UNKNOWN")
         )
+    }
+}
+
+/// Returns Zend's noun and the visible body of one quoted-string token.
+fn quoted_string_noun(text: &[u8]) -> (&'static str, &[u8]) {
+    match text.first() {
+        Some(b'\'') => ("single-quoted string", &text[1..text.len().saturating_sub(1)]),
+        Some(b'"') => ("double-quoted string", &text[1..text.len().saturating_sub(1)]),
+        Some(b'b') | Some(b'B') if text.len() >= 3 => {
+            ("quoted string", &text[..text.len().saturating_sub(1)])
+        }
+        _ => ("quoted string", text),
     }
 }
 

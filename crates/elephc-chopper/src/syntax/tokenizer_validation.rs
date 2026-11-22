@@ -467,7 +467,8 @@ fn earlier_error<T: SourceToken>(
 ///
 /// `__halt_compiler();` ends tokenization, so a `}` after it is not a brace token. A real `}`
 /// token before the halt means this opener already closed and the parser error is an earlier
-/// block. A `}` inside a string is not a token, so it does not close the block.
+/// block. A `}` inside a string is not a token, so it does not close the block. An argument
+/// inside `__halt_compiler(…)` stays authoritative across a newline in that same block.
 fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
     tokens: &[T],
     precheck: &ValidationError,
@@ -475,7 +476,7 @@ fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
 ) -> bool {
     if main.message != "Unclosed '{'"
         || precheck.pos <= main.pos
-        || !halt_scope_diagnostic(precheck)
+        || !(halt_scope_diagnostic(precheck) || halt_argument_diagnostic(tokens, precheck))
     {
         return false;
     }
@@ -500,6 +501,39 @@ fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
         }
     }
     depth > 0
+}
+
+/// Returns whether `error` is the token inside a malformed `__halt_compiler(…)`.
+///
+/// The parser can report the enclosing `Unclosed '{'` first, including across a newline.
+/// This diagnostic still belongs to that halt call.
+fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if !error.message.ends_with("expecting \")\"") {
+        return false;
+    }
+    let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) else {
+        return false;
+    };
+    let Some(open) = previous_significant_index(tokens, index) else {
+        return false;
+    };
+    if tokens[open].id() != i64::from(b'(') {
+        return false;
+    }
+    previous_significant_index(tokens, open).is_some_and(|halt| {
+        tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+    })
+}
+
+/// Returns whether the halt at `index` is a member or namespace name.
+fn halt_used_as_name_token<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index).is_some_and(|previous| {
+        let id = tokens[previous].id();
+        id == tok::T_OBJECT_OPERATOR
+            || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+            || id == i64::from(b'\\')
+            || id == tok::T_NS_SEPARATOR
+    })
 }
 
 /// Returns whether the diagnostic is one of the halt-scope messages.
