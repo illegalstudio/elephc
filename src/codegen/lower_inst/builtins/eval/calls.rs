@@ -12,7 +12,10 @@ use crate::codegen::lower_inst::callable_guards;
 use crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
 
 const EVAL_RESULT_GUARD_OFFSET: usize = EVAL_STACK_BYTES;
-const EVAL_GUARDED_STACK_BYTES: usize = EVAL_STACK_BYTES + EXCEPTION_GUARD_SLOT_SIZE;
+/// Parks the literal fragment's result across the reload and the native-binding clear, which both
+/// reuse `EVAL_TEMP_CELL_OFFSET` as scratch (a reference entry's value view travels through it).
+const EVAL_RESULT_SAVE_OFFSET: usize = EVAL_STACK_BYTES + EXCEPTION_GUARD_SLOT_SIZE;
+const EVAL_GUARDED_STACK_BYTES: usize = EVAL_RESULT_SAVE_OFFSET + 16;
 
 /// Lowers `eval($code)` through internal EIR AOT or the bridge ABI and leaves its result in registers.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -624,16 +627,17 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_RESULT_SAVE_OFFSET);
     callable_guards::guard_saved_owner(
         ctx.emitter,
         EVAL_RESULT_GUARD_OFFSET,
-        EVAL_TEMP_CELL_OFFSET,
+        EVAL_RESULT_SAVE_OFFSET,
     );
     reload_eval_scope_locals(ctx, &reload_locals, None)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
     clear_native_scope_bindings(ctx, &flush_locals, &flush_globals);
     callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_SAVE_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     store_if_result(ctx, inst)?;
     Ok(true)
