@@ -527,6 +527,33 @@ A::run(); G::run(); G2::run(); H::run(); K::run();
     assert_eq!(out, "A static: [arg 5]A::m\nG static: Error: Non-static method G::m() cannot be called statically\nG2 static: Error: Non-static method G::m() cannot be called statically\nH static: Error: Call to private method H::m() from scope A\nK static: Error: Non-static method K::m() cannot be called statically\nA inst: [arg 6]A::m\nG inst: [arg 6]G::m 6 G g G\nG2 inst: [arg 6]G::m 6 G2 g G2\nH inst: Error: Call to private method H::m() from scope A\nK inst: [arg 6]60\n");
 }
 
+/// Verifies an abstract redeclaration, which has no body, links: a caller with `$this` never
+/// sees an abstract called class, and a static caller whose called class is abstract (`B`, or
+/// `S2` inheriting `S`'s abstract static `m`) raises php-src's "Cannot call abstract method".
+#[test]
+fn test_static_late_binding_private_scope_method_abstract_redeclaration() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(): string { return "A::m"; }
+    public static function run(): void {
+        try { echo static::class, " static: ", static::m(), "\n"; }
+        catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+    public function inst(): void { echo static::class, " inst: ", static::m(), "\n"; }
+}
+abstract class B extends A { abstract public function m(): string; }
+class C extends B { public function m(): string { return "C::m"; } }
+abstract class S extends A { abstract public static function m(): string; }
+abstract class S2 extends S {}
+class T extends S2 { public static function m(): string { return "T::m"; } }
+(new A)->inst(); (new C)->inst(); (new T)->inst();
+A::run(); B::run(); C::run(); S::run(); S2::run(); T::run();
+"#,
+    );
+    assert_eq!(out, "A inst: A::m\nC inst: C::m\nT inst: T::m\nA static: A::m\nB static: Error: Cannot call abstract method B::m()\nC static: Error: Non-static method C::m() cannot be called statically\nS static: Error: Cannot call abstract method S::m()\nS2 static: Error: Cannot call abstract method S::m()\nT static: T::m\n");
+}
+
 /// Verifies a private redeclaration the scope cannot call falls back to the called class's
 /// `__call()` from an instance caller and to its `__callStatic()` otherwise, with `static`
 /// forwarded (`D2`), while a class with `__callStatic()` and no redeclaration keeps `A::m()`

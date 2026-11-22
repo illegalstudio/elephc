@@ -12,6 +12,8 @@
 //! - A redeclared instance method runs on `$this` from an instance method and raises the
 //!   non-static `Error` from a static one. A private redeclaration falls back to the called
 //!   class's `__call()` (with `$this`) or `__callStatic()`, as php-src's static lookup does.
+//! - An abstract redeclaration has no body: an abstract called class raises php-src's
+//!   "Cannot call abstract method" `Error`, and a caller with `$this` gets no arm for it.
 //! - Only called classes whose lookup differs from the scope's method get a dispatch arm. A
 //!   call whose method no subclass redeclares lowers exactly as before.
 //! - Each arm lowers the arguments against the signature of the method it calls, so a
@@ -39,6 +41,9 @@ enum PrivateLateStaticArm {
     PrivateError(String),
     /// The called class inherits an instance `m` from `class` and the caller has no `$this`.
     NonStaticError(String),
+    /// The called class is abstract and inherits an abstract `m` from `class`, which has no
+    /// body to call.
+    AbstractError(String),
 }
 
 /// The first declaration of the method php-src's lookup in the called class finds below the
@@ -47,6 +52,7 @@ struct Redeclaration {
     class: String,
     is_static: bool,
     private: bool,
+    is_abstract: bool,
 }
 
 /// Lowers `static::m()` when `m` is a private static method of the lexical class and some
@@ -174,7 +180,14 @@ fn private_late_static_arms(
         let Some(found) = late_bound_lookup(ctx, class_name, scope, &key) else {
             continue;
         };
-        let arm = if found.private {
+        let arm = if found.is_abstract {
+            // Only an abstract called class can find an abstract `m`, and `$this` is never an
+            // instance of one, so the arm is unreachable from a caller with `$this`.
+            if has_this {
+                continue;
+            }
+            PrivateLateStaticArm::AbstractError(found.class)
+        } else if found.private {
             magic_arm(ctx, class_name, has_this)
                 .unwrap_or(PrivateLateStaticArm::PrivateError(found.class))
         } else if found.is_static {
@@ -231,13 +244,17 @@ fn late_bound_lookup(
     while cursor != scope {
         let info = ctx.classes.get(cursor)?;
         if found.is_none() {
-            if info.static_method_impl_classes.get(key).map(String::as_str) == Some(cursor)
+            let abstract_static = info.abstract_static_methods.contains(key)
+                && info.static_method_declaring_classes.get(key).map(String::as_str) == Some(cursor);
+            if (abstract_static
+                || info.static_method_impl_classes.get(key).map(String::as_str) == Some(cursor))
                 && info.static_methods.contains_key(key)
             {
                 found = Some(Redeclaration {
                     class: cursor.to_string(),
                     is_static: true,
                     private: info.static_method_visibilities.get(key) == Some(&Visibility::Private),
+                    is_abstract: abstract_static,
                 });
             } else if info.methods.contains_key(key)
                 && (info.method_impl_classes.get(key).map(String::as_str) == Some(cursor)
@@ -247,6 +264,7 @@ fn late_bound_lookup(
                     class: cursor.to_string(),
                     is_static: false,
                     private: info.method_visibilities.get(key) == Some(&Visibility::Private),
+                    is_abstract: info.abstract_methods.contains(key),
                 });
             }
         }
@@ -274,7 +292,9 @@ fn arm_signature<'a>(
         PrivateLateStaticArm::CallMagicOnThis(class_name) => {
             class_method_signature(ctx, class_name, &php_symbol_key("__call"))
         }
-        PrivateLateStaticArm::PrivateError(_) | PrivateLateStaticArm::NonStaticError(_) => None,
+        PrivateLateStaticArm::PrivateError(_)
+        | PrivateLateStaticArm::NonStaticError(_)
+        | PrivateLateStaticArm::AbstractError(_) => None,
     }
 }
 
@@ -312,7 +332,9 @@ fn arm_result_type(
                 None => nominal,
             })
         }
-        PrivateLateStaticArm::PrivateError(_) | PrivateLateStaticArm::NonStaticError(_) => None,
+        PrivateLateStaticArm::PrivateError(_)
+        | PrivateLateStaticArm::NonStaticError(_)
+        | PrivateLateStaticArm::AbstractError(_) => None,
     }
 }
 
@@ -459,6 +481,14 @@ fn lower_private_late_static_dispatch(
                 crate::ir_lower::stmt::lower_throw_access_error(
                     ctx,
                     &format!("Non-static method {class_name}::{method}() cannot be called statically"),
+                    span,
+                );
+                continue;
+            }
+            PrivateLateStaticArm::AbstractError(class_name) => {
+                crate::ir_lower::stmt::lower_throw_access_error(
+                    ctx,
+                    &format!("Cannot call abstract method {class_name}::{method}()"),
                     span,
                 );
                 continue;
