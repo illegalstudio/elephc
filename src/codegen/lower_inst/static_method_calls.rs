@@ -259,6 +259,7 @@ fn emit_late_private_dispatch_call(
         .iter()
         .map(|_| ctx.next_label("late_private_arm"))
         .collect::<Vec<_>>();
+    // -- branch to the redeclaration the hidden called-class id selects, if any --
     for ((_, class_ids), arm_label) in arms.iter().zip(&arm_labels) {
         for class_id in class_ids {
             abi::emit_load_int_immediate(ctx.emitter, scratch, *class_id as i64);
@@ -267,9 +268,10 @@ fn emit_late_private_dispatch_call(
                 Arch::AArch64 => "b.eq",
                 Arch::X86_64 => "je",
             };
-            ctx.emitter.instruction(&format!("{} {}", branch, arm_label));       // run that redeclaration for this called class
+            ctx.emitter.instruction(&format!("{} {}", branch, arm_label));      // run that redeclaration for this called class
         }
     }
+    // -- every other called class runs the scope's private method, then each arm its own --
     abi::emit_call_label(ctx.emitter, &static_method_symbol(scope_class, method_key));
     for ((class_name, _), arm_label) in arms.iter().zip(&arm_labels) {
         abi::emit_jump(ctx.emitter, &done_label);

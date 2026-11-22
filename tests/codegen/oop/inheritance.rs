@@ -597,6 +597,64 @@ echo A::run(), "\n", C::run(), "\n", V::run(), "\n", W::run(), "\n";
     assert_eq!(out, "A::m 1\nArgumentCountError: Too few arguments to function C::m(), 1 passed in FILE on line 5 and exactly 2 expected\nV::m\nArgumentCountError: Too few arguments to function W::m(), 1 passed in FILE on line 5 and at least 2 expected\n");
 }
 
+/// Verifies the `__callStatic()`/`__call()` fallback for a private redeclaration receives named
+/// arguments under their names, after the positional ones, as php-src passes them.
+#[test]
+fn test_static_late_binding_private_scope_method_magic_fallback_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function show(array $a): string { $s = ""; foreach ($a as $k => $v) { $s .= "$k=$v,"; } return $s; }
+class A {
+    private static function m(int $x, int $y = 0): string { return "A::m $x $y"; }
+    public static function run(): void { echo static::class, " ", static::m(1, y: 5), "\n"; }
+    public function inst(): void { echo static::class, " ", static::m(x: 2, y: 3), "\n"; }
+}
+class D extends A {
+    private static function m(): string { return "D::m"; }
+    public static function __callStatic(string $n, array $a): string { return "__callStatic($n) " . show($a); }
+    public function __call(string $n, array $a): string { return "__call($n) " . show($a); }
+}
+A::run();
+D::run();
+(new A)->inst();
+(new D)->inst();
+"#,
+    );
+    assert_eq!(out, "A A::m 1 5\nD __callStatic(m) 0=1,y=5,\nA A::m 2 3\nD __call(m) x=2,y=3,\n");
+}
+
+/// Verifies an error handler that throws on the by-reference notice of `$r =& static::m()`
+/// releases the by-value result first: its destructor runs before the catch, and nothing leaks
+/// once the handler is restored.
+#[test]
+fn test_static_late_binding_private_scope_method_reference_notice_throw_releases_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Obj { public function __construct(public string $n) {} public function __destruct() { echo "destruct {$this->n}\n"; } }
+class Holder { public Obj $o; public function __construct() { $this->o = new Obj("a"); } }
+set_error_handler(function (int $no, string $msg): bool { throw new ErrorException($msg, 0, $no); });
+class A {
+    public static Holder $h;
+    private static function &m(): Obj { $h = self::$h; return $h->o; }
+    public static function run(): void {
+        try { $r =& static::m(); echo "bound ", $r->n, "\n"; }
+        catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+        echo "after ", static::class, "\n";
+    }
+}
+class C extends A { public static function m(): Obj { return new Obj("c"); } }
+A::$h = new Holder();
+A::run();
+C::run();
+restore_error_handler();
+echo "end\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bound a\nafter A\ndestruct c\ncaught: Only variables should be assigned by reference\nafter C\nend\ndestruct a\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies same-signature redeclarations dispatched inside one call: `C::m()` runs for `C` and
 /// its subclass `C2` and protected `P::m()` for `P`. `C::m()` writes a static property, so the
 /// call keeps its effects although `A::m()` is pure: the unused call and both `static::m(7)`

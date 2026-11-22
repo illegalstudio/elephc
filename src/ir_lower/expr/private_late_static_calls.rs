@@ -520,12 +520,31 @@ fn lower_private_late_static_dispatch(
 }
 
 /// Packs a call php-src hands to `__call()`/`__callStatic()` into the method name and the
-/// argument array, as the direct magic static call does.
+/// argument array. Named arguments keep their names as string keys after the positional ones,
+/// as php-src passes them.
 fn magic_call_args(method: &str, args: &[Expr], span: Span) -> Vec<Expr> {
-    vec![
-        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
-        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
-    ]
+    let named = args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
+    let spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+    let arguments = if named && !spread {
+        let mut position = 0;
+        let pairs = args
+            .iter()
+            .map(|arg| match &arg.kind {
+                ExprKind::NamedArg { name, value } => (
+                    Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                    (**value).clone(),
+                ),
+                _ => {
+                    position += 1;
+                    (Expr::new(ExprKind::IntLiteral(position - 1), arg.span), arg.clone())
+                }
+            })
+            .collect();
+        Expr::new(ExprKind::ArrayLiteralAssoc(pairs), span)
+    } else {
+        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span)
+    };
+    vec![Expr::new(ExprKind::StringLiteral(method.to_string()), span), arguments]
 }
 
 /// Stores one arm's call result into the merge temporary (or, under `$r =& static::m()`, gives a
@@ -545,17 +564,20 @@ fn finish_private_late_static_arm(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    if reference_assignment && !ctx.reference_call_context.as_ref().unwrap().adopted {
-        // php-src binds a by-value result to a fresh reference and notices it.
+    let by_value_reference =
+        reference_assignment && !ctx.reference_call_context.as_ref().unwrap().adopted;
+    super::enum_interface_calls::complete_reference_branch(
+        ctx, value, reference_assignment, arm_type, span,
+    );
+    if by_value_reference {
+        // php-src binds a by-value result to a fresh reference and notices it. The cell is
+        // already in the assignment's published staging, so a handler that throws releases it.
         let message = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(
             "Notice: Only variables should be assigned by reference\n".into()), span));
         ctx.emit_void(Op::RuntimeCall, vec![message.value],
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
             crate::ir_lower::effects_lookup::runtime_effects(), Some(span));
     }
-    super::enum_interface_calls::complete_reference_branch(
-        ctx, value, reference_assignment, arm_type, span,
-    );
     if let Some(temp_name) = temp_name {
         let value = if ctx.builder.value_php_type(value.value) == PhpType::Void {
             lower_expr(ctx, &Expr::new(ExprKind::Null, span))
