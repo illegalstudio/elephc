@@ -7,11 +7,11 @@
 //! Key details:
 //! - Each check returns the first PHP-shaped error; the main parser never sees blanked regions.
 
-use crate::scanner::{operator, Operator};
+use crate::scanner::{newline_count, operator, Operator, HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE};
 
-use super::*;
 use super::diagnostics::*;
-use super::parser_view::parser_view;
+use super::parser_view::{parser_view, ternary_colon_before_label};
+use super::*;
 
 /// Rejects an unterminated backtick shell string with Zend's delimiter expectation.
 #[inline(never)]
@@ -1478,50 +1478,233 @@ pub(crate) fn next_non_inline_html_index<T: SourceToken>(tokens: &[T], index: us
     None
 }
 
+/// One open scope that changes how `__halt_compiler()` is diagnosed.
+enum HaltScope {
+    /// A function, method, control, hook or bare block body.
+    Statement,
+    /// A class-like body, trait adaptation block or property-hook container.
+    ClassLike,
+    /// A braced namespace. `line` is the one-based line of its `{`.
+    Namespace { line: usize },
+    /// `{$...}` or `${...}` interpolation. Its `}` must not close a real block.
+    Interpolation,
+    /// `if/while/for/foreach/switch/declare (...):` until the matching `end*`.
+    Alternative,
+}
+
+/// Returns whether `{` opens a trait adaptation block (`use Trait {`, `use A, B {`).
+///
+/// A closure's `use ($a) {` stops at the parameter list and stays a statement body.
+fn brace_is_trait_use<T: SourceToken>(tokens: &[T], open: usize) -> bool {
+    let mut cursor = open;
+    let mut saw_name = false;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == tok::T_USE {
+            return saw_name;
+        }
+        if id == tok::T_STRING
+            || id == tok::T_NAME_FULLY_QUALIFIED
+            || id == tok::T_NAME_QUALIFIED
+            || id == tok::T_NAME_RELATIVE
+            || id == tok::T_NS_SEPARATOR
+            || id == i64::from(b'\\')
+        {
+            saw_name = true;
+            cursor = previous;
+            continue;
+        }
+        if id == i64::from(b',') {
+            cursor = previous;
+            continue;
+        }
+        return false;
+    }
+    false
+}
+
+/// Classifies a real `{` as a statement block, a class-like body or a namespace body.
+///
+/// The namespace line is filled by the caller from the brace token. A property-hook container
+/// (`public $x {`) is not a statement list; the `get {` body inside it is.
+fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
+    if brace_is_trait_use(tokens, open)
+        || previous_significant_index(tokens, open)
+            .is_some_and(|previous| tokens[previous].id() == tok::T_VARIABLE)
+    {
+        return HaltScope::ClassLike;
+    }
+    let mut cursor = open;
+    while let Some(previous) = previous_significant_index(tokens, cursor) {
+        let id = tokens[previous].id();
+        if id == tok::T_NAMESPACE {
+            return HaltScope::Namespace { line: 0 };
+        }
+        if id == tok::T_CLASS || id == tok::T_INTERFACE || id == tok::T_TRAIT || id == tok::T_ENUM {
+            return HaltScope::ClassLike;
+        }
+        if id == tok::T_FUNCTION
+            || id == tok::T_FN
+            || id == i64::from(b';')
+            || id == i64::from(b'{')
+            || id == i64::from(b'}')
+        {
+            return HaltScope::Statement;
+        }
+        cursor = previous;
+    }
+    HaltScope::Statement
+}
+
+/// Returns whether `index` opens or closes one alternative-syntax construct.
+///
+/// `1` pushes a scope, `-1` pops the nearest one, and `0` leaves the stack alone. `else` and
+/// `elseif` stay inside the `if` they continue, so only the outer header is pushed.
+fn alternative_scope_delta<T: SourceToken>(tokens: &[T], index: usize) -> i8 {
+    let id = tokens[index].id();
+    let header = id == tok::T_IF
+        || id == tok::T_WHILE
+        || id == tok::T_FOR
+        || id == tok::T_FOREACH
+        || id == tok::T_SWITCH
+        || id == tok::T_DECLARE;
+    let end = id == tok::T_ENDIF
+        || id == tok::T_ENDWHILE
+        || id == tok::T_ENDFOR
+        || id == tok::T_ENDFOREACH
+        || id == tok::T_ENDSWITCH
+        || id == tok::T_ENDDECLARE;
+    if (!header && !end) || control_keyword_is_name(tokens, index) {
+        return 0;
+    }
+    if header && alternative_header_colon(tokens, index) {
+        return 1;
+    }
+    if end {
+        return -1;
+    }
+    0
+}
+
+/// Returns whether `__halt_compiler` sits where PHP's grammar accepts a statement.
+///
+/// A ternary colon is an expression boundary, so `$a ? 1 : __halt_compiler()` stays a parse
+/// error even inside a function. A case, label or alternative-syntax colon starts a statement.
+fn halt_is_statement_start<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let Some(previous) = previous_significant_index(tokens, index) else {
+        return true;
+    };
+    let id = tokens[previous].id();
+    if id == i64::from(b';')
+        || id == i64::from(b'{')
+        || id == i64::from(b'}')
+        || id == tok::T_OPEN_TAG
+    {
+        return true;
+    }
+    id == i64::from(b':') && !ternary_colon_before_label(tokens, index)
+}
+
+/// Returns whether the halt word is a member or namespace name rather than the construct.
+fn halt_used_as_name<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index).is_some_and(|previous| {
+        matches!(
+            tokens[previous].id(),
+            token_id if token_id == tok::T_OBJECT_OPERATOR
+                || token_id == tok::T_NULLSAFE_OBJECT_OPERATOR
+                || token_id == i64::from(b'\\')
+                || token_id == tok::T_NS_SEPARATOR
+        )
+    })
+}
+
+/// Builds PHP's `Unclosed '{'` diagnostic for a halt that ends a braced namespace early.
+fn halt_namespace_unclosed(source: &[u8], pos: usize, brace_line: usize) -> ValidationError {
+    let halt_line = 1 + newline_count(&source[..pos.min(source.len())]);
+    let message = if halt_line == brace_line {
+        "Unclosed '{'".to_string()
+    } else {
+        format!("Unclosed '{{' on line {brace_line}")
+    };
+    ValidationError { message, pos, lexical: false }
+}
+
 /// Rejects `__halt_compiler()` outside the outermost file scope.
 ///
-/// Zend's parser only accepts it as a top-level statement; inside a block, function, class or
-/// unbraced control body it is `syntax error, unexpected token "__halt_compiler"`.
+/// A statement inside a function, block or alternative-syntax body is PHP's `CompileError`.
+/// A braced namespace halts before its `}` and reports `Unclosed '{'`. A class body, an
+/// unbraced `if`, a ternary operand and a property initializer stay ordinary parse errors.
 #[inline(never)]
-pub(crate) fn halt_compiler_scope_error<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<ValidationError> {
-    let mut depth = 0usize;
+pub(crate) fn halt_compiler_scope_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+) -> Option<ValidationError> {
+    if !tokens.iter().any(|token| token.id() == tok::T_HALT_COMPILER) {
+        return None;
+    }
+    let mut scopes: Vec<HaltScope> = Vec::new();
     for index in 0..tokens.len() {
         let id = tokens[index].id();
-        if id == i64::from(b'{')
-            || id == tok::T_CURLY_OPEN
-            || id == tok::T_DOLLAR_OPEN_CURLY_BRACES
-        {
-            depth += 1;
-        } else if id == i64::from(b'}') {
-            depth = depth.saturating_sub(1);
-        } else if id == tok::T_HALT_COMPILER {
-            let previous = previous_significant_index(tokens, index);
-            // Only member access and namespace separators treat the word as a name.
-            if previous.is_some_and(|previous| {
-                matches!(
-                    tokens[previous].id(),
-                    token_id if token_id == tok::T_OBJECT_OPERATOR
-                        || token_id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                        || token_id == i64::from(b'\\')
-                        || token_id == tok::T_NS_SEPARATOR
-                )
-            }) {
-                continue;
+        if id == i64::from(b'{') {
+            let mut scope = halt_brace_kind(tokens, index);
+            if let HaltScope::Namespace { line } = &mut scope {
+                *line = 1 + newline_count(&source[..tokens[index].pos().min(source.len())]);
             }
-            let top_level_previous = previous.is_none_or(|previous| {
-                matches!(
-                    tokens[previous].id(),
-                    id if id == i64::from(b';')
-                        || id == i64::from(b'{')
-                        || id == i64::from(b'}')
-                        || id == tok::T_OPEN_TAG
-                )
-            });
-            if depth == 0 && top_level_previous {
-                continue;
-            }
-            return Some(token_at_index_error(source, tokens, index));
+            scopes.push(scope);
+            continue;
         }
+        if id == tok::T_CURLY_OPEN || id == tok::T_DOLLAR_OPEN_CURLY_BRACES {
+            scopes.push(HaltScope::Interpolation);
+            continue;
+        }
+        if id == i64::from(b'}') {
+            scopes.pop();
+            continue;
+        }
+        match alternative_scope_delta(tokens, index) {
+            1 => {
+                scopes.push(HaltScope::Alternative);
+                continue;
+            }
+            -1 => {
+                if let Some(position) = scopes
+                    .iter()
+                    .rposition(|scope| matches!(scope, HaltScope::Alternative))
+                {
+                    scopes.remove(position);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if id != tok::T_HALT_COMPILER || halt_used_as_name(tokens, index) {
+            continue;
+        }
+        let pos = tokens[index].pos();
+        let statement = halt_is_statement_start(tokens, index);
+        let in_statement = scopes.iter().any(|scope| {
+            matches!(scope, HaltScope::Statement | HaltScope::Alternative)
+        });
+        if statement && in_statement {
+            return Some(ValidationError {
+                message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
+                pos,
+                lexical: false,
+            });
+        }
+        if statement && !scopes.iter().any(|scope| matches!(scope, HaltScope::ClassLike)) {
+            if let Some(line) = scopes.iter().rev().find_map(|scope| match scope {
+                HaltScope::Namespace { line } => Some(*line),
+                _ => None,
+            }) {
+                return Some(halt_namespace_unclosed(source, pos, line));
+            }
+        }
+        let blocking = scopes.iter().any(|scope| !matches!(scope, HaltScope::Interpolation));
+        if statement && !blocking {
+            continue;
+        }
+        return Some(token_at_index_error(source, tokens, index));
     }
     None
 }

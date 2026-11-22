@@ -1103,39 +1103,79 @@ fn declaration_name_predecessor(id: i64) -> bool {
         )
 }
 
-/// Returns whether a declaration modifier precedes `index` before any statement boundary.
+/// Returns whether a token can appear between a property modifier and its variable.
+fn is_property_type_token(id: i64) -> bool {
+    (is_declaration_type_token(id) && id != tok::T_STATIC)
+        || id == i64::from(b'?')
+        || id == i64::from(b'|')
+        || id == i64::from(b'&')
+        || id == i64::from(b'(')
+        || id == i64::from(b')')
+        || id == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+        || id == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+}
+
+/// Returns whether a token is a property modifier that can introduce `$$name`.
+fn is_property_modifier(id: i64) -> bool {
+    id == tok::T_PUBLIC
+        || id == tok::T_PROTECTED
+        || id == tok::T_PRIVATE
+        || id == tok::T_STATIC
+        || id == tok::T_READONLY
+}
+
+/// Returns whether the token before a property modifier starts a declaration.
+///
+/// `instanceof static` is an expression. `public static`, `{ static` and `#[Attr] public`
+/// are declarations. `final` and `var` count as the modifier that precedes `public`.
+fn property_declaration_boundary(id: Option<i64>) -> bool {
+    const T_FINAL: i64 = elephc_builtin_contract::token_const_id("T_FINAL");
+    const T_VAR: i64 = elephc_builtin_contract::token_const_id("T_VAR");
+    let Some(id) = id else {
+        return true;
+    };
+    id == i64::from(b';')
+        || id == i64::from(b'{')
+        || id == i64::from(b'}')
+        || id == i64::from(b']')
+        || id == tok::T_OPEN_TAG
+        || id == tok::T_ABSTRACT
+        || id == T_FINAL
+        || id == T_VAR
+        || is_property_modifier(id)
+}
+
+/// Returns whether a declaration modifier precedes `index` across a property type only.
+///
+/// `static::$$a` stops at `::`. A modifier counts only when every token between it and `$`
+/// is a property type and the token before the modifier is a declaration boundary, so
+/// `$o instanceof static ? $$a` stays an expression. `static $$a` and `public static ?int $$a`
+/// still count as declarations.
 pub(crate) fn property_modifier_before<T: SourceToken>(tokens: &[T], index: usize) -> bool {
-    // A declaration name follows a type or modifier token. An operator, literal, variable or
-    // keyword before the `$` proves this is an expression, and rejecting it in O(1) keeps
-    // repeated `$$a` terms from walking the same statement prefix once per variable.
+    // An operator, literal, variable or keyword immediately before the `$` proves this is an
+    // expression. Rejecting it in O(1) keeps repeated `$$a` terms from walking the statement.
     let Some(immediate) = previous_significant_index(tokens, index) else {
         return false;
     };
-    if !declaration_name_predecessor(tokens[immediate].id()) {
+    let immediate_id = tokens[immediate].id();
+    if immediate_id == tok::T_DOUBLE_COLON || !declaration_name_predecessor(immediate_id) {
         return false;
     }
     let mut cursor = index;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
-        match tokens[previous].id() {
-            id if id == tok::T_PUBLIC
-                || id == tok::T_PROTECTED
-                || id == tok::T_PRIVATE
-                || id == tok::T_STATIC
-                || id == tok::T_READONLY =>
-            {
-                return true;
-            }
-            id if id == i64::from(b';')
-                || id == i64::from(b'{')
-                || id == i64::from(b'}')
-                || id == i64::from(b'=')
-                || id == i64::from(b',')
-                || id == i64::from(b'(') =>
-            {
-                return false;
-            }
-            _ => cursor = previous,
+        let id = tokens[previous].id();
+        if id == tok::T_DOUBLE_COLON {
+            return false;
         }
+        if is_property_modifier(id) {
+            let before = previous_significant_index(tokens, previous).map(|index| tokens[index].id());
+            return property_declaration_boundary(before);
+        }
+        if is_property_type_token(id) {
+            cursor = previous;
+            continue;
+        }
+        return false;
     }
     false
 }

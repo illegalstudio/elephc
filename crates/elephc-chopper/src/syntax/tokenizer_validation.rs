@@ -11,6 +11,7 @@
 //!   stay stable, so parser diagnostics keep PHP's source lines.
 //! - Accepted keyword identifiers are mapped back to byte offsets for token reclassification.
 
+use crate::scanner::HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE;
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
 use std::cell::OnceCell;
@@ -352,6 +353,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     view_error,
                     reference_error,
@@ -396,6 +398,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     error,
                     reference_error,
@@ -423,12 +426,15 @@ fn prefer_reference_error(
 ///
 /// A parser failure on an earlier token can be a same-statement refinement (the precheck
 /// reports the real member after `::`), so only a separator between the two positions proves
-/// the parser reached an earlier statement. Unterminated backticks report at EOF and stay
-/// authoritative. A reference diagnostic may displace a later precheck only after comparing it
-/// with the original parser position. Later prechecks also yield to earlier parser errors inside
-/// the reference.
-fn earlier_error(
+/// the parser reached an earlier statement. That separator does not apply when the parser's
+/// `Unclosed '{'` is the block `__halt_compiler()` already ended: the scanner stops there, the
+/// closing brace becomes inline HTML, and the halt diagnostic stays authoritative.
+/// Unterminated backticks report at EOF and stay authoritative. A reference diagnostic may
+/// displace a later precheck only after comparing it with the original parser position. Later
+/// prechecks also yield to earlier parser errors inside the reference.
+fn earlier_error<T: SourceToken>(
     source: &[u8],
+    tokens: &[T],
     precheck: Option<ValidationError>,
     main: ValidationError,
     reference: Option<ReferenceError>,
@@ -437,6 +443,7 @@ fn earlier_error(
         precheck.pos <= main.pos
             || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
             || !statement_boundary_between(source, main.pos, precheck.pos)
+            || halt_diagnostic_inside_unclosed_brace(tokens, precheck, &main)
     });
     if let Some(reference) = reference {
         let preferred = precheck.as_ref().unwrap_or(&main);
@@ -452,6 +459,59 @@ fn earlier_error(
         }
     }
     precheck.unwrap_or(main)
+}
+
+/// Returns whether a halt diagnostic sits inside the brace the parser reported as unclosed.
+///
+/// `__halt_compiler();` ends tokenization, so a `}` after it is not a brace token. A real `}`
+/// token before the halt means this opener already closed and the parser error is an earlier
+/// block. A `}` inside a string is not a token, so it does not close the block.
+fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '{'"
+        || precheck.pos <= main.pos
+        || !halt_scope_diagnostic(precheck)
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && is_halt_brace_open(token.id())
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if is_halt_brace_open(id) {
+            depth += 1;
+        } else if id == i64::from(b'}') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether the diagnostic is one of the halt-scope messages.
+fn halt_scope_diagnostic(error: &ValidationError) -> bool {
+    error.message == HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE
+        || error.message == "Unclosed '{'"
+        || error.message.starts_with("Unclosed '{' on line ")
+}
+
+/// Returns whether `id` opens a brace the halt-scope walk treats as a real block.
+fn is_halt_brace_open(id: i64) -> bool {
+    id == i64::from(b'{')
+        || id == tok::T_CURLY_OPEN
+        || id == tok::T_DOLLAR_OPEN_CURLY_BRACES
 }
 
 /// Returns whether a statement boundary separates two source positions.

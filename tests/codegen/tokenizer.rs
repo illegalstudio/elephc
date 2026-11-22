@@ -84,6 +84,45 @@ echo count(token_get_all('<?php function broken(')) > 0 ? 'permissive' : 'wrong'
     assert_eq!(out, "T_STRING\nParseError\npermissive");
 }
 
+/// TOKEN_PARSE throws CompileError for a nested halt and ParseError for the other halt failures.
+///
+/// Direct calls use the compiled prelude. The literal eval uses Magician's tokenizer throw.
+#[test]
+fn test_tokenizer_halt_compiler_exception_class() {
+    let out = compile_and_run(r#"<?php
+function show(string $label, string $code): void {
+    try {
+        token_get_all($code, TOKEN_PARSE);
+        echo $label, ":ok\n";
+    } catch (Throwable $e) {
+        echo $label, ":", get_class($e), ":", $e->getMessage(), "\n";
+    }
+}
+show('fn', '<?php function f() { __halt_compiler(); }');
+show('ns', '<?php namespace N { __halt_compiler(); }');
+show('if', '<?php if (1) __halt_compiler();');
+show('top', '<?php __halt_compiler();');
+try {
+    PhpToken::tokenize('<?php function p() { __halt_compiler(); }', TOKEN_PARSE);
+    echo "token:ok\n";
+} catch (ParseError $e) {
+    echo "token:ParseError\n";
+} catch (CompileError $e) {
+    echo "token:CompileError\n";
+}
+eval('try { token_get_all("<?php function g() { __halt_compiler(); }", TOKEN_PARSE); echo "eval:ok\n"; } catch (ParseError $e) { echo "eval:ParseError\n"; } catch (CompileError $e) { echo "eval:CompileError\n"; }');
+"#);
+    assert_eq!(
+        out,
+        "fn:CompileError:__HALT_COMPILER() can only be used from the outermost scope\n\
+ns:ParseError:Unclosed '{'\n\
+if:ParseError:syntax error, unexpected token \"__halt_compiler\"\n\
+top:ok\n\
+token:CompileError\n\
+eval:CompileError\n"
+    );
+}
+
 /// A nested unpack contributes an unknown number of arguments, so the static arity gate
 /// leaves the call to the runtime instead of counting the unpack itself as one argument.
 #[test]

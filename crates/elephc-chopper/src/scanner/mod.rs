@@ -82,6 +82,20 @@ pub struct ParseError {
     pub warnings: Vec<Warning>,
 }
 
+/// Message PHP uses for `__halt_compiler()` outside the outermost scope.
+///
+/// TOKEN_PARSE carries this text without an exception class. Callers that throw map this
+/// exact message to `CompileError` and every other diagnostic to `ParseError`.
+pub const HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE: &str =
+    "__HALT_COMPILER() can only be used from the outermost scope";
+
+impl ParseError {
+    /// Reports whether this diagnostic is PHP's outermost-scope `CompileError`.
+    pub fn is_compile_error(&self) -> bool {
+        self.message == HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE
+    }
+}
+
 /// Tokens and lexical diagnostics before applying tokenization-mode policies.
 pub struct Scan {
     /// Tokens in source order.

@@ -286,6 +286,15 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         "<?php class C { public private(set) $x; }",
         "<?php switch (1) { default: default: }",
         "<?php switch ($v) { case $a ? B : C: break; }",
+        "<?php switch ($v) { case $a ? B::C : D::E: break; }",
+        "<?php static::$$a; echo static::$$a; return static::$$a;",
+        "<?php yield static::$$a;",
+        "<?php $x = static::$$a; fn() => static::$$a;",
+        "<?php $o instanceof static ? $$a : 0;",
+        "<?php f(static::$$a); if (static::$$a) {} A::$$a;",
+        "<?php label: __halt_compiler();",
+        "<?php if (1): endif; __halt_compiler();",
+        "<?php switch (1) { case 1: echo 1; } __halt_compiler();",
         "<?php break 0;",
         "<?php break $a;",
         "<?php try {}",
@@ -827,6 +836,23 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php function &f($a = &$b) {}", "<?php function f($a = &$b) {}",
         "<?php function readonly($a = &$b) {}", "<?php function &readonly($a = &$b) {}",
         "<?php class C { function &readonly($a = &$b) {} }",
+        "<?php $f = fn &($a = &$b) => 1;",
+        "<?php class A { function list($a = &$b) {} }",
+        "<?php function f() { __halt_compiler(); }",
+        "<?php function f() { $s = \"{$a}\"; __halt_compiler(); }",
+        "<?php\nfunction f() {\n__halt_compiler();\n}",
+        "<?php class C { function m() { __halt_compiler(); } }",
+        "<?php namespace N { __halt_compiler(); }",
+        "<?php\nnamespace N {\n__halt_compiler();\n}",
+        "<?php\nnamespace N {\n    echo 1;\n    __halt_compiler();\n}",
+        "<?php function f() { if (1) __halt_compiler(); }",
+        "<?php if (1): __halt_compiler(); endif;",
+        "<?php class C { public $x { get { __halt_compiler(); } } }",
+        "<?php class C { use T { __halt_compiler(); } }",
+        "<?php echo \"${__halt_compiler()}\";",
+        "<?= __halt_compiler();",
+        "<?php class A { public static ?int $$a; }",
+        "<?php class A { public $$a; }",
         "<?php class C { function match(...) {} }",
         "<?php class C { function &match(...) {} }",
         "<?php function f(...$a,\n...) {}",
@@ -1723,6 +1749,97 @@ fn tokenizer_declare_encoding_warning() {
         .expect("strict_types is valid syntax")
         .warnings
         .is_empty());
+}
+
+/// Nested `__halt_compiler()` matches PHP's CompileError text, line and namespace unclosed brace.
+#[test]
+fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
+    let compile = "__HALT_COMPILER() can only be used from the outermost scope";
+    for source in [
+        "<?php function f() { __halt_compiler(); }",
+        "<?php class C { function m() { __halt_compiler(); } }",
+        "<?php if (1) { __halt_compiler(); }",
+        "<?php if (1): __halt_compiler(); endif;",
+        "<?php function f() { label: __halt_compiler(); }",
+        "<?php namespace N { if (1): __halt_compiler(); endif; }",
+        "<?php class C { public $x { get { __halt_compiler(); } } }",
+        "<?php $f = function () use ($a) { __halt_compiler(); };",
+        "<?php function f() { $s = \"{$a}\"; __halt_compiler(); }",
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert_eq!(error.message, compile, "{source}");
+        assert_eq!(error.line, 1, "{source}");
+        assert!(error.is_compile_error(), "{source}");
+    }
+    let nested = tokenize(b"<?php\nfunction f() {\n__halt_compiler();\n}", TOKEN_PARSE)
+        .expect_err("halt line follows the function brace");
+    assert_eq!(nested.message, compile);
+    assert_eq!(nested.line, 3);
+    assert!(nested.is_compile_error());
+    let quoted_brace = tokenize(
+        b"<?php\nfunction f() {\n    echo \"}\";\n    __halt_compiler();\n}",
+        TOKEN_PARSE,
+    )
+    .expect_err("a quoted brace does not close the function");
+    assert_eq!(quoted_brace.message, compile);
+    assert_eq!(quoted_brace.line, 4);
+    assert!(quoted_brace.is_compile_error());
+    let earlier = tokenize(
+        b"<?php\necho ;\nfunction f() {\n__halt_compiler();\n}",
+        TOKEN_PARSE,
+    )
+    .expect_err("an earlier syntax error stays ahead of the halt");
+    assert_eq!(earlier.message, "syntax error, unexpected token \";\"");
+    assert_eq!(earlier.line, 2);
+    assert!(!earlier.is_compile_error());
+    let inside = tokenize(
+        b"<?php\nfunction f() {\necho ;\n__halt_compiler();\n}",
+        TOKEN_PARSE,
+    )
+    .expect_err("a syntax error inside the function stays ahead of the halt");
+    assert_eq!(inside.message, "syntax error, unexpected token \";\"");
+    assert_eq!(inside.line, 3);
+    assert!(!inside.is_compile_error());
+
+    let same_line = tokenize(b"<?php namespace N { __halt_compiler(); }", TOKEN_PARSE)
+        .expect_err("braced namespace halts before the closing brace");
+    assert_eq!(same_line.message, "Unclosed '{'");
+    assert_eq!(same_line.line, 1);
+    assert!(!same_line.is_compile_error());
+
+    let later_line = tokenize(b"<?php\nnamespace N {\n__halt_compiler();\n}", TOKEN_PARSE)
+        .expect_err("the unclosed brace names its own line when the halt is later");
+    assert_eq!(later_line.message, "Unclosed '{' on line 2");
+    assert_eq!(later_line.line, 3);
+    assert!(!later_line.is_compile_error());
+
+    for source in [
+        "<?php if (1) __halt_compiler();",
+        "<?php function f() { if (1) __halt_compiler(); }",
+        "<?php class C { __halt_compiler(); }",
+        "<?php class C { public $x = __halt_compiler(); }",
+        "<?php class C { use T { __halt_compiler(); } }",
+        "<?php fn() => __halt_compiler();",
+        "<?= __halt_compiler();",
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert!(!error.is_compile_error(), "{source}: {}", error.message);
+        assert!(error.message.contains("__halt_compiler") || error.message.contains("__HALT_COMPILER"), "{source}: {}", error.message);
+    }
+    assert!(tokenize(b"<?php __halt_compiler();", TOKEN_PARSE).is_ok());
+    assert!(tokenize(b"<?php label: __halt_compiler();", TOKEN_PARSE).is_ok());
+    assert!(tokenize(b"<?php namespace N;\n__halt_compiler();", TOKEN_PARSE).is_ok());
+    let typed = tokenize(b"<?php class A { public static ?int $$a; }", TOKEN_PARSE)
+        .expect_err("a typed property cannot be a variable variable");
+    assert_eq!(typed.message, "syntax error, unexpected token \"$\", expecting variable");
+    for source in [
+        "<?php function &f($a = &$b) {}",
+        "<?php $f = fn &($a = &$b) => 1;",
+        "<?php class A { function list($a = &$b) {} }",
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert_eq!(error.message, "syntax error, unexpected token \"&\"", "{source}");
+    }
 }
 
 /// php-src halt-compiler headers keep PHP's TOKEN_PARSE diagnostics.

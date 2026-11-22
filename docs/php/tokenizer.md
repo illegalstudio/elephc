@@ -75,7 +75,10 @@ normalized in the parser view first, so `goto`, variable variables, dynamic
 hooks, first-class callables, pipes and destructuring in expression position
 remain accepted. Syntax errors throw a catchable `ParseError` with PHP's parser-facing
 wording, including heredoc indentation, invalid escapes, unclosed delimiters,
-numeric-literal boundaries and interpolation offsets. A differential test pins
+numeric-literal boundaries and interpolation offsets. `__halt_compiler()` outside
+the outermost scope throws `CompileError` with PHP's outermost-scope message, and a
+braced namespace that halts before its closing brace throws `ParseError` with
+`Unclosed '{'`. A differential test pins
 exact message-and-line parity for a broad PHP 8.5 corpus; syntax outside that
 corpus can still differ in wording. Without the flag, incomplete and malformed
 PHP remains tokenizable. Other flag bits are ignored, matching PHP.
