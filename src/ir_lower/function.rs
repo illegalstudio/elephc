@@ -1485,7 +1485,9 @@ pub(crate) fn lower_eval_native_default_helpers(
                 specs.push((
                     format!("__elephc_eval_default\\closure\\{}\\{index}", closure.name),
                     closure.lexical_class.clone(),
-                    default.clone(),
+                    signature
+                        .default_value(index)
+                        .expect("present closure default"),
                 ));
             }
         }
