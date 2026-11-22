@@ -51,8 +51,23 @@ fn strict_numeric_eval_contracts_use_existing_binding_origins_on_every_target() 
         assert!(checked.local_store_contracts.iter().any(|((_, _, local), contract)|
             local == "owner" && contract.ty == crate::types::PhpType::Int
                 && contract.feature == StrictFeature::Locals), "{name}: source-point integer origin");
-        assert!(!checked.local_store_contracts.keys().any(|(_, _, local)| local == "future"),
-            "{name}: a later zero-valued integer slot does not constrain earlier eval");
+        let future = checked.local_store_contracts.iter().filter(|((_, _, local), _)|
+            local == "future").collect::<Vec<_>>();
+        assert!(matches!(future.as_slice(), [((_, span, _), contract)]
+            if span.line == 27 && contract.ty == crate::types::PhpType::Int
+                && contract.feature == StrictFeature::Locals),
+            "{name}: only the post-eval native store keeps its predecessor contract: {future:?}");
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function|
+            function.name == "futureNumericScope").unwrap();
+        assert!(!function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::EvalScopeBindLocalType
+                && matches!(inst.immediate.as_ref(),
+                    Some(crate::ir::Immediate::EvalScopeStore(metadata))
+                    if module.data.global_names[metadata.name.as_raw() as usize] == "future")
+        }), "{name}: the later native slot must not constrain the preceding eval");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
 
@@ -99,12 +114,19 @@ fn strict_numeric_locals_guard_writes_and_updates_on_every_target() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
         let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
-        assert!(checked.local_store_contracts.values().filter(|contract|
-            contract.feature == StrictFeature::Locals).count() >= 4, "{name}");
+        for local in ["value", "compound", "prefix", "postfix"] {
+            let guarded_store = checked.local_store_contracts.iter().any(|((_, _, candidate), contract)|
+                candidate == local && contract.feature == StrictFeature::Locals);
+            let guarded_origin = checked.local_store_contracts.origins.iter().any(|((_, _, candidate), contract)|
+                candidate == local && contract == &crate::types::PhpType::Int);
+            assert!(guarded_store || guarded_origin,
+                "{name}: ${local} must retain its integer binding contract");
+        }
         let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
         let function = module.functions.iter().find(|function| function.name == "numericBindings").unwrap();
         assert!(function.instructions.iter().filter(|instruction|
-            instruction.op == crate::ir::Op::ThrowTypeError).count() >= 4, "{name}");
+            instruction.op == crate::ir::Op::ThrowTypeError).count() >= 4,
+            "{name}: {}", crate::ir::print_function(function));
         assert!(!module.semantic_profile.contains(StrictFeature::Overflow));
         assert!(!module.semantic_profile.contains(StrictFeature::Coercions));
         crate::ir::validate_module(&module).unwrap();
