@@ -523,3 +523,19 @@ echo $c->same($c), $c->up(new Base()), E::X->same(E::X), (new D())->foo(), (new 
     );
     assert_eq!(out, "sue1d2\n");
 }
+
+/// A by-reference variadic that widens the declared element type of an abstract trait method's
+/// by-reference variadic satisfies it. Expected output measured with php 8.5.13.
+#[test]
+fn test_trait_requirement_by_ref_variadic_may_widen() {
+    let out = compile_and_run(
+        r#"<?php
+trait NeedsRefs { abstract public function take(int &...$xs): int; }
+trait TakesRefs { public function take(int|string &...$xs): int { return count($xs); } }
+final class Refs { use NeedsRefs, TakesRefs; }
+$a = 1; $b = 2;
+echo (new Refs())->take($a, $b), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}

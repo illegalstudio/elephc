@@ -354,6 +354,29 @@ trait X { abstract public function foo(): string; }
 class C { use X; public function foo() { return "c"; } }
 "#,
         "Cannot change return type when implementing trait method: C::foo",
+    );    // A by-reference variadic keeps its declared element type for the comparison.
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+trait Y { function foo(string &...$xs): void {} }
+class C { use X, Y; }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+trait Y { function foo(string &...$xs): void {} }
+enum E { use X, Y; case A; }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: E::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+class C { use X; function foo(string &...$xs): void {} }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: C::foo",
     );
 }
 
