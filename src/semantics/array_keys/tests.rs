@@ -330,6 +330,32 @@ fn strict_array_key_source_validation_audits_bounded_nested_replay() {
     assert!(error.message.contains("strict-array-keys"), "{error:?}");
 }
 
+/// Multi-level loop actions carry their exact assignment facts through each target level.
+#[test]
+fn strict_array_key_source_validation_tracks_multilevel_loop_jumps() {
+    for source in [
+        "<?php $values = [[1]]; do { while (true) { $values = [1]; continue 2; } } while (false); $values[0][false] = 2;",
+        "<?php while (true) { while (true) { $values = [1]; break 2; } } $values[0][false] = 2;",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    for source in [
+        "<?php $values = [1]; do { while (true) { $values = [[1]]; continue 2; } } while (false); $values[0][false] = 2;",
+        "<?php while (true) { while (true) { $values = [[1]]; break 2; } } $values[0][false] = 2;",
+        "<?php $values = []; $key = 0; while (true) { switch (1) { case 1: $key = 1.5; break 2; } } $values[$key] = 1;",
+        "<?php while (true) { while (true) { try { $values = [1]; break 2; } finally { $values = [[1]]; } } } $values[0][false] = 2;",
+    ] {
+        let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_err();
+        assert!(
+            error.message.contains("strict-array-keys"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {

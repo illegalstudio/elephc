@@ -1610,6 +1610,16 @@ fn validate_stmt(
     if stmt.source_mode == crate::source::SourceMode::Internal {
         return Ok(());
     }
+    if let Some(flow) = validate_control_flow(
+        stmt,
+        locals,
+        properties,
+        profile,
+        current_class,
+    )? {
+        *locals = flow.fallthrough.unwrap_or(flow.audit_exit);
+        return Ok(());
+    }
     if !matches!(&stmt.kind, StmtKind::DoWhile { .. }) {
         validate_expression_writes(stmt, locals, properties, profile, current_class)?;
     }
@@ -1818,329 +1828,6 @@ fn validate_stmt(
                 .then_some(locals.clone())
                 .unwrap_or_else(|| merge_exits(&exits));
         }
-        StmtKind::While { condition, body } => {
-            let first_flow = validate_condition_flow(
-                condition,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let first_body_reachable = first_flow.true_reachable;
-            let first_exit_reachable = first_flow.false_reachable;
-            let first_body_entry = first_flow.when_true;
-            let first_exit = first_flow.when_false;
-            let first_break_flow = collect_loop_break_flow(
-                body,
-                &first_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let first_back_edge = first_break_flow.back_edge();
-            let first_reaches_condition = first_back_edge.is_some();
-            let first_body = first_back_edge.unwrap_or_else(|| first_body_entry.clone());
-            let repeated_flow = validate_condition_flow(
-                condition,
-                &first_body,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_condition_reachable =
-                first_body_reachable && first_reaches_condition;
-            let repeated_body_reachable =
-                repeated_condition_reachable && repeated_flow.true_reachable;
-            let repeated_exit_reachable =
-                repeated_condition_reachable && repeated_flow.false_reachable;
-            let repeated_body_entry = repeated_flow.when_true;
-            let repeated_exit = repeated_flow.when_false;
-            let repeated_break_flow = collect_repeated_loop_flow(
-                body,
-                &first_body_entry,
-                &repeated_body_entry,
-                &first_break_flow,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let mut normal_exits = Vec::new();
-            if first_exit_reachable {
-                normal_exits.push(first_exit);
-            }
-            if repeated_exit_reachable {
-                normal_exits.push(repeated_exit);
-            }
-            let mut break_flows = Vec::new();
-            if first_body_reachable {
-                break_flows.push(&first_break_flow);
-            }
-            if repeated_body_reachable {
-                break_flows.push(&repeated_break_flow);
-            }
-            *locals = merge_loop_exits(
-                body,
-                Some(condition),
-                None,
-                &normal_exits,
-                &break_flows,
-                locals,
-                properties,
-                profile,
-                current_class,
-            );
-        }
-        StmtKind::Foreach {
-            array,
-            key_var,
-            value_var,
-            value_by_ref,
-            body,
-            ..
-        } => {
-            apply_expression_facts(array, locals, properties, profile, current_class);
-            let entry = locals.clone();
-            let body_reachable = source_array_literal_nonempty(array) != Some(false);
-            let mut iteration = entry.clone();
-            if let Some(key) = key_var {
-                iteration.set(key, ValueFact::Unknown);
-            }
-            iteration.set(value_var, ValueFact::Unknown);
-            let break_flow = collect_loop_break_flow(
-                body,
-                &iteration,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let mut normal_exits = Vec::new();
-            if source_array_literal_nonempty(array) != Some(true) {
-                normal_exits.push(entry.clone());
-            }
-            if body_reachable {
-                if let Some(iteration) = break_flow.back_edge() {
-                    normal_exits.push(iteration);
-                }
-            }
-            let break_flows: Vec<_> = body_reachable.then_some(&break_flow).into_iter().collect();
-            *locals = merge_loop_exits(
-                body,
-                None,
-                None,
-                &normal_exits,
-                &break_flows,
-                &entry,
-                properties,
-                profile,
-                current_class,
-            );
-            if *value_by_ref && body_reachable {
-                apply_foreach_reference_fact(
-                    array,
-                    value_var,
-                    body,
-                    &entry,
-                    &break_flow,
-                    locals,
-                    properties,
-                    profile,
-                    current_class,
-                );
-            }
-        }
-        StmtKind::DoWhile { body, condition } => {
-            let entry = locals.clone();
-            let first_break_flow = collect_loop_break_flow(
-                body,
-                &entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let first_back_edge = first_break_flow.back_edge();
-            let first_reaches_condition = first_back_edge.is_some();
-            let first_body = first_back_edge.unwrap_or_else(|| entry.clone());
-            let first_flow = validate_condition_flow(
-                condition,
-                &first_body,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_body_reachable =
-                first_reaches_condition && first_flow.true_reachable;
-            let first_exit_reachable =
-                first_reaches_condition && first_flow.false_reachable;
-            let first_exit = first_flow.when_false;
-            let repeated_body_entry = first_flow.when_true;
-            let repeated_break_flow = collect_repeated_loop_flow(
-                body,
-                &entry,
-                &repeated_body_entry,
-                &first_break_flow,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_back_edge = repeated_break_flow.back_edge();
-            let repeated_reaches_condition = repeated_back_edge.is_some();
-            let repeated_body =
-                repeated_back_edge.unwrap_or_else(|| repeated_body_entry.clone());
-            let repeated_flow = validate_condition_flow(
-                condition,
-                &repeated_body,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_exit_reachable = repeated_body_reachable
-                && repeated_reaches_condition
-                && repeated_flow.false_reachable;
-            let repeated_exit = repeated_flow.when_false;
-            let mut normal_exits = Vec::new();
-            if first_exit_reachable {
-                normal_exits.push(first_exit);
-            }
-            if repeated_exit_reachable {
-                normal_exits.push(repeated_exit);
-            }
-            let mut break_flows = vec![&first_break_flow];
-            if repeated_body_reachable {
-                break_flows.push(&repeated_break_flow);
-            }
-            *locals = merge_loop_exits(
-                body,
-                Some(condition),
-                None,
-                &normal_exits,
-                &break_flows,
-                &entry,
-                properties,
-                profile,
-                current_class,
-            );
-        }
-        StmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(init) = init {
-                validate_stmt(init, locals, properties, profile, current_class)?;
-            }
-            let first_flow = match condition {
-                Some(condition) => validate_condition_flow(
-                    condition,
-                    locals,
-                    properties,
-                    profile,
-                    current_class,
-                )?,
-                None => ConditionFlow {
-                    when_true: locals.clone(),
-                    when_false: locals.clone(),
-                    true_reachable: true,
-                    false_reachable: false,
-                },
-            };
-            let first_body_reachable = first_flow.true_reachable;
-            let first_exit_reachable = first_flow.false_reachable;
-            let first_body_entry = first_flow.when_true;
-            let first_exit = first_flow.when_false;
-            let first_break_flow = collect_loop_break_flow(
-                body,
-                &first_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let first_back_edge = first_break_flow.back_edge();
-            let first_reaches_update = first_back_edge.is_some();
-            let mut first_body =
-                first_back_edge.unwrap_or_else(|| first_body_entry.clone());
-            if let Some(update) = update {
-                validate_stmt(
-                    update,
-                    &mut first_body,
-                    properties,
-                    profile,
-                    current_class,
-                )?;
-            }
-            let repeated_flow = match condition {
-                Some(condition) => validate_condition_flow(
-                    condition,
-                    &first_body,
-                    properties,
-                    profile,
-                    current_class,
-                )?,
-                None => ConditionFlow {
-                    when_true: first_body.clone(),
-                    when_false: first_body,
-                    true_reachable: true,
-                    false_reachable: false,
-                },
-            };
-            let repeated_condition_reachable =
-                first_body_reachable && first_reaches_update;
-            let repeated_body_reachable =
-                repeated_condition_reachable && repeated_flow.true_reachable;
-            let repeated_exit_reachable =
-                repeated_condition_reachable && repeated_flow.false_reachable;
-            let repeated_body_entry = repeated_flow.when_true;
-            let repeated_exit = repeated_flow.when_false;
-            let repeated_break_flow = collect_repeated_loop_flow(
-                body,
-                &first_body_entry,
-                &repeated_body_entry,
-                &first_break_flow,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let mut normal_exits = Vec::new();
-            if first_exit_reachable {
-                normal_exits.push(first_exit);
-            }
-            if repeated_exit_reachable {
-                normal_exits.push(repeated_exit);
-            }
-            let mut break_flows = Vec::new();
-            if first_body_reachable {
-                break_flows.push(&first_break_flow);
-            }
-            if repeated_body_reachable {
-                break_flows.push(&repeated_break_flow);
-            }
-            *locals = merge_loop_exits(
-                body,
-                condition.as_ref(),
-                update.as_deref(),
-                &normal_exits,
-                &break_flows,
-                locals,
-                properties,
-                profile,
-                current_class,
-            );
-        }
-        StmtKind::Switch {
-            subject,
-            cases,
-            default,
-        } => {
-            apply_expression_facts(subject, locals, properties, profile, current_class);
-            *locals = validate_switch_flow(
-                cases,
-                default.as_deref(),
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-        }
         StmtKind::Try {
             try_body,
             catches,
@@ -2331,6 +2018,13 @@ fn apply_foreach_reference_fact(
     exit.set(source_name, ValueFact::Array(source));
 }
 
+/// Reachable exits and multi-level jumps produced by one switch statement.
+struct SwitchFlow {
+    exit: LocalFacts,
+    outer_jumps: Vec<OuterLoopJump>,
+    can_fallthrough: bool,
+}
+
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
 fn validate_switch_flow(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
@@ -2339,7 +2033,7 @@ fn validate_switch_flow(
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) -> Result<LocalFacts, CompileError> {
+) -> Result<SwitchFlow, CompileError> {
     let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
     if let Some(default) = default {
         bodies.insert(
@@ -2349,6 +2043,7 @@ fn validate_switch_flow(
     }
 
     let mut switch_exits = Vec::new();
+    let mut outer_jumps = Vec::new();
     let mut prior_fallthrough = None;
     for body in bodies {
         let mut inputs = vec![entry.clone()];
@@ -2368,6 +2063,7 @@ fn validate_switch_flow(
             )?;
             switch_exits.extend(flow.exits);
             switch_exits.extend(flow.continues);
+            outer_jumps.extend(flow.outer_jumps);
             fallthroughs.push(flow.fallthrough);
         }
         prior_fallthrough = merge_optional_exits(fallthroughs);
@@ -2378,10 +2074,16 @@ fn validate_switch_flow(
     if default.is_none() {
         switch_exits.push(entry.clone());
     }
-    Ok(if switch_exits.is_empty() {
+    let can_fallthrough = !switch_exits.is_empty();
+    let exit = if switch_exits.is_empty() {
         entry.clone()
     } else {
         merge_exits(&switch_exits)
+    };
+    Ok(SwitchFlow {
+        exit,
+        outer_jumps,
+        can_fallthrough,
     })
 }
 
@@ -2391,6 +2093,7 @@ struct LoopBreakFlow {
     fallthrough: Option<LocalFacts>,
     exits: Vec<LocalFacts>,
     continues: Vec<LocalFacts>,
+    outer_jumps: Vec<OuterLoopJump>,
     terminals: Vec<LocalFacts>,
     complete: bool,
     audit_exit: LocalFacts,
@@ -2403,6 +2106,21 @@ impl LoopBreakFlow {
         exits.extend(self.fallthrough.iter().cloned());
         (!exits.is_empty()).then(|| merge_exits(&exits))
     }
+}
+
+/// One multi-level loop action after the innermost construct consumed its level.
+#[derive(Clone, Copy)]
+enum OuterLoopJumpKind {
+    Break,
+    Continue,
+}
+
+/// Facts captured where a multi-level break or continue executes.
+#[derive(Clone)]
+struct OuterLoopJump {
+    kind: OuterLoopJumpKind,
+    levels: usize,
+    facts: LocalFacts,
 }
 
 /// Restores the previous nested-loop refinement depth when one bounded replay finishes.
@@ -2450,6 +2168,428 @@ fn collect_repeated_loop_flow(
     })
 }
 
+/// Flow produced when a nested loop or switch consumes one control level.
+struct NestedControlFlow {
+    fallthrough: Option<LocalFacts>,
+    outer_jumps: Vec<OuterLoopJump>,
+    audit_exit: LocalFacts,
+}
+
+/// Validates a nested breakable statement and preserves its outbound multi-level jumps.
+#[allow(clippy::too_many_arguments)]
+fn validate_control_flow(
+    stmt: &Stmt,
+    entry: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<Option<NestedControlFlow>, CompileError> {
+    if stmt.source_mode == crate::source::SourceMode::Internal {
+        return Ok(None);
+    }
+    if !matches!(
+        &stmt.kind,
+        StmtKind::While { .. }
+            | StmtKind::Foreach { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::Switch { .. }
+    ) {
+        return Ok(None);
+    }
+
+    if !matches!(&stmt.kind, StmtKind::DoWhile { .. }) {
+        validate_expression_writes(stmt, entry, properties, profile, current_class)?;
+    }
+
+    let (outer_jumps, can_fallthrough, audit_exit) = match &stmt.kind {
+        StmtKind::While { condition, body } => {
+            let first_condition = validate_condition_flow(
+                condition,
+                entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_body_entry = first_condition.when_true;
+            let first_flow = collect_loop_break_flow(
+                body,
+                &first_body_entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_back_edge = first_flow.back_edge();
+            let first_reaches_condition = first_back_edge.is_some();
+            let repeated_condition = validate_condition_flow(
+                condition,
+                &first_back_edge.unwrap_or_else(|| first_body_entry.clone()),
+                properties,
+                profile,
+                current_class,
+            )?;
+            let repeated_body_reachable = first_condition.true_reachable
+                && first_reaches_condition
+                && repeated_condition.true_reachable;
+            let repeated_exit_reachable = first_condition.true_reachable
+                && first_reaches_condition
+                && repeated_condition.false_reachable;
+            let repeated_flow = collect_repeated_loop_flow(
+                body,
+                &first_body_entry,
+                &repeated_condition.when_true,
+                &first_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut outer_jumps = Vec::new();
+            if first_condition.true_reachable {
+                outer_jumps.extend(first_flow.outer_jumps.clone());
+            }
+            if repeated_body_reachable {
+                outer_jumps.extend(repeated_flow.outer_jumps.clone());
+            }
+            let mut normal_exits = Vec::new();
+            if first_condition.false_reachable {
+                normal_exits.push(first_condition.when_false);
+            }
+            if repeated_exit_reachable {
+                normal_exits.push(repeated_condition.when_false);
+            }
+            let mut break_flows = Vec::new();
+            if first_condition.true_reachable {
+                break_flows.push(&first_flow);
+            }
+            if repeated_body_reachable {
+                break_flows.push(&repeated_flow);
+            }
+            let can_fallthrough = !normal_exits.is_empty()
+                || break_flows.iter().any(|flow| !flow.exits.is_empty());
+            let audit_exit = merge_loop_exits(
+                body,
+                Some(condition),
+                None,
+                &normal_exits,
+                &break_flows,
+                entry,
+                properties,
+                profile,
+                current_class,
+            );
+            (outer_jumps, can_fallthrough, audit_exit)
+        }
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            value_by_ref,
+            body,
+            ..
+        } => {
+            let mut loop_entry = entry.clone();
+            apply_expression_facts(
+                array,
+                &mut loop_entry,
+                properties,
+                profile,
+                current_class,
+            );
+            let body_reachable = source_array_literal_nonempty(array) != Some(false);
+            let mut iteration = loop_entry.clone();
+            if let Some(key) = key_var {
+                iteration.set(key, ValueFact::Unknown);
+            }
+            iteration.set(value_var, ValueFact::Unknown);
+            let flow = collect_loop_break_flow(
+                body,
+                &iteration,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut normal_exits = Vec::new();
+            if source_array_literal_nonempty(array) != Some(true) {
+                normal_exits.push(loop_entry.clone());
+            }
+            if body_reachable {
+                if let Some(iteration) = flow.back_edge() {
+                    normal_exits.push(iteration);
+                }
+            }
+            let break_flows: Vec<_> = body_reachable.then_some(&flow).into_iter().collect();
+            let can_fallthrough = !normal_exits.is_empty() || !flow.exits.is_empty();
+            let mut audit_exit = merge_loop_exits(
+                body,
+                None,
+                None,
+                &normal_exits,
+                &break_flows,
+                &loop_entry,
+                properties,
+                profile,
+                current_class,
+            );
+            if *value_by_ref && body_reachable {
+                apply_foreach_reference_fact(
+                    array,
+                    value_var,
+                    body,
+                    &loop_entry,
+                    &flow,
+                    &mut audit_exit,
+                    properties,
+                    profile,
+                    current_class,
+                );
+            }
+            let outer_jumps = body_reachable
+                .then(|| flow.outer_jumps.clone())
+                .unwrap_or_default();
+            (outer_jumps, can_fallthrough, audit_exit)
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let first_flow = collect_loop_break_flow(
+                body,
+                entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_back_edge = first_flow.back_edge();
+            let first_reaches_condition = first_back_edge.is_some();
+            let first_condition = validate_condition_flow(
+                condition,
+                &first_back_edge.unwrap_or_else(|| entry.clone()),
+                properties,
+                profile,
+                current_class,
+            )?;
+            let repeated_body_reachable =
+                first_reaches_condition && first_condition.true_reachable;
+            let repeated_flow = collect_repeated_loop_flow(
+                body,
+                entry,
+                &first_condition.when_true,
+                &first_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut outer_jumps = first_flow.outer_jumps.clone();
+            if repeated_body_reachable {
+                outer_jumps.extend(repeated_flow.outer_jumps.clone());
+            }
+            let repeated_back_edge = repeated_flow.back_edge();
+            let repeated_reaches_condition = repeated_back_edge.is_some();
+            let repeated_condition = validate_condition_flow(
+                condition,
+                &repeated_back_edge
+                    .unwrap_or_else(|| first_condition.when_true.clone()),
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut normal_exits = Vec::new();
+            if first_reaches_condition && first_condition.false_reachable {
+                normal_exits.push(first_condition.when_false);
+            }
+            if repeated_body_reachable
+                && repeated_reaches_condition
+                && repeated_condition.false_reachable
+            {
+                normal_exits.push(repeated_condition.when_false);
+            }
+            let mut break_flows = vec![&first_flow];
+            if repeated_body_reachable {
+                break_flows.push(&repeated_flow);
+            }
+            let can_fallthrough = !normal_exits.is_empty()
+                || break_flows.iter().any(|flow| !flow.exits.is_empty());
+            let audit_exit = merge_loop_exits(
+                body,
+                Some(condition),
+                None,
+                &normal_exits,
+                &break_flows,
+                entry,
+                properties,
+                profile,
+                current_class,
+            );
+            (outer_jumps, can_fallthrough, audit_exit)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            let mut initialized = entry.clone();
+            if let Some(init) = init {
+                validate_stmt(
+                    init,
+                    &mut initialized,
+                    properties,
+                    profile,
+                    current_class,
+                )?;
+            }
+            let first_condition = match condition {
+                Some(condition) => validate_condition_flow(
+                    condition,
+                    &initialized,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => ConditionFlow {
+                    when_true: initialized.clone(),
+                    when_false: initialized.clone(),
+                    true_reachable: true,
+                    false_reachable: false,
+                },
+            };
+            let first_body_entry = first_condition.when_true;
+            let first_flow = collect_loop_break_flow(
+                body,
+                &first_body_entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_back_edge = first_flow.back_edge();
+            let first_reaches_update = first_back_edge.is_some();
+            let mut repeated_entry =
+                first_back_edge.unwrap_or_else(|| first_body_entry.clone());
+            if let Some(update) = update {
+                validate_stmt(
+                    update,
+                    &mut repeated_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )?;
+            }
+            let repeated_condition = match condition {
+                Some(condition) => validate_condition_flow(
+                    condition,
+                    &repeated_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => ConditionFlow {
+                    when_true: repeated_entry.clone(),
+                    when_false: repeated_entry,
+                    true_reachable: true,
+                    false_reachable: false,
+                },
+            };
+            let repeated_body_reachable = first_condition.true_reachable
+                && first_reaches_update
+                && repeated_condition.true_reachable;
+            let repeated_exit_reachable = first_condition.true_reachable
+                && first_reaches_update
+                && repeated_condition.false_reachable;
+            let repeated_flow = collect_repeated_loop_flow(
+                body,
+                &first_body_entry,
+                &repeated_condition.when_true,
+                &first_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut outer_jumps = Vec::new();
+            if first_condition.true_reachable {
+                outer_jumps.extend(first_flow.outer_jumps.clone());
+            }
+            if repeated_body_reachable {
+                outer_jumps.extend(repeated_flow.outer_jumps.clone());
+            }
+            let mut normal_exits = Vec::new();
+            if first_condition.false_reachable {
+                normal_exits.push(first_condition.when_false);
+            }
+            if repeated_exit_reachable {
+                normal_exits.push(repeated_condition.when_false);
+            }
+            let mut break_flows = Vec::new();
+            if first_condition.true_reachable {
+                break_flows.push(&first_flow);
+            }
+            if repeated_body_reachable {
+                break_flows.push(&repeated_flow);
+            }
+            let can_fallthrough = !normal_exits.is_empty()
+                || break_flows.iter().any(|flow| !flow.exits.is_empty());
+            let audit_exit = merge_loop_exits(
+                body,
+                condition.as_ref(),
+                update.as_deref(),
+                &normal_exits,
+                &break_flows,
+                &initialized,
+                properties,
+                profile,
+                current_class,
+            );
+            (outer_jumps, can_fallthrough, audit_exit)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            let mut switch_entry = entry.clone();
+            apply_expression_facts(
+                subject,
+                &mut switch_entry,
+                properties,
+                profile,
+                current_class,
+            );
+            let flow = validate_switch_flow(
+                cases,
+                default.as_deref(),
+                &switch_entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            (flow.outer_jumps, flow.can_fallthrough, flow.exit)
+        }
+        _ => unreachable!("nested control flow is filtered above"),
+    };
+
+    Ok(Some(NestedControlFlow {
+        fallthrough: can_fallthrough.then_some(audit_exit.clone()),
+        outer_jumps,
+        audit_exit,
+    }))
+}
+
+/// Consumes jumps that target the current loop and propagates the remaining levels.
+fn route_nested_outer_jumps(
+    jumps: Vec<OuterLoopJump>,
+    exits: &mut Vec<LocalFacts>,
+    continues: &mut Vec<LocalFacts>,
+    outer_jumps: &mut Vec<OuterLoopJump>,
+) {
+    for mut jump in jumps {
+        if jump.levels == 1 {
+            match jump.kind {
+                OuterLoopJumpKind::Break => exits.push(jump.facts),
+                OuterLoopJumpKind::Continue => continues.push(jump.facts),
+            }
+        } else {
+            jump.levels -= 1;
+            outer_jumps.push(jump);
+        }
+    }
+}
+
 /// Replays reachable body paths to snapshot facts exactly where `break 1` executes.
 fn collect_loop_break_flow(
     body: &[Stmt],
@@ -2461,6 +2601,7 @@ fn collect_loop_break_flow(
     let mut fallthrough = Some(entry.clone());
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
     let mut complete = true;
     let mut audit_exit = entry.clone();
@@ -2480,16 +2621,22 @@ fn collect_loop_break_flow(
                 if *level == 1 {
                     exits.push(locals.clone());
                 } else {
-                    terminals.push(locals.clone());
-                    complete = false;
+                    outer_jumps.push(OuterLoopJump {
+                        kind: OuterLoopJumpKind::Break,
+                        levels: level - 1,
+                        facts: locals.clone(),
+                    });
                 }
             }
             StmtKind::Continue(level) => {
                 if *level == 1 {
                     continues.push(locals.clone());
                 } else {
-                    terminals.push(locals.clone());
-                    complete = false;
+                    outer_jumps.push(OuterLoopJump {
+                        kind: OuterLoopJumpKind::Continue,
+                        levels: level - 1,
+                        facts: locals.clone(),
+                    });
                 }
             }
             StmtKind::Return(_) | StmtKind::Throw(_) => {
@@ -2515,6 +2662,7 @@ fn collect_loop_break_flow(
                 audit_exit = branch.audit_exit;
                 exits.extend(branch.exits);
                 continues.extend(branch.continues);
+                outer_jumps.extend(branch.outer_jumps);
                 terminals.extend(branch.terminals);
                 complete &= branch.complete;
                 fallthrough = branch.fallthrough;
@@ -2531,6 +2679,7 @@ fn collect_loop_break_flow(
                 audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
+                outer_jumps.extend(nested.outer_jumps);
                 terminals.extend(nested.terminals);
                 complete &= nested.complete;
                 fallthrough = nested.fallthrough;
@@ -2547,6 +2696,7 @@ fn collect_loop_break_flow(
                 audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
+                outer_jumps.extend(nested.outer_jumps);
                 terminals.extend(nested.terminals);
                 complete &= nested.complete;
                 let mut paths = vec![locals];
@@ -2602,6 +2752,7 @@ fn collect_loop_break_flow(
                 audit_exit = flow.audit_exit;
                 exits.extend(flow.exits);
                 continues.extend(flow.continues);
+                outer_jumps.extend(flow.outer_jumps);
                 terminals.extend(flow.terminals);
                 complete &= flow.complete;
                 fallthrough = flow.fallthrough;
@@ -2632,6 +2783,7 @@ fn collect_loop_break_flow(
                         fallthrough: Some(locals.clone()),
                         exits: Vec::new(),
                         continues: Vec::new(),
+                        outer_jumps: Vec::new(),
                         terminals: Vec::new(),
                         complete: true,
                         audit_exit: locals,
@@ -2645,6 +2797,8 @@ fn collect_loop_break_flow(
                 exits.extend(else_flow.exits);
                 continues.extend(then_flow.continues);
                 continues.extend(else_flow.continues);
+                outer_jumps.extend(then_flow.outer_jumps);
+                outer_jumps.extend(else_flow.outer_jumps);
                 terminals.extend(then_flow.terminals);
                 terminals.extend(else_flow.terminals);
                 complete &= then_flow.complete && else_flow.complete;
@@ -2655,12 +2809,22 @@ fn collect_loop_break_flow(
                 continue;
             }
             _ => {
-                if crate::termination::block_may_break_current_loop(std::slice::from_ref(stmt)) {
-                    exits.push(locals.clone());
-                    complete &= !locals
-                        .values
-                        .keys()
-                        .any(|name| crate::ir_lower::stmt_writes_local(stmt, name));
+                if let Some(nested) = validate_control_flow(
+                    stmt,
+                    &locals,
+                    properties,
+                    profile,
+                    current_class,
+                )? {
+                    audit_exit = nested.audit_exit;
+                    route_nested_outer_jumps(
+                        nested.outer_jumps,
+                        &mut exits,
+                        &mut continues,
+                        &mut outer_jumps,
+                    );
+                    fallthrough = nested.fallthrough;
+                    continue;
                 }
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
                 audit_exit = locals.clone();
@@ -2675,6 +2839,7 @@ fn collect_loop_break_flow(
         fallthrough,
         exits,
         continues,
+        outer_jumps,
         terminals,
         complete,
         audit_exit,
@@ -2698,16 +2863,19 @@ fn merge_parallel_loop_flows(flows: Vec<LoopBreakFlow>) -> LoopBreakFlow {
     let complete = flows.iter().all(|flow| flow.complete);
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
     for flow in flows {
         exits.extend(flow.exits);
         continues.extend(flow.continues);
+        outer_jumps.extend(flow.outer_jumps);
         terminals.extend(flow.terminals);
     }
     LoopBreakFlow {
         fallthrough,
         exits,
         continues,
+        outer_jumps,
         terminals,
         complete,
         audit_exit,
@@ -2720,6 +2888,7 @@ enum LoopResume {
     Fallthrough,
     Break,
     Continue,
+    Outer(OuterLoopJumpKind, usize),
     Terminal,
 }
 
@@ -2735,6 +2904,7 @@ fn apply_loop_finally(
     audit_inputs.extend(flow.fallthrough.iter().cloned());
     audit_inputs.extend(flow.exits.iter().cloned());
     audit_inputs.extend(flow.continues.iter().cloned());
+    audit_inputs.extend(flow.outer_jumps.iter().map(|jump| jump.facts.clone()));
     audit_inputs.extend(flow.terminals.iter().cloned());
     let audit_entry = if audit_inputs.is_empty() {
         flow.audit_exit.clone()
@@ -2758,6 +2928,9 @@ fn apply_loop_finally(
     if !flow.continues.is_empty() {
         paths.push((LoopResume::Continue, merge_exits(&flow.continues)));
     }
+    for jump in flow.outer_jumps {
+        paths.push((LoopResume::Outer(jump.kind, jump.levels), jump.facts));
+    }
     if !flow.terminals.is_empty() {
         paths.push((LoopResume::Terminal, merge_exits(&flow.terminals)));
     }
@@ -2765,6 +2938,7 @@ fn apply_loop_finally(
     let mut fallthroughs = Vec::new();
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
     let mut complete = flow.complete;
     for (resume, entry) in paths {
@@ -2777,6 +2951,7 @@ fn apply_loop_finally(
         )?;
         exits.extend(finally_flow.exits);
         continues.extend(finally_flow.continues);
+        outer_jumps.extend(finally_flow.outer_jumps);
         terminals.extend(finally_flow.terminals);
         complete &= finally_flow.complete;
         let Some(fallthrough) = finally_flow.fallthrough else {
@@ -2786,6 +2961,11 @@ fn apply_loop_finally(
             LoopResume::Fallthrough => fallthroughs.push(Some(fallthrough)),
             LoopResume::Break => exits.push(fallthrough),
             LoopResume::Continue => continues.push(fallthrough),
+            LoopResume::Outer(kind, levels) => outer_jumps.push(OuterLoopJump {
+                kind,
+                levels,
+                facts: fallthrough,
+            }),
             LoopResume::Terminal => terminals.push(fallthrough),
         }
     }
@@ -2793,6 +2973,7 @@ fn apply_loop_finally(
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
         continues,
+        outer_jumps,
         terminals,
         complete,
         audit_exit,
@@ -2819,6 +3000,7 @@ fn collect_loop_break_if(
     )?;
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
     let mut fallthroughs = Vec::new();
     let mut audit_exits = Vec::new();
@@ -2834,6 +3016,7 @@ fn collect_loop_break_if(
         audit_exits.push(then_flow.audit_exit.clone());
         exits.extend(then_flow.exits);
         continues.extend(then_flow.continues);
+        outer_jumps.extend(then_flow.outer_jumps);
         terminals.extend(then_flow.terminals);
         complete &= then_flow.complete;
         fallthroughs.push(then_flow.fallthrough);
@@ -2859,6 +3042,7 @@ fn collect_loop_break_if(
             audit_exits.push(body_flow.audit_exit.clone());
             exits.extend(body_flow.exits);
             continues.extend(body_flow.continues);
+            outer_jumps.extend(body_flow.outer_jumps);
             terminals.extend(body_flow.terminals);
             complete &= body_flow.complete;
             fallthroughs.push(body_flow.fallthrough);
@@ -2878,6 +3062,7 @@ fn collect_loop_break_if(
             audit_exits.push(else_flow.audit_exit.clone());
             exits.extend(else_flow.exits);
             continues.extend(else_flow.continues);
+            outer_jumps.extend(else_flow.outer_jumps);
             terminals.extend(else_flow.terminals);
             complete &= else_flow.complete;
             fallthroughs.push(else_flow.fallthrough);
@@ -2895,6 +3080,7 @@ fn collect_loop_break_if(
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
         continues,
+        outer_jumps,
         terminals,
         complete,
         audit_exit,
