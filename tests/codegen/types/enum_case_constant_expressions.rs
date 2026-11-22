@@ -90,3 +90,24 @@ echo "\n";
     );
     assert_eq!(out, "A=yes;B=11x-2;\n");
 }
+
+/// An int-and-string concatenation inside an array literal (as a list element, an assoc value
+/// or an assoc key) is joined before the enclosing array read folds, so the case gets the
+/// element php reads.
+#[test]
+fn test_enum_case_values_fold_int_concatenation_inside_constant_array_read() {
+    let out = compile_and_run(
+        r#"<?php
+class C { const ONE = 1; }
+enum E: string
+{
+    case A = ['n' . C::ONE][0];
+    case B = ['k' => 'x' . C::ONE]['k'];
+    case C = ['k' . C::ONE => 'y']['k1'];
+}
+foreach (E::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "A=n1;B=x1;C=y;\n");
+}
