@@ -32,13 +32,14 @@ fn test_list_local_binds_to_declared_hash_parameter() {
     ));
 }
 
-/// A declared `array<T>` local keeps its list storage, so the reference is refused.
+/// A declared `array<T>` local is a frame slot like an inferred one: the call converts it in
+/// place, as php just runs the program
+/// (`tests/codegen/list_hash_param_binding.rs::test_declared_list_local_binds_to_hash_reference_parameter`).
 #[test]
-fn test_error_declared_list_local_cannot_bind_hash_reference() {
-    expect_error(
-        &hashes("function run(): void { array<int> $ids = [4, 5]; put($ids); } run();"),
-        BY_REFERENCE,
-    );
+fn test_declared_list_local_binds_to_hash_reference_parameter() {
+    expect_no_error(&hashes(
+        "function run(): void { array<int> $ids = [4, 5]; put($ids); echo count($ids); } run();",
+    ));
 }
 
 /// A property, an element, an aliased local and a global are not promotable places.
@@ -90,19 +91,20 @@ fn test_list_local_binds_to_reference_parameters_inside_loops() {
     );
 }
 
-/// A written `array<mixed> &` parameter is a contract: a declared `array<int>` variable and a
-/// typed list property keep their element storage, so the reference is refused.
+/// A written `array<mixed> &` parameter is a contract: an inferred, a declared `array<mixed>` and
+/// a declared `array<int>` local are all converted in place.
 #[test]
-fn test_error_typed_list_storage_cannot_bind_array_mixed_reference() {
+fn test_typed_list_storage_binds_to_array_mixed_reference() {
     let add = "<?php function add(array<mixed> &$a): void { $a[] = 'x'; } ";
     expect_no_error(&format!("{add}function run(): void {{ $ids = [4, 5]; add($ids); echo count($ids); }} run();"));
     expect_no_error(&format!(
         "{add}function run(): void {{ array<mixed> $any = [4, 'b']; add($any); echo count($any); }} run();"
     ));
-    expect_error(
-        &format!("{add}function run(): void {{ array<int> $ids = [4, 5]; add($ids); }} run();"),
-        BY_REFERENCE,
-    );
+    // A declared `array<int>` local is converted in place too; php just runs this program
+    // (`tests/codegen/list_hash_param_binding.rs::test_declared_list_local_binds_to_array_mixed_reference_parameter`).
+    expect_no_error(&format!(
+        "{add}function run(): void {{ array<int> $ids = [4, 5]; add($ids); echo count($ids); }} run();"
+    ));
 }
 
 /// Elements with no conversion to the parameter's values are refused in both positions.

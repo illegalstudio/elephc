@@ -435,8 +435,19 @@ impl Checker {
         // resolves to the same `array<mixed>` before a call site sharpens it, and is bound
         // through the boxed reference cell below: `mysqli_poll(..., array &$reject, ...)`
         // forwards its own parameter to `mysqli::poll()`'s, which no caller could convert.
+        //
+        // An earlier `mixed &` slot of this call that boxes the same local conflicts with a hash
+        // contract even when the local no longer reads as a list: the pre-call storage
+        // preparation (`prepare_by_ref_variable_storage`) has already re-typed it to the
+        // parameter's layout, and one variable cannot be a boxed cell and a raw hash at once.
+        let boxed_by_earlier_slot = layout_contract
+            && matches!(expected_ty.codegen_repr(), PhpType::AssocArray { .. })
+            && self
+                .pending_boxed_reference_output(by_ref_storage_place(arg))
+                .is_some_and(|pending| pending.codegen_repr() == PhpType::Mixed);
         if layout_contract
-            && crate::types::binds_packed_reference_argument(expected_ty, &storage_ty)
+            && (boxed_by_earlier_slot
+                || crate::types::binds_packed_reference_argument(expected_ty, &storage_ty))
         {
             // `can_widen_local` was decided before this argument was recorded as an alias root,
             // so it answers for the FIRST time a call binds the local. A call can be checked
@@ -449,11 +460,12 @@ impl Checker {
             let pending = self.pending_boxed_reference_output(by_ref_storage_place(arg));
             let approved = match pending {
                 Some(pending) => Some(pending) == target.as_ref(),
-                None => can_widen_local,
+                None => can_widen_local || self.by_ref_list_local_can_convert(arg),
             };
             let promotable = matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
                 && target.is_some()
-                && approved;
+                && approved
+                && !boxed_by_earlier_slot;
             if promotable {
                 return Ok(());
             }
@@ -465,6 +477,30 @@ impl Checker {
                      there. Declare the variable with the parameter's type (`{} $v = [...]`), \
                      or declare the parameter as the list `{}` or as plain `array`",
                     context, expected_ty, storage_ty, expected_ty, storage_ty
+                ),
+            ));
+        }
+        // A boxed caller (a global, a `mixed` local) bound to a written container layout other
+        // than `array<mixed>`: the by-reference adapter reads the cell through a concrete
+        // temporary, and no run-time conversion rebuilds boxed elements as raw hash values or raw
+        // list slots (`coerce_gradual_value_to_boundary` narrows only `mixed`-valued containers).
+        // Binding the unconverted box made the callee read the cell as the container and crash.
+        if layout_contract
+            && matches!(
+                expected_ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+            && matches!(storage_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && !crate::ir_lower::gradual_coercions::boundary_coercion_narrows_gradual(expected_ty)
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {}: a by-reference parameter uses the caller's own \
+                     storage, and this boxed value cannot be converted to the parameter's \
+                     layout there. Declare the parameter as plain `array` or `array<mixed>`, \
+                     or pass a local variable that holds the array",
+                    context, expected_ty, storage_ty
                 ),
             ));
         }
@@ -581,6 +617,29 @@ impl Checker {
         let Some(current) = env.get(name) else { return false; };
         self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(current)
             .codegen_repr() == PhpType::TaggedScalar
+    }
+
+    /// Returns whether `arg` names an ordinary frame local whose packed list lowering can convert
+    /// in place to the layout of a declared by-reference container parameter.
+    ///
+    /// That is [`Self::by_ref_argument_can_widen_local_to_mixed`] without the declared-type
+    /// exclusion: a declared `array<int> $ids` is a local slot like any other, and the
+    /// conversion re-types it exactly as it re-types an inferred list. Storage other code reads
+    /// as a list (a global, a static, a by-reference parameter, an alias) stays excluded.
+    pub(crate) fn by_ref_list_local_can_convert(&self, arg: &Expr) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.

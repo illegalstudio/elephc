@@ -1819,6 +1819,38 @@ impl Checker {
                         } else {
                             Some(expected.clone())
                         }
+                    } else if !internal_callable
+                        && declared
+                        && crate::types::is_written_reference_array_param(
+                            &signature.ref_params,
+                            &signature.param_type_exprs,
+                            binding_index,
+                        )
+                        && current.as_ref().is_some_and(|current| {
+                            (crate::types::binds_packed_reference_argument(expected, current)
+                                && !(crate::types::packed_reference_argument_storage(expected, current)
+                                    .is_some()
+                                    && self.by_ref_list_local_can_convert(argument)))
+                                || (matches!(
+                                    current.codegen_repr(),
+                                    PhpType::Mixed | PhpType::Union(_)
+                                ) && matches!(
+                                    expected.codegen_repr(),
+                                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                                ) && !crate::ir_lower::gradual_coercions::boundary_coercion_narrows_gradual(
+                                    expected,
+                                ))
+                        })
+                    {
+                        // A list another reader holds as a list (a global, an alias, a static),
+                        // elements the parameter's values cannot hold, or a boxed caller (a
+                        // global is `mixed` inside a function) cannot take the parameter's
+                        // layout. Re-typing the local to it here, before the call's own
+                        // validation, hid the storage from `require_boxed_by_ref_storage`
+                        // (rule 4), whose refusal then never fired and the callee wrote a hash
+                        // through list or boxed storage. Leaving the binding alone lets that
+                        // rule see what the local really holds.
+                        None
                     } else if declared
                         && matches!(
                             expected,
