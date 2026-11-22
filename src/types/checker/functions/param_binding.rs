@@ -21,7 +21,8 @@
 //!   parameter boundary.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::names::Name;
+use crate::parser::ast::{Expr, TypeExpr};
 use crate::span::Span;
 use crate::types::param_binding::{
     classify_param_binding, strict_param_binding_rejection, ParamBinding,
@@ -331,7 +332,7 @@ impl Checker {
                 continue;
             }
             let array_string_or_null = if setlocale_function {
-                name.eq_ignore_ascii_case("locales") || name.eq_ignore_ascii_case("rest")
+                name.eq_ignore_ascii_case("locales")
             } else {
                 name.eq_ignore_ascii_case("config")
             };
@@ -347,7 +348,27 @@ impl Checker {
                 changed = true;
             }
         }
+        // Call validation reads a declared variadic's element type from its source type
+        // expression, so `...$rest` is narrowed there rather than in its collector storage type.
+        if setlocale_function {
+            if let Some(slot) = crate::types::signatures::variadic_param_index(&adjusted)
+                .and_then(|index| adjusted.param_type_exprs.get_mut(index))
+                .filter(|slot| slot.as_ref().is_some_and(Self::is_mixed_type_expr))
+            {
+                *slot = Some(TypeExpr::Union(vec![
+                    TypeExpr::Named(Name::unqualified("array")),
+                    TypeExpr::Str,
+                    TypeExpr::Named(Name::unqualified("null")),
+                ]));
+                changed = true;
+            }
+        }
         changed.then_some(adjusted)
+    }
+
+    /// Returns whether `type_expr` is the bare `mixed` a prelude adapter declares.
+    fn is_mixed_type_expr(type_expr: &TypeExpr) -> bool {
+        matches!(type_expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed"))
     }
 
     /// Returns whether `callee_desc` names a method declared by the injected `tidy` class.
