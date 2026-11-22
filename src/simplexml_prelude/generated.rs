@@ -2154,7 +2154,8 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_assign("packed", e_call("elephc_xml_sx_namespace", vec![e_var("handle"), e_cast(CastType::Int, e_var("declared")), e_cast(CastType::Int, e_var("recursive")), e_cast(CastType::Int, e_var("root")), e_neg(e_int(2)), e_int(0)])),
                     s_assign("parts", e_call("explode", vec![e_str("\0"), e_cast(CastType::String, e_call("hex2bin", vec![e_var("packed")]))])),
                     s_assign("length", e_call("count", vec![e_var("parts")])),
-                    s_assign("namespaces", e_array(vec![])),
+                    s_assign("namespaces", e_array_assoc(vec![(e_str("__elephc_namespace_seed"), e_str(""))])),
+                    s_expr(e_call("unset", vec![e_index(e_var("namespaces"), e_str("__elephc_namespace_seed"))])),
                     s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_binop(e_var("i"), BinOp::Add, e_int(1)), BinOp::Lt, e_var("length"))), Some(s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(2)))), vec![
                         s_array_assign("namespaces", e_index(e_var("parts"), e_var("i")), e_index(e_var("parts"), e_binop(e_var("i"), BinOp::Add, e_int(1)))),
                     ]),
