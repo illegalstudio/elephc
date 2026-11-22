@@ -546,7 +546,7 @@ impl Checker {
     /// builtin contract files it as `PreludeProvided`; a method, when its class is internal.
     /// `imagepng(123)` then reads `imagepng(): Argument #1 ($image) must be of type GdImage, int
     /// given`, as in php.
-    fn callee_is_php_internal(&self, callee: &str) -> bool {
+    pub(in crate::types::checker) fn callee_is_php_internal(&self, callee: &str) -> bool {
         let callee = callee.trim_start_matches('\\');
         if let Some((class_name, _)) = callee.split_once("::") {
             return self.classes.get(class_name).is_some_and(|info| info.is_internal);

@@ -5904,3 +5904,21 @@ echo "\n";');
          FrameworkBundle=[] TwigBundle=[FrameworkBundle] \n"
     );
 }
+
+/// A built-in constant in an attribute argument is folded to its value: `class_attribute_args()`
+/// echoes the same `[1]` that `php -n` reports through
+/// `ReflectionClass::getAttributes()[0]->getArguments()` for `Attribute::TARGET_CLASS`.
+#[test]
+fn test_class_attribute_args_folds_a_builtin_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_CLASS)]
+class MyAttr {}
+$args = class_attribute_args('MyAttr', 'Attribute');
+echo count($args), ':', $args[0], ':';
+$reflected = (new ReflectionClass('MyAttr'))->getAttributes()[0]->getArguments();
+echo count($reflected), ':', $reflected[0];
+"#,
+    );
+    assert_eq!(out, "1:1:1:1");
+}

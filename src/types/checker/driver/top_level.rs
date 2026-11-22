@@ -46,6 +46,15 @@ impl Checker {
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
         self.begin_promotable_walk(crate::types::TOP_LEVEL_SCOPE);
+        // This walk re-decides every generic call at top level. The first pass runs before the
+        // method bodies settle, so an argument typed `int` there (`identity((new C(7))->get())`
+        // over an untyped promoted property) can read `mixed` once they have: the later answer
+        // replaces the earlier one. Keeping the stale entries made the SAME call site resolve
+        // twice and trip the "two different generic instantiations" refusal, which is reserved
+        // for two calls the span cannot tell apart.
+        self.generic_call_sites.retain(|(scope, _), _| {
+            !crate::types::loop_storage_scope_is_within(scope, crate::types::TOP_LEVEL_SCOPE)
+        });
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;

@@ -74,3 +74,18 @@ fn test_simplexml_shared_boxed_operator_graphs_bundle() {
 fn test_simplexml_shared_boxed_operator_graphs_unoptimized_bundle() {
     without_ir_opt(assert_shared_boxed_operator_graphs);
 }
+
+/// `++` on a SimpleXMLElement held in a static local compiles and replaces the value with the
+/// number php computes (`$xml++` on `<r>2</r>` is `int(3)`): the checker used to refuse it as
+/// "unboxable storage" although `php -n` runs it.
+#[test]
+fn test_simplexml_counter_on_a_static_local_follows_php() {
+    if skip_without_xml_native("test_simplexml_counter_on_a_static_local_follows_php") { return; }
+    let output = compile_and_run(
+        r#"<?php
+function remember(): void { static $xml; $xml = new SimpleXMLElement('<r>2</r>'); ++$xml; var_dump($xml); }
+remember();
+"#,
+    );
+    assert_eq!(output, "int(3)\n");
+}

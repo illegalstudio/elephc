@@ -1668,3 +1668,32 @@ echo get_class($t), ":", $t->name, ":", $t instanceof ObjectType ? "y" : "n";
     assert!(line.contains(" doc_class_instances=0 "), "{line}");
     assert!(line.contains(" erasure_reruns=0 "), "{line}");
 }
+
+/// A call to a PHPDoc function template whose argument is typed `int` before the method bodies
+/// settle and `mixed` after (`(new C(7))->get()` over an untyped promoted property) compiles: the
+/// two top-level passes re-decide the call site instead of reporting "two different generic
+/// instantiations" for it. The output is what `php -n` prints.
+#[test]
+fn test_doc_function_template_call_over_a_widening_property_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+/**
+ * @template U
+ * @param U $value
+ * @return U
+ */
+function identity($value) { return $value; }
+/** @template T */
+class C {
+    /** @param T $value */
+    public function __construct(private $value) {}
+    /** @return T */
+    public function get() { return $this->value; }
+}
+$number = identity((new C(7))->get());
+$text = identity((new C("seven"))->get());
+var_dump($number, $text);
+"#,
+    );
+    assert_eq!(out, "int(7)\nstring(5) \"seven\"\n");
+}

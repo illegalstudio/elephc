@@ -751,6 +751,14 @@ impl Checker {
     /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
     /// members; a concrete match is preserved, including its array element or object class type.
     fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
+        // `is_array()` on a value no array can be (a scalar, an object): the true edge is
+        // unreachable, and the view stays the old unconstrained `Mixed` instead of an
+        // `array<mixed>` the binding could never hold -- a store inside that region would
+        // otherwise read as a retype of an array (`$a = 1; if (is_array($a)) { $a = "x"; }`
+        // is `--strict-locals` clean, and the mixed-storage scan models the same target).
+        if matches!(target, GuardTarget::AnyArray) && Self::type_can_never_be_an_array(current) {
+            return PhpType::Mixed;
+        }
         if matches!(target, GuardTarget::Numeric) {
             return match current {
                 PhpType::Int | PhpType::Float => current.clone(),
@@ -816,6 +824,23 @@ impl Checker {
                 current.clone()
             }
             _ => target.fallback_type(),
+        }
+    }
+
+    /// Whether no value of `ty` can be an array: a scalar, `null` or an object, or a union of them.
+    fn type_can_never_be_an_array(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Void
+            | PhpType::Object(_) => true,
+            PhpType::Union(members) => {
+                !members.is_empty() && members.iter().all(Self::type_can_never_be_an_array)
+            }
+            _ => false,
         }
     }
 

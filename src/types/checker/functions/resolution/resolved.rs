@@ -84,8 +84,25 @@ impl Checker {
                 ),
             ));
         }
+        // A php-internal function the prelude supplies refuses a surplus argument
+        // (`xml_parse($p, $d, true, 4)` is an `ArgumentCountError`) even when the backtrace pass
+        // gave its declaration the hidden surplus collector: that collector is an ABI detail of
+        // frame capture, not a variadic php declares, so the call is counted against the
+        // PHP-visible signature.
+        let internal_surplus_refused =
+            crate::func_args::sig_collects_surplus_args(effective_sig) && self.callee_is_php_internal(name);
+        let visible_sig;
+        let (required, effective_sig_params_len) = if internal_surplus_refused {
+            visible_sig = crate::func_args::php_visible_signature(effective_sig);
+            (
+                visible_sig.defaults.iter().filter(|d| d.is_none()).count(),
+                visible_sig.params.len(),
+            )
+        } else {
+            (required, effective_sig.params.len())
+        };
         if !has_spread {
-            if effective_sig.variadic.is_some() {
+            if effective_sig.variadic.is_some() && !internal_surplus_refused {
                 if effective_arg_count < required {
                     return Err(CompileError::new(
                         span,
@@ -96,14 +113,14 @@ impl Checker {
                     ));
                 }
             } else if effective_arg_count < required
-                || effective_arg_count > effective_sig.params.len()
+                || effective_arg_count > effective_sig_params_len
             {
                 return Err(CompileError::new(
                     span,
                     &format!(
                         "Function '{}' expects {} arguments, got {}",
                         name,
-                        Self::format_fixed_or_range_arity(required, effective_sig.params.len()),
+                        Self::format_fixed_or_range_arity(required, effective_sig_params_len),
                         effective_arg_count
                     ),
                 ));

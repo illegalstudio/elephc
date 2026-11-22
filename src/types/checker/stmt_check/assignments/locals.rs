@@ -1807,7 +1807,13 @@ fn merge_local_assignment_type(
             // wider union. Doctrine's DQL parser stores `Token::$value` (`string|int`) into its
             // `string|null &$fieldAlias` parameter -- php checks a parameter's type only when it is
             // bound -- and the refusal interpreted the whole parser.
-            if matches!(existing, PhpType::Union(_))
+            //
+            // `--strict-locals` keeps the refusal: the flag exists to report a store outside the
+            // declared contract (`array $fields = mb_split(...)`, an `array|false`, inside an
+            // `is_array($fields)` guard), and a shared cell makes the store representable, not
+            // valid.
+            if !checker.strict_locals
+                && matches!(existing, PhpType::Union(_))
                 && matches!(ty, PhpType::Union(_))
                 && existing.codegen_repr() == PhpType::Mixed
                 && ty.codegen_repr() == PhpType::Mixed
