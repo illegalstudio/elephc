@@ -484,17 +484,9 @@ impl AstVisitor for GlobalBindingFinder<'_> {
         }
     }
 
-    /// Skips named declaration scopes while still descending into closure expressions.
-    fn descend_statement(&mut self, stmt: &Stmt) -> bool {
+    /// Continues through every nested scope until a global alias is found.
+    fn descend_statement(&mut self, _stmt: &Stmt) -> bool {
         !self.found
-            && !matches!(
-                &stmt.kind,
-                StmtKind::FunctionDecl { .. }
-                    | StmtKind::ClassDecl { .. }
-                    | StmtKind::TraitDecl { .. }
-                    | StmtKind::InterfaceDecl { .. }
-                    | StmtKind::EnumDecl { .. }
-            )
     }
 
     /// Stops expression recursion once the binding has been found.
@@ -503,7 +495,7 @@ impl AstVisitor for GlobalBindingFinder<'_> {
     }
 }
 
-/// Detects global aliases reachable through nested closures in one capture body.
+/// Detects global aliases reachable through nested declarations in one capture body.
 fn body_declares_global_binding(body: &[Stmt], name: &str) -> bool {
     let mut finder = GlobalBindingFinder { name, found: false };
     walk_statements(body, &mut finder);
@@ -1114,7 +1106,7 @@ mod tests {
         body.clone()
     }
 
-    /// Nested globals widen a capture without treating an unrelated nested local as an alias.
+    /// Nested globals in closures, functions, and methods widen a by-reference capture.
     #[test]
     fn nested_global_binding_widens_by_ref_capture() {
         let global = outer_closure_body(
@@ -1122,6 +1114,16 @@ mod tests {
         );
         assert!(body_declares_global_binding(&global, "value"));
         assert!(body_writes_local(&global, "value"));
+
+        let function = outer_closure_body(
+            "<?php $outer = function () { function inner() { global $value; $value = null; } };",
+        );
+        assert!(body_declares_global_binding(&function, "value"));
+
+        let method = outer_closure_body(
+            "<?php $outer = function () { class Inner { public function write(): void { global $value; $value = null; } } };",
+        );
+        assert!(body_declares_global_binding(&method, "value"));
 
         let local = outer_closure_body(
             "<?php $outer = function () { $inner = function () { $value = null; }; };",
