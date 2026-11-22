@@ -313,8 +313,16 @@ scan_flagged($input, 3, NAN);
 echo "after\n";
 "#;
     let ir = function_ir(source, true, "scan_flagged");
-    let call = ir.lines().find(|line| line.contains("= call ")).expect("non-inlined predicate call");
-    assert!(call.contains("may_warn"), "{ir}");
+    // The warning is raised at the call boundary, where the boxed `mixed` argument is converted to
+    // the callee's `bool`. That conversion is its own cast instruction now, ahead of the call, so
+    // the boundary warns through the call or through the cast that feeds it.
+    let lines: Vec<&str> = ir.lines().collect();
+    let call_at = lines.iter().position(|line| line.contains("= call ")).expect("non-inlined predicate call");
+    let boundary_warns = lines[call_at].contains("may_warn")
+        || lines[..call_at].iter().rev().take(3).any(|line| line.contains("= cast ") && line.contains("may_warn"));
+    assert!(boundary_warns, "{ir}");
+    // The property the warning exists to protect: the handler may free the buffer, so no
+    // descriptor resolved before it may be used after it.
     assert!(!ir.contains("buffer_resolve"), "{ir}");
     assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
 }
