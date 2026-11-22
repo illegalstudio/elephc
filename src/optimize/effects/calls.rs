@@ -40,6 +40,11 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
             conservative_call_effect()
         }
     });
+    if builtin_string_param_may_reject(name, args) {
+        // php raises `TypeError` when the call RUNS (an array, or an object without
+        // `__toString`, at a `string` parameter); the call is never a droppable pure read.
+        return effect.with_may_throw();
+    }
     if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
         // Unpacking can fail before even a pure builtin executes. Its arity guard
         // must remain observable when the caller discards the builtin result.
@@ -688,5 +693,70 @@ pub(super) fn resolve_static_receiver_class(receiver: &crate::parser::ast::Stati
                 .and_then(|context| context.parent_name.clone())
         }),
         crate::parser::ast::StaticReceiver::Static => None,
+    }
+}
+
+/// Returns whether a builtin call hands an operand that is not provably scalar to a parameter php
+/// types `string` (and does not also accept an array there). Such a call throws `TypeError` for an
+/// array operand, so it must neither be dropped as pure nor lose a surrounding `catch (TypeError)`.
+/// Operands proven scalar (literals, concatenations, casts, scalar-returning builtins) keep the
+/// call pure.
+pub(in crate::optimize) fn builtin_string_param_may_reject(name: &str, args: &[Expr]) -> bool {
+    if crate::types::checker::builtins::php_accepts_array_at_string_param(name)
+        || name.eq_ignore_ascii_case("str_replace")
+        || name.eq_ignore_ascii_case("str_ireplace")
+    {
+        return false;
+    }
+    let Some(def) = crate::builtins::registry::lookup(name) else {
+        return false;
+    };
+    args.iter().enumerate().any(|(index, arg)| {
+        let (param, value) = match &arg.kind {
+            ExprKind::NamedArg { name: written, value } => (
+                def.params.iter().find(|(param, _)| param == written),
+                &**value,
+            ),
+            _ => (def.params.get(index), arg),
+        };
+        param.is_some_and(|(_, ty)| *ty == PhpType::Str) && operand_may_be_array_or_object(value)
+    })
+}
+
+/// Conservative syntactic proof that an operand cannot be an array or an object.
+fn operand_may_be_array_or_object(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::MagicConstant(_)
+        | ExprKind::Not(_) | ExprKind::Negate(_) | ExprKind::BitNot(_)
+        | ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_)
+        | ExprKind::InstanceOf { .. } => false,
+        ExprKind::Cast { target, .. } => matches!(
+            target,
+            crate::parser::ast::CastType::Array | crate::parser::ast::CastType::Object
+        ),
+        ExprKind::BinaryOp { left, op, right } => {
+            use crate::parser::ast::BinOp;
+            match op {
+                // `array + array` is an array.
+                BinOp::Add => operand_may_be_array_or_object(left) || operand_may_be_array_or_object(right),
+                BinOp::NullCoalesce => operand_may_be_array_or_object(left) || operand_may_be_array_or_object(right),
+                _ => false,
+            }
+        }
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            operand_may_be_array_or_object(then_expr) || operand_may_be_array_or_object(else_expr)
+        }
+        ExprKind::FunctionCall { name, .. } => {
+            match crate::builtins::registry::lookup(name.as_str()) {
+                Some(def) => !matches!(
+                    def.return_type,
+                    PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                ),
+                None => true,
+            }
+        }
+        _ => true,
     }
 }

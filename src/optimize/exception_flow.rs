@@ -1299,7 +1299,7 @@ impl ExceptionFlowAnalysis {
                 if function_call_effect(name, args).may_throw {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
-                if builtin_array_literal_at_string_param(name, args) {
+                if effects::builtin_string_param_may_reject(name, args) {
                     // php throws `TypeError` for `strtoupper([1])` when the call runs; lowering
                     // inserts that throw, so a `catch (TypeError)` around it must survive.
                     thrown = thrown.combined(ThrownTypes::exact("TypeError"));
@@ -1981,29 +1981,4 @@ fn reads_reporting_constant(expr: &Expr) -> bool {
             };
     });
     found
-}
-
-/// Returns whether a builtin call hands an array literal to a parameter php types `string`, the
-/// shape the checker defers to a run-time `TypeError` (`strtoupper([1])`).
-fn builtin_array_literal_at_string_param(name: &str, args: &[Expr]) -> bool {
-    if crate::types::checker::builtins::php_accepts_array_at_string_param(name)
-        || name.eq_ignore_ascii_case("str_replace")
-        || name.eq_ignore_ascii_case("str_ireplace")
-    {
-        return false;
-    }
-    let Some(def) = crate::builtins::registry::lookup(name) else {
-        return false;
-    };
-    args.iter().enumerate().any(|(index, arg)| {
-        let (param, value) = match &arg.kind {
-            ExprKind::NamedArg { name: written, value } => (
-                def.params.iter().find(|(param, _)| param == written),
-                &**value,
-            ),
-            _ => (def.params.get(index), arg),
-        };
-        matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))
-            && param.is_some_and(|(_, ty)| *ty == PhpType::Str)
-    })
 }

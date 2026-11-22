@@ -17,6 +17,7 @@ mod calls;
 
 use aliases::apply_stmt_callable_aliases;
 pub(super) use calls::{
+    builtin_string_param_may_reject,
     callable_alias_effect,
     expr_call_effect,
     function_call_effect,

@@ -165,6 +165,38 @@ fn test_effect_analysis_recognizes_pure_builtin_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
+/// A string builtin may throw `TypeError` for any operand not proven scalar (a variable, a user
+/// call, an array literal) and stays pure for operands proven scalar.
+#[test]
+fn test_string_builtin_may_throw_for_operands_that_may_be_arrays() {
+    let call = |operand: Expr| Expr::new(
+        ExprKind::FunctionCall { name: Name::from("strtoupper"), args: vec![operand] },
+        Span::dummy(),
+    );
+    let user_call = Expr::new(
+        ExprKind::FunctionCall { name: Name::from("g"), args: vec![] },
+        Span::dummy(),
+    );
+    for operand in [
+        Expr::var("a"),
+        user_call,
+        Expr::new(ExprKind::ArrayLiteral(vec![Expr::int_lit(1)]), Span::dummy()),
+    ] {
+        let expr = call(operand);
+        assert!(expr_effect(&expr).may_throw, "{expr:?}");
+        assert!(expr_is_observable(&expr), "{expr:?}");
+    }
+    let concat = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(Expr::var("a")),
+        op: BinOp::Concat,
+        right: Box::new(Expr::string_lit("x")),
+    }, Span::dummy());
+    for operand in [Expr::string_lit("abc"), Expr::int_lit(1), concat] {
+        let expr = call(operand);
+        assert!(!expr_effect(&expr).may_throw, "{expr:?}");
+    }
+}
+
 /// Verifies that `eval` is modeled as an observable, throwing dynamic barrier.
 #[test]
 fn test_effect_analysis_treats_eval_as_dynamic_barrier() {
