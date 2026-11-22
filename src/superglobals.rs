@@ -227,21 +227,14 @@ pub fn seed_cli_populated_superglobals(
     // statements at the head of every `main`, so the optimizer saw a seeded main frame where the
     // program mentions no superglobal.
     let mut spelled = crate::fast_hash::FastSet::default();
-    let mut runs_unseen_php = false;
     for stmt in program.iter().filter(|stmt| {
         !(matches!(stmt.kind, StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. })
             && stmt.span.line == 0)
     }) {
-        let usage = crate::prelude_prune::usage::collect(std::slice::from_ref(stmt));
-        // Text the walk cannot read (a runtime eval, a runtime include) can name any superglobal.
-        runs_unseen_php |= usage.opaque_eval || usage.introspects || usage.includes_runtime_php;
-        spelled.extend(usage.variables);
+        spelled.extend(crate::prelude_prune::usage::collect(std::slice::from_ref(stmt)).variables);
     }
     let mut seeds: Vec<Stmt> = Vec::new();
-    for name in CLI_POPULATED_SUPERGLOBALS
-        .iter()
-        .filter(|name| runs_unseen_php || spelled.contains(**name))
-    {
+    for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
         seeds.extend(seed_for(name));
     }
     if seeds.is_empty() {

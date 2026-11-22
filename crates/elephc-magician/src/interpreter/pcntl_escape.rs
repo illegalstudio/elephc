@@ -87,6 +87,7 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                 if context
                     .closure_object_target(identity)
                     .is_some_and(|target| target.contains_foreign_context())
+                    || context.pcntl_foreign_callable_object_is_pinned(identity, values)
                 {
                     release_walk_values(value, owned, &mut pending, values);
                     return Ok(true);

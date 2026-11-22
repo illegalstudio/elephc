@@ -114,6 +114,21 @@ impl ElephcEvalContext {
             .map(|(_, owner)| owner)
     }
 
+    /// Returns whether an object value is the very object a retained foreign callable pins.
+    ///
+    /// The pointer lookup misses once the value was copied into a fresh cell (a native
+    /// synchronization re-boxes it), so an exported closure is also matched by object identity.
+    pub(crate) fn pcntl_foreign_callable_object_is_pinned(
+        &self,
+        object_identity: u64,
+        values: &mut impl RuntimeValueOps,
+    ) -> bool {
+        self.pcntl_foreign_callables.values().any(|(retained, _)| {
+            matches!(values.type_tag(*retained), Ok(6))
+                && values.object_identity(*retained).is_ok_and(|identity| identity == object_identity)
+        })
+    }
+
     /// Releases every cell pin before dropping its foreign context lease.
     pub(crate) fn release_pcntl_foreign_callables(
         &mut self,

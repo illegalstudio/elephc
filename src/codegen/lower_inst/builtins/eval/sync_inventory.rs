@@ -168,6 +168,8 @@ pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Op
 /// Answers `eval_sync_global_type` by walking every function and closure body.
 fn eval_sync_global_type_uncached(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
     let is_typed_superglobal = ctx.module.web && crate::superglobals::is_superglobal(name);
+    let cli_superglobal_unspelled =
+        !ctx.module.web && crate::superglobals::CLI_POPULATED_SUPERGLOBALS.contains(&name);
     let mut inferred = None;
     for function in ctx
         .module
@@ -183,6 +185,15 @@ fn eval_sync_global_type_uncached(ctx: &FunctionContext<'_>, name: &str) -> Opti
             // global; eval scope ops reference names through the same data
             // pool without any global storage behind them.
             if !matches!(inst.op, Op::LoadGlobal | Op::StoreGlobal | Op::GlobalRefCell | Op::UnsetGlobal) {
+                continue;
+            }
+            // Off-web a CLI superglobal is created by whoever first names it: the compiled seed
+            // for a program that spells it, the interpreter for a fragment that names it (php's
+            // auto_globals_jit). The compiler's own prelude functions (the session API reads and
+            // writes `$_SERVER`/`$_ENV`) carry position-less spans and are not a spelling:
+            // flushing their never-initialized storage would publish an empty entry that stops
+            // the interpreter from creating the real one.
+            if cli_superglobal_unspelled && inst.span.is_none_or(|span| span.line == 0) {
                 continue;
             }
             if !is_typed_superglobal {
