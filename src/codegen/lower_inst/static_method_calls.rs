@@ -15,6 +15,13 @@ use super::*;
 /// against the runtime called class. Early-bound and final calls keep the resolved signature.
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let raw_target = method_name_data(ctx, inst)?.to_string();
+    // `@this@Class::m` calls Class's instance method on `$this`: the EIR dispatch for a
+    // late-bound call whose lexical method is private chose Class already.
+    if let Some(target) = raw_target.strip_prefix("@this@") {
+        let (receiver_label, method_name) = parse_static_method_target(target)?;
+        let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+        return lower_lexical_instance_static_method_call(ctx, inst, receiver.as_str(), method_name);
+    }
     let object_static = raw_target.starts_with("@object@");
     // `@forward@Class::m` calls Class's method with `static` forwarded from this frame: the
     // EIR dispatch for a late-bound call whose lexical method is private chose Class already

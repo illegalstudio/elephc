@@ -46,6 +46,8 @@ pub(super) enum StaticCallBinding {
     Resolved,
     /// The named receiver's method, with `static` forwarded from the caller's called class.
     Forwarded,
+    /// The named receiver's instance method, called on `$this` without virtual dispatch.
+    ForwardedThis,
 }
 
 /// Shared static-call lowering with an optional object receiver for late static binding.
@@ -81,8 +83,10 @@ pub(super) fn lower_static_method_call_bound(
         }
     }
     let magic_args;
-    let (dispatch_method, call_args) = if let Some(args) =
-        magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
+    let (dispatch_method, call_args) = if let Some(args) = (binding
+        != StaticCallBinding::ForwardedThis)
+        .then(|| magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span))
+        .flatten()
     {
         magic_args = args;
         ("__callStatic", magic_args.as_slice())
@@ -109,9 +113,17 @@ pub(super) fn lower_static_method_call_bound(
             }
         }
     }
-    let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
-        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
-        .cloned();
+    let sig = if binding == StaticCallBinding::ForwardedThis {
+        // A subclass inherits the scope's private static method into its static tables, so
+        // the instance method `$this` runs is looked up among the instance methods only.
+        static_receiver_class_name(ctx, receiver).and_then(|class_name| {
+            class_method_signature(ctx, &class_name, &php_symbol_key(dispatch_method))
+        })
+    } else {
+        static_method_implementation_signature(ctx, receiver, dispatch_method)
+            .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
+    }
+    .cloned();
     // The result type and the alias summary are decided by the receiver and the method alone, so
     // they are resolved up front: the reference lease and the ordinary owned result both need
     // their staging published BEFORE any argument expression runs, and the result staging has to
@@ -127,8 +139,16 @@ pub(super) fn lower_static_method_call_bound(
             }
         });
     let late_static_receiver_type = static_late_binding_receiver_type_for_ir(ctx, receiver);
+    let late_static_return = if binding == StaticCallBinding::ForwardedThis {
+        static_receiver_class_name(ctx, receiver).and_then(|class_name| {
+            ctx.classes.get(&class_name)?.late_static_method_returns
+                .get(&php_symbol_key(dispatch_method)).cloned()
+        })
+    } else {
+        static_method_late_static_return_for_ir(ctx, receiver, dispatch_method)
+    };
     let result_type = match (
-        static_method_late_static_return_for_ir(ctx, receiver, dispatch_method),
+        late_static_return,
         late_static_receiver_type.as_deref(),
     ) {
         (Some(return_type), Some(receiver_type)) => {
@@ -136,7 +156,11 @@ pub(super) fn lower_static_method_call_bound(
         }
         _ => result_type,
     };
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    let return_alias = if binding == StaticCallBinding::ForwardedThis {
+        ReturnArgAlias::Unknown
+    } else {
+        static_method_return_arg_alias(ctx, receiver, dispatch_method)
+    };
     // A by-reference-returning static method transfers a lease that must outlive this caller's
     // argument cleanup, so its staging is published before the arguments are evaluated.
     let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
@@ -177,6 +201,9 @@ pub(super) fn lower_static_method_call_bound(
         (Some(_), _) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
         (None, StaticCallBinding::Forwarded) => {
             format!("@forward@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, StaticCallBinding::ForwardedThis) => {
+            format!("@this@{}::{}", receiver_name(receiver), dispatch_method)
         }
         (None, _) => format!("{}::{}", receiver_name(receiver), dispatch_method),
     };

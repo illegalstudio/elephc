@@ -22,6 +22,26 @@ pub(super) fn reject_invalid(
     ctx: &mut LoweringContext<'_, '_>, class: &str, method: &str,
     signature: &FunctionSig, args: &[Expr], span: Span,
 ) -> bool {
+    reject_invalid_binding(ctx, class, method, signature, args, span, false)
+}
+
+/// Like `reject_invalid()`, with php-src's `passed in <file> on line <n>` in the
+/// `ArgumentCountError` of a user method called from source code.
+pub(super) fn reject_invalid_at_call_site(
+    ctx: &mut LoweringContext<'_, '_>, class: &str, method: &str,
+    signature: &FunctionSig, args: &[Expr], span: Span,
+) -> bool {
+    reject_invalid_binding(ctx, class, method, signature, args, span, true)
+}
+
+/// Shared body of `reject_invalid()` and `reject_invalid_at_call_site()`.
+fn reject_invalid_binding(
+    ctx: &mut LoweringContext<'_, '_>, class: &str, method: &str,
+    signature: &FunctionSig, args: &[Expr], span: Span, call_site: bool,
+) -> bool {
+    let passed_in = call_site.then(|| format!(
+        " in {} on line {}", ctx.source_path().unwrap_or("unknown"), span.line,
+    )).unwrap_or_default();
     // PHP treats defaults before a later required parameter as required,
     // including named omissions. Keep declaration metadata unchanged.
     let regular = crate::types::call_args::regular_param_count(signature);
@@ -40,7 +60,7 @@ pub(super) fn reject_invalid(
             MethodArgumentError {
                 exception_class: "ArgumentCountError",
                 message: format!(
-                    "Too few arguments to function {class}::{method}(), {provided} passed and {bound} {required} expected"
+                    "Too few arguments to function {class}::{method}(), {provided} passed{passed_in} and {bound} {required} expected"
                 ),
                 guard_supplied_arguments: true,
             }

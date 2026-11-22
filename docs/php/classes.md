@@ -639,8 +639,12 @@ When the method is a private static method of the class that contains the call, 
 called class's own `method` still decides, as in PHP: a subclass that does not redeclare
 it runs the private method, a public or protected redeclaration (or a class inheriting
 one) runs instead, and a private redeclaration throws
-`Error: Call to private method B::method() from scope A`. Only classes that redeclare
-the method get a runtime check; when none does, the call binds directly.
+`Error: Call to private method B::method() from scope A`, unless the called class has
+`__call()` (called on `$this` from an instance method) or `__callStatic()`, which then runs.
+An instance-method redeclaration runs on `$this` from an instance method and throws
+`Error: Non-static method B::method() cannot be called statically` from a static one. Only
+classes that redeclare the method get a runtime check; when none does, the call binds
+directly.
 
 ## Static methods
 Called with `::`, no `$this`.

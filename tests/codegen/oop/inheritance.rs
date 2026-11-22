@@ -465,6 +465,138 @@ echo A::run(), "\n", C::run(), "\n", A::run(), "\n";
     assert_eq!(out, "A: r=2 v=2\nC: r=41 v=2\nA: r=3 v=3\n");
 }
 
+/// Verifies `static::m()` over a private static `A::m()` when the called class redeclares `m`
+/// as an instance method: a static caller throws the non-static `Error` and an instance caller
+/// runs it on `$this` (inherited by `G2`, protected in `K`), both before evaluating the
+/// Verifies `$r =& static::m()` raises php-src's `Only variables should be assigned by
+/// reference` notice when the selected redeclaration returns by value, and not for the private
+/// method that returns a reference.
+#[test]
+fn test_static_late_binding_private_scope_method_reference_assignment_notice() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $no, string $msg): bool { echo "[$no:$msg]"; return true; });
+class Box { public int $v = 1; }
+class A {
+    public static Box $box;
+    private static function &m(): int { $b = self::$box; return $b->v; }
+    public static function run(): string {
+        $r =& static::m();
+        $r++;
+        return static::class . ": r=$r v=" . self::$box->v;
+    }
+}
+class C extends A { public static function m(): int { return 40; } }
+A::$box = new Box();
+echo A::run(), "\n";
+echo C::run(), "\n";
+echo A::run(), "\n";
+"#,
+    );
+    assert_eq!(out, "A: r=2 v=2\n[8:Only variables should be assigned by reference]C: r=41 v=2\nA: r=3 v=3\n");
+}
+
+/// arguments when they throw. A private instance redeclaration throws the private-call `Error`.
+#[test]
+fn test_static_late_binding_private_scope_method_instance_redeclaration() {
+    let out = compile_and_run(
+        r#"<?php
+function arg(int $v): int { echo "[arg $v]"; return $v; }
+class A {
+    private static function m(int $x = 1): string { return "A::m"; }
+    public static function run(): void {
+        try { echo static::class, " static: "; echo static::m(arg(5)), "\n"; }
+        catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+    public function inst(): void {
+        try { echo static::class, " inst: "; echo static::m(arg(6)), "\n"; }
+        catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+}
+class G extends A {
+    public string $tag = "g";
+    public function m(int $x): string { return "G::m $x " . get_class($this) . " " . $this->tag . " " . static::class; }
+}
+class G2 extends G {}
+class H extends A { private function m(): string { return "H::m"; } }
+class K extends A { protected function m(int $x): int { return $x * 10; } }
+A::run(); G::run(); G2::run(); H::run(); K::run();
+(new A)->inst(); (new G)->inst(); (new G2)->inst(); (new H)->inst(); (new K)->inst();
+"#,
+    );
+    assert_eq!(out, "A static: [arg 5]A::m\nG static: Error: Non-static method G::m() cannot be called statically\nG2 static: Error: Non-static method G::m() cannot be called statically\nH static: Error: Call to private method H::m() from scope A\nK static: Error: Non-static method K::m() cannot be called statically\nA inst: [arg 6]A::m\nG inst: [arg 6]G::m 6 G g G\nG2 inst: [arg 6]G::m 6 G2 g G2\nH inst: Error: Call to private method H::m() from scope A\nK inst: [arg 6]60\n");
+}
+
+/// Verifies a private redeclaration the scope cannot call falls back to the called class's
+/// `__call()` from an instance caller and to its `__callStatic()` otherwise, with `static`
+/// forwarded (`D2`), while a class with `__callStatic()` and no redeclaration keeps `A::m()`
+/// and a public instance redeclaration still throws the non-static `Error` statically.
+#[test]
+fn test_static_late_binding_private_scope_method_magic_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+function arg(int $v): int { echo "[arg $v]"; return $v; }
+class A {
+    private static function m(int $x = 1): string { return "A::m"; }
+    public static function run(): void {
+        try { echo static::class, " static: "; echo static::m(arg(5)), "\n"; }
+        catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+    public function inst(): void {
+        try { echo static::class, " inst: "; echo static::m(arg(6)), "\n"; }
+        catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+}
+class B extends A {
+    public static function __callStatic(string $n, array $a): string { return "B::__callStatic($n)"; }
+}
+class D extends A {
+    private static function m(): string { return "D::m"; }
+    public static function __callStatic(string $n, array $a): string { return "D::__callStatic($n," . implode(",", $a) . ") " . static::class; }
+    public function __call(string $n, array $a): string { return "D::__call($n," . implode(",", $a) . ")"; }
+}
+class D2 extends D {}
+class E extends A {
+    private static function m(): string { return "E::m"; }
+    public function __call(string $n, array $a): string { return "E::__call($n)"; }
+}
+class H extends A {
+    private function m(): string { return "H::m"; }
+    public static function __callStatic(string $n, array $a): string { return "H::__callStatic($n)"; }
+}
+class J extends A {
+    public function m(int $x): string { return "J::m"; }
+    public static function __callStatic(string $n, array $a): string { return "J::__callStatic($n)"; }
+}
+A::run(); B::run(); D::run(); D2::run(); E::run(); H::run(); J::run();
+(new B)->inst(); (new D)->inst(); (new D2)->inst(); (new E)->inst(); (new H)->inst(); (new J)->inst();
+"#,
+    );
+    assert_eq!(out, "A static: [arg 5]A::m\nB static: [arg 5]A::m\nD static: [arg 5]D::__callStatic(m,5) D\nD2 static: [arg 5]D::__callStatic(m,5) D2\nE static: Error: Call to private method E::m() from scope A\nH static: [arg 5]H::__callStatic(m)\nJ static: Error: Non-static method J::m() cannot be called statically\nB inst: [arg 6]A::m\nD inst: [arg 6]D::__call(m,6)\nD2 inst: [arg 6]D::__call(m,6)\nE inst: [arg 6]E::__call(m)\nH inst: [arg 6]H::__callStatic(m)\nJ inst: [arg 6]J::m\n");
+}
+
+/// Verifies a redeclaration's `ArgumentCountError` names the call's file and line as php-src
+/// does, for an exact and a minimum parameter count, and a variadic redeclaration binds.
+#[test]
+fn test_static_late_binding_private_scope_method_argument_count_location() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(int $x): string { return "A::m $x"; }
+    public static function run(): string {
+        try { return static::m(1); }
+        catch (\ArgumentCountError $e) { return get_class($e) . ": " . str_replace(__FILE__, "FILE", $e->getMessage()); }
+    }
+}
+class C extends A { public static function m(int $x, int $extra): string { return "C::m $x $extra"; } }
+class V extends A { public static function m(int $x, int ...$more): string { return "V::m"; } }
+class W extends A { public static function m(int $x, int $y, int $z = 0): string { return "W::m"; } }
+echo A::run(), "\n", C::run(), "\n", V::run(), "\n", W::run(), "\n";
+"#,
+    );
+    assert_eq!(out, "A::m 1\nArgumentCountError: Too few arguments to function C::m(), 1 passed in FILE on line 5 and exactly 2 expected\nV::m\nArgumentCountError: Too few arguments to function W::m(), 1 passed in FILE on line 5 and at least 2 expected\n");
+}
+
 /// Verifies inherited properties (`$a`) and methods are accessible from child, and
 /// `parent::greet()` calls the parent's version, returning "42 hi!".
 #[test]

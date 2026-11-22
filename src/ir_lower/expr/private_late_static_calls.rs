@@ -9,20 +9,44 @@
 //!   `static::m()` used to bind `A::m()` for every called class. php-src looks `m` up in the
 //!   late-bound class instead: a subclass that redeclares `m` runs its own method, or raises
 //!   `Error` when that redeclaration is private to it.
+//! - A redeclared instance method runs on `$this` from an instance method and raises the
+//!   non-static `Error` from a static one. A private redeclaration falls back to the called
+//!   class's `__call()` (with `$this`) or `__callStatic()`, as php-src's static lookup does.
 //! - Only called classes whose lookup differs from the scope's method get a dispatch arm. A
 //!   call whose method no subclass redeclares lowers exactly as before.
 //! - Each arm lowers the arguments against the signature of the method it calls, so a
 //!   redeclaration with its own parameter types or defaults binds them like a direct call.
+
+use std::borrow::Cow;
 
 use super::*;
 
 /// What `static::m()` resolves to for one group of late-bound called classes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PrivateLateStaticArm {
-    /// The called class inherits a non-private `m` from `class`: call it, forwarding `static`.
+    /// The called class inherits a non-private static `m` from `class`: call it, forwarding
+    /// `static`.
     Call(String),
+    /// The called class inherits a non-private instance `m` from `class` and the caller has
+    /// `$this`: call it on `$this`.
+    CallOnThis(String),
+    /// The called class's `m` is private to it and it inherits `__callStatic()` from `class`.
+    CallStaticMagic(String),
+    /// The called class's `m` is private to it, the caller has `$this` and the called class
+    /// inherits `__call()` from `class`.
+    CallMagicOnThis(String),
     /// The called class sees a private `m` declared by `class`, which the scope cannot call.
     PrivateError(String),
+    /// The called class inherits an instance `m` from `class` and the caller has no `$this`.
+    NonStaticError(String),
+}
+
+/// The first declaration of the method php-src's lookup in the called class finds below the
+/// scope.
+struct Redeclaration {
+    class: String,
+    is_static: bool,
+    private: bool,
 }
 
 /// Lowers `static::m()` when `m` is a private static method of the lexical class and some
@@ -74,26 +98,55 @@ fn private_late_static_arms(
         .map(|(name, info)| (name.as_str(), info.class_id))
         .collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_id)| *class_id);
+    // `static::m()` in a method with `$this` is a call on `$this` for an instance method, and
+    // `$this` is an instance of the called class.
+    let has_this = ctx.local_slots.contains_key("this");
     let mut arms: Vec<(PrivateLateStaticArm, Vec<u64>)> = Vec::new();
     for (class_name, class_id) in classes {
-        let Some(arm) = late_bound_lookup(ctx, class_name, scope, &key) else {
+        let Some(found) = late_bound_lookup(ctx, class_name, scope, &key) else {
             continue;
         };
-        // php-src hands a refused call to `__callStatic()` instead; that class keeps the scope's
-        // method (a known gap) rather than raising an `Error` php-src would not raise.
-        if matches!(arm, PrivateLateStaticArm::PrivateError(_))
-            && ctx.classes.get(class_name).is_some_and(|info| {
-                info.static_methods.contains_key(&php_symbol_key("__callStatic"))
-            })
-        {
-            continue;
-        }
+        let arm = if found.private {
+            magic_arm(ctx, class_name, has_this)
+                .unwrap_or(PrivateLateStaticArm::PrivateError(found.class))
+        } else if found.is_static {
+            PrivateLateStaticArm::Call(found.class)
+        } else if has_this {
+            PrivateLateStaticArm::CallOnThis(found.class)
+        } else {
+            PrivateLateStaticArm::NonStaticError(found.class)
+        };
         match arms.iter_mut().find(|(existing, _)| *existing == arm) {
             Some((_, ids)) => ids.push(class_id),
             None => arms.push((arm, vec![class_id])),
         }
     }
     arms
+}
+
+/// Returns the magic method php-src calls instead of a private `m` the scope cannot reach:
+/// `__call()` when the caller has `$this`, else `__callStatic()`, as the called class inherits
+/// them.
+fn magic_arm(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    has_this: bool,
+) -> Option<PrivateLateStaticArm> {
+    let info = ctx.classes.get(class_name)?;
+    let call = php_symbol_key("__call");
+    if has_this && info.methods.contains_key(&call) {
+        let owner = info.method_impl_classes.get(&call).map_or(class_name, String::as_str);
+        return Some(PrivateLateStaticArm::CallMagicOnThis(owner.to_string()));
+    }
+    let call_static = php_symbol_key("__callStatic");
+    if info.static_methods.contains_key(&call_static) {
+        let owner = info
+            .static_method_impl_classes
+            .get(&call_static)
+            .map_or(class_name, String::as_str);
+        return Some(PrivateLateStaticArm::CallStaticMagic(owner.to_string()));
+    }
+    None
 }
 
 /// Walks from `class_name` up to `scope` and returns the redeclaration of `key` that php-src's
@@ -104,7 +157,7 @@ fn late_bound_lookup(
     class_name: &str,
     scope: &str,
     key: &str,
-) -> Option<PrivateLateStaticArm> {
+) -> Option<Redeclaration> {
     let mut cursor = class_name;
     let mut found = None;
     while cursor != scope {
@@ -113,21 +166,86 @@ fn late_bound_lookup(
             if info.static_method_impl_classes.get(key).map(String::as_str) == Some(cursor)
                 && info.static_methods.contains_key(key)
             {
-                found = Some(
-                    if info.static_method_visibilities.get(key) == Some(&Visibility::Private) {
-                        PrivateLateStaticArm::PrivateError(cursor.to_string())
-                    } else {
-                        PrivateLateStaticArm::Call(cursor.to_string())
-                    },
-                );
-            } else if info.method_impl_classes.get(key).map(String::as_str) == Some(cursor) {
-                // An instance-method redeclaration keeps the scope's method (a known gap).
-                return None;
+                found = Some(Redeclaration {
+                    class: cursor.to_string(),
+                    is_static: true,
+                    private: info.static_method_visibilities.get(key) == Some(&Visibility::Private),
+                });
+            } else if info.methods.contains_key(key)
+                && (info.method_impl_classes.get(key).map(String::as_str) == Some(cursor)
+                    || info.method_declaring_classes.get(key).map(String::as_str) == Some(cursor))
+            {
+                found = Some(Redeclaration {
+                    class: cursor.to_string(),
+                    is_static: false,
+                    private: info.method_visibilities.get(key) == Some(&Visibility::Private),
+                });
             }
         }
         cursor = info.parent.as_deref()?;
     }
     found
+}
+
+/// Returns the signature of the method one dispatch arm calls, or `None` for an arm that throws.
+fn arm_signature<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    arm: &PrivateLateStaticArm,
+    method: &str,
+) -> Option<&'a FunctionSig> {
+    match arm {
+        PrivateLateStaticArm::Call(class_name) => {
+            static_method_implementation_signature(ctx, &static_receiver_for_class_name(class_name), method)
+        }
+        PrivateLateStaticArm::CallOnThis(class_name) => {
+            class_method_signature(ctx, class_name, &php_symbol_key(method))
+        }
+        PrivateLateStaticArm::CallStaticMagic(class_name) => static_method_implementation_signature(
+            ctx, &static_receiver_for_class_name(class_name), "__callStatic",
+        ),
+        PrivateLateStaticArm::CallMagicOnThis(class_name) => {
+            class_method_signature(ctx, class_name, &php_symbol_key("__call"))
+        }
+        PrivateLateStaticArm::PrivateError(_) | PrivateLateStaticArm::NonStaticError(_) => None,
+    }
+}
+
+/// Returns the result type one dispatch arm's call is lowered with, or `None` for an arm that
+/// throws.
+fn arm_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    arm: &PrivateLateStaticArm,
+    method: &str,
+) -> Option<PhpType> {
+    match arm {
+        PrivateLateStaticArm::Call(class_name) => lexical_static_method_call_expr_type_for_ir(
+            ctx, &static_receiver_for_class_name(class_name), method,
+        ),
+        PrivateLateStaticArm::CallStaticMagic(class_name) => {
+            lexical_static_method_call_expr_type_for_ir(
+                ctx, &static_receiver_for_class_name(class_name), "__callStatic",
+            )
+        }
+        PrivateLateStaticArm::CallOnThis(class_name)
+        | PrivateLateStaticArm::CallMagicOnThis(class_name) => {
+            let method = match arm {
+                PrivateLateStaticArm::CallOnThis(_) => php_symbol_key(method),
+                _ => php_symbol_key("__call"),
+            };
+            let nominal = class_method_signature(ctx, class_name, &method).map(|signature| {
+                normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type))
+            })?;
+            Some(match ctx
+                .classes
+                .get(class_name)
+                .and_then(|info| info.late_static_method_returns.get(&method))
+            {
+                Some(return_type) => late_static_return_type_for_ir(ctx, return_type, class_name),
+                None => nominal,
+            })
+        }
+        PrivateLateStaticArm::PrivateError(_) | PrivateLateStaticArm::NonStaticError(_) => None,
+    }
 }
 
 /// Returns the result type of `static::m()` when it dispatches over redeclarations of a private
@@ -162,13 +280,8 @@ fn joined_result_type(
 ) -> PhpType {
     let fallback_type = lexical_static_method_call_expr_type_for_ir(ctx, receiver, method)
         .unwrap_or(PhpType::Mixed);
-    let same = arms.iter().all(|(arm, _)| match arm {
-        PrivateLateStaticArm::Call(class_name) => {
-            let target = static_receiver_for_class_name(class_name);
-            lexical_static_method_call_expr_type_for_ir(ctx, &target, method)
-                .is_none_or(|ty| ty == fallback_type)
-        }
-        PrivateLateStaticArm::PrivateError(_) => true,
+    let same = arms.iter().all(|(arm, _)| {
+        arm_result_type(ctx, arm, method).is_none_or(|ty| ty == fallback_type)
     });
     if same { fallback_type } else { PhpType::Mixed }
 }
@@ -194,12 +307,7 @@ fn lower_private_late_static_dispatch(
         .is_some_and(|context| context.depth == ctx.expression_depth);
     if reference_assignment {
         let fallback = static_method_implementation_signature(ctx, receiver, method);
-        let targets = arms.iter().filter_map(|(arm, _)| match arm {
-            PrivateLateStaticArm::Call(class_name) => static_method_implementation_signature(
-                ctx, &static_receiver_for_class_name(class_name), method,
-            ),
-            PrivateLateStaticArm::PrivateError(_) => None,
-        });
+        let targets = arms.iter().filter_map(|(arm, _)| arm_signature(ctx, arm, method));
         if fallback.into_iter().chain(targets).any(|signature| signature.by_ref_return
             && !signature.return_type.reference_payload_compatible(&result_type))
         {
@@ -269,34 +377,7 @@ fn lower_private_late_static_dispatch(
     for (block, arm) in arm_blocks {
         ctx.builder.position_at_end(block);
         ctx.restore_initialized_slots(split_initialized.clone());
-        match arm {
-            PrivateLateStaticArm::Call(class_name) => {
-                let target = static_receiver_for_class_name(&class_name);
-                // The checker bound the arguments against the private method only. A
-                // redeclaration with other parameters throws its own binding error, and only
-                // when a class that selects it is the called class.
-                let signature = static_method_implementation_signature(ctx, &target, method)
-                    .cloned();
-                if let Some(signature) = signature.as_ref() {
-                    if super::selected_method_arguments::reject_invalid(
-                        ctx, &class_name, method, signature, args, span,
-                    ) {
-                        continue;
-                    }
-                }
-                let arm_type = lexical_static_method_call_expr_type_for_ir(ctx, &target, method)
-                    .unwrap_or_else(|| result_type.clone());
-                if reference_assignment {
-                    ctx.reference_call_context.as_mut().unwrap().adopted = false;
-                }
-                let value = lower_static_method_call_bound(
-                    ctx, &target, method, args, expr, None, StaticCallBinding::Forwarded,
-                );
-                finish_private_late_static_arm(
-                    ctx, temp_name.as_deref(), &result_type, value, merge,
-                    &mut reachable_initialized, reference_assignment, &arm_type, span,
-                );
-            }
+        let (target_class, target_method, binding, call_args) = match &arm {
             PrivateLateStaticArm::PrivateError(class_name) => {
                 // php-src refuses the call before evaluating its arguments.
                 crate::ir_lower::stmt::lower_throw_access_error(
@@ -304,8 +385,54 @@ fn lower_private_late_static_dispatch(
                     &format!("Call to private method {class_name}::{method}() from scope {scope}"),
                     span,
                 );
+                continue;
+            }
+            PrivateLateStaticArm::NonStaticError(class_name) => {
+                crate::ir_lower::stmt::lower_throw_access_error(
+                    ctx,
+                    &format!("Non-static method {class_name}::{method}() cannot be called statically"),
+                    span,
+                );
+                continue;
+            }
+            PrivateLateStaticArm::Call(class_name) => {
+                (class_name.as_str(), method, StaticCallBinding::Forwarded, Cow::Borrowed(args))
+            }
+            PrivateLateStaticArm::CallOnThis(class_name) => {
+                (class_name.as_str(), method, StaticCallBinding::ForwardedThis, Cow::Borrowed(args))
+            }
+            PrivateLateStaticArm::CallStaticMagic(class_name) => (
+                class_name.as_str(), "__callStatic", StaticCallBinding::Forwarded,
+                Cow::Owned(magic_call_args(method, args, span)),
+            ),
+            PrivateLateStaticArm::CallMagicOnThis(class_name) => (
+                class_name.as_str(), "__call", StaticCallBinding::ForwardedThis,
+                Cow::Owned(magic_call_args(method, args, span)),
+            ),
+        };
+        let target = static_receiver_for_class_name(target_class);
+        // The checker bound the arguments against the private method only. A redeclaration
+        // with other parameters throws its own binding error, and only when a class that
+        // selects it is the called class.
+        let signature = arm_signature(ctx, &arm, method).cloned();
+        if let Some(signature) = signature.as_ref() {
+            if super::selected_method_arguments::reject_invalid_at_call_site(
+                ctx, target_class, target_method, signature, &call_args, span,
+            ) {
+                continue;
             }
         }
+        let arm_type = arm_result_type(ctx, &arm, method).unwrap_or_else(|| result_type.clone());
+        if reference_assignment {
+            ctx.reference_call_context.as_mut().unwrap().adopted = false;
+        }
+        let value = lower_static_method_call_bound(
+            ctx, &target, target_method, &call_args, expr, None, binding,
+        );
+        finish_private_late_static_arm(
+            ctx, temp_name.as_deref(), &result_type, value, merge,
+            &mut reachable_initialized, reference_assignment, &arm_type, span,
+        );
     }
     ctx.builder.position_at_end(merge);
     let mut merged = reachable_initialized.into_iter();
@@ -324,6 +451,15 @@ fn lower_private_late_static_dispatch(
     }
 }
 
+/// Packs a call php-src hands to `__call()`/`__callStatic()` into the method name and the
+/// argument array, as the direct magic static call does.
+fn magic_call_args(method: &str, args: &[Expr], span: Span) -> Vec<Expr> {
+    vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
+    ]
+}
+
 /// Stores one arm's call result into the merge temporary (or, under `$r =& static::m()`, gives a
 /// by-value result its own reference cell) and joins the merge block.
 #[allow(clippy::too_many_arguments)]
@@ -340,6 +476,14 @@ fn finish_private_late_static_arm(
 ) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
+    }
+    if reference_assignment && !ctx.reference_call_context.as_ref().unwrap().adopted {
+        // php-src binds a by-value result to a fresh reference and notices it.
+        let message = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(
+            "Notice: Only variables should be assigned by reference\n".into()), span));
+        ctx.emit_void(Op::RuntimeCall, vec![message.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
+            crate::ir_lower::effects_lookup::runtime_effects(), Some(span));
     }
     super::enum_interface_calls::complete_reference_branch(
         ctx, value, reference_assignment, arm_type, span,
