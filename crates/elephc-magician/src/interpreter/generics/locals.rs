@@ -130,7 +130,7 @@ fn array_write_accepts(ty: &Type, array: RuntimeCellHandle, index: RuntimeCellHa
         return array_write_accepts(schema, array, index, value, context, values);
     }
     match ty {
-        Type::Atom(name) => Ok(name == "array" || name == "mixed"),
+        Type::Atom(name) => Ok(matches!(name.as_str(), "array" | "iterable" | "mixed")),
         Type::Nullable(inner) => array_write_accepts(inner, array, index, value, context, values),
         Type::Intersection(types) => {
             for ty in types { if !array_write_accepts(ty, array, index, value, context, values)? { return Ok(false); } }
