@@ -3197,6 +3197,24 @@ enum LoopResume {
     Terminal(TerminalKind),
 }
 
+/// Groups control actions that can share one deterministic finally traversal.
+fn group_loop_resume_paths(
+    paths: Vec<(LoopResume, LocalFacts)>,
+) -> Vec<(LocalFacts, Vec<LoopResume>)> {
+    let mut groups: Vec<(LocalFacts, Vec<LoopResume>)> = Vec::new();
+    for (resume, entry) in paths {
+        if let Some((_, resumes)) = groups
+            .iter_mut()
+            .find(|(candidate, _)| candidate == &entry)
+        {
+            resumes.push(resume);
+        } else {
+            groups.push((entry, vec![resume]));
+        }
+    }
+    groups
+}
+
 /// Applies one finally body to every distinct incoming loop-control category.
 fn apply_loop_finally(
     flow: LoopBreakFlow,
@@ -3230,7 +3248,7 @@ fn apply_loop_finally(
     let mut terminals = Vec::new();
     let mut audit_exits = Vec::new();
     let mut complete = flow.complete;
-    for (resume, entry) in paths {
+    for (entry, resumes) in group_loop_resume_paths(paths) {
         let finally_flow = collect_loop_break_flow(
             finally_body,
             &entry,
@@ -3247,19 +3265,21 @@ fn apply_loop_finally(
         let Some(fallthrough) = finally_flow.fallthrough else {
             continue;
         };
-        match resume {
-            LoopResume::Fallthrough => fallthroughs.push(Some(fallthrough)),
-            LoopResume::Break => exits.push(fallthrough),
-            LoopResume::Continue => continues.push(fallthrough),
-            LoopResume::Outer(kind, levels) => outer_jumps.push(OuterLoopJump {
-                kind,
-                levels,
-                facts: fallthrough,
-            }),
-            LoopResume::Terminal(kind) => terminals.push(TerminalFlow {
-                kind,
-                facts: fallthrough,
-            }),
+        for resume in resumes {
+            match resume {
+                LoopResume::Fallthrough => fallthroughs.push(Some(fallthrough.clone())),
+                LoopResume::Break => exits.push(fallthrough.clone()),
+                LoopResume::Continue => continues.push(fallthrough.clone()),
+                LoopResume::Outer(kind, levels) => outer_jumps.push(OuterLoopJump {
+                    kind,
+                    levels,
+                    facts: fallthrough.clone(),
+                }),
+                LoopResume::Terminal(kind) => terminals.push(TerminalFlow {
+                    kind,
+                    facts: fallthrough.clone(),
+                }),
+            }
         }
     }
     let audit_exit = if audit_exits.is_empty() {

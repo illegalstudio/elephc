@@ -400,6 +400,23 @@ fn strict_array_key_source_validation_handles_deeply_nested_finally() {
     assert!(error.message.contains("strict-array-keys"), "{error:?}");
 }
 
+/// Return and throw actions with equal facts share each nested finally traversal.
+#[test]
+fn strict_array_key_source_validation_reuses_equal_finally_entries() {
+    let mut source = String::from("<?php ");
+    for _ in 0..20 {
+        source.push_str(
+            "try { if ($argc > 1) { return; } throw new Exception(); } finally { ",
+        );
+    }
+    source.push_str("echo 1;");
+    for _ in 0..20 {
+        source.push_str(" }");
+    }
+    crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+        .expect("equal finally entries remain bounded");
+}
+
 /// Finally receives terminal facts produced inside every nested breakable statement.
 #[test]
 fn strict_array_key_source_validation_replays_finally_after_nested_terminals() {
