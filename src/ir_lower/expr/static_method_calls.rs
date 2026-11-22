@@ -39,7 +39,7 @@ pub(super) fn lower_object_static_method_call(
 
 /// How a static call binds its receiver class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StaticCallBinding {
+pub(super) enum StaticCallBinding<'a> {
     /// The receiver as written; a late-bound call to a private method may still dispatch.
     Lexical,
     /// The receiver's own method, already chosen by a called-class dispatch.
@@ -48,6 +48,9 @@ pub(super) enum StaticCallBinding {
     Forwarded,
     /// The named receiver's instance method, called on `$this` without virtual dispatch.
     ForwardedThis,
+    /// `static::m()` to the scope's private method, where codegen picks among same-signature
+    /// redeclarations by called class (`Class=id,id;Class=id`, see `private_late_static_calls`).
+    Dispatched(&'a str),
 }
 
 /// Shared static-call lowering with an optional object receiver for late static binding.
@@ -58,7 +61,7 @@ pub(super) fn lower_static_method_call_bound(
     args: &[Expr],
     expr: &Expr,
     object_receiver: Option<crate::ir::ValueId>,
-    binding: StaticCallBinding,
+    binding: StaticCallBinding<'_>,
 ) -> LoweredValue {
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
@@ -204,6 +207,9 @@ pub(super) fn lower_static_method_call_bound(
         }
         (None, StaticCallBinding::ForwardedThis) => {
             format!("@this@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, StaticCallBinding::Dispatched(arms)) => {
+            format!("@late@{arms}@{}::{}", receiver_name(receiver), dispatch_method)
         }
         (None, _) => format!("{}::{}", receiver_name(receiver), dispatch_method),
     };

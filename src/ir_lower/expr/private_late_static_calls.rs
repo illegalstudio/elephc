@@ -72,7 +72,75 @@ pub(super) fn try_lower_private_late_static_call(
     if arms.is_empty() {
         return None;
     }
+    if let Some(dispatch) = same_signature_dispatch(ctx, receiver, method, &arms) {
+        return Some(lower_static_method_call_bound(
+            ctx, receiver, method, args, expr, None, StaticCallBinding::Dispatched(&dispatch),
+        ));
+    }
     Some(lower_private_late_static_dispatch(ctx, receiver, method, args, expr, &scope, arms))
+}
+
+/// Encodes the arms of a dispatch codegen can run inside one call, as `Class=id,id;Class=id`,
+/// when every arm calls a static redeclaration whose signature is the scope method's.
+///
+/// The arguments then bind identically for every called class, so the call keeps one
+/// argument evaluation and one result, and only the branch to the callee depends on the called
+/// class. The EIR optimizer sees an ordinary call, as for a method no subclass redeclares.
+fn same_signature_dispatch(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    arms: &[(PrivateLateStaticArm, Vec<u64>)],
+) -> Option<String> {
+    let reference_assignment = ctx
+        .reference_call_context
+        .as_ref()
+        .is_some_and(|context| context.depth == ctx.expression_depth);
+    if reference_assignment {
+        return None;
+    }
+    let key = php_symbol_key(method);
+    let scope_signature = static_method_implementation_signature(ctx, receiver, method)?;
+    let scope_class = static_receiver_class_name(ctx, receiver)?;
+    let has_late_static_return = |class_name: &str| {
+        ctx.classes.get(class_name).is_none_or(|info| {
+            info.late_static_static_method_returns.contains_key(&key)
+        })
+    };
+    if has_late_static_return(&scope_class) || scope_signature.deprecation.is_some() {
+        return None;
+    }
+    let mut encoded = Vec::with_capacity(arms.len());
+    for (arm, class_ids) in arms {
+        let PrivateLateStaticArm::Call(class_name) = arm else {
+            return None;
+        };
+        let signature = static_method_implementation_signature(
+            ctx, &static_receiver_for_class_name(class_name), method,
+        )?;
+        let same = signature.params == scope_signature.params
+            && signature.param_type_exprs == scope_signature.param_type_exprs
+            // A default such as `self::X` names each declaring class, so only scalar literal
+            // defaults bind alike.
+            && signature.defaults == scope_signature.defaults
+            && signature.defaults.iter().flatten().all(|default| matches!(default.kind,
+                ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_)
+                    | ExprKind::BoolLiteral(_) | ExprKind::Null))
+            && signature.return_type == scope_signature.return_type
+            && signature.declared_return == scope_signature.declared_return
+            && signature.by_ref_return == scope_signature.by_ref_return
+            && signature.ref_params == scope_signature.ref_params
+            && signature.declared_params == scope_signature.declared_params
+            && signature.variadic == scope_signature.variadic
+            && signature.deprecation.is_none()
+            && signature.is_generator == scope_signature.is_generator;
+        if !same || has_late_static_return(class_name) {
+            return None;
+        }
+        let ids = class_ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        encoded.push(format!("{class_name}={ids}"));
+    }
+    Some(encoded.join(";"))
 }
 
 /// Groups the descendants of `scope` whose late-bound lookup of `method` differs from the

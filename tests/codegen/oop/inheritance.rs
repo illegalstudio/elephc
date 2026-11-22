@@ -597,6 +597,36 @@ echo A::run(), "\n", C::run(), "\n", V::run(), "\n", W::run(), "\n";
     assert_eq!(out, "A::m 1\nArgumentCountError: Too few arguments to function C::m(), 1 passed in FILE on line 5 and exactly 2 expected\nV::m\nArgumentCountError: Too few arguments to function W::m(), 1 passed in FILE on line 5 and at least 2 expected\n");
 }
 
+/// Verifies same-signature redeclarations dispatched inside one call: `C::m()` runs for `C` and
+/// its subclass `C2` and protected `P::m()` for `P`. `C::m()` writes a static property, so the
+/// call keeps its effects although `A::m()` is pure: the unused call and both `static::m(7)`
+/// run.
+#[test]
+fn test_static_late_binding_private_scope_method_same_signature_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(int $i): int { return $i; }
+    public static function run(): int {
+        static::m(1);
+        $sum = 0;
+        for ($k = 0; $k < 3; $k++) { $sum += static::m($k); }
+        return $sum + static::m(7) + static::m(7);
+    }
+}
+class B extends A {}
+class C extends A {
+    public static int $calls = 0;
+    public static function m(int $i): int { self::$calls++; return $i + 100; }
+}
+class C2 extends C {}
+class P extends A { protected static function m(int $i): int { return -$i; } }
+echo A::run(), " ", B::run(), " ", C::run(), " ", C2::run(), " ", P::run(), " ", C::$calls, "\n";
+"#,
+    );
+    assert_eq!(out, "17 17 517 517 -17 12\n");
+}
+
 /// Verifies inherited properties (`$a`) and methods are accessible from child, and
 /// `parent::greet()` calls the parent's version, returning "42 hi!".
 #[test]

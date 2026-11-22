@@ -644,7 +644,8 @@ one) runs instead, and a private redeclaration throws
 An instance-method redeclaration runs on `$this` from an instance method and throws
 `Error: Non-static method B::method() cannot be called statically` from a static one. Only
 classes that redeclare the method get a runtime check; when none does, the call binds
-directly.
+directly, and when every redeclaration has the private method's signature the check is a
+branch inside the one call.
 
 ## Static methods
 Called with `::`, no `$this`.

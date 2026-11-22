@@ -22,6 +22,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
         return lower_lexical_instance_static_method_call(ctx, inst, receiver.as_str(), method_name);
     }
+    let (raw_target, late_private_arms) = split_late_private_dispatch(&raw_target)?;
     let object_static = raw_target.starts_with("@object@");
     // `@forward@Class::m` calls Class's method with `static` forwarded from this frame: the
     // EIR dispatch for a late-bound call whose lexical method is private chose Class already
@@ -205,6 +206,8 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             &reference_entries,
             &callee_sig.return_type,
         )?;
+    } else if let Some(arms) = late_private_arms.as_deref() {
+        emit_late_private_dispatch_call(ctx, impl_class, &method_key, arms);
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
@@ -218,6 +221,62 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         ctx.emitter.label(&done_label);
     }
     Ok(())
+}
+
+/// Splits `@late@Class=id,id;Class=id@static::m` into the call target and the redeclarations
+/// that the called class selects (`ir_lower::expr::private_late_static_calls`).
+fn split_late_private_dispatch(raw_target: &str) -> Result<(String, Option<Vec<(String, Vec<u64>)>>)> {
+    let Some(rest) = raw_target.strip_prefix("@late@") else {
+        return Ok((raw_target.to_string(), None));
+    };
+    let invalid = || CodegenIrError::invalid_module(format!("invalid late private dispatch '{raw_target}'"));
+    let (encoded, target) = rest.split_once('@').ok_or_else(invalid)?;
+    let mut arms = Vec::new();
+    for arm in encoded.split(';') {
+        let (class_name, ids) = arm.split_once('=').ok_or_else(invalid)?;
+        let ids = ids
+            .split(',')
+            .map(|id| id.parse::<u64>().map_err(|_| invalid()))
+            .collect::<Result<Vec<_>>>()?;
+        arms.push((class_name.to_string(), ids));
+    }
+    Ok((target.to_string(), Some(arms)))
+}
+
+/// Calls the scope's private static method, or the same-signature redeclaration the called
+/// class selects. The arguments, including the hidden called-class id in the first integer
+/// argument register, are already in place, so only the branch target depends on the class.
+fn emit_late_private_dispatch_call(
+    ctx: &mut FunctionContext<'_>,
+    scope_class: &str,
+    method_key: &str,
+    arms: &[(String, Vec<u64>)],
+) {
+    let called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    let done_label = ctx.next_label("late_private_done");
+    let arm_labels = arms
+        .iter()
+        .map(|_| ctx.next_label("late_private_arm"))
+        .collect::<Vec<_>>();
+    for ((_, class_ids), arm_label) in arms.iter().zip(&arm_labels) {
+        for class_id in class_ids {
+            abi::emit_load_int_immediate(ctx.emitter, scratch, *class_id as i64);
+            ctx.emitter.instruction(&format!("cmp {}, {}", called_class_reg, scratch)); // compare the called-class id with a class that selects a redeclaration
+            let branch = match ctx.emitter.target.arch {
+                Arch::AArch64 => "b.eq",
+                Arch::X86_64 => "je",
+            };
+            ctx.emitter.instruction(&format!("{} {}", branch, arm_label));       // run that redeclaration for this called class
+        }
+    }
+    abi::emit_call_label(ctx.emitter, &static_method_symbol(scope_class, method_key));
+    for ((class_name, _), arm_label) in arms.iter().zip(&arm_labels) {
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(arm_label);
+        abi::emit_call_label(ctx.emitter, &static_method_symbol(class_name, method_key));
+    }
+    ctx.emitter.label(&done_label);
 }
 
 /// Lowers a direct static-method call against a class declared by a previous eval fragment.
