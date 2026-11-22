@@ -10,7 +10,7 @@
 //! - By reference the callee writes a hash through the caller's own storage. An ordinary local
 //!   is promoted in place; storage other code reads as a list is refused instead of crashing.
 
-use super::{expect_error, expect_no_error};
+use super::{expect_error, expect_error_strict, expect_no_error};
 
 /// The diagnostic every refused by-reference binding carries.
 const BY_REFERENCE: &str = "a by-reference parameter uses the caller's own storage";
@@ -43,36 +43,44 @@ fn test_declared_list_local_binds_to_hash_reference_parameter() {
 }
 
 /// A property, an element, an aliased local and a global are not promotable places.
+///
+/// The default build demotes the callee's `array<K, V> &` parameter to the generic boxed `array`
+/// layout instead (php does not enforce the annotation), so php just runs these programs
+/// (`tests/codegen/list_hash_param_binding.rs`, `test_*_binds_to_demoted_hash_reference_parameter`);
+/// only `--strict-locals` keeps the refusal.
 #[test]
 fn test_error_shared_list_storage_cannot_bind_hash_reference() {
-    expect_error(
+    expect_error_strict(
         &hashes("class H { public array<int> $ids = [4, 5]; } \
                  function run(): void { $h = new H(); put($h->ids); } run();"),
         BY_REFERENCE,
     );
-    expect_error(
+    expect_error_strict(
         &hashes("function run(): void { $rows = [[4, 5]]; put($rows[0]); } run();"),
         BY_REFERENCE,
     );
-    expect_error(
+    expect_error_strict(
         &hashes("function run(): void { $ids = [4, 5]; $alias = &$ids; put($ids); echo count($alias); } run();"),
         BY_REFERENCE,
     );
-    expect_error(
+    expect_error_strict(
         &hashes("$g = [4, 5]; function run(): void { global $g; put($g); } run();"),
         BY_REFERENCE,
     );
 }
 
 /// One variable can fill two hash reference slots of one call (both alias the promoted local),
-/// but cannot become a hash while an earlier `mixed &` slot of that call is boxing it.
+/// but cannot become a hash while an earlier `mixed &` slot of that call is boxing it. The default
+/// build demotes the hash parameter instead (codegen test
+/// `test_list_local_boxed_by_an_earlier_slot_binds_to_demoted_hash_reference_parameter`); only
+/// `--strict-locals` refuses.
 #[test]
 fn test_error_list_local_boxed_by_an_earlier_slot_cannot_bind_hash_reference() {
     expect_no_error(
         "<?php function two(array<int, int> &$a, array<int, int> &$b): void { $a[5] = 1; $b[6] = 2; } \
          function run(): void { $ids = [4, 5]; two($ids, $ids); } run();",
     );
-    expect_error(
+    expect_error_strict(
         "<?php function two(mixed &$a, array<int, int> &$b): void { $b[6] = 2; } \
          function run(): void { $ids = [4, 5]; two($ids, $ids); } run();",
         BY_REFERENCE,
@@ -107,10 +115,12 @@ fn test_typed_list_storage_binds_to_array_mixed_reference() {
     ));
 }
 
-/// Elements with no conversion to the parameter's values are refused in both positions.
+/// Elements with no conversion to the parameter's values are refused by value, and by reference
+/// under `--strict-locals`; the default build demotes the by-reference parameter instead (codegen
+/// test `test_int_list_binds_to_demoted_float_hash_reference_parameter`).
 #[test]
 fn test_error_list_elements_without_hash_conversion_are_refused() {
-    expect_error(
+    expect_error_strict(
         "<?php function put(array<int, float> &$m): void { $m[9] = 1.5; } \
          function run(): void { $ids = [4, 5]; put($ids); } run();",
         BY_REFERENCE,

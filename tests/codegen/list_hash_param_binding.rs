@@ -390,3 +390,58 @@ run();
 "#;
     assert_eq!(run_clean(source), "3x4");
 }
+
+// The fixtures below bind lists that cannot take the parameter's written layout (a global, an
+// alias, an element, a property, a variable another slot boxes, elements the declared values
+// cannot hold). php does not enforce the annotation, so the compiler demotes the callee's
+// `array<K, V> &` parameter to the generic boxed `array` and every caller binds it. Expected
+// output is `php -n` on the annotation-stripped program.
+
+/// A global list bound to a hash reference parameter keeps one storage for every reader.
+#[test]
+fn test_global_list_binds_to_demoted_hash_reference_parameter() {
+    let source = r#"<?php
+function put(array<int, int> &$m): void { $m[9] = 7; }
+$g = [4, 5];
+function run(): void { global $g; put($g); echo count($g), $g[9], $g[0]; }
+run();
+echo "|", count($g);
+"#;
+    assert_eq!(run_clean(source), "374|3");
+}
+
+/// An element, a property and an aliased local bound to a hash reference parameter.
+#[test]
+fn test_shared_list_storage_binds_to_demoted_hash_reference_parameter() {
+    let source = r#"<?php
+function put(array<int, int> &$m): void { $m[9] = 7; }
+class H { public array $ids = [4, 5]; }
+function property(): void { $h = new H(); put($h->ids); echo count($h->ids), $h->ids[9]; }
+function element(): void { $rows = [[4, 5]]; put($rows[0]); echo count($rows[0]), $rows[0][9]; }
+function alias(): void { $ids = [4, 5]; $alias = &$ids; put($ids); echo count($alias), $alias[9], count($ids); }
+property(); echo "|"; element(); echo "|"; alias();
+"#;
+    assert_eq!(run_clean(source), "37|37|373");
+}
+
+/// One variable filling a `mixed &` slot and a hash slot of the same call.
+#[test]
+fn test_list_local_boxed_by_an_earlier_slot_binds_to_demoted_hash_reference_parameter() {
+    let source = r#"<?php
+function two(mixed &$a, array<int, int> &$b): void { $b[6] = 2; }
+function run(): void { $ids = [4, 5]; two($ids, $ids); echo count($ids), $ids[6]; }
+run();
+"#;
+    assert_eq!(run_clean(source), "32");
+}
+
+/// An int list bound to a hash reference parameter whose declared values are floats.
+#[test]
+fn test_int_list_binds_to_demoted_float_hash_reference_parameter() {
+    let source = r#"<?php
+function put(array<int, float> &$m): void { $m[9] = 1.5; }
+function run(): void { $ids = [4, 5]; put($ids); echo count($ids), $ids[9], $ids[0]; }
+run();
+"#;
+    assert_eq!(run_clean(source), "31.54");
+}

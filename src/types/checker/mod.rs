@@ -107,7 +107,7 @@ pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use functions::call_validation::is_call_result_argument;
 pub(crate) use loop_storage::loop_assigned_local_names;
 pub(crate) use inference::closure_body_uses_this;
-pub(crate) use type_compat::set_program_evaluates_code;
+pub(crate) use type_compat::{set_program_evaluates_code, take_ref_param_demotions};
 pub(crate) use inference::php_declared_type_spelling;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;

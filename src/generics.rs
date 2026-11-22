@@ -200,6 +200,13 @@ where
         let check_phase = stats::Phase::start();
         let checked = check(&program, &context);
         let check_us = check_phase.finish_check();
+        // A by-reference parameter with a written array layout that some call site cannot bind
+        // is demoted to a bare `array` hint and the program is checked again (php does not
+        // enforce the element annotation). Requests of a successful check are stale.
+        let demotions = crate::types::checker::take_ref_param_demotions();
+        if checked.is_err() && !demotions.is_empty() && demote_ref_array_params(&mut program, &demotions) > 0 {
+            continue;
+        }
         let result = match checked {
             Ok(result) => result,
             Err(error) if rounds == 0 => return Err((Some(program), error)),
@@ -1082,6 +1089,37 @@ pub fn instantiated_name(base: &str, bindings: &[(String, TypeExpr)]) -> String 
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{}>", base, args)
+}
+
+/// Rewrites the written array hint of each requested by-reference function parameter to a bare
+/// `array`, returning how many parameters changed.
+///
+/// `requests` pairs a case-folded function name with a parameter name, as recorded by
+/// `Checker::request_ref_param_demotion`. Only a by-reference parameter carrying a written
+/// `array<T>` / `array<K, V>` hint is touched.
+fn demote_ref_array_params(
+    program: &mut crate::parser::ast::Program,
+    requests: &[(String, String)],
+) -> usize {
+    use crate::parser::ast::StmtKind;
+    let mut changed = 0;
+    for stmt in program.iter_mut() {
+        let StmtKind::FunctionDecl { name, params, .. } = &mut stmt.kind else {
+            continue;
+        };
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        for (param_name, type_expr, _, by_ref) in params.iter_mut() {
+            if !*by_ref
+                || !matches!(type_expr, Some(TypeExpr::Array(_) | TypeExpr::AssocArray { .. }))
+                || !requests.iter().any(|(function, param)| *function == key && param == param_name)
+            {
+                continue;
+            }
+            *type_expr = Some(TypeExpr::Named(Name::unqualified("array")));
+            changed += 1;
+        }
+    }
+    changed
 }
 
 #[cfg(test)]

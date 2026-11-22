@@ -469,6 +469,7 @@ impl Checker {
             if promotable {
                 return Ok(());
             }
+            self.request_ref_param_demotion(context);
             return Err(CompileError::new(
                 arg.span,
                 &format!(
@@ -493,6 +494,7 @@ impl Checker {
             && matches!(storage_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             && !crate::ir_lower::gradual_coercions::boundary_coercion_narrows_gradual(expected_ty)
         {
+            self.request_ref_param_demotion(context);
             return Err(CompileError::new(
                 arg.span,
                 &format!(
@@ -1031,6 +1033,53 @@ fn by_ref_storage_place(arg: &Expr) -> &Expr {
         arg = value;
     }
     arg
+}
+
+thread_local! {
+    /// By-reference parameters (`(function key, parameter name)`) whose written array layout a
+    /// call site could not bind: see [`Checker::request_ref_param_demotion`].
+    static REF_PARAM_DEMOTIONS: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Hands the demotion requests of the check that just ended to the monomorphization driver,
+/// which rewrites those parameters to a bare `array` hint and checks again.
+pub(crate) fn take_ref_param_demotions() -> Vec<(String, String)> {
+    REF_PARAM_DEMOTIONS.with(|requests| std::mem::take(&mut *requests.borrow_mut()))
+}
+
+impl Checker {
+    /// Asks the driver to demote a by-reference parameter's written array layout to plain `array`.
+    ///
+    /// A by-reference parameter shares the caller's storage, and a written `array<K, V>` is a
+    /// layout contract only an ordinary local can be converted to. A call site passing a global,
+    /// an alias, a property, an element, a variable another slot of the call boxes, or a list
+    /// whose elements the declared values cannot hold cannot meet it. php does not enforce the
+    /// element annotation, so the parameter is demoted to the generic boxed layout every caller
+    /// can bind (what an untyped `array &$p` already is), instead of refusing the program.
+    /// `--strict-locals` keeps the refusal. `context` is the call checker's
+    /// `Function 'name' parameter $p` label; only function parameters are demoted.
+    pub(crate) fn request_ref_param_demotion(&self, context: &str) {
+        if self.strict_locals {
+            return;
+        }
+        let Some(rest) = context.strip_prefix("Function '") else {
+            return;
+        };
+        let Some((function, param)) = rest.split_once("' parameter $") else {
+            return;
+        };
+        let request = (
+            crate::names::php_symbol_key(function.trim_start_matches('\\')),
+            param.to_string(),
+        );
+        REF_PARAM_DEMOTIONS.with(|requests| {
+            let mut requests = requests.borrow_mut();
+            if !requests.contains(&request) {
+                requests.push(request);
+            }
+        });
+    }
 }
 
 thread_local! {
