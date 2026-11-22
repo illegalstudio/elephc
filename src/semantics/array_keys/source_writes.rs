@@ -2062,30 +2062,20 @@ fn validate_stmt(
                 current_class,
             );
         }
-        StmtKind::Switch { cases, default, .. } => {
-            let entry = locals.clone();
-            let mut exits = Vec::with_capacity(cases.len() + 1);
-            for (_, body) in cases {
-                exits.push(validate_branch(
-                    body,
-                    &entry,
-                    properties,
-                    profile,
-                    current_class,
-                )?);
-            }
-            if let Some(body) = default {
-                exits.push(validate_branch(
-                    body,
-                    &entry,
-                    properties,
-                    profile,
-                    current_class,
-                )?);
-            } else {
-                exits.push(entry);
-            }
-            *locals = merge_exits(&exits);
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            apply_expression_facts(subject, locals, properties, profile, current_class);
+            *locals = validate_switch_flow(
+                cases,
+                default.as_deref(),
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
         }
         StmtKind::Try {
             try_body,
@@ -2152,6 +2142,60 @@ fn validate_branch(
     let mut exit = entry.clone();
     validate_block(body, &mut exit, properties, profile, current_class)?;
     Ok(exit)
+}
+
+/// Validates switch direct entries and fallthrough paths without merging them before each body.
+fn validate_switch_flow(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    entry: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LocalFacts, CompileError> {
+    let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
+    if let Some(default) = default {
+        bodies.insert(
+            crate::termination::switch_default_position(cases, default),
+            default,
+        );
+    }
+
+    let mut switch_exits = Vec::new();
+    let mut prior_fallthrough = None;
+    for body in bodies {
+        let mut inputs = vec![entry.clone()];
+        if let Some(fallthrough) = prior_fallthrough.take() {
+            if fallthrough != *entry {
+                inputs.push(fallthrough);
+            }
+        }
+        let mut fallthroughs = Vec::new();
+        for input in inputs {
+            let flow = collect_loop_break_flow(
+                body,
+                &input,
+                properties,
+                profile,
+                current_class,
+            )?;
+            switch_exits.extend(flow.exits);
+            switch_exits.extend(flow.continues);
+            fallthroughs.push(flow.fallthrough);
+        }
+        prior_fallthrough = merge_optional_exits(fallthroughs);
+    }
+    if let Some(fallthrough) = prior_fallthrough {
+        switch_exits.push(fallthrough);
+    }
+    if default.is_none() {
+        switch_exits.push(entry.clone());
+    }
+    Ok(if switch_exits.is_empty() {
+        entry.clone()
+    } else {
+        merge_exits(&switch_exits)
+    })
 }
 
 /// Facts from breaks that directly leave the loop whose body is being analyzed.

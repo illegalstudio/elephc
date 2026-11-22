@@ -159,6 +159,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [[1]]; while ($argc > 1) { try { $values = [[1]]; break; } catch (Exception $error) {} } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [1]; while (true) { try { $values = [[1]]; break; } finally {} } $values[0][false] = 2;",
         "<?php $values = ['ab']; do { try { $values = [['a']]; continue; } finally {} } while (false); $values[0][false] = 'x';",
+        "<?php $values = [1]; switch ($argc) { case 1: $values = [[1]]; case 2: $values[0][false] = 2; break; }",
         "<?php $values = [[1]]; while ($argc > 1) { while ($argc > 2) { $values = [[1]]; break 2; } break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[1]]; while ($argc > 1) { if (false) { $values[0][false] = 2; } break; }",
         "<?php $values = [[1]]; while ($argc > 1) { break; $values[0][false] = 2; }",
@@ -245,6 +246,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = [1]; $ignored = false ? ($values = [[1]]) : 0; $values[0][false] = 2;",
         "<?php $values = [['a']]; while ($values = [['a']]) { $values = ['ab']; break; } $values[0][false] = 'x';",
         "<?php $values = [[1]]; while (true) { try { $values = [1]; break; } finally {} } $values[0][false] = 2;",
+        "<?php $values = [1]; switch (1) { case 1: break; $values = [[1]]; } $values[0][false] = 2;",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
