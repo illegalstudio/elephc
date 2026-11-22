@@ -10,6 +10,7 @@
 //!   `static::` keeps late-static semantics after the enclosing method returns.
 
 use super::*;
+use crate::ast_visit::{walk_statements, AstVisitor};
 use crate::names::CALLED_CLASS_ID_LOCAL as CALLED_CLASS_ID_CAPTURE;
 
 /// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
@@ -227,7 +228,9 @@ pub(super) fn lower_closure_with_context(
                     crate::ir_lower::eval_reference_layouts::contains_unboxed_array(&ty));
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture))
+                && (body_contains_eval
+                    || body_writes_local(body, capture)
+                    || body_declares_global_binding(body, capture))
                 && !preserves_native_reference_layout;
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
@@ -465,6 +468,46 @@ pub(super) fn lower_closure_with_context(
 /// this gate exists to prevent — while a spurious true only widens a cell that did not need it.
 pub(crate) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
+}
+
+/// Finds a `global $name` binding inside closure expressions but not named declarations.
+struct GlobalBindingFinder<'a> {
+    name: &'a str,
+    found: bool,
+}
+
+impl AstVisitor for GlobalBindingFinder<'_> {
+    /// Records a global binding that can alias a by-reference capture's top-level storage.
+    fn statement(&mut self, stmt: &Stmt) {
+        if let StmtKind::Global { vars } = &stmt.kind {
+            self.found |= vars.iter().any(|var| var == self.name);
+        }
+    }
+
+    /// Skips named declaration scopes while still descending into closure expressions.
+    fn descend_statement(&mut self, stmt: &Stmt) -> bool {
+        !self.found
+            && !matches!(
+                &stmt.kind,
+                StmtKind::FunctionDecl { .. }
+                    | StmtKind::ClassDecl { .. }
+                    | StmtKind::TraitDecl { .. }
+                    | StmtKind::InterfaceDecl { .. }
+                    | StmtKind::EnumDecl { .. }
+            )
+    }
+
+    /// Stops expression recursion once the binding has been found.
+    fn descend_expression(&mut self, _expr: &Expr) -> bool {
+        !self.found
+    }
+}
+
+/// Detects global aliases reachable through nested closures in one capture body.
+fn body_declares_global_binding(body: &[Stmt], name: &str) -> bool {
+    let mut finder = GlobalBindingFinder { name, found: false };
+    walk_statements(body, &mut finder);
+    finder.found
 }
 
 /// Returns true when a statement can store into the local named `name`.
@@ -1022,4 +1065,39 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 /// Returns true when a function call name resolves to PHP's `eval` construct.
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses the body of the outer closure assigned by one small fixture.
+    fn outer_closure_body(source: &str) -> Vec<Stmt> {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let value = program
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                StmtKind::Assign { name, value } if name == "outer" => Some(value),
+                _ => None,
+            })
+            .expect("outer closure assignment");
+        let ExprKind::Closure { body, .. } = &value.kind else {
+            panic!("outer assignment must contain a closure");
+        };
+        body.clone()
+    }
+
+    /// Nested globals widen a capture without treating an unrelated nested local as an alias.
+    #[test]
+    fn nested_global_binding_widens_by_ref_capture() {
+        let global = outer_closure_body(
+            "<?php $outer = function () { $inner = function () { global $value; $value = null; }; };",
+        );
+        assert!(body_declares_global_binding(&global, "value"));
+
+        let local = outer_closure_body(
+            "<?php $outer = function () { $inner = function () { $value = null; }; };",
+        );
+        assert!(!body_declares_global_binding(&local, "value"));
+    }
 }
