@@ -24,6 +24,8 @@ use elephc_semantics::{array_keys::StringKey, SemanticProfile};
 thread_local! {
     /// Prevents repeated loop-entry refinement from multiplying across nested loop bodies.
     static LOOP_REFINEMENT_DEPTH: Cell<u8> = const { Cell::new(0) };
+    /// Keeps one exact catch replay from forking into conservative and exact descendants again.
+    static EXACT_CATCH_REPLAY_DEPTH: Cell<u8> = const { Cell::new(0) };
 }
 
 /// One exact literal key retained by a source array shape.
@@ -2348,6 +2350,34 @@ impl Drop for LoopRefinementGuard<'_> {
     }
 }
 
+/// Restores the previous exact-catch replay depth after one path finishes.
+struct ExactCatchReplayGuard<'a> {
+    depth: &'a Cell<u8>,
+    previous: u8,
+}
+
+impl Drop for ExactCatchReplayGuard<'_> {
+    /// Restores the thread-local depth on success, error, or unwinding.
+    fn drop(&mut self) {
+        self.depth.set(self.previous);
+    }
+}
+
+/// Runs one exact catch path whose nested catches keep exact descendants without reforking.
+fn replay_exact_catch<T>(replay: impl FnOnce() -> Result<T, CompileError>) -> Result<T, CompileError> {
+    EXACT_CATCH_REPLAY_DEPTH.with(|depth| {
+        let previous = depth.get();
+        depth.set(previous.saturating_add(1));
+        let _guard = ExactCatchReplayGuard { depth, previous };
+        replay()
+    })
+}
+
+/// Reports whether the current flow belongs to an exact catch replay.
+fn replaying_exact_catch() -> bool {
+    EXACT_CATCH_REPLAY_DEPTH.with(|depth| depth.get() > 0)
+}
+
 /// Replays one changed loop entry while bounding recursive replays in nested loops.
 fn collect_repeated_loop_flow(
     body: &[Stmt],
@@ -3172,21 +3202,15 @@ fn collect_try_flow(
         }
     }
     try_flow.terminals = escaping;
+    let exact_replay = replaying_exact_catch();
     let mut flows = vec![try_flow];
-    let mut exact_catch_flows = Vec::new();
+    let mut conservative_audit_flows = Vec::new();
     for (catch, exact_entries) in catches.iter().zip(caught_entries) {
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
         if let Some(variable) = &catch.variable {
             catch_entry.set(variable, ValueFact::Unknown);
         }
-        flows.push(collect_loop_break_flow(
-            &catch.body,
-            &catch_entry,
-            properties,
-            profile,
-            current_class,
-        )?);
         let mut distinct_entries = Vec::new();
         for mut exact_entry in exact_entries {
             if let Some(variable) = &catch.variable {
@@ -3196,21 +3220,42 @@ fn collect_try_flow(
                 distinct_entries.push(exact_entry);
             }
         }
+        if distinct_entries.is_empty() {
+            flows.push(collect_loop_break_flow(
+                &catch.body,
+                &catch_entry,
+                properties,
+                profile,
+                current_class,
+            )?);
+            continue;
+        }
         for exact_entry in distinct_entries {
-            exact_catch_flows.push(collect_loop_break_flow(
+            flows.push(replay_exact_catch(|| collect_loop_break_flow(
                 &catch.body,
                 &exact_entry,
                 properties,
                 profile,
                 current_class,
-            )?);
+            ))?);
+        }
+        if !exact_replay {
+            conservative_audit_flows.push(replay_exact_catch(|| {
+                collect_loop_break_flow(
+                    &catch.body,
+                    &catch_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )
+            })?);
         }
     }
     let flow = merge_parallel_loop_flows(flows);
     if let Some(finally_body) = finally_body {
-        for exact_flow in exact_catch_flows {
+        for conservative_flow in conservative_audit_flows {
             apply_loop_finally(
-                exact_flow,
+                conservative_flow,
                 finally_body,
                 properties,
                 profile,

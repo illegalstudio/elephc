@@ -464,6 +464,39 @@ fn strict_array_key_source_validation_routes_caught_throws_before_finally() {
     let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
         .expect_err("a caught throw must retain its exact facts through finally");
     assert!(error.message.contains("strict-array-keys"), "{error:?}");
+
+    let source = "<?php $values = [1]; try { try { $values = [[1]]; throw new Exception(); } catch (Exception $error) {} } finally { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("an enclosing finally must retain caught throw facts");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+
+    let source = "<?php $values = [1]; try { $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("later statements must retain caught throw facts");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+
+    let source = "<?php $values = [1]; try { try { $values = [[1]]; throw new Exception(); } catch (Exception $error) { throw new RuntimeException(); } } finally { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("a rethrow must retain caught throw facts through outer finally");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+}
+
+/// Exact catch replays stay bounded while retaining outer array facts.
+#[test]
+fn strict_array_key_source_validation_bounds_nested_catch_replays() {
+    let mut source = String::from("<?php ");
+    for depth in 0..20 {
+        source.push_str(&format!(
+            "try {{ $values{depth} = [[1]]; throw new Exception(); }} catch (Exception $error{depth}) {{ "
+        ));
+    }
+    source.push_str("$values0[0][false] = 2;");
+    for _ in 0..20 {
+        source.push_str(" }");
+    }
+    let error = crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+        .expect_err("nested exact catches retain the outer invalid receiver");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
 }
 
 /// A nested loop audits one changed repeated entry before the refinement bound applies.
