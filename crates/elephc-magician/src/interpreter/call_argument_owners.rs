@@ -225,31 +225,14 @@ fn eval_invoker_ref_arg_value_and_target(
     ))
 }
 
-/// Reads the current PHP value from a native descriptor-invoker by-reference slot.
+/// Reads a marker accepted by the argument-unpacking boundary.
 fn eval_invoker_ref_slot_value(
     slot: usize,
     source_tag: u64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match source_tag {
-        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
-            let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
-        }
-        EVAL_TAG_STRING => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            values.raw_string_value(words[0], words[1])
-        }
-        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
-            let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
-        }
-        EVAL_TAG_MIXED => {
-            let value = RuntimeCellHandle::from_raw(unsafe {
-                *(slot as *const *mut crate::value::RuntimeCell)
-            });
-            values.retain(value)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
+    if source_tag == EVAL_INVOKER_TAGGED_SCALAR_SOURCE {
+        return Err(EvalStatus::RuntimeFatal);
     }
+    eval_invoker_slot_ref_target_value(slot, source_tag, values)
 }

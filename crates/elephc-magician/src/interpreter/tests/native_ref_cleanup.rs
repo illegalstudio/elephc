@@ -8,6 +8,7 @@
 //! - Injected release errors consume their owner, matching throwing native destructors.
 //! - Staged replacement cells model owners already transferred by the native callee.
 
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 use super::super::*;
 use super::support::*;
 use crate::runtime_hooks::owner_frames::RuntimeOwners;
@@ -163,8 +164,12 @@ fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
         let BoundNativeFunctionRefSlot::TaggedScalar { slot, .. } = &mut bound.ref_slots[0] else {
             panic!("nullable integers must expose a full payload/tag slot");
         };
-        assert_eq!(**slot, [before.unwrap_or(0) as u64, if before.is_some() { EVAL_TAG_INT } else { EVAL_TAG_NULL }]);
-        let address = (slot.as_mut() as *mut [u64; 2]) as usize;
+        let expected = InvokerSlotWords::new(
+            before.unwrap_or(0) as u64,
+            if before.is_some() { EVAL_TAG_INT } else { EVAL_TAG_NULL },
+        );
+        assert_eq!(slot.as_ref().snapshot(), expected);
+        let address = slot.as_ref().as_ptr() as usize;
         let read = eval_invoker_slot_ref_target_value(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, &mut values).unwrap();
         assert_eq!(values.get(read), before.map_or(FakeValue::Null, FakeValue::Int));
         values.release(read).unwrap();
@@ -212,10 +217,8 @@ fn native_scalar_reference_staging_reserves_a_full_marker_slot() {
     let BoundNativeFunctionRefSlot::RawWord { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("integer references must use a raw scalar marker slot");
     };
-    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
-    assert_eq!(**slot, [3, 0]);
-    slot[0] = 7;
-    slot[1] = u64::MAX;
+    assert_eq!(slot.as_ref().snapshot(), InvokerSlotWords::new(3, 0));
+    unsafe { slot.as_ref().as_ptr().write(InvokerSlotWords::new(7, u64::MAX)); }
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     assert_eq!(values.get(scope.visible_cell("value").unwrap()), FakeValue::Int(7));
     for marker in bound.values { values.release(marker).unwrap(); }
@@ -255,9 +258,8 @@ fn native_iterable_reference_staging_reserves_a_full_marker_slot() {
     let BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } = &mut bound.ref_slots[0] else {
         panic!("iterable references must expose a full raw heap marker slot");
     };
-    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
-    assert_eq!(**slot, [original.as_ptr() as u64, 0]);
-    slot[1] = u64::MAX;
+    assert_eq!(slot.as_ref().snapshot(), InvokerSlotWords::new(original.as_ptr() as u64, 0));
+    unsafe { slot.as_ref().as_ptr().write(InvokerSlotWords::new(original.as_ptr() as u64, u64::MAX)); }
     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
     for marker in bound.values { values.release(marker).unwrap(); }
     let current = scope.visible_cell("value").unwrap();
@@ -540,13 +542,13 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
             named_keys: Vec::new(),
             ref_slots: vec![
                 BoundNativeFunctionRefSlot::RawString {
-                    original: [string.as_ptr() as u64, 6],
-                    slot: Box::new([string.as_ptr() as u64, 6]), target: None,
+                    original: InvokerSlotWords::new(string.as_ptr() as u64, 6),
+                    slot: InvokerSlot::pin(InvokerSlotWords::new(string.as_ptr() as u64, 6)), target: None,
                     force_writeback: false,
                 },
                 BoundNativeFunctionRefSlot::OwnedRawWord {
                     original: array.as_ptr() as u64,
-                    slot: Box::new([array.as_ptr() as u64, 0]), target: None,
+                    slot: InvokerSlot::pin(InvokerSlotWords::new(array.as_ptr() as u64, 0)), target: None,
                 },
                 BoundNativeFunctionRefSlot::Mixed {
                     original: mixed, slot: Box::new(mixed.as_ptr()), target: None,

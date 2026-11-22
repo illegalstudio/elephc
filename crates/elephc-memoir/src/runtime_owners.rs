@@ -147,6 +147,33 @@ impl RuntimeOwners for RuntimeOwnerSlot {
     }
 }
 
+/// Releases every argument in caller order while preserving an invocation's rooted result.
+///
+/// The caller keeps the result and argument slots visible to any collector invoked by
+/// `release`. An invocation error wins over cleanup errors. Otherwise the first cleanup
+/// error wins and the unpublished result is detached and discarded.
+pub fn finish_argument_cleanup<'a, T: 'a, E: Copy, S>(
+    result: &Result<RuntimeOwnerSlot, E>,
+    owners: impl IntoIterator<Item = &'a T>,
+    state: &mut S,
+    mut release: impl FnMut(&mut S, &T) -> Result<(), E>,
+    discard: impl FnOnce(&mut S, RuntimeCellHandle),
+) -> Result<RuntimeCellHandle, E> {
+    let mut cleanup = Ok(());
+    for owner in owners {
+        let released = release(state, owner);
+        cleanup = cleanup.and(released);
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(*status),
+        (Ok(result), Err(status)) => {
+            discard(state, result.take());
+            Err(status)
+        }
+        (Ok(result), Ok(())) => Ok(result.take()),
+    }
+}
+
 /// Consumes every lease through a contained native callback, accumulating its owned Throwable.
 ///
 /// The callback returns whether this release failed. Previously accumulated exceptions can
@@ -162,4 +189,46 @@ pub fn release_owned_cells(
         caught |= release(cell.as_ptr(), &mut thrown);
     }
     ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Keeps a result rooted through every release and preserves the first failure.
+    #[test]
+    fn argument_cleanup_keeps_the_result_live_and_preserves_error_order() {
+        let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let result = Ok(RuntimeOwnerSlot::new(value));
+        let slot = result.as_ref().unwrap();
+        let mut released = Vec::new();
+
+        let outcome = finish_argument_cleanup(
+            &result,
+            &[1, 2, 3],
+            &mut released,
+            |released, &owner| {
+                assert!(!slot.is_empty());
+                released.push(owner);
+                Err(owner)
+            },
+            |released, discarded| {
+                assert_eq!(discarded, value);
+                assert!(slot.is_empty());
+                released.push(4);
+            },
+        );
+        assert_eq!(outcome, Err(1));
+        assert_eq!(released, [1, 2, 3, 4]);
+
+        let outcome = finish_argument_cleanup(
+            &Err(5),
+            &[1],
+            &mut released,
+            |released, &owner| { released.push(owner); Err(owner) },
+            |_, _| panic!("a failed invocation has no result to discard"),
+        );
+        assert_eq!(outcome, Err(5));
+        assert_eq!(released, [1, 2, 3, 4, 1]);
+    }
 }

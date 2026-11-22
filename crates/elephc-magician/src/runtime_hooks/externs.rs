@@ -196,10 +196,10 @@ unsafe extern "C" {
         object_identity: u64,
         name_ptr: *const u8,
         name_len: u64,
-        node: *mut u64,
+        node: *mut c_void,
     ) -> u64;
     /// Removes the supplied magic-setter guard from the native guard chain.
-    pub(super) fn __elephc_eval_magic_set_guard_pop(node: *mut u64);
+    pub(super) fn __elephc_eval_magic_set_guard_pop(node: *mut c_void);
     /// Clears a native typed slot and returns any escaping exception through the owned output box.
     #[link_name = "__elephc_eval_value_typed_property_unset_v2"]
     pub(super) fn __elephc_eval_value_typed_property_unset(

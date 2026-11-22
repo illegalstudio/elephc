@@ -1083,11 +1083,11 @@ pub(super) fn eval_magic_property_set(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut native_node = std::pin::pin!([0_u64; 4]);
+    let native_node = std::pin::pin!(elephc_memoir::owner_layout::MagicSetGuard::default());
     if !values.native_magic_set_guard_push(
         identity,
         property_name,
-        native_node.as_mut().get_mut(),
+        native_node.as_ref(),
     )? {
         return Ok(false);
     }
@@ -1105,7 +1105,7 @@ pub(super) fn eval_magic_property_set(
         let result = finish_magic_property_name(result, property, context, values)?;
         release_expr_result(result, context, values)
     })();
-    let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
+    let popped = values.native_magic_set_guard_pop(native_node.as_ref());
     result.and(popped).map(|()| true)
 }
 

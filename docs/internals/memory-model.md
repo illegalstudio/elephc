@@ -73,6 +73,11 @@ distinct layouts shared by the Rust storage and Memoir's emitted instructions.
 Memoir initializes an external activation before linking it to the supplied
 chain, and visits its actual pointer fields while the owning frame is stable.
 The compiler retains versioned C ABI wrappers and selects which slots to visit.
+The magic-setter guard and staged invoker slots also share their native sizes
+and field offsets. A staged invoker slot reserves two words even for a scalar
+because a native variadic writer can publish a complete pair. A borrowed scalar
+slot is accessed at its actual width. Magician selects the argument's PHP
+representation and the writeback target.
 Foreign release receives optional staging-owner transfer and exception
 boxing/unboxing hooks. It contains destructor throws below Rust, updates the
 caller's owned nullable exception accumulator and returns the new-throw status.
@@ -94,9 +99,13 @@ so reentrant destruction cannot retire the same slot twice.
 Boxed-array storage helpers separate shared cells, create an empty indexed
 payload when the caller requests one, and install a promoted hash before
 releasing the displaced array. Eval argument lists own staged callable descriptors
-and expose their actual slots to GC. A native reference commit publishes the
-validated owner before it retires the displaced value and any snapshot lease,
-reporting cleanup exceptions through the caller's context. String writes can use
+and expose their actual slots to GC.
+The common eval argument cleanup keeps the result visible to GC until its
+arguments have been released. It preserves the call error or the first cleanup
+error and detaches a result that cleanup prevents from being returned.
+A native reference commit publishes the validated owner before it retires the
+displaced value and any snapshot lease, reporting cleanup exceptions through the
+caller's context. String writes can use
 a private snapshot and an unwind guard to keep their input valid while a warning
 handler runs. The compiler supplies the layouts and controls when these
 operations run.

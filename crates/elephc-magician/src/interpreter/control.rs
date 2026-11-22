@@ -11,6 +11,8 @@
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
+use std::pin::Pin;
 use super::argument_value_owners::ArgumentValueOwner;
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -82,24 +84,24 @@ pub(super) enum BoundNativeFunctionRefSlot {
     RawWord {
         tag: u64,
         original: u64,
-        slot: Box<[u64; 2]>,
+        slot: Pin<Box<InvokerSlot>>,
         target: Option<EvalReferenceTarget>,
         force_writeback: bool,
     },
     RawString {
-        original: [u64; 2],
-        slot: Box<[u64; 2]>,
+        original: InvokerSlotWords,
+        slot: Pin<Box<InvokerSlot>>,
         target: Option<EvalReferenceTarget>,
         force_writeback: bool,
     },
     TaggedScalar {
-        original: [u64; 2],
-        slot: Box<[u64; 2]>,
+        original: InvokerSlotWords,
+        slot: Pin<Box<InvokerSlot>>,
         target: Option<EvalReferenceTarget>,
     },
     OwnedRawWord {
         original: u64,
-        slot: Box<[u64; 2]>,
+        slot: Pin<Box<InvokerSlot>>,
         target: Option<EvalReferenceTarget>,
     },
 }

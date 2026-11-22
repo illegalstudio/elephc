@@ -254,14 +254,14 @@ macro_rules! impl_collection_call_ops {
         &mut self,
         object_identity: u64,
         property: &str,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&elephc_memoir::owner_layout::MagicSetGuard>,
     ) -> Result<bool, EvalStatus> {
         Ok(unsafe {
             __elephc_eval_magic_set_guard_push(
                 object_identity,
                 property.as_ptr(),
                 property.len() as u64,
-                node.as_mut_ptr(),
+                node.as_ptr(),
             ) != 0
         })
     }
@@ -269,9 +269,9 @@ macro_rules! impl_collection_call_ops {
     /// Unlinks the eval-owned node before its Rust stack storage leaves scope.
     fn native_magic_set_guard_pop(
         &mut self,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&elephc_memoir::owner_layout::MagicSetGuard>,
     ) -> Result<(), EvalStatus> {
-        unsafe { __elephc_eval_magic_set_guard_pop(node.as_mut_ptr()); }
+        unsafe { __elephc_eval_magic_set_guard_pop(node.as_ptr()); }
         Ok(())
     }
 

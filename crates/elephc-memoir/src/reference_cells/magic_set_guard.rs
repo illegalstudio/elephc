@@ -7,12 +7,11 @@
 //! Key details:
 //! - A guard borrows the receiver and name for the lifetime of its caller's frame.
 
+use crate::owner_layout::MagicSetGuard;
 use crate::{Arch, Emitter, abi};
 
 /// Current coroutine's head for the borrowed guard chain.
 pub const HEAD: &str = "_magic_set_guard_head";
-/// Bytes occupied by the previous link, receiver, name pointer and name length.
-pub const NODE_BYTES: usize = 4 * 8;
 
 /// Emits publication and removal of one caller-owned magic-setter guard node.
 pub fn emit_link_and_pop(emitter: &mut impl Emitter) {
@@ -26,9 +25,9 @@ pub fn emit_link_and_pop(emitter: &mut impl Emitter) {
 fn emit_aarch64(emitter: &mut impl Emitter) {
     emitter.label("__rt_magic_set_guard_push_new");
     emitter.instruction("str x9, [x3]");                                        // node.next = old head
-    emitter.instruction("str x0, [x3, #8]");                                    // node.receiver = receiver
-    emitter.instruction("str x1, [x3, #16]");                                   // node.name_ptr = property bytes
-    emitter.instruction("str x2, [x3, #24]");                                   // node.name_len = property length
+    emitter.instruction(&format!("str x0, [x3, #{}]", MagicSetGuard::RECEIVER)); // node.receiver = receiver
+    emitter.instruction(&format!("str x1, [x3, #{}]", MagicSetGuard::NAME_POINTER)); // node.name_ptr = property bytes
+    emitter.instruction(&format!("str x2, [x3, #{}]", MagicSetGuard::NAME_LENGTH)); // node.name_len = property length
     abi::emit_store_reg_to_symbol(
         emitter,
         "x3",
@@ -65,9 +64,9 @@ fn emit_x86_64(emitter: &mut impl Emitter) {
         0,
     );
     emitter.instruction("mov QWORD PTR [rcx], r8");                             // node.next = old head
-    emitter.instruction("mov QWORD PTR [rcx + 8], rdi");                        // node.receiver = receiver
-    emitter.instruction("mov QWORD PTR [rcx + 16], rsi");                       // node.name_ptr = property bytes
-    emitter.instruction("mov QWORD PTR [rcx + 24], rdx");                       // node.name_len = property length
+    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], rdi", MagicSetGuard::RECEIVER)); // node.receiver = receiver
+    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], rsi", MagicSetGuard::NAME_POINTER)); // node.name_ptr = property bytes
+    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], rdx", MagicSetGuard::NAME_LENGTH)); // node.name_len = property length
     abi::emit_store_reg_to_symbol(
         emitter,
         "rcx",

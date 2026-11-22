@@ -9,7 +9,7 @@
 //! - Cleanup runs on failed argument evaluation and failed operations as well as success.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, RuntimeOwners, with_runtime_owners};
 
 /// Prints a borrowed operand and releases its temporary owner and any separate string conversion.
 pub(in crate::interpreter) fn eval_echo_expr(
@@ -191,23 +191,28 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = result.and_then(|value| promote_borrowed_result(value, values))
         .map(RuntimeOwnerSlot::new);
-    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
     // Materialization moves each cleanup obligation before any release can reenter PHP.
-    let inventory = (&arguments, result.as_ref().ok());
+    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    finish_eval_argument_slots(result, &arguments, context, values, |owner, context, values| {
+        release_expr_result(owner.take(), context, values)
+    })
+}
+
+/// Publishes a surviving result and its arguments until the shared cleanup completes.
+pub(super) fn finish_eval_argument_slots<T: RuntimeOwners, V: RuntimeValueOps>(
+    result: Result<RuntimeOwnerSlot, EvalStatus>,
+    arguments: &[T],
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    mut release: impl FnMut(&T, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let inventory = (arguments, result.as_ref().ok());
     with_runtime_owners(&inventory, || {
-        let mut released = Ok(());
-        for argument in &arguments {
-            let cleanup = release_expr_result(argument.take(), context, values);
-            if released.is_ok() { released = cleanup; }
-        }
-        match (&result, released) {
-            (Err(status), _) => Err(*status),
-            (Ok(value), Err(status)) => {
-                let _ = eval_release_value(context, values, value.take());
-                Err(status)
-            }
-            (Ok(value), Ok(())) => Ok(value.take()),
-        }
+        elephc_memoir::runtime_owners::finish_argument_cleanup(
+            &result, arguments, &mut (context, values),
+            |(context, values), owner| release(owner, context, &mut **values),
+            |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+        )
     })
 }
 

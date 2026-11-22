@@ -15,9 +15,9 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
-const MAGIC_SET_GUARD_FRAME_BYTES: usize = TRY_HANDLER_SLOT_SIZE + 64;
+const MAGIC_SET_GUARD_FRAME_BYTES: usize = MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_SLOT_SIZE + 16;
 const MAGIC_SET_GUARD_NODE_OFFSET: usize = 0;
-const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = elephc_memoir::reference_cells::magic_set_guard::NODE_BYTES + 16;
+const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = elephc_memoir::owner_layout::MagicSetGuard::BYTES + 16;
 
 /// Raises PHP's call-site `TypeError` for a property argument whose storage cannot satisfy a
 /// typed by-reference parameter. The runtime unwinder transfers control, so the callee call

@@ -10,6 +10,7 @@
 
 use super::super::*;
 use super::support::*;
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 
 /// A by-value foreach receiver is retired after every normal or abrupt body exit.
 ///
@@ -190,12 +191,14 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                 let current_word = current.as_ptr() as u64;
                 let slot = if string {
                     BoundNativeFunctionRefSlot::RawString {
-                        original: [original_word, 3], slot: Box::new([current_word, 3]), target: None,
+                        original: InvokerSlotWords::new(original_word, 3),
+                        slot: InvokerSlot::pin(InvokerSlotWords::new(current_word, 3)), target: None,
                         force_writeback: false,
                     }
                 } else {
                     BoundNativeFunctionRefSlot::OwnedRawWord {
-                        original: original_word, slot: Box::new([current_word, 0]), target: None,
+                        original: original_word,
+                        slot: InvokerSlot::pin(InvokerSlotWords::new(current_word, 0)), target: None,
                     }
                 };
                 let bound = BoundNativeFunctionArgs {

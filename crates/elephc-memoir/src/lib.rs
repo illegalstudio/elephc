@@ -32,4 +32,6 @@ pub mod output_handlers;
 #[cfg(feature = "runtime")]
 pub mod runtime_bytes;
 #[cfg(feature = "runtime")]
+pub mod runtime_invoker_slots;
+#[cfg(feature = "runtime")]
 pub mod runtime_owners;

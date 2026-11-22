@@ -1,5 +1,5 @@
 //! Purpose:
-//! Shares the storage layout of native activations and foreign reference pins.
+//! Shares the storage layout of native activations, guards and foreign reference slots.
 //!
 //! Called from:
 //! - Native assembly emitters and Magician's stable record storage.
@@ -9,6 +9,73 @@
 //! - These layouts do not acquire cell owners or invoke runtime callbacks.
 
 use core::mem::{offset_of, size_of};
+
+/// Internal Mixed tag identifying an invoker's reference marker.
+pub const INVOKER_ARG_REF_CELL_TAG: u64 = 11;
+/// Source representation of an inline nullable integer.
+pub const INVOKER_ARG_TAGGED_SCALAR_SOURCE: u64 = 12;
+
+/// Full writable storage used to stage native invoker arguments.
+///
+/// The second word can hold a string length or nullable integer tag. Staged
+/// scalars also reserve both words because a native variadic writer can
+/// publish a complete pair. A borrowed native scalar may have only one word.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvokerSlotWords {
+    /// Scalar value, heap address, or first word of an inline pair.
+    pub word: u64,
+    /// Optional second word of an inline pair.
+    pub high: u64,
+}
+
+impl InvokerSlotWords {
+    /// Offset of the first native word.
+    pub const WORD: usize = offset_of!(Self, word);
+    /// Offset of the second word of a complete pair.
+    pub const HIGH: usize = offset_of!(Self, high);
+    /// Size of a complete writable pair.
+    pub const BYTES: usize = size_of::<Self>();
+
+    /// Forms an initialized pair for a native writer.
+    pub const fn new(word: u64, high: u64) -> Self { Self { word, high } }
+}
+
+/// The native guard's borrowed receiver and property name, linked on its caller's stack.
+#[repr(C)]
+#[derive(Default)]
+struct MagicSetGuardWords {
+    next: u64,
+    receiver: u64,
+    name_pointer: u64,
+    name_length: u64,
+}
+
+/// Pinned storage written by the native magic-setter guard chain.
+#[repr(transparent)]
+#[derive(Default)]
+pub struct MagicSetGuard {
+    words: core::cell::UnsafeCell<MagicSetGuardWords>,
+    _pin: core::marker::PhantomPinned,
+}
+
+impl MagicSetGuard {
+    /// Link toward the older guard on the same Fiber.
+    pub const NEXT: usize = offset_of!(MagicSetGuardWords, next);
+    /// Identity of the borrowed receiver.
+    pub const RECEIVER: usize = offset_of!(MagicSetGuardWords, receiver);
+    /// Address of the borrowed property bytes.
+    pub const NAME_POINTER: usize = offset_of!(MagicSetGuardWords, name_pointer);
+    /// Length of the borrowed property name.
+    pub const NAME_LENGTH: usize = offset_of!(MagicSetGuardWords, name_length);
+    /// Size of the complete native guard.
+    pub const BYTES: usize = size_of::<Self>();
+
+    /// Exposes stable writable storage until the caller unlinks the native guard.
+    pub fn as_ptr(self: core::pin::Pin<&Self>) -> *mut core::ffi::c_void {
+        self.words.get().cast()
+    }
+}
 
 /// The shared unwind prefix followed by the three extended activation words.
 #[repr(C, align(16))]
@@ -90,6 +157,16 @@ impl ArgumentPin {
 }
 
 const _: () = {
+    assert!(InvokerSlotWords::WORD == 0);
+    assert!(InvokerSlotWords::HIGH == 8);
+    assert!(InvokerSlotWords::BYTES == 16);
+    assert!(core::mem::align_of::<InvokerSlotWords>() == 8);
+    assert!(MagicSetGuard::NEXT == 0);
+    assert!(MagicSetGuard::RECEIVER == 8);
+    assert!(MagicSetGuard::NAME_POINTER == 16);
+    assert!(MagicSetGuard::NAME_LENGTH == 24);
+    assert!(MagicSetGuard::BYTES == 32);
+    assert!(core::mem::align_of::<MagicSetGuard>() == 8);
     assert!(ExtendedActivation::BYTES == 48);
     assert!(core::mem::align_of::<ExtendedActivation>() == 16);
     assert!(ExtendedActivation::OWNER_VISITOR == 40);

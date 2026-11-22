@@ -9,6 +9,7 @@
 //! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
+use elephc_memoir::owner_layout::InvokerSlotWords;
 
 /// Returns the calling-scope class when PHP's private-method shadowing rule
 /// selects it as the dispatch scope: `$obj->m()` from class scope S calls S's
@@ -388,9 +389,9 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match source_tag {
         EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            match words[1] {
-                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0]),
+            let words = unsafe { InvokerSlotWords::read_at(slot) };
+            match words.high {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words.word),
                 EVAL_TAG_NULL => values.null(),
                 _ => Err(EvalStatus::RuntimeFatal),
             }
@@ -400,8 +401,8 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
             values.raw_word_value(source_tag, word)
         }
         EVAL_TAG_STRING => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            values.raw_string_value(words[0], words[1])
+            let words = unsafe { InvokerSlotWords::read_at(slot) };
+            values.raw_string_value(words.word, words.high)
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             let word = unsafe { *(slot as *const u64) };
@@ -429,7 +430,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
             let tag = values.type_tag(value)?;
             if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
             let word = values.raw_value_word(value)?;
-            unsafe { *(slot as *mut [u64; 2]) = [word, tag]; }
+            unsafe { InvokerSlotWords::new(word, tag).write_at(slot); }
             Ok(())
         }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
@@ -476,13 +477,9 @@ pub(super) fn write_back_invoker_string_slot(
     let ptr = values.raw_value_word(value)?;
     let len = values.raw_value_high_word(value)?;
     let retained = values.retain_raw_string_words(ptr, len)?;
-    let replaced = unsafe {
-        let slot = slot as *mut [u64; 2];
-        let replaced = *slot;
-        *slot = [retained.0, retained.1];
-        replaced
-    };
-    values.release_raw_string_words(replaced[0], replaced[1])
+    let replacement = InvokerSlotWords::new(retained.0, retained.1);
+    let replaced = unsafe { replacement.replace_at(slot) };
+    values.release_raw_string_words(replaced.word, replaced.high)
 }
 
 /// Writes a boxed heap value back into a native descriptor-invoker raw heap slot.

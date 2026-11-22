@@ -29,8 +29,8 @@ pub(in crate::interpreter) fn eval_native_magic_property_set(
     let owner = values
         .reflection_method_declaring_class(object_class, "__set")?
         .unwrap_or_else(|| object_class.to_string());
-    let mut native_node = std::pin::pin!([0_u64; 4]);
-    if !values.native_magic_set_guard_push(identity, property, native_node.as_mut().get_mut())? {
+    let native_node = std::pin::pin!(elephc_memoir::owner_layout::MagicSetGuard::default());
+    if !values.native_magic_set_guard_push(identity, property, native_node.as_ref())? {
         return Ok(false);
     }
     let result = (|| {
@@ -47,7 +47,7 @@ pub(in crate::interpreter) fn eval_native_magic_property_set(
         let released = release_expr_result(name, context, values);
         call.and(released)
     })();
-    let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
+    let popped = values.native_magic_set_guard_pop(native_node.as_ref());
     result.and(popped).map(|()| true)
 }
 

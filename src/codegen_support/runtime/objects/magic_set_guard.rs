@@ -11,6 +11,7 @@
 //! - Nodes live in the generated caller's guarded stack frame and are always unlinked before
 //!   that frame is released, including the local exception-boundary path.
 
+use elephc_memoir::owner_layout::MagicSetGuard;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -36,13 +37,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x11, x9");                                         // scan the active guard chain from its head
     emitter.label("__rt_magic_set_guard_push_scan");
     emitter.instruction("cbz x11, __rt_magic_set_guard_push_new");              // no matching active receiver/name pair exists
-    emitter.instruction("ldr x12, [x11, #8]");                                  // compare receiver identity
+    emitter.instruction(&format!("ldr x12, [x11, #{}]", MagicSetGuard::RECEIVER)); // compare receiver identity
     emitter.instruction("cmp x12, x0");                                         // emit the guarded operation
     emitter.instruction("b.ne __rt_magic_set_guard_push_next");                 // emit the guarded operation
-    emitter.instruction("ldr x12, [x11, #24]");                                 // compare property-name length
+    emitter.instruction(&format!("ldr x12, [x11, #{}]", MagicSetGuard::NAME_LENGTH)); // compare property-name length
     emitter.instruction("cmp x12, x2");                                         // emit the guarded operation
     emitter.instruction("b.ne __rt_magic_set_guard_push_next");                 // emit the guarded operation
-    emitter.instruction("ldr x12, [x11, #16]");                                 // x12 = active property bytes
+    emitter.instruction(&format!("ldr x12, [x11, #{}]", MagicSetGuard::NAME_POINTER)); // x12 = active property bytes
     emitter.instruction("mov x13, #0");                                         // x13 = byte index
     emitter.label("__rt_magic_set_guard_push_bytes");
     emitter.instruction("cmp x13, x2");                                         // emit the guarded operation
@@ -77,11 +78,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_magic_set_guard_push_scan");
     emitter.instruction("test r10, r10");                                       // emit the guarded operation
     emitter.instruction("jz __rt_magic_set_guard_push_new");                    // no matching active receiver/name pair exists
-    emitter.instruction("cmp QWORD PTR [r10 + 8], rdi");                        // compare receiver identity
+    emitter.instruction(&format!("cmp QWORD PTR [r10 + {}], rdi", MagicSetGuard::RECEIVER)); // compare receiver identity
     emitter.instruction("jne __rt_magic_set_guard_push_next");                  // emit the guarded operation
-    emitter.instruction("cmp QWORD PTR [r10 + 24], rdx");                       // compare property-name length
+    emitter.instruction(&format!("cmp QWORD PTR [r10 + {}], rdx", MagicSetGuard::NAME_LENGTH)); // compare property-name length
     emitter.instruction("jne __rt_magic_set_guard_push_next");                  // emit the guarded operation
-    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // r11 = active property bytes
+    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", MagicSetGuard::NAME_POINTER)); // r11 = active property bytes
     emitter.instruction("xor eax, eax");                                        // rax = byte index
     emitter.label("__rt_magic_set_guard_push_bytes");
     emitter.instruction("cmp rax, rdx");                                        // emit the guarded operation

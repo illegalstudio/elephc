@@ -528,15 +528,13 @@ fn copy_bridge_string(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> Result<String, BcmathDispatchError> {
-    if out_ptr.is_null() && out_len != 0 {
-        return Err(BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal));
+    // The bridge accepts only the exact pointer and length it returned.
+    let bytes = unsafe {
+        elephc_memoir::runtime_bytes::copy_owned(out_ptr, out_len, |pointer| {
+            elephc_bcmath_free(pointer.cast_mut(), out_len);
+        })
     }
-    let bytes = if out_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(out_ptr, out_len).to_vec() }
-    };
-    unsafe { elephc_bcmath_free(out_ptr, out_len) };
+    .ok_or(BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal))?;
     String::from_utf8(bytes)
         .map_err(|_| BcmathDispatchError::Runtime(EvalStatus::RuntimeFatal))
 }

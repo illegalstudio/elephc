@@ -8,13 +8,13 @@
 //! - The marker borrows a caller slot and carries its native representation.
 //! - Callers decide when to retire an old payload and when to free a moved box.
 
-use crate::{Emitter, TargetAbi, layout};
+use crate::{Emitter, TargetAbi, layout, owner_layout::{self, InvokerSlotWords}};
 
 /// Internal Mixed tag identifying an invoker's reference marker.
-pub const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
+pub const INVOKER_ARG_REF_CELL_TAG: i64 = owner_layout::INVOKER_ARG_REF_CELL_TAG as i64;
 
 /// Representation of a caller slot storing an inline nullable integer.
-pub const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
+pub const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = owner_layout::INVOKER_ARG_TAGGED_SCALAR_SOURCE as i64;
 
 /// Borrows the marker's source representation and the caller slot address.
 pub fn emit_project(
@@ -37,12 +37,12 @@ pub fn emit_publish_box_payload(
     emitter: &mut impl TargetAbi, destination: &str, replacement: &str, scratch: &str, high: HighWord,
 ) {
     layout::emit_load_mixed_low(emitter, scratch, replacement);
-    emitter.emit_store_to_address(scratch, destination, 0);
+    emitter.emit_store_to_address(scratch, destination, InvokerSlotWords::WORD);
     match high {
         HighWord::Payload => layout::emit_load_mixed_high(emitter, scratch, replacement),
         HighWord::Tag => layout::emit_load_mixed_tag(emitter, scratch, replacement),
     }
-    emitter.emit_store_to_address(scratch, destination, 8);
+    emitter.emit_store_to_address(scratch, destination, InvokerSlotWords::HIGH);
 }
 
 /// Publishes a boxed replacement and returns the displaced owner in a scratch register.

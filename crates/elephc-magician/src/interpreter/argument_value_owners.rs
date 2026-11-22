@@ -13,7 +13,7 @@ use super::*;
 use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
 use elephc_memoir::owner_layout::ArgumentPin;
-use crate::runtime_hooks::owner_frames::{RuntimeOwners, RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{RuntimeOwners, RuntimeOwnerSlot};
 use crate::value::RuntimeCell;
 
 /// Shared provenance for one independently acquired source argument owner.
@@ -183,24 +183,10 @@ pub(super) fn finish_eval_argument_owners(
     result: Result<RuntimeCellHandle, EvalStatus>, owners: impl AsRef<[ArgumentCleanupOwner]>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let owners = owners.as_ref();
     let result = result.and_then(|value| promote_borrowed_result(value, values))
         .map(RuntimeOwnerSlot::new);
-    let inventory = (owners, result.as_ref().ok());
-    with_runtime_owners(&inventory, || {
-        let mut cleanup = Ok(());
-        for owner in owners {
-            let released = owner.release(context, values);
-            if cleanup.is_ok() { cleanup = released; }
-        }
-        match (&result, cleanup) {
-            (Err(status), _) => Err(*status),
-            (Ok(value), Err(status)) => {
-                let _ = eval_release_value(context, values, value.take());
-                Err(status)
-            }
-            (Ok(value), Ok(())) => Ok(value.take()),
-        }
+    finish_eval_argument_slots(result, owners.as_ref(), context, values, |owner, context, values| {
+        owner.release(context, values)
     })
 }
 

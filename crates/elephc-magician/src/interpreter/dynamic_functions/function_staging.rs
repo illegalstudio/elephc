@@ -14,6 +14,7 @@
 //!   `named_keys` vector stays index-aligned with `values`.
 
 use super::*;
+use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
 
 /// Identifies native parameters whose retaining consumers need a persistent boxed reference.
 pub(super) fn native_reference_uses_boxed_staging(
@@ -139,10 +140,10 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
     if tagged_scalar {
         let tag = values.type_tag(original)?;
         if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
-        let original = [values.raw_value_word(original)?, tag];
-        let mut slot = Box::new(original);
+        let original = InvokerSlotWords::new(values.raw_value_word(original)?, tag);
+        let slot = InvokerSlot::pin(original);
         let marker = values.invoker_raw_ref_cell(
-            (slot.as_mut() as *mut [u64; 2]).cast(), EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+            slot.as_ref().as_ptr().cast(), EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
         )?;
         return Ok((marker, BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target }));
     }
@@ -152,9 +153,9 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             // Generated marker writers publish the complete two-word source slot even for
             // scalar tags. Keep the second word addressable so a typed by-ref variadic cannot
             // write past this Rust allocation after its marker enters an Array(Mixed) collector.
-            let mut slot = Box::new([original, 0]);
+            let slot = InvokerSlot::pin(InvokerSlotWords::new(original, 0));
             let marker = values.invoker_raw_ref_cell(
-                (slot.as_mut() as *mut [u64; 2]).cast(), tag,
+                slot.as_ref().as_ptr().cast(), tag,
             )?;
             Ok((marker, BoundNativeFunctionRefSlot::RawWord {
                 tag,
@@ -168,9 +169,9 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             let ptr = values.raw_value_word(original)?;
             let len = values.raw_value_high_word(original)?;
             let retained = values.retain_raw_string_words(ptr, len)?;
-            let mut slot = Box::new([retained.0, retained.1]);
+            let slot = InvokerSlot::pin(InvokerSlotWords::new(retained.0, retained.1));
             let marker = values.invoker_raw_ref_cell(
-                (slot.as_mut() as *mut [u64; 2]).cast(), EVAL_TAG_STRING,
+                slot.as_ref().as_ptr().cast(), EVAL_TAG_STRING,
             );
             let marker = match marker {
                 Ok(marker) => marker,
@@ -180,7 +181,7 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
                 }
             };
             Ok((marker, BoundNativeFunctionRefSlot::RawString {
-                original: [retained.0, retained.1],
+                original: InvokerSlotWords::new(retained.0, retained.1),
                 slot,
                 target,
                 force_writeback: false,
@@ -190,8 +191,8 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             let tag = values.type_tag(original)?;
             let original = values.raw_value_word(original)?;
             let retained = values.retain_raw_heap_word(original)?;
-            let mut slot = Box::new([retained, 0]);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut [u64; 2]).cast(), tag);
+            let slot = InvokerSlot::pin(InvokerSlotWords::new(retained, 0));
+            let marker = values.invoker_raw_ref_cell(slot.as_ref().as_ptr().cast(), tag);
             let marker = match marker {
                 Ok(marker) => marker,
                 Err(status) => {

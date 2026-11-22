@@ -13,6 +13,7 @@
 use std::ffi::c_void;
 
 use elephc_builtin_contract::RuntimeBuiltinId;
+use elephc_memoir::owner_layout::MagicSetGuard;
 
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
@@ -519,7 +520,7 @@ pub trait RuntimeValueOps {
         &mut self,
         object_identity: u64,
         property: &str,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&MagicSetGuard>,
     ) -> Result<bool, EvalStatus> {
         FALLBACK_MAGIC_SET_GUARDS.with(|guards| {
             let mut guards = guards.borrow_mut();
@@ -536,7 +537,7 @@ pub trait RuntimeValueOps {
     /// Removes a guard node previously accepted by `native_magic_set_guard_push`.
     fn native_magic_set_guard_pop(
         &mut self,
-        node: &mut [u64; 4],
+        node: std::pin::Pin<&MagicSetGuard>,
     ) -> Result<(), EvalStatus> {
         FALLBACK_MAGIC_SET_GUARDS.with(|guards| {
             let removed = guards.borrow_mut().pop();
@@ -1288,9 +1289,10 @@ pub(super) const EVAL_TAG_MIXED: u64 = 7;
 pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
-pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
-/// Internal invoker source shape for a two-word nullable integer, never a PHP value tag.
-pub(super) const EVAL_INVOKER_TAGGED_SCALAR_SOURCE: u64 = 12;
+pub(super) use elephc_memoir::owner_layout::{
+    INVOKER_ARG_REF_CELL_TAG as EVAL_TAG_INVOKER_REF_CELL,
+    INVOKER_ARG_TAGGED_SCALAR_SOURCE as EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+};
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

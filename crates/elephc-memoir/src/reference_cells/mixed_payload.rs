@@ -9,6 +9,7 @@
 //! - The host supplies the uninitialized sentinel and optional post-promotion type-source association.
 
 use crate::{abi, Arch, Emitter};
+use crate::owner_layout::InvokerSlotWords;
 
 /// Retains an existing managed cell or gives a borrowed Mixed slot an owned wrapper-backed cell.
 pub fn emit_retain_mixed(emitter: &mut impl Emitter) {
@@ -128,12 +129,15 @@ pub fn emit_publish_staged_payload(
     replacement_low: &str, replacement_high: Option<&str>,
 ) {
     let displaced = emitter.int_result_reg();
-    emitter.emit_load_from_address(displaced, destination, 0);
+    emitter.emit_load_from_address(displaced, destination, InvokerSlotWords::WORD);
     let arm = emitter.arch() == Arch::AArch64;
-    for (offset, source) in [(0, Some(replacement_low)), (8, replacement_high)] {
+    for (offset, source) in [
+        (InvokerSlotWords::WORD, Some(replacement_low)),
+        (InvokerSlotWords::HIGH, replacement_high),
+    ] {
         if let Some(source) = source {
             emitter.instruction(&if arm { format!("ldr {scratch}, {source}") }
-                else { format!("mov {scratch}, QWORD PTR {source}") });        // load the prepared replacement word
+                else { format!("mov {scratch}, QWORD PTR {source}") });         // load the prepared replacement word
             emitter.emit_store_to_address(scratch, destination, offset);
         }
     }
@@ -147,7 +151,7 @@ pub fn emit_replace_persistent_owner(emitter: &mut impl Emitter, incoming: &str)
     emitter.instruction(&match emitter.arch() {
         Arch::AArch64 => format!("ldr {result}, {incoming}"),
         Arch::X86_64 => format!("mov {result}, QWORD PTR {incoming}"),
-    });                                                                       // recover the incoming owner without disturbing the displaced child
+    });                                                                         // recover the incoming owner without disturbing the displaced child
     emitter.emit_call_label("__rt_decref_any");
     emitter.emit_pop_reg(result);
     emitter.emit_call_label("__rt_decref_any");
@@ -155,6 +159,6 @@ pub fn emit_replace_persistent_owner(emitter: &mut impl Emitter, incoming: &str)
 
 /// Publishes two already staged native payload words to the same caller slot.
 pub fn emit_publish_payload_pair(emitter: &mut impl Emitter, destination: &str, low: &str, high: &str) {
-    emitter.emit_store_to_address(low, destination, 0);
-    emitter.emit_store_to_address(high, destination, 8);
+    emitter.emit_store_to_address(low, destination, InvokerSlotWords::WORD);
+    emitter.emit_store_to_address(high, destination, InvokerSlotWords::HIGH);
 }

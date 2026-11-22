@@ -148,11 +148,11 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
                 values.release_native_mixed_reference_cell(*cell, pin.get().cast())
             }
             BoundNativeFunctionRefSlot::RawString { slot, .. } => {
-                let words = **slot;
-                values.release_raw_string_words(words[0], words[1])
+                let words = slot.as_ref().snapshot();
+                values.release_raw_string_words(words.word, words.high)
             }
             BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
-                let word = slot[0];
+                let word = slot.as_ref().snapshot().word;
                 values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
@@ -210,7 +210,7 @@ fn write_back_native_function_ref_slot(
             target,
             force_writeback,
         } => {
-            let word = slot[0];
+            let word = slot.as_ref().snapshot().word;
             if word == *original && !force_writeback {
                 return Ok(());
             }
@@ -221,11 +221,11 @@ fn write_back_native_function_ref_slot(
             publish_native_function_ref_value(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target } => {
-            let words = **slot;
+            let words = slot.as_ref().snapshot();
             if words == *original { return Ok(()); }
             let Some(target) = target else { return Ok(()); };
-            let value = match words[1] {
-                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0])?,
+            let value = match words.high {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words.word)?,
                 EVAL_TAG_NULL => values.null()?,
                 _ => return Err(EvalStatus::RuntimeFatal),
             };
@@ -237,15 +237,15 @@ fn write_back_native_function_ref_slot(
             target,
             force_writeback,
         } => {
-            let words = **slot;
+            let words = slot.as_ref().snapshot();
             let Some(target) = target else {
-                return values.release_raw_string_words(words[0], words[1]);
+                return values.release_raw_string_words(words.word, words.high);
             };
             if words == *original && !force_writeback {
-                return values.release_raw_string_words(words[0], words[1]);
+                return values.release_raw_string_words(words.word, words.high);
             }
-            let value = values.raw_string_value(words[0], words[1]);
-            let released = values.release_raw_string_words(words[0], words[1]);
+            let value = values.raw_string_value(words.word, words.high);
+            let released = values.release_raw_string_words(words.word, words.high);
             publish_native_function_ref_conversion(target, value, released, context, values)
         }
         BoundNativeFunctionRefSlot::OwnedRawWord {
@@ -253,7 +253,7 @@ fn write_back_native_function_ref_slot(
             slot,
             target,
         } => {
-            let word = slot[0];
+            let word = slot.as_ref().snapshot().word;
             let Some(target) = target else {
                 return values.release_raw_heap_word(word);
             };
