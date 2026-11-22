@@ -22,7 +22,7 @@
 
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{Expr, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, TypeExpr};
 use crate::span::Span;
 use crate::types::param_binding::{
     classify_param_binding, strict_param_binding_rejection, ParamBinding,
@@ -364,6 +364,22 @@ impl Checker {
             }
         }
         changed.then_some(adjusted)
+    }
+
+    /// Returns the strict-call validation signature for a first-class callable whose target
+    /// is a prelude function with widened `mixed` parameters, or `None` for any other target.
+    pub(crate) fn first_class_prelude_strict_adapter_signature(
+        &self,
+        target: &CallableTarget,
+        sig: &FunctionSig,
+    ) -> Option<FunctionSig> {
+        let CallableTarget::Function(name) = target else {
+            return None;
+        };
+        let function = self
+            .canonical_function_name_folded(name.as_str())
+            .unwrap_or_else(|| name.as_str().to_string());
+        self.prelude_strict_adapter_signature(Some(&function), None, None, sig)
     }
 
     /// Returns whether `type_expr` is the bare `mixed` a prelude adapter declares.

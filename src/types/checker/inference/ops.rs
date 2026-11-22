@@ -704,9 +704,14 @@ impl Checker {
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
                     .insert(var.to_string(), specialized_sig.return_type.clone());
+                // A captured prelude adapter (`$f = setlocale(...)`) keeps its contract types
+                // under the calling file's `strict_types`, exactly like a direct call.
+                let strict_sig =
+                    self.first_class_prelude_strict_adapter_signature(&target, &specialized_sig);
+                let validation_sig = strict_sig.as_ref().unwrap_or(&specialized_sig);
                 if descriptor_args {
                     return self.check_known_callable_call_allowing_by_ref_spread(
-                        &specialized_sig,
+                        validation_sig,
                         args,
                         expr.span,
                         env,
@@ -714,7 +719,7 @@ impl Checker {
                     );
                 }
                 return self.check_known_callable_call(
-                    &specialized_sig,
+                    validation_sig,
                     args,
                     expr.span,
                     env,
