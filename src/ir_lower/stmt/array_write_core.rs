@@ -303,7 +303,7 @@ fn lower_array_assign_from_value(
     // that payload, so the keyed write keeps the element layout every checked reader expects.
     if let Some(element) = crate::ir_lower::expr::container_element_type(&container_ty) {
         value_value = crate::ir_lower::expr::project_element_value(
-            ctx, value_value, value.span, Some(&element),
+            ctx, value_value, value.span, None, Some(&element),
         );
     }
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,

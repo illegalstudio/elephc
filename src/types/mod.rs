@@ -101,7 +101,7 @@ pub(crate) use return_alias::{
     ReturnArgAlias,
 };
 pub(crate) use result::{
-    ElementValueView, ElementValueViews, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
+    ElementValueViews, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
 };
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the

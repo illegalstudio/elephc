@@ -22,7 +22,7 @@
 
 use super::Checker;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{ElementValueView, PhpType, TypeEnv};
+use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
     /// Records the type the checker proved for a value written as a container element.
@@ -44,15 +44,22 @@ impl Checker {
         }
         let view = self.projectable_element_view(value, ty, env);
         self.publish_merge_arm_views(value, ty, env);
-        self.publish_element_value_view(value.span, view);
+        self.publish_element_value_view(value.span, direct_local(value), view);
     }
 
     /// Stores one site's view, disabling the site when an earlier visit proved another one.
-    fn publish_element_value_view(&mut self, span: crate::span::Span, view: Option<ElementValueView>) {
+    ///
+    /// `local` is the variable the value reads directly, which is part of the site's identity.
+    fn publish_element_value_view(
+        &mut self,
+        span: crate::span::Span,
+        local: Option<&str>,
+        view: Option<PhpType>,
+    ) {
         if !span.identifies_a_node() {
             return;
         }
-        let key = (self.current_loop_storage_scope.clone(), span);
+        let key = (self.current_loop_storage_scope.clone(), span, local.map(str::to_string));
         self.element_value_views
             .entry(key)
             .and_modify(|previous| {
@@ -81,10 +88,9 @@ impl Checker {
         let scalar = is_projectable_scalar(ty);
         for arm in arms {
             if let ExprKind::Variable(name) = &arm.kind {
-                let arm_view = (scalar && self.element_value_is_proven(arm, ty, env)).then(|| {
-                    ElementValueView { ty: ty.clone(), local: Some(name.clone()) }
-                });
-                self.publish_element_value_view(arm.span, arm_view);
+                let arm_view =
+                    (scalar && self.element_value_is_proven(arm, ty, env)).then(|| ty.clone());
+                self.publish_element_value_view(arm.span, Some(name.as_str()), arm_view);
             } else {
                 self.publish_merge_arm_views(arm, ty, env);
             }
@@ -101,24 +107,21 @@ impl Checker {
         value: &Expr,
         ty: &PhpType,
         env: &TypeEnv,
-    ) -> Option<ElementValueView> {
+    ) -> Option<PhpType> {
         let scalar = is_projectable_scalar(ty);
-        let local = match &value.kind {
-            ExprKind::Variable(name) => Some(name.clone()),
-            _ => None,
-        };
+        let local = direct_local(value);
         let projectable = if scalar {
             self.element_value_is_proven(value, ty, env)
         } else {
             // A guard proves a value is an array, never which layout the array has, so only a
             // loop binding whose source stores this very container qualifies.
             matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-                && local.as_ref().is_some_and(|name| {
+                && local.is_some_and(|name| {
                     self.element_local_read_is_stable(name, ty, env)
                         && self.proven_local_views.get(name) == Some(ty)
                 })
         };
-        projectable.then(|| ElementValueView { ty: ty.clone(), local })
+        projectable.then(|| ty.clone())
     }
 
     /// Returns whether the checked type of an element-forming value is a proof, not a guess.
@@ -297,6 +300,14 @@ impl Checker {
             || self.by_ref_captured_locals.contains(name)
             || self.boxed_ref_aliased_locals.contains(name)
             || self.top_level_binding_is_program_global(name)
+    }
+}
+
+/// Returns the local a value reads directly, when the value is one plain variable.
+fn direct_local(value: &Expr) -> Option<&str> {
+    match &value.kind {
+        ExprKind::Variable(name) => Some(name.as_str()),
+        _ => None,
     }
 }
 

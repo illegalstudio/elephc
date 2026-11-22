@@ -3,7 +3,8 @@
 //!
 //! Called from:
 //! - Local array appends and keyed writes in `crate::ir_lower::stmt`.
-//! - Indexed and associative array literal lowering and their storage prediction.
+//! - Local reads (`local_values`), which cover literal items and merge arms, and the storage
+//!   prediction that pairs with them.
 //!
 //! Key details:
 //! - A hash `foreach` binding, a guard-narrowed `mixed` local and a branch merge are boxed
@@ -18,14 +19,16 @@
 
 use super::*;
 
-/// Returns the element type a boxed operand at `span` is projected to, if the checker
-/// published one for a container that stores `element` (or is still empty).
+/// Returns the type a boxed operand at `span` is projected to, if the checker published one
+/// for a container that stores `element` (or is still empty).
 ///
-/// `physical` is the operand's own EIR storage. A concrete operand needs no projection, and a
-/// container holding another payload widens exactly as before.
+/// `local` is the variable the operand reads directly, `None` for a branch merge; it is part of
+/// the site's identity. `physical` is the operand's own EIR storage: a concrete operand needs
+/// no projection, and a container holding another payload widens exactly as before.
 pub(crate) fn projected_element_type(
     ctx: &LoweringContext<'_, '_>,
     span: Span,
+    local: Option<&str>,
     physical: &PhpType,
     element: Option<&PhpType>,
 ) -> Option<PhpType> {
@@ -34,9 +37,9 @@ pub(crate) fn projected_element_type(
     }
     let view = ctx
         .element_value_views
-        .get(&(ctx.loop_storage_scope.clone(), span))?
+        .get(&(ctx.loop_storage_scope.clone(), span, local.map(str::to_string)))?
         .as_ref()?;
-    let target = view.ty.codegen_repr();
+    let target = view.codegen_repr();
     if !is_scalar_element(&target)
         && !matches!(target, PhpType::Array(_) | PhpType::AssocArray { .. })
     {
@@ -51,18 +54,20 @@ pub(crate) fn projected_element_type(
 
 /// Extracts the checked value from a boxed operand before it becomes a container element.
 ///
-/// A scalar is cast out of the box and a local's own array or hash is unboxed. `element` is
-/// the payload the receiving container stores now, or `None` when the caller already chose
-/// its storage from [`projected_local_element_type`]. Every other operand is returned
-/// unchanged, so unproven, volatile and genuinely heterogeneous writes keep their old path.
+/// A scalar is cast out of the box and a local's own array or hash is unboxed. `local` names
+/// the variable the operand reads directly, `None` for a branch merge. `element` is the
+/// payload the receiving container stores now, or `None` when the caller already chose its
+/// storage from [`projected_local_element_type`]. Every other operand is returned unchanged,
+/// so unproven, volatile and genuinely heterogeneous writes keep their old path.
 pub(crate) fn project_element_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
+    local: Option<&str>,
     element: Option<&PhpType>,
 ) -> LoweredValue {
     let physical = ctx.builder.value_php_type(value.value);
-    let Some(target) = projected_element_type(ctx, span, &physical, element) else {
+    let Some(target) = projected_element_type(ctx, span, local, &physical, element) else {
         return value;
     };
     if !is_scalar_element(&target) {
@@ -106,23 +111,17 @@ pub(crate) fn container_element_type(container: &PhpType) -> Option<PhpType> {
     }
 }
 
-/// Returns the type a boxed read of `name` at `span` is projected to as a container element.
+/// Returns the type a boxed read of `name` at `span` is projected to, if one is published.
 ///
-/// Literal storage is predicted from the syntax before its items are lowered, so the read
-/// itself has to produce the checked value: the prediction and every literal lowering path
-/// then agree without consulting the view again. The view must name this same local.
+/// The read is a container element or an arm of a merge that is one. Literal storage is
+/// predicted from the syntax before its items are lowered, so the read itself has to produce
+/// the checked value: the prediction and every lowering path then agree without consulting
+/// the view again.
 pub(crate) fn projected_local_element_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     span: Span,
     physical: &PhpType,
 ) -> Option<PhpType> {
-    let view = ctx
-        .element_value_views
-        .get(&(ctx.loop_storage_scope.clone(), span))?
-        .as_ref()?;
-    if view.local.as_deref() != Some(name) {
-        return None;
-    }
-    projected_element_type(ctx, span, physical, None)
+    projected_element_type(ctx, span, Some(name), physical, None)
 }

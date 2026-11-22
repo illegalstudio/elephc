@@ -48,7 +48,7 @@ pub(super) fn lower_local_value(
     ).is_some() {
         // A boxed local written as a container element is read as the value the checker
         // proved, which keeps the container on the payload its checked type promises.
-        element_values::project_element_value(ctx, value, span, None)
+        element_values::project_element_value(ctx, value, span, Some(name), None)
     } else {
         value
     }

@@ -371,7 +371,10 @@ while the boxed cell can still hold the `null`, and casting that box would store
   The loop binding and the kept complement are recorded in
   `Checker::proven_local_views` and end at the first store to the name; a loop
   binding also ends with its loop, after which the name holds whatever it held
-  before a source that turned out to be empty.
+  before a source that turned out to be empty. A plain copy (`$x = $v`) carries
+  the proof to the copy, which holds the same value. A closure body starts with
+  no proofs: a by-value capture is a boxed parameter there, and the closure's
+  signature is inferred from that storage.
 - **A branch merge** (`?:`, `??`, `match`) is as proven as its arms, and a
   literal arm is its own type. A scalar merge also publishes its type on each
   proven local its arms read, each arm judged on its own, so the arms produce the

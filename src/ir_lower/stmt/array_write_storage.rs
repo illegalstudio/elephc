@@ -78,7 +78,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     // that payload; widening here is a storage change no checked consumer was compiled for.
     let value = match crate::ir_lower::expr::container_element_type(&array_ty) {
         Some(element) => crate::ir_lower::expr::project_element_value(
-            ctx, value, value_span, Some(&element),
+            ctx, value, value_span, None, Some(&element),
         ),
         None => value,
     };
