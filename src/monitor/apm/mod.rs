@@ -33,10 +33,13 @@ use super::{fmt_ns, resolve_probe_key, MonitorCommand};
 
 mod api;
 mod browse;
+mod captures;
 mod collector;
 mod dashboard;
+mod deploys;
 mod history;
 mod options;
+mod otlp_export;
 mod runs;
 mod store;
 mod summary;
@@ -66,12 +69,18 @@ const MEMORY_WINDOWS: usize = 3_600;
 pub(crate) const DEFAULT_RESOLUTION_SECS: u64 = 10;
 /// Default number of days of history the store keeps.
 pub(crate) const DEFAULT_RETENTION_DAYS: u32 = 7;
+/// Default number of days the store keeps at the collector's resolution; older days are
+/// rolled up by the minute.
+pub(crate) const DEFAULT_FULL_DAYS: u32 = 2;
+/// Default number of days the store keeps at least by the minute; older days are rolled
+/// up by the hour.
+pub(crate) const DEFAULT_MINUTE_DAYS: u32 = 7;
 
 /// Runs `monitor --apm`; returns the exit code.
 pub(crate) fn run(cmd: &MonitorCommand) -> i32 {
     let store = match &cmd.apm_store {
         Some(dir) => match Store::open(dir, cmd.apm_retention_days) {
-            Ok(store) => Some(store),
+            Ok(store) => Some(store.with_tiers(cmd.apm_full_days, cmd.apm_minute_days)),
             Err(error) => {
                 eprintln!("elephc monitor: {error}");
                 return 1;
@@ -148,7 +157,7 @@ pub(crate) fn run(cmd: &MonitorCommand) -> i32 {
         "connected to probe build {}",
         elephc_probe::handshake::fingerprint(&key)
     );
-    let collecting = cmd.live || store.is_some() || cmd.serve.is_some();
+    let collecting = cmd.live || store.is_some() || cmd.serve.is_some() || cmd.otlp.is_some();
     if !collecting {
         let window = Window::since_start(&first);
         print!(

@@ -547,6 +547,7 @@ fn finalize_user_asm(
             // `--with-apm`: the library counts its export calls.
             let apm = shared.apm_only.then_some(crate::codegen::cdylib::LibraryApm {
                 collector: shared.apm_collector,
+                rules: shared.apm_rules,
             });
             crate::codegen::cdylib::emit_cdylib_exports(
                 &mut emitter,

@@ -528,6 +528,7 @@ fn print_cli_run(
     status: &process::ExitStatus,
     wall_ns: u64,
     io: super::apm::Io,
+    graph: Option<&crate::call_graph::CallGraph>,
 ) -> Option<super::apm::Window> {
     use std::os::unix::process::ExitStatusExt as _;
     let label = match (status.code(), status.signal()) {
@@ -535,7 +536,8 @@ fn print_cli_run(
         (None, Some(signal)) => format!("killed by signal {signal}"),
         (None, None) => "ended".to_string(),
     };
-    match super::apm::record_cli_run(cmd, status.success(), wall_ns, io, &label) {
+    let exit_code = status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
+    match super::apm::record_cli_run(cmd, exit_code, wall_ns, io, &label, graph) {
         Ok((table, window)) => {
             print!("{table}");
             Some(window)
@@ -603,6 +605,12 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         // The runtime writes the Chrome/Perfetto trace to this path at exit.
         command.env("ELEPHC_INSTR_TRACE", trace_path);
     }
+    // A page gets the run's timeline: every call where and when it ran, and the
+    // heap in bytes along the run. The runtime writes it at exit, here.
+    let timeline_path = cmd.html_out.as_ref().map(|_| super::timeline::scratch_path());
+    if let Some(path) = &timeline_path {
+        command.env("ELEPHC_INSTR_TIMELINE", path);
+    }
     let started = std::time::Instant::now();
     let output = match command
         .spawn()
@@ -643,7 +651,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         // A run that died before writing a profile is still a run, and the one
         // a transaction history most needs to show.
         if cmd.apm {
-            print_cli_run(cmd, &output.status, wall_ns, super::apm::Io::default());
+            print_cli_run(cmd, &output.status, wall_ns, super::apm::Io::default(), None);
             // Under --apm, monitor wraps the run (a cron line): its code is the
             // script's, and a run that succeeded without a profile succeeded.
             return launched_run_code(cmd, &output.status).unwrap_or(0);
@@ -652,7 +660,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     }
     print!("{}", instrument_table(&graph));
     let this_run = if cmd.apm {
-        print_cli_run(cmd, &output.status, wall_ns, super::apm::io_of(&graph))
+        print_cli_run(cmd, &output.status, wall_ns, super::apm::io_of(&graph), Some(&graph))
     } else {
         None
     };
@@ -773,7 +781,12 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
             Some(base) => vec![(0, base), (1, &graph)],
             None => vec![(0, &graph)],
         };
-        let html = crate::call_graph::render_html_page(
+        let timeline = timeline_path.as_ref().and_then(|p| {
+            let shaped = super::timeline::read(p);
+            let _ = std::fs::remove_file(p);
+            shaped
+        });
+        let html = crate::call_graph::render_html_page_with_timeline(
             &frames,
             &title,
             false,
@@ -781,6 +794,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
             true,
             &assert_outcomes,
             apm_view.as_ref(),
+            timeline.as_ref(),
         );
         if let Err(error) = std::fs::write(path, html) {
             eprintln!("elephc monitor: cannot write {path}: {error}");

@@ -41,6 +41,16 @@ const MESSENGER_HANDLE: &str = "handleMessage";
 /// The event the worker builds for a message whose handling failed.
 const MESSENGER_FAILED_EVENT: &str = "Symfony\\Component\\Messenger\\Event\\WorkerMessageFailedEvent";
 
+/// The HttpKernel class that turns an exception into an error response.
+const HTTP_KERNEL: &str = "Symfony\\Component\\HttpKernel\\HttpKernel";
+/// The method of `HTTP_KERNEL` every exception a request throws goes through.
+const HTTP_KERNEL_HANDLE_THROWABLE: &str = "handleThrowable";
+
+/// The variable the `--web` handler's catch-all catches into (`crate::web_prelude`), and the
+/// one a catch-all that binds none is given: its catch notes the error of a request that
+/// ends with an uncaught exception.
+pub(crate) const WEB_CATCH_VAR: &str = "__elephc_exc";
+
 /// The stem of the local holding the open transaction's token in a wrapped
 /// body; the local itself is `generated_local_name`d, so PHP code cannot see it.
 const TOKEN_VAR: &str = "__elephc_apm_txn";
@@ -90,7 +100,8 @@ fn inject_on_compiler_stack(mut program: Program, targets: &[String]) -> Result<
         }
     }
     let mut found = vec![false; targets.len()];
-    let wrapped = rewrite(&mut program, targets, &mut found);
+    let mut wrapped = rewrite(&mut program, targets, &mut found);
+    wrapped |= note_web_catches(&mut program);
     for (target, found) in targets.iter().zip(&found) {
         if !found {
             eprintln!(
@@ -118,6 +129,11 @@ fn declarations() -> Program {
             extern_fn_unbound("elephc_probe_txn_end")
                 .param("token", CType::Int)
                 .param("failed", CType::Int)
+                .build(),
+            extern_fn_unbound("elephc_probe_note_error")
+                .param("class", CType::Str)
+                .param("file", CType::Str)
+                .param("line", CType::Int)
                 .build(),
         ]
     })
@@ -150,7 +166,19 @@ fn rewrite(statements: &mut [Stmt], targets: &[String], found: &mut [bool]) -> b
                         }
                     } else if same_name(&class, MESSENGER_FAILED_EVENT) && same_name(&method.name, "__construct") {
                         method.body.insert(0, s_expr(e_call("\\elephc_probe_txn_fail_current", vec![])));
+                        // `(Envelope $envelope, string $receiverName, \Throwable $error)`: the
+                        // handler's exception is the message's error.
+                        if let Some((error, ..)) = method.params.get(2) {
+                            method.body.insert(0, note_error(error));
+                        }
                         wrapped = true;
+                    } else if same_name(&class, HTTP_KERNEL) && same_name(&method.name, HTTP_KERNEL_HANDLE_THROWABLE) {
+                        // Symfony answers a request's exception itself, with an error page: the
+                        // probe counts it if that answer is a 5xx, not a 404.
+                        if let Some((error, ..)) = method.params.first() {
+                            method.body.insert(0, note_error(error));
+                            wrapped = true;
+                        }
                     }
                     wrapped |= wrap_named_method(&class, method, targets, found, boundary_wrapped);
                 }
@@ -256,6 +284,46 @@ fn wrap_named_method(
     wrapped && !already
 }
 
+/// `\elephc_probe_note_error(\get_class($var), $var->getFile(), $var->getLine());`: notes the
+/// exception in `$var` as the error of the transaction it is failing.
+fn note_error(var: &str) -> Stmt {
+    s_expr(e_call(
+        "\\elephc_probe_note_error",
+        vec![
+            e_call("\\get_class", vec![e_var(var)]),
+            e_method_call(e_var(var), "getFile", vec![]),
+            e_method_call(e_var(var), "getLine", vec![]),
+        ],
+    ))
+}
+
+/// Notes the error in every catch of a `--web` catch-all, wherever the web prelude put it:
+/// the program's top level, or a function of the application adapter. Found by the call
+/// they make (`web_prelude::answers_uncaught`), not by how their variable is named. True
+/// when one was found.
+fn note_web_catches(statements: &mut [Stmt]) -> bool {
+    let mut noted = false;
+    for stmt in statements.iter_mut() {
+        if let StmtKind::Try { catches, .. } = &mut stmt.kind {
+            for clause in catches.iter_mut().filter(|clause| crate::web_prelude::answers_uncaught(&clause.body)) {
+                // The application adapter's catch binds nothing: the exception gets a name here.
+                let var = clause.variable.get_or_insert_with(|| WEB_CATCH_VAR.to_string()).clone();
+                clause.body.insert(0, note_error(&var));
+                noted = true;
+            }
+        }
+        match &mut stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::FunctionDecl { body, .. } => noted |= note_web_catches(body),
+            kind => {
+                for body in nested_bodies(kind) {
+                    noted |= note_web_catches(body);
+                }
+            }
+        }
+    }
+    noted
+}
+
 /// PHP class, method and function names compare without regard to case.
 fn same_name(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
@@ -280,6 +348,7 @@ fn wrap(body: Vec<Stmt>, name: Expr) -> Vec<Stmt> {
                 vec!["\\Throwable"],
                 Some(&error),
                 vec![
+                    note_error(&error),
                     s_expr(e_call("\\elephc_probe_txn_fail", vec![e_var(&token)])),
                     s_throw(e_var(&error)),
                 ],
@@ -303,6 +372,25 @@ mod tests {
     /// The names of the functions a program calls, in order of appearance.
     fn calls(program: &Program) -> String {
         format!("{program:?}")
+    }
+
+    /// Where a request's exception is answered — the `--web` catch-all, Symfony's
+    /// `HttpKernel::handleThrowable` — it is noted as the request's error, and the probe
+    /// entry is declared.
+    #[test]
+    fn a_requests_exception_is_noted_where_it_is_answered() {
+        let source = "<?php namespace Symfony\\Component\\HttpKernel { class HttpKernel { private function handleThrowable(\\Throwable $e, $request, int $type) { return 1; } } }
+            namespace {
+                function handle() { try { echo 1; } catch (\\Throwable $__elephc_exc) { elephc_web_handle_uncaught_exception(); } }
+                function adapter() { try { echo 1; } catch (\\Throwable) { elephc_web_handle_uncaught_exception(); } }
+            }";
+        let program = inject(resolved(source), &[], true).expect("no error");
+        let text = calls(&program);
+        assert_eq!(text.matches("ExternFunctionDecl { name: \"elephc_probe_note_error\"").count(), 1, "declared: {text}");
+        assert_eq!(text.matches("text: \"elephc_probe_note_error\"").count(), 3, "called thrice: {text}");
+        assert_eq!(text.matches("variable: Some(\"__elephc_exc\")").count(), 2, "the adapter's catch is given a variable: {text}");
+        let untouched = "<?php function f() { try { echo 1; } catch (\\Throwable $e) { echo 2; } }";
+        assert!(!calls(&inject(resolved(untouched), &[], true).expect("no error")).contains("elephc_probe_note_error"));
     }
 
     #[test]
