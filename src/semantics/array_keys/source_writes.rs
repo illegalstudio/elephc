@@ -228,6 +228,7 @@ fn definite_array_type(ty: &PhpType) -> bool {
 struct LocalFacts {
     values: HashMap<String, ValueFact>,
     foreach_references: HashMap<String, ForeachReference>,
+    ordinary_references: BTreeSet<String>,
 }
 
 /// One lingering reference left by a by-reference foreach value variable.
@@ -255,11 +256,23 @@ impl LocalFacts {
 
     /// Replaces one local fact after a source-order assignment.
     fn set(&mut self, name: &str, fact: ValueFact) {
+        let fact = if self.ordinary_references.contains(name) {
+            ValueFact::Unknown
+        } else {
+            fact
+        };
         self.values.insert(name.to_owned(), fact);
     }
 
     /// Records a source assignment, including writes through a lingering foreach reference.
     fn assign(&mut self, name: &str, fact: ValueFact) {
+        if self.ordinary_references.contains(name) {
+            self.foreach_references.remove(name);
+            self.foreach_references
+                .retain(|_, reference| reference.source != name);
+            self.set(name, ValueFact::Unknown);
+            return;
+        }
         if let Some(reference) = self.foreach_references.get(name).cloned() {
             let original = self.get(&reference.source);
             let updated = match original.clone() {
@@ -286,7 +299,23 @@ impl LocalFacts {
     /// Rebinds a local name without storing through the reference it previously held.
     fn rebind(&mut self, name: &str, fact: ValueFact) {
         self.foreach_references.remove(name);
+        self.ordinary_references.remove(name);
         self.set(name, fact);
+    }
+
+    /// Marks an ordinary PHP reference pair as unknown until either name is rebound.
+    fn bind_ordinary_reference(&mut self, target: &str, source: &str) {
+        self.foreach_references.remove(target);
+        if let Some(reference) = self.foreach_references.get(source) {
+            self.values.insert(
+                reference.source.clone(),
+                ValueFact::Known(PhpType::php_array()),
+            );
+        }
+        self.ordinary_references.insert(target.to_owned());
+        self.ordinary_references.insert(source.to_owned());
+        self.set(target, ValueFact::Unknown);
+        self.set(source, ValueFact::Unknown);
     }
 
     /// Remembers that PHP leaves the foreach value variable bound to its last element.
@@ -1600,9 +1629,10 @@ fn apply_prelude_facts(
                 ValueFact::Known(crate::types::constant_binding::declared_type(type_expr)),
             ),
             StmtKind::RefAssign { target, source } => {
-                locals.rebind(target, ValueFact::Unknown);
                 if let ExprKind::Variable(source) = &source.kind {
-                    locals.set(source, ValueFact::Unknown);
+                    locals.bind_ordinary_reference(target, source);
+                } else {
+                    locals.rebind(target, ValueFact::Unknown);
                 }
             }
             StmtKind::StaticVar { name, init } => {
@@ -1751,9 +1781,10 @@ fn validate_stmt(
             );
         }
         StmtKind::RefAssign { target, source } => {
-            locals.rebind(target, ValueFact::Unknown);
             if let ExprKind::Variable(source) = &source.kind {
-                locals.set(source, ValueFact::Unknown);
+                locals.bind_ordinary_reference(target, source);
+            } else {
+                locals.rebind(target, ValueFact::Unknown);
             }
         }
         StmtKind::Global { vars } => {
@@ -3773,6 +3804,11 @@ fn merge_exits(exits: &[LocalFacts]) -> LocalFacts {
         names.extend(exit.values.keys().cloned());
     }
     let mut merged = LocalFacts::default();
+    merged.ordinary_references.extend(
+        exits
+            .iter()
+            .flat_map(|exit| exit.ordinary_references.iter().cloned()),
+    );
     for name in names {
         let fact = exits
             .iter()
