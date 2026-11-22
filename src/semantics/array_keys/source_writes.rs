@@ -372,6 +372,24 @@ fn source_literal_truthiness(expr: &Expr) -> Option<bool> {
         ExprKind::ArrayLiteralAssoc(entries) => Some(!entries.is_empty()),
         ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
         ExprKind::Assignment { value, .. } => source_literal_truthiness(value),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match source_literal_truthiness(condition)? {
+            true => source_literal_truthiness(then_expr),
+            false => source_literal_truthiness(else_expr),
+        },
+        ExprKind::ShortTernary { value, default } => {
+            match source_literal_truthiness(value)? {
+                true => Some(true),
+                false => source_literal_truthiness(default),
+            }
+        }
+        ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
+            true => source_literal_truthiness(default),
+            false => source_literal_truthiness(value),
+        },
         _ => crate::types::deferred_defaults::literal_truthiness(expr),
     }
 }
@@ -388,6 +406,24 @@ fn source_literal_nullness(expr: &Expr) -> Option<bool> {
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::ArrayLiteralMixed(_) => Some(false),
         ExprKind::Assignment { value, .. } => source_literal_nullness(value),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match source_literal_truthiness(condition)? {
+            true => source_literal_nullness(then_expr),
+            false => source_literal_nullness(else_expr),
+        },
+        ExprKind::ShortTernary { value, default } => {
+            match source_literal_truthiness(value)? {
+                true => Some(false),
+                false => source_literal_nullness(default),
+            }
+        }
+        ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
+            true => source_literal_nullness(default),
+            false => Some(false),
+        },
         _ => None,
     }
 }
@@ -491,7 +527,11 @@ fn validate_condition_flow(
             let true_reachable = left_flow.true_reachable && right_flow.true_reachable;
             let false_from_left = left_flow.false_reachable;
             let false_from_right = left_flow.true_reachable && right_flow.false_reachable;
-            let when_true = right_flow.when_true;
+            let when_true = if true_reachable {
+                right_flow.when_true
+            } else {
+                left_flow.when_true.clone()
+            };
             let when_false = merge_reachable_condition_exits(
                 &[
                     (false_from_left, &left_flow.when_false),
@@ -532,12 +572,17 @@ fn validate_condition_flow(
                 ],
                 &left_flow.when_true,
             );
-            let when_false = right_flow.when_false;
+            let false_reachable = left_flow.false_reachable && right_flow.false_reachable;
+            let when_false = if false_reachable {
+                right_flow.when_false
+            } else {
+                left_flow.when_false.clone()
+            };
             Ok(ConditionFlow {
                 when_true,
                 when_false,
                 true_reachable: true_from_left || true_from_right,
-                false_reachable: left_flow.false_reachable && right_flow.false_reachable,
+                false_reachable,
             })
         }
         ExprKind::Not(inner) => {
@@ -1204,17 +1249,7 @@ fn apply_lazy_expression_facts(
         ExprKind::NullCoalesce { value, default } => {
             let value_fact =
                 apply_expression_facts(value, locals, properties, profile, current_class);
-            let default_runs = match &value.kind {
-                ExprKind::Null => Some(true),
-                ExprKind::BoolLiteral(_)
-                | ExprKind::IntLiteral(_)
-                | ExprKind::FloatLiteral(_)
-                | ExprKind::StringLiteral(_)
-                | ExprKind::ArrayLiteral(_)
-                | ExprKind::ArrayLiteralAssoc(_)
-                | ExprKind::ArrayLiteralMixed(_) => Some(false),
-                _ => None,
-            };
+            let default_runs = source_literal_nullness(value);
             match apply_optional_expression_facts(
                 default,
                 default_runs,
