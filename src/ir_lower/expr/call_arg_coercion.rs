@@ -2684,14 +2684,9 @@ fn convert_packed_local_for_reference(
     }
     let local = ctx.load_local(name, Some(arg.span));
     if matches!(storage_ty.codegen_repr(), PhpType::AssocArray { .. }) {
-        let hash = ctx.emit_value(
-            Op::ArrayToHash,
-            vec![local.value],
-            None,
-            storage_ty.clone(),
-            Op::ArrayToHash.default_effects(),
-            Some(arg.span),
-        );
+        // The conversion MOVES the slot's reference: the retyping store below releases nothing,
+        // so a plain `ArrayToHash` over a slot load left the caller's list leaked.
+        let hash = ctx.emit_local_array_to_hash_move(name, local, storage_ty.clone(), arg.span);
         // The callee reaches the hash through this slot's address, so the slot has to keep
         // holding the raw container pointer. A plain re-typing store would widen the frame
         // slot to a boxed cell instead, and the callee would then read the box as the table.
