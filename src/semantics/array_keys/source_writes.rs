@@ -376,6 +376,46 @@ fn source_literal_truthiness(expr: &Expr) -> Option<bool> {
     }
 }
 
+/// Resolves whether a source literal or assignment result is definitely null.
+fn source_literal_nullness(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::Null => Some(true),
+        ExprKind::BoolLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_) => Some(false),
+        ExprKind::Assignment { value, .. } => source_literal_nullness(value),
+        _ => None,
+    }
+}
+
+/// Selects the expression PHP returns from a statically decided lazy value.
+fn statically_selected_source_expr(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::Assignment { value, .. } => statically_selected_source_expr(value),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match source_literal_truthiness(condition)? {
+            true => statically_selected_source_expr(then_expr),
+            false => statically_selected_source_expr(else_expr),
+        },
+        ExprKind::ShortTernary { value, default } => match source_literal_truthiness(value)? {
+            true => statically_selected_source_expr(value),
+            false => statically_selected_source_expr(default),
+        },
+        ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
+            true => statically_selected_source_expr(default),
+            false => statically_selected_source_expr(value),
+        },
+        _ => Some(expr),
+    }
+}
+
 /// Proves whether an indexed literal contributes an element after expanding its spreads.
 fn source_indexed_array_nonempty(values: &[Expr]) -> Option<bool> {
     let mut unknown_spread = false;
@@ -2132,21 +2172,29 @@ fn infer_expr(
             static_property_fact(receiver, property, properties, current_class)
         }
         ExprKind::Ternary {
-            condition,
             then_expr,
             else_expr,
-        } => match source_literal_truthiness(condition) {
-            Some(true) => infer_expr(then_expr, locals, properties, profile, current_class),
-            Some(false) => infer_expr(else_expr, locals, properties, profile, current_class),
-            None => merge_value_facts(
-                infer_expr(then_expr, locals, properties, profile, current_class),
-                infer_expr(else_expr, locals, properties, profile, current_class),
-            ),
-        },
-        ExprKind::NullCoalesce { value, default } => merge_value_facts(
-            infer_expr(value, locals, properties, profile, current_class),
-            infer_expr(default, locals, properties, profile, current_class),
+            ..
+        } => statically_selected_source_expr(expr).map_or_else(
+            || {
+                merge_value_facts(
+                    infer_expr(then_expr, locals, properties, profile, current_class),
+                    infer_expr(else_expr, locals, properties, profile, current_class),
+                )
+            },
+            |selected| infer_expr(selected, locals, properties, profile, current_class),
         ),
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => statically_selected_source_expr(expr)
+            .map_or_else(
+                || {
+                    merge_value_facts(
+                        infer_expr(value, locals, properties, profile, current_class),
+                        infer_expr(default, locals, properties, profile, current_class),
+                    )
+                },
+                |selected| infer_expr(selected, locals, properties, profile, current_class),
+            ),
         _ => ValueFact::Unknown,
     }
 }
@@ -2511,7 +2559,8 @@ fn inferred_mixed_array_fact(
 /// Under exact keys, string `"0"` deliberately remains distinct from integer `0`; an integer
 /// lookup is then a known missing slot whose nested write still receives array-key validation.
 fn source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
-    match crate::types::literal_array_key(expr, profile)? {
+    let selected = statically_selected_source_expr(expr)?;
+    match crate::types::literal_array_key(selected, profile)? {
         StringKey::Integer(value) => Some(ArrayKeyFact::Integer(value)),
         StringKey::String(value) => Some(ArrayKeyFact::String(
             String::from_utf8_lossy(value).into_owned(),
