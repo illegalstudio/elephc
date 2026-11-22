@@ -266,10 +266,33 @@ fn dynamic_new_class_is_planning_candidate(
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
+    if !dynamic_new_args_need_planning(sig, args)
+        && !owns_promoted_references
+        && !dynamic_new_args_need_scalar_guard(ctx, sig, args)
+    {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
+}
+
+/// Returns true when a positional argument the checker recorded as runtime-typed binds a
+/// declared non-nullable scalar parameter of `sig`.
+///
+/// PHP checks that argument against the constructor of the class selected at run time. The
+/// generic dynamic-new opcode binds it with a lenient cast, so such a class is constructed
+/// through the fixed-class branch, whose argument binding raises the `TypeError`.
+pub(super) fn dynamic_new_args_need_scalar_guard(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> bool {
+    args.iter()
+        .take_while(|arg| !is_spread_arg(arg) && !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        .enumerate()
+        .any(|(index, arg)| {
+            ctx.scalar_guard_arg_sites.contains(&arg.span)
+                && crate::types::param_binding::runtime_scalar_guard_param(sig, index).is_some()
+        })
 }
 
 /// Returns true when a constructor signature would reshape the source argument list.

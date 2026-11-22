@@ -666,6 +666,11 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
         ) {
             return value;
         }
+        if let Some(value) = super::object_construction::lower_planned_guarded_static_new(
+            ctx, class_name, &fallback_class, args, expr,
+        ) {
+            return value;
+        }
         for (arg_index, arg) in args.iter().enumerate() {
             let place = match &arg.kind {
                 ExprKind::NamedArg { value, .. } => value.as_ref(),

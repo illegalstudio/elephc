@@ -203,3 +203,36 @@ echo walk(["a", "b"]), walkTwo(["a", "b", "c"]);
         && inst.result.is_some_and(|value| value_type(two, value) == Some(crate::ir::IrType::Str))),
         "the first converted string is published before the second check");
 }
+
+/// Counts the instructions with `op` in the lowered function `name`.
+fn ops_in(module: &crate::ir::Module, name: &str, op: Op) -> usize {
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap_or_else(|| panic!("missing function {name}"));
+    function.instructions.iter().filter(|inst| inst.op == op).count()
+}
+
+/// Verifies `new $class($v)` checks a `mixed` argument against the selected class's scalar
+/// constructor parameter through fixed-class construction (one checked branch per class),
+/// while typed arguments keep the single dynamic-new instruction and emit no check.
+#[test]
+fn dynamic_construction_guards_only_runtime_typed_scalar_arguments() {
+    let module = super::lower_source(
+        r#"<?php
+class A { function __construct(string $s) {} }
+class B extends A { function __construct(string $t) {} }
+class C extends A { function __construct(?string $t) {} }
+function newMixed(string $c, mixed $v) { return new $c($v); }
+function newTyped(string $c, string $v, int $i) { return [new $c($v), new $c($i)]; }
+newMixed("A", "a"); newTyped("A", "a", 1);
+"#,
+    );
+    assert_eq!(ops_in(&module, "newTyped", Op::ScalarParamGuard), 0);
+    assert_eq!(ops_in(&module, "newTyped", Op::ObjectNew), 0);
+    assert_eq!(ops_in(&module, "newTyped", Op::DynamicObjectNewMixed), 2);
+    assert_eq!(ops_in(&module, "newMixed", Op::ScalarParamGuard), 2, "one per checking class");
+    assert_eq!(ops_in(&module, "newMixed", Op::ObjectNew), 2, "C keeps the generic dispatch");
+    assert_eq!(ops_in(&module, "newMixed", Op::DynamicObjectNewMixed), 1);
+}

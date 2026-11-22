@@ -2178,3 +2178,71 @@ t(fn() => (new B)->runB(null));
     );
     assert_eq!(out, "A::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(x)\nB::m\n");
 }
+
+/// `new $class($v)` and `new static($v)` select the constructor at run time: PHP checks the
+/// `mixed` argument against the selected class's own (or inherited) scalar parameter and names
+/// it, while a nullable constructor accepts `null` and a case-folded class name selects the same
+/// class.
+#[test]
+fn test_dynamic_construction_checks_the_selected_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class A {
+    function __construct(string $s, int $n = 1) { echo static::class, " A(", $s, ",", $n, ")\n"; }
+    static function make(mixed $v) { return new static($v); }
+    static function make2(mixed $v, mixed $n) { return new static($v, $n); }
+}
+class B extends A { function __construct(string $t, int $count = 2) { echo "B(", $t, ",", $count, ")\n"; } }
+class C extends A { function __construct(?string $t, int $u = 0) { echo "C(", var_export($t, true), ")\n"; } }
+class D extends A {}
+final class E extends B {}
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+foreach (["A", "B", "C", "D", "E"] as $cls) {
+    t(fn() => new $cls(box(null)));
+    if ($cls !== "C") t(fn() => new $cls(box([1])));
+    t(fn() => new $cls(box("v")));
+    t(fn() => $cls::make(null));
+    if ($cls !== "C") t(fn() => $cls::make(box(7)));
+}
+t(fn() => A::make2("x", box("12abc")));
+t(fn() => B::make2("x", box(null)));
+t(fn() => B::make2("x", box("5")));
+$cls = "e";
+t(fn() => new $cls(box(null)));
+"#,
+    );
+    assert_eq!(
+        out,
+        "A::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nA::__construct(): Argument #1 ($s) must be of type string, array given, called in F on line 15\nA A(v,1)\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 5\nA A(7,1)\nB::__construct(): Argument #1 ($t) must be of type string, null given, called in F on line 14\nB::__construct(): Argument #1 ($t) must be of type string, array given, called in F on line 15\nB(v,2)\nB::__construct(): Argument #1 ($t) must be of type string, null given, called in F on line 5\nB(7,2)\nC(NULL)\nC('v')\nC(NULL)\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nA::__construct(): Argument #1 ($s) must be of type string, array given, called in F on line 15\nD A(v,1)\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 5\nD A(7,1)\nB::__construct(): Argument #1 ($t) must be of type string, null given, called in F on line 14\nB::__construct(): Argument #1 ($t) must be of type string, array given, called in F on line 15\nB(v,2)\nB::__construct(): Argument #1 ($t) must be of type string, null given, called in F on line 5\nB(7,2)\nA::__construct(): Argument #2 ($n) must be of type int, string given, called in F on line 6\nB::__construct(): Argument #2 ($count) must be of type int, null given, called in F on line 6\nB(x,5)\nB::__construct(): Argument #1 ($t) must be of type string, null given, called in F on line 24\n"
+    );
+}
+
+/// A refusal from the fixed-class branch of a dynamic construction releases the call's other
+/// owned arguments and the refused box (`--heap-debug` leak summary clean).
+#[test]
+fn test_dynamic_construction_refusal_releases_the_call_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class A {
+    function __construct(string $s, array $a) {}
+    static function make(mixed $v, array $a) { return new static($v, $a); }
+}
+class B extends A { function __construct(string $t, array $a) {} }
+class C extends A { function __construct(?string $t, array $a) {} }
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    foreach (["A", "B", "C"] as $cls) {
+        try { new $cls(box(null), [str_repeat("a", 40 + $i)]); $n += 1; } catch (TypeError $e) { $n += 10; }
+        try { $cls::make(box(null), [str_repeat("b", 40)]); $n += 100; } catch (TypeError $e) { $n += 1000; }
+        try { $o = new $cls(box("s" . $i), [str_repeat("c", 40)]); $n += 10000; } catch (TypeError $e) { $n += 100000; }
+    }
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "96363\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

@@ -1336,6 +1336,12 @@ pieces must stay in agreement:
    reads the called-class id instead). Codegen reads it only on the cold path,
    so the inline tag test costs the same. A callable whose method is resolved
    from the receiver's static class (#2466) leaves such a method unchecked.
+   `new $class($v)` and `new static($v)` dispatch on the class name: when the
+   checker records a runtime-typed positional argument (`new $class` records
+   every `mixed`/union one, since its constructor is unknown), each class whose
+   constructor checks it is constructed in a fixed-class branch of the planned
+   class-name dispatch (`dynamic_constructors.rs`), which checks it as `new A`
+   does. The other classes keep the generic dynamic-new instruction.
 
 ### Eval and Dynamic Symbols
 
