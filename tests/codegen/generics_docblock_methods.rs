@@ -1340,6 +1340,121 @@ echo get_class($t), ":", $t->name, ":", $t instanceof ObjectType ? "y" : "n";
     assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "BackedEnumType:Suit:y");
 }
 
+/// A class whose `@template` bound this reader cannot parse (`Builtin<Id::A>|Obj`, Symfony
+/// type-info's `GenericType`) is still a generic declaration to the people who mention it: the
+/// mention is forgotten, not warned about as a bare mention of a template.
+#[test]
+fn test_unreadable_template_bound_does_not_warn_at_a_mention_of_a_template() {
+    let source = r#"<?php
+enum Id: string { case A = 'a'; case B = 'b'; }
+/** @template T of Id */
+final class Builtin {
+    public function __construct(public readonly Id $id) {}
+}
+final class Obj {}
+/**
+ * @template T of Builtin<Id::A>|Builtin<Id::B>|Obj
+ */
+final class Generic {
+    /** @param T $type */
+    public function __construct(private readonly Builtin|Obj $type) {}
+    public function kind(): string { return $this->type instanceof Obj ? 'obj' : 'builtin'; }
+}
+echo (new Generic(new Obj))->kind(), (new Generic(new Builtin(Id::A)))->kind(), "\n";
+"#;
+    let notes = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(!notes.contains("names a template"), "{notes}");
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "objbuiltin\n");
+}
+
+/// A method `@template T of object` whose `@return array<T>` no argument determines
+/// (`class-string<T>` is no type of the grammar) reads `T` as its bound, and a typed
+/// `array<object>` is not the boxed array the body builds. The array position goes back to the
+/// plain `array` php declares, so the method compiles at once (Symfony `ArgumentMetadata`).
+#[test]
+fn test_undetermined_doc_template_does_not_type_an_array_return() {
+    let source = r#"<?php
+final class Meta {
+    /** @param list<object> $attributes */
+    public function __construct(private array $attributes) {}
+    /**
+     * @template T of object
+     *
+     * @param class-string<T> $name
+     *
+     * @return array<T>
+     */
+    public function ofType(string $name): array {
+        $out = [];
+        foreach ($this->attributes as $a) {
+            if ($a::class === $name) {
+                $out[] = $a;
+            }
+        }
+        return $out;
+    }
+}
+class A {}
+class B {}
+$m = new Meta([new A, new B, new A]);
+echo count($m->ofType(A::class)), count($m->ofType(B::class)), "\n";
+"#;
+    let notes = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(!notes.contains(ERASED_NOTE), "{notes}");
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "21\n");
+}
+
+/// The same undetermined template in a parameter and in a nested return
+/// (`list<self<TEntities>>`), called with a plain `array` (Doctrine `InsertBatch`).
+#[test]
+fn test_undetermined_doc_template_does_not_type_an_array_parameter() {
+    let source = r#"<?php
+/** @template TEntity of object */
+final class Batch {
+    /** @param non-empty-list<TEntity> $entities */
+    public function __construct(public readonly string $class, public array $entities) {}
+
+    /**
+     * @param list<TEntities> $entities
+     *
+     * @return list<self<TEntities>>
+     *
+     * @template TEntities of object
+     */
+    public static function byType(array $entities): array {
+        $current = null;
+        $batches = [];
+        $index = -1;
+        foreach ($entities as $entity) {
+            if ($current?->class !== $entity::class) {
+                $current = new self($entity::class, []);
+                $batches[] = $current;
+                $index++;
+            }
+            $batches[$index]->entities[] = $entity;
+        }
+        return $batches;
+    }
+}
+final class Uow {
+    /** @return list<object> */
+    private function order(): array { return [new stdClass, new stdClass, new ArrayObject([])]; }
+    public function run(): string {
+        $out = [];
+        foreach (Batch::byType($this->order()) as $b) { $out[] = $b->class . ':' . count($b->entities); }
+        return implode(',', $out);
+    }
+}
+echo (new Uow)->run(), "\n";
+"#;
+    let notes = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(!notes.contains(ERASED_NOTE), "{notes}");
+    assert_eq!(
+        compile_cli_file_and_run_with_flags(source, &[]),
+        "stdClass:2,ArrayObject:1\n"
+    );
+}
+
 /// Erasing a PHPDoc template's file takes the files that write type arguments on it in the SAME
 /// re-run. The refusal here (a bare `Box` parameter given a subclass) implicates `Box.php` and
 /// `SBox.php`; `Holder.php` annotates `@var Box<T>` and would be refused once `Box` is no

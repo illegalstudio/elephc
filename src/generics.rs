@@ -480,6 +480,31 @@ pub(crate) fn docblock_params_read_as_mixed(
         .collect()
 }
 
+/// Returns the PHPDoc parameters of a function or method that no array element position may
+/// type: those read as `mixed`, and those bound to nothing but their own bound.
+///
+/// `@template T of object` with `@return array<T>` and an argument that says nothing about `T`
+/// (`class-string<T> $name`, a plain `array`) binds `T` to `object`. The body builds the array
+/// php-src builds, boxed cells, and a declared `array<object>` holds raw object pointers: the
+/// two storages are not interchangeable and the check refused the call. A bare `T` keeps its
+/// bound reading; only the positions inside an array go back to the plain `array`.
+pub(crate) fn docblock_params_read_bare(
+    type_params: &[TypeParam],
+    bindings: &Bindings,
+) -> Vec<String> {
+    type_params
+        .iter()
+        .filter(|param| param.from_docblock)
+        .filter(|param| {
+            bindings.iter().any(|(name, ty)| {
+                name == &param.name
+                    && (is_mixed_type(ty) || param.bound.as_ref() == Some(ty))
+            })
+        })
+        .map(|param| param.name.clone())
+        .collect()
+}
+
 /// Substitutes the type arguments into a declared type, giving an array that mentioned one of
 /// the `erased` parameters its native spelling back.
 ///
@@ -491,11 +516,10 @@ pub(crate) fn substitute_signature_type(
     bindings: &Bindings,
     erased: &[String],
 ) -> TypeExpr {
-    let substituted = substitute_value_type(ty, bindings);
     if erased.is_empty() || !ty.mentions_type_param(erased) {
-        substituted
+        substitute_value_type(ty, bindings)
     } else {
-        erasure::collapse_mixed(substituted)
+        erasure::erase_containers(ty, bindings, erased)
     }
 }
 

@@ -551,3 +551,55 @@ pub(crate) fn collapse_mixed(ty: TypeExpr) -> TypeExpr {
         other => other,
     }
 }
+
+/// Substitutes `bindings` into `ty`, reading every array one of whose component types mentions an
+/// `erased` parameter as the plain `array` php-src declares.
+///
+/// A component read through an undetermined template (`array<T>`, `list<Foo<T>>`,
+/// `array<string, T>`) says nothing php enforces, and a typed storage of it would not match the
+/// boxed array the body builds. A bare `T`, and any position that does not mention an erased
+/// parameter, substitute as ever; `?mixed` and a union with `mixed` still collapse.
+pub(crate) fn erase_containers(
+    ty: &TypeExpr,
+    bindings: &super::Bindings,
+    erased: &[String],
+) -> TypeExpr {
+    erase_containers_with(ty, bindings, erased, super::substitute_value_type)
+}
+
+/// [`erase_containers`] with the caller's own substitution for the positions it keeps.
+pub(crate) fn erase_containers_with(
+    ty: &TypeExpr,
+    bindings: &super::Bindings,
+    erased: &[String],
+    substitute: fn(&TypeExpr, &super::Bindings) -> TypeExpr,
+) -> TypeExpr {
+    if !ty.mentions_type_param(erased) {
+        return substitute(ty, bindings);
+    }
+    match ty {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => {
+            TypeExpr::Named(crate::names::Name::unqualified("array"))
+        }
+        TypeExpr::Nullable(inner) => {
+            let inner = erase_containers_with(inner, bindings, erased, substitute);
+            if super::is_mixed_type(&inner) {
+                inner
+            } else {
+                TypeExpr::Nullable(Box::new(inner))
+            }
+        }
+        TypeExpr::Union(members) => {
+            let members: Vec<TypeExpr> = members
+                .iter()
+                .map(|member| erase_containers_with(member, bindings, erased, substitute))
+                .collect();
+            if members.iter().any(super::is_mixed_type) {
+                super::mixed_type()
+            } else {
+                TypeExpr::Union(members)
+            }
+        }
+        other => collapse_mixed(substitute(other, bindings)),
+    }
+}

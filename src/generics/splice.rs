@@ -107,11 +107,12 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
         ty: crate::parser::ast::TypeExpr,
         _span: crate::span::Span,
     ) -> crate::parser::ast::TypeExpr {
-        let substituted = ty.substitute_type_params(self.bindings);
         if self.erased.is_empty() || !ty.mentions_type_param(self.erased) {
-            substituted
+            ty.substitute_type_params(self.bindings)
         } else {
-            super::erasure::collapse_mixed(substituted)
+            super::erasure::erase_containers_with(&ty, self.bindings, self.erased, |ty, bindings| {
+                ty.substitute_type_params(bindings)
+            })
         }
     }
 
@@ -164,7 +165,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
     else {
         return None;
     };
-    let erased = super::docblock_params_read_as_mixed(type_params, bindings);
+    let erased = super::docblock_params_read_bare(type_params, bindings);
     let erased = erased.as_slice();
     let mut instance = template.clone();
     // Reuse the body the clone already carries instead of cloning it a second time from the

@@ -58,6 +58,11 @@ struct DocBlock {
     extends: Vec<(Name, Vec<TypeExpr>)>,
     /// `@implements Iface<T>`, matched to the declaration's `implements` list by name.
     implements: Vec<(Name, Vec<TypeExpr>)>,
+    /// A `@template` tag this reader could not parse (a bound like `BuiltinType<Id::ARRAY>`).
+    /// The template is not adopted, but the declaration still IS a generic one to the people who
+    /// annotate their mentions of it (`GenericType<T>`), so the mention must be forgotten rather
+    /// than refused as a mention of a non-template.
+    unreadable_template: bool,
 }
 
 impl DocBlock {
@@ -90,6 +95,7 @@ impl DocBlock {
             && self.var_type.is_none()
             && self.extends.is_empty()
             && self.implements.is_empty()
+            && !self.unreadable_template
     }
 }
 
@@ -405,7 +411,9 @@ fn overlay_doc_template(
     if generics.is_some() {
         return Vec::new();
     }
-    let Some(block) = block.filter(|block| !block.type_params.is_empty()) else {
+    let Some(block) =
+        block.filter(|block| !block.type_params.is_empty() || block.unreadable_template)
+    else {
         return Vec::new();
     };
     let key = scope.class_key(&Name::unqualified(name));
@@ -523,6 +531,8 @@ fn parse_block(lines: &[&str]) -> DocBlock {
                     if !block.type_params.iter().any(|p| p.name == param.name) {
                         block.type_params.push(param);
                     }
+                } else {
+                    block.unreadable_template = true;
                 }
             } else if let Some(rest) = segment.strip_prefix("@param ") {
                 if let Some((name, ty)) = parse_param(rest) {

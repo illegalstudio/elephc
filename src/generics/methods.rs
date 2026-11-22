@@ -285,7 +285,7 @@ fn attach(
 /// checker from treating the result as a template again.
 fn substitute(mut method: ClassMethod, instantiated: &str, bindings: &Bindings) -> ClassMethod {
     method.name = instantiated.to_string();
-    let erased = super::docblock_params_read_as_mixed(&method.type_params, bindings);
+    let erased = super::docblock_params_read_bare(&method.type_params, bindings);
     method.type_params = Vec::new();
     for (_, declared, _, _) in method.params.iter_mut() {
         if let Some(ty) = declared.as_mut() {
