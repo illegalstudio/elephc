@@ -2466,7 +2466,11 @@ fn collect_loop_break_flow(
             }
             _ => {
                 if crate::termination::block_may_break_current_loop(std::slice::from_ref(stmt)) {
-                    complete = false;
+                    exits.push(locals.clone());
+                    complete &= !locals
+                        .values
+                        .keys()
+                        .any(|name| crate::ir_lower::stmt_writes_local(stmt, name));
                 }
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
                 audit_exit = locals.clone();

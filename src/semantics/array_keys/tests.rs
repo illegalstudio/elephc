@@ -163,6 +163,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [1]; foreach ([10] as $item) { $values = [[1]]; continue; } $values[0][false] = 2;",
         "<?php $values = [1]; while (true) { $values = [[1]]; } $values[0][false] = 2;",
         "<?php $values = [[1]]; while ($argc > 1) { while ($argc > 2) { $values = [[1]]; break 2; } break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [1]; while (true) { $values = [[1]]; while ($argc > 2) { break 2; } break; } $values[0][false] = 2;",
         "<?php $values = [[1]]; while ($argc > 1) { if (false) { $values[0][false] = 2; } break; }",
         "<?php $values = [[1]]; while ($argc > 1) { break; $values[0][false] = 2; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { if (true) { $values = [[1]]; } $values[0][false] = 2; }",
