@@ -59,10 +59,12 @@ pub(crate) fn expr_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     effect.may_throw || effect.has_side_effects
 }
 
-/// Returns true when running `stmts` can raise a catchable error, judged without any
-/// whole-program summary: every call the summaries would have resolved counts as throwing.
-pub(crate) fn block_may_raise(stmts: &[crate::parser::ast::Stmt]) -> bool {
-    effects::block_may_throw(stmts)
+/// Returns true when running `user` (the statements of `program` that are not prelude declarations)
+/// can raise a catchable error, judged with the callable summaries of the whole `program`, the same
+/// facts the dead-code passes use to drop a `catch` that nothing can reach.
+pub(crate) fn block_may_raise(program: &[crate::parser::ast::Stmt], user: &[crate::parser::ast::Stmt]) -> bool {
+    let analysis = CallableEffectAnalysis::from_program(program);
+    with_callable_effect_analysis(&analysis, || effects::block_may_throw(user))
 }
 
 #[cfg(test)]

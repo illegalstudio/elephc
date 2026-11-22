@@ -103,7 +103,7 @@ pub fn helpers_needed(
         .filter(|stmt| !inventory.owns_top_level_declaration(stmt))
         .cloned()
         .collect();
-    crate::optimize::block_may_raise(&user)
+    crate::optimize::block_may_raise(program, &user)
 }
 
 /// `if (condition) { then } [else { otherwise }]`, without elseif arms.
