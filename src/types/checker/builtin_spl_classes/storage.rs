@@ -121,7 +121,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                param_default("array", plain_array_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
@@ -169,7 +169,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             array_append_body(),
         ),
-        method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
+        method_with_body("getArrayCopy", Vec::new(), Some(plain_array_type()), array_copy_body()),
     ];
     methods.extend(array_write_fetch_methods());
     methods
@@ -181,7 +181,7 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                param_default("array", plain_array_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
@@ -219,7 +219,7 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             array_append_body(),
         ),
-        method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
+        method_with_body("getArrayCopy", Vec::new(), Some(plain_array_type()), array_copy_body()),
     ];
     methods.extend(array_write_fetch_methods());
     methods
