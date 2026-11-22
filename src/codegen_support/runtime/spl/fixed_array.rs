@@ -196,7 +196,7 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 
 /// Emits `__rt_spl_fixed_offset_set` on aarch64: ArrayAccess `offsetSet`.
 /// x0 = receiver, x1 = boxed offset, x2 = owned Mixed value to store.
-/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Releases the displaced slot owner after publishing the replacement.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
@@ -221,7 +221,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x9]");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction("b.hs __rt_spl_fixed_offset_set_range_throw");          // reject offsets outside fixed range
-    elephc_memoir::values::fixed_array_storage::emit_replace_slot(emitter);
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("b __rt_spl_fixed_offset_set_done");                    // finish offsetSet
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
@@ -248,8 +248,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_fixed_offset_unset` on aarch64: ArrayAccess `offsetUnset`.
-/// x0 = receiver, x1 = boxed offset. Releases the existing Mixed cell at the slot
-/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// x0 = receiver, x1 = boxed offset. Clears the slot and releases its detached Mixed owner.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
@@ -738,7 +737,7 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_spl_fixed_offset_set` on x86_64: ArrayAccess `offsetSet`.
 /// rdi = receiver, rsi = boxed offset, rdx = owned Mixed value to store.
-/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Releases the displaced slot owner after publishing the replacement.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
@@ -763,7 +762,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction("jae __rt_spl_fixed_offset_set_range_throw");           // reject offsets outside fixed range
-    elephc_memoir::values::fixed_array_storage::emit_replace_slot(emitter);
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("jmp __rt_spl_fixed_offset_set_done");                  // finish offsetSet
     emitter.label("__rt_spl_fixed_offset_set_type_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
@@ -790,8 +789,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_fixed_offset_unset` on x86_64: ArrayAccess `offsetUnset`.
-/// rdi = receiver, rsi = boxed offset. Releases the existing Mixed cell at the slot
-/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// rdi = receiver, rsi = boxed offset. Clears the slot and releases its detached Mixed owner.
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");

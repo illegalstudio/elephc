@@ -472,6 +472,41 @@ echo count($json);
     assert_eq!(out, "2|2\na|3\n1\n3|c\n3|3|c\n3");
 }
 
+/// SPL publishes each replacement or removal before running a displaced object's destructor.
+#[test]
+fn test_spl_slot_retirement_publishes_state_before_destructors() {
+    let out = compile_and_run(r#"<?php
+class InspectFixedSlot {
+    public static SplFixedArray $slots;
+    public function __destruct() {
+        $value = self::$slots->offsetGet(0);
+        echo is_object($value) ? "old" : ($value ?? "null"), "\n";
+    }
+}
+class InspectListSlot {
+    public static SplDoublyLinkedList $slots;
+    public function __destruct() {
+        $value = self::$slots->offsetGet(0);
+        echo is_object($value) ? "old" : $value, "\n";
+    }
+}
+$fixed = new SplFixedArray(1);
+InspectFixedSlot::$slots = $fixed;
+$fixed->offsetSet(0, new InspectFixedSlot());
+$fixed->offsetSet(0, "replacement");
+$fixed->offsetSet(0, new InspectFixedSlot());
+$fixed->offsetUnset(0);
+$list = new SplDoublyLinkedList();
+InspectListSlot::$slots = $list;
+$list->push(new InspectListSlot());
+$list->push("tail");
+$list->offsetSet(0, "replacement");
+$list->offsetSet(0, new InspectListSlot());
+$list->offsetUnset(0);
+"#);
+    assert_eq!(out, "replacement\nnull\nreplacement\ntail\n");
+}
+
 // Tests that negative size to SplFixedArray constructor throws ValueError, out-of-bounds
 // get/set throws OutOfBoundsException, non-integer index throws TypeError, and fromArray
 // with string keys throws InvalidArgumentException.

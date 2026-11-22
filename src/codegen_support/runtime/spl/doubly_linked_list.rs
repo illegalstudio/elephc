@@ -1057,8 +1057,8 @@ fn emit_offset_index_prefix_aarch64(
 
 /// Emits `__rt_spl_dll_offset_set` on ARM64: receiver in x0, boxed offset in x1, owned
 /// value in x2. When offset is null, appends via `__rt_spl_dll_push`. Otherwise unboxes
-/// offset, validates it is a non-negative integer within storage bounds, releases the old
-/// Mixed cell at that slot, stores the replacement, and returns void. Converts LIFO
+/// offset, validates it is a non-negative integer within storage bounds, publishes the new
+/// Mixed cell, releases the displaced owner, and returns void. Converts LIFO
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
@@ -1097,16 +1097,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x11, x10");                                   // convert logical LIFO offset to one-based physical offset
     emitter.instruction("sub x10, x10, #1");                                    // finish zero-based physical offset
     emitter.label("__rt_spl_dll_offset_set_physical_index_ready");
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage element
-    emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load the old Mixed cell at this offset
-    emitter.instruction("str x9, [sp, #40]");                                   // preserve storage across old-value release
-    emitter.instruction("str x10, [sp, #48]");                                  // preserve offset across old-value release
-    emitter.instruction("bl __rt_decref_mixed");                                // release old Mixed cell before overwriting
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload storage after release
-    emitter.instruction("ldr x10, [sp, #48]");                                  // reload offset after release
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage element
-    emitter.instruction("ldr x13, [sp, #16]");                                  // reload owned replacement Mixed cell
-    emitter.instruction("str x13, [x12, x10, lsl #3]");                         // store replacement Mixed cell
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("b __rt_spl_dll_offset_set_done");                      // finish offsetSet
     emitter.label("__rt_spl_dll_offset_set_append");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for append
@@ -1149,28 +1140,7 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
         "__rt_spl_dll_offset_unset_range_throw",
         "__rt_spl_dll_offset_unset_index_ready",
     );
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage element
-    emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load removed Mixed cell
-    emitter.instruction("str x9, [sp, #32]");                                   // preserve storage across removed-value release
-    emitter.instruction("str x10, [sp, #40]");                                  // preserve removed index across release
-    emitter.instruction("bl __rt_decref_mixed");                                // release removed Mixed cell
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload storage after release
-    emitter.instruction("ldr x10, [sp, #40]");                                  // reload removed index after release
-    emitter.instruction("ldr x11, [x9]");                                       // reload old storage length
-    emitter.instruction("add x12, x9, #24");                                    // point at first storage element
-    emitter.instruction("add x13, x10, #1");                                    // start compaction after the removed slot
-    emitter.label("__rt_spl_dll_offset_unset_shift_loop");
-    emitter.instruction("cmp x13, x11");                                        // have all following elements shifted left?
-    emitter.instruction("b.ge __rt_spl_dll_offset_unset_shrink");               // shrink once compaction is complete
-    emitter.instruction("ldr x14, [x12, x13, lsl #3]");                         // load next Mixed pointer
-    emitter.instruction("sub x15, x13, #1");                                    // compute destination index
-    emitter.instruction("str x14, [x12, x15, lsl #3]");                         // shift Mixed pointer left by one slot
-    emitter.instruction("add x13, x13, #1");                                    // advance compaction cursor
-    emitter.instruction("b __rt_spl_dll_offset_unset_shift_loop");              // continue compaction
-    emitter.label("__rt_spl_dll_offset_unset_shrink");
-    emitter.instruction("sub x11, x11, #1");                                    // compute new length
-    emitter.instruction("str x11, [x9]");                                       // persist shortened length
-    emitter.instruction("str xzr, [x12, x11, lsl #3]");                         // clear stale tail slot
+    elephc_memoir::values::spl_storage::emit_remove_slot(emitter);
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame
@@ -2202,8 +2172,8 @@ fn emit_offset_index_prefix_x86_64(
 
 /// Emits `__rt_spl_dll_offset_set` on x86_64: receiver in rdi, boxed offset in rsi, owned
 /// value in rdx. When offset is null, appends via `__rt_spl_dll_push`. Otherwise unboxes
-/// offset, validates it is a non-negative integer within storage bounds, releases the old
-/// Mixed cell at that slot, stores the replacement, and returns void. Converts LIFO
+/// offset, validates it is a non-negative integer within storage bounds, publishes the new
+/// Mixed cell, releases the displaced owner, and returns void. Converts LIFO
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
@@ -2245,16 +2215,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, QWORD PTR [rbp - 40]");                       // compute one-based physical offset
     emitter.instruction("sub r10, 1");                                          // finish zero-based physical offset
     emitter.label("__rt_spl_dll_offset_set_physical_index_ready");
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load old Mixed cell at this offset
-    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // preserve storage across old-value release
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve offset across old-value release
-    emitter.instruction("call __rt_decref_mixed");                              // release old Mixed cell before overwriting
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload storage after release
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload offset after release
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload owned replacement Mixed cell
-    emitter.instruction("mov QWORD PTR [r12 + r10 * 8], r13");                  // store replacement Mixed cell
+    elephc_memoir::values::spl_storage::emit_replace_slot(emitter);
     emitter.instruction("jmp __rt_spl_dll_offset_set_done");                    // finish offsetSet
     emitter.label("__rt_spl_dll_offset_set_append");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for append
@@ -2297,29 +2258,7 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
         "__rt_spl_dll_offset_unset_range_throw",
         "__rt_spl_dll_offset_unset_index_ready",
     );
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load removed Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // preserve storage across removed-value release
-    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve removed index across release
-    emitter.instruction("call __rt_decref_mixed");                              // release removed Mixed cell
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload storage after release
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload removed index after release
-    emitter.instruction("mov r11, QWORD PTR [r9]");                             // reload old storage length
-    emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("lea r13, [r10 + 1]");                                  // start compaction after removed slot
-    emitter.label("__rt_spl_dll_offset_unset_shift_loop");
-    emitter.instruction("cmp r13, r11");                                        // have all following elements shifted left?
-    emitter.instruction("jge __rt_spl_dll_offset_unset_shrink");                // shrink once compaction is complete
-    emitter.instruction("mov r14, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
-    emitter.instruction("mov r15, r13");                                        // copy source index for destination calculation
-    emitter.instruction("sub r15, 1");                                          // compute destination index
-    emitter.instruction("mov QWORD PTR [r12 + r15 * 8], r14");                  // shift Mixed pointer left by one slot
-    emitter.instruction("add r13, 1");                                          // advance compaction cursor
-    emitter.instruction("jmp __rt_spl_dll_offset_unset_shift_loop");            // continue compaction
-    emitter.label("__rt_spl_dll_offset_unset_shrink");
-    emitter.instruction("sub r11, 1");                                          // compute new length
-    emitter.instruction("mov QWORD PTR [r9], r11");                             // persist shortened length
-    emitter.instruction("mov QWORD PTR [r12 + r11 * 8], 0");                    // clear stale tail slot
+    elephc_memoir::values::spl_storage::emit_remove_slot(emitter);
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

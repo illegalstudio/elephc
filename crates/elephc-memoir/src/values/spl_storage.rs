@@ -222,3 +222,68 @@ pub fn emit_take_head(emitter: &mut impl Emitter) {
         }
     }
 }
+
+/// Transfers the staged replacement into verified SPL storage before retiring the old value.
+/// Both SPL callers stage the incoming Mixed owner in the same architecture-specific frame slot.
+pub fn emit_replace_slot(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("add x12, x9, #24");                            // point at the packed payload
+            emitter.instruction("ldr x0, [x12, x10, lsl #3]");                   // take the displaced Mixed owner
+            emitter.instruction("ldr x13, [sp, #16]");                          // recover the incoming Mixed owner
+            emitter.instruction("str x13, [x12, x10, lsl #3]");                  // publish the new owner before destruction
+        }
+        Arch::X86_64 => {
+            emitter.instruction("lea r11, [r9 + 24]");                          // point at the packed payload
+            emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");           // take the displaced Mixed owner
+            emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                 // recover the incoming Mixed owner
+            emitter.instruction("mov QWORD PTR [r11 + r10 * 8], r8");            // publish the new owner before destruction
+        }
+    }
+    emitter.emit_call_label("__rt_decref_mixed");
+}
+
+/// Detaches the indexed list owner, compacts the survivors and clears the stale tail.
+/// The old owner is released only when reentrant observers can see the new list.
+pub fn emit_remove_slot(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("add x12, x9, #24");                                    // point at first storage element
+            emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load removed Mixed cell
+            emitter.instruction("ldr x11, [x9]");                                       // reload old storage length
+            emitter.instruction("add x13, x10, #1");                                    // start compaction after the removed slot
+            emitter.label("__rt_spl_dll_offset_unset_shift_loop");
+            emitter.instruction("cmp x13, x11");                                        // have all following elements shifted left?
+            emitter.instruction("b.ge __rt_spl_dll_offset_unset_shrink");               // shrink once compaction is complete
+            emitter.instruction("ldr x14, [x12, x13, lsl #3]");                         // load next Mixed pointer
+            emitter.instruction("sub x15, x13, #1");                                    // compute destination index
+            emitter.instruction("str x14, [x12, x15, lsl #3]");                         // shift Mixed pointer left by one slot
+            emitter.instruction("add x13, x13, #1");                                    // advance compaction cursor
+            emitter.instruction("b __rt_spl_dll_offset_unset_shift_loop");              // continue compaction
+            emitter.label("__rt_spl_dll_offset_unset_shrink");
+            emitter.instruction("sub x11, x11, #1");                                    // compute new length
+            emitter.instruction("str x11, [x9]");                                       // persist shortened length
+            emitter.instruction("str xzr, [x12, x11, lsl #3]");                         // clear stale tail slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
+            emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load removed Mixed cell
+            emitter.instruction("mov r11, QWORD PTR [r9]");                             // reload old storage length
+            emitter.instruction("lea r13, [r10 + 1]");                                  // start compaction after removed slot
+            emitter.label("__rt_spl_dll_offset_unset_shift_loop");
+            emitter.instruction("cmp r13, r11");                                        // have all following elements shifted left?
+            emitter.instruction("jge __rt_spl_dll_offset_unset_shrink");                // shrink once compaction is complete
+            emitter.instruction("mov r14, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
+            emitter.instruction("mov r15, r13");                                        // copy source index for destination calculation
+            emitter.instruction("sub r15, 1");                                          // compute destination index
+            emitter.instruction("mov QWORD PTR [r12 + r15 * 8], r14");                  // shift Mixed pointer left by one slot
+            emitter.instruction("add r13, 1");                                          // advance compaction cursor
+            emitter.instruction("jmp __rt_spl_dll_offset_unset_shift_loop");            // continue compaction
+            emitter.label("__rt_spl_dll_offset_unset_shrink");
+            emitter.instruction("sub r11, 1");                                          // compute new length
+            emitter.instruction("mov QWORD PTR [r9], r11");                             // persist shortened length
+            emitter.instruction("mov QWORD PTR [r12 + r11 * 8], 0");                    // clear stale tail slot
+        }
+    }
+    emitter.emit_call_label("__rt_decref_mixed");
+}
