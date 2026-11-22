@@ -1273,7 +1273,11 @@ impl Checker {
         let backedge = self.loop_backedge_env();
         let mut tail_env = backedge.clone().unwrap_or_else(|| env.clone());
         if let Some(update) = update {
-            if let Err(error) = self.check_stmt(update, &mut tail_env) {
+            // The update runs only after an iteration, so a proof it records stays inside it.
+            let entry_proofs = self.begin_proof_scope();
+            let checked = self.check_stmt(update, &mut tail_env);
+            self.end_proof_scope(entry_proofs);
+            if let Err(error) = checked {
                 errors.extend(error.flatten());
             }
         }
