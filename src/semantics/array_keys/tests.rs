@@ -300,9 +300,13 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
 /// Ordinary PHP references do not regain independent receiver facts after assignment.
 #[test]
 fn strict_array_key_source_validation_forgets_ordinary_reference_facts() {
-    let source = "<?php $a = [[]]; $b =& $a; $a = [[]]; $b = ['ab']; $a[0][false] = 'x';";
-    crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
-        .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    for source in [
+        "<?php $a = [[]]; $b =& $a; $a = [[]]; $b = ['ab']; $a[0][false] = 'x';",
+        "<?php $arr = [[[]]]; $alias =& $arr; foreach ($arr as &$elem) { $other =& $elem; $alias = 'ab'; $arr[false] = 1; }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
 }
 
 /// Assignments after a reference foreach update the last source element through the alias.

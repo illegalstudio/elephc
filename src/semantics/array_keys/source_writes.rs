@@ -286,7 +286,7 @@ impl LocalFacts {
             } else {
                 merge_value_facts(original, updated)
             };
-            self.values.insert(reference.source, source_fact);
+            self.set(&reference.source, source_fact);
         } else {
             self.foreach_references
                 .retain(|_, reference| reference.source != name);
@@ -304,11 +304,12 @@ impl LocalFacts {
     /// Marks an ordinary PHP reference pair as unknown until either name is rebound.
     fn bind_ordinary_reference(&mut self, target: &str, source: &str) {
         self.foreach_references.remove(target);
-        if let Some(reference) = self.foreach_references.get(source) {
-            self.values.insert(
-                reference.source.clone(),
-                ValueFact::Known(PhpType::php_array()),
-            );
+        if let Some(reference_source) = self
+            .foreach_references
+            .get(source)
+            .map(|reference| reference.source.clone())
+        {
+            self.set(&reference_source, ValueFact::Known(PhpType::php_array()));
         }
         self.ordinary_references.insert(target.to_owned());
         self.ordinary_references.insert(source.to_owned());
