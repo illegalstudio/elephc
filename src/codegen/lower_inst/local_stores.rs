@@ -826,9 +826,9 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     let raw = ctx.next_label("reference_store_legacy");
     let done = ctx.next_label("reference_store_complete");
     abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), ctx.local_offset(slot)?);
-    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_mixed_payload_address");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
-    // Canonical cells preserve the actual PHP tag even when the legacy alias has a scalar ABI.
+    // Managed Mixed cells preserve the actual PHP tag even when the logical alias has a scalar ABI.
     store_value_to_raw_ref_cell_as(ctx, slot, value, &PhpType::Mixed, previous)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&raw);

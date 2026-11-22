@@ -77,6 +77,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter, native_validation);
+    mixed_payload::emit_managed_address(emitter);
     if native_validation || eval_scope { canonical_promotion::emit(emitter); }
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);

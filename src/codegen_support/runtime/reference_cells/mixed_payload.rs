@@ -11,6 +11,47 @@
 
 use super::*;
 
+/// Returns the original payload address only when it belongs to a managed Mixed cell.
+///
+/// A narrowed native reference parameter may receive a caller cell whose physical payload is
+/// boxed `Mixed`, for example after a by-reference closure capture. The logical declaration
+/// cannot select that memory layout. This probe authenticates the managed owner first, then
+/// checks descriptor seven without inspecting arbitrary stack or interior addresses.
+pub(super) fn emit_managed_address(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    let none = "__rt_reference_cell_mixed_payload_address_none";
+    let done = "__rt_reference_cell_mixed_payload_address_done";
+    emitter.blank();
+    emitter.label_global("__rt_reference_cell_mixed_payload_address");
+    abi::emit_frame_prologue(emitter, 32);
+    abi::store_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_reference_cell_owner");
+    abi::emit_branch_if_int_result_zero(emitter, none);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {scratch}, [{result}, #-8]"));   // read the authenticated cell descriptor
+            emitter.instruction(&format!("ubfx {scratch}, {scratch}, #8, #7")); // isolate the physical payload tag
+            emitter.instruction(&format!("cmp {scratch}, #7"));               // descriptor seven stores one boxed Mixed pointer
+            emitter.instruction(&format!("b.ne {none}"));                     // keep every concrete native payload on its legacy path
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {scratch}, QWORD PTR [{result} - 8]")); // read the authenticated cell descriptor
+            emitter.instruction(&format!("shr {scratch}, 8"));                // position the physical payload tag
+            emitter.instruction(&format!("and {scratch}, 127"));              // discard heap and collector flags
+            emitter.instruction(&format!("cmp {scratch}, 7"));                // descriptor seven stores one boxed Mixed pointer
+            emitter.instruction(&format!("jne {none}"));                      // keep every concrete native payload on its legacy path
+        }
+    }
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_jump(emitter, done);
+    emitter.label(none);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+}
+
 /// Retains an existing managed cell or gives a borrowed Mixed slot an owned wrapper-backed cell.
 pub(super) fn emit_retain_mixed(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -126,6 +167,20 @@ pub(super) fn emit_promote_mixed(emitter: &mut Emitter, native_validation: bool)
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Managed Mixed payload probes authenticate before reading descriptor seven on every target.
+    #[test]
+    fn managed_mixed_payload_addresses_are_authenticated_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_managed_address(&mut emitter);
+            let assembly = emitter.output();
+            let owner = assembly.find("__rt_reference_cell_owner").unwrap();
+            let descriptor = assembly.find(if name == "linux-x86_64" { "cmp r10, 7" } else { "cmp x10, #7" }).unwrap();
+            assert!(owner < descriptor, "{name}: authenticate before reading the payload descriptor");
+            assert!(assembly.contains("__rt_reference_cell_mixed_payload_address_none"), "{name}");
+        }
+    }
 
     /// Every target owns a promoted Mixed constructor cell and retires its replaced placeholder.
     #[test]
