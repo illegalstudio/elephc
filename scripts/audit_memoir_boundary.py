@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 MEMOIR = "elephc-memoir"
 MAGICIAN = "elephc-magician"
@@ -258,6 +259,25 @@ def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
     return findings
 
 
+def audit_magician_archive(archive: Path) -> list[Finding]:
+    """Inspect Memoir's objects without asking nm to parse unrelated archive members."""
+    result = subprocess.run(["ar", "t", str(archive)], check=True, capture_output=True, text=True)
+    memoir_members = [name for name in result.stdout.splitlines()
+                      if name.startswith("elephc_memoir-") and name.endswith(".o")]
+    symbols = ""
+    if memoir_members:
+        with tempfile.TemporaryDirectory(prefix="elephc-memoir-symbols-") as directory:
+            objects = []
+            for index, name in enumerate(memoir_members):
+                result = subprocess.run(["ar", "p", str(archive), name], check=True, capture_output=True)
+                obj = Path(directory) / f"{index}.o"
+                obj.write_bytes(result.stdout)
+                objects.append(str(obj))
+            result = subprocess.run(["nm", "-gU", *objects], check=True, capture_output=True, text=True)
+            symbols = result.stdout
+    return audit_archive_symbols(str(archive), symbols)
+
+
 def main() -> int:
     """Audit this checkout with Cargo's authoritative interpretation of its manifests."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -274,9 +294,16 @@ def main() -> int:
         for path in sorted((root / "crates/elephc-memoir/src").rglob("*.rs")):
             findings.extend(audit_source(path.relative_to(root).as_posix(), path.read_text()))
         for archive in args.magician_archive:
-            result = subprocess.run(["nm", "-gU", str(archive)], check=True, capture_output=True, text=True)
-            findings.extend(audit_archive_symbols(str(archive), result.stdout))
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+            findings.extend(audit_magician_archive(archive))
+    except subprocess.CalledProcessError as error:
+        print(f"Memoir boundary audit could not complete: {error}", file=sys.stderr)
+        stderr = error.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        if stderr:
+            print(stderr.rstrip(), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, KeyError) as error:
         print(f"Memoir boundary audit could not complete: {error}", file=sys.stderr)
         return 2
     for finding in findings:
