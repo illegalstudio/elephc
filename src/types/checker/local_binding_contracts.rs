@@ -162,12 +162,16 @@ impl Checker {
             self.local_store_contracts.remove(&key);
         }
         let declared = self.typed_local_names.get(name);
-        // A store governed by a flow guard is checked against that guard's current view. Once
-        // the first store replaces the view, later stores in the same region are checked against
+        // A store governed by an exact flow guard is checked against that guard's current view.
+        // Family guards such as `is_array` can publish `Mixed` when the source has no matching
+        // member; that is a conservative read view, not a replacement binding contract. Once the
+        // first store replaces an exact view, later stores in the same region are checked against
         // the value the region itself published. The inferred binding contract remains untouched
         // so closing the region can restore the pre-guard binding.
         let guarded = self.narrowed_local_origins.get(name).and_then(|origin| {
-            origin.view.as_ref().or_else(|| origin.stored_in_region.then(|| env.get(name)).flatten())
+            origin.view.as_ref()
+                .filter(|view| crate::semantics::conversions::inferred_binding_contract(view).is_some())
+                .or_else(|| origin.stored_in_region.then(|| env.get(name)).flatten())
         });
         let original = declared.or(guarded).or_else(|| self.inferred_local_contracts.get(name))
             .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
