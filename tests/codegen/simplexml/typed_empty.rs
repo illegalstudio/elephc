@@ -353,11 +353,20 @@ for ($i = 0; $i < 4; $i++) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// XML capability must not turn unsupported erased storage unsets into discarded-copy mutations.
+/// XML capability must not turn an erased static unset into a discarded-copy mutation: the
+/// key leaves the static property itself (main lowers an untyped static hash directly, so this
+/// shape is supported rather than refused; php -n prints `r|0`).
 #[test]
 fn test_simplexml_erased_unset_storage_is_rejected() {
-    assert_erased_unset_storage_is_rejected("test_simplexml_erased_unset_storage_is_rejected",
-        "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);");
+    if skip_without_xml_native("test_simplexml_erased_unset_storage_is_rejected") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = simplexml_load_string('<r/>'); echo $xml->getName();
+class ErasedStaticUnset { public static mixed $data = ['a' => 1]; }
+unset(ErasedStaticUnset::$data['a']);
+echo '|', count(ErasedStaticUnset::$data);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "r|0");
 }
 
 /// Runtime-named erased properties keep the explicit unsupported-storage diagnostic.

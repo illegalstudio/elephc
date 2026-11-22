@@ -278,7 +278,10 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
     let _dir_guard = TestDirGuard::new(dir.clone());
-    let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr(
+    // The refusal belongs to the interpreter-linked build: a closed world compiles the same shape
+    // to a runtime Error (`lower_unset_builtin`), so the default closed-world pass would never
+    // observe it.
+    let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr_inner(
         source,
         &dir,
         &HashSet::default(),
@@ -288,8 +291,11 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
         false,
         default_null_repr(),
         false,
+        false,
         elephc::php_version::PhpVersion::default(),
-    );
+        false,
+    )
+    .expect("an interpreter-linked compile always produces a result");
     match user_asm {
         Ok(_) => panic!("expected the EIR backend to reject this program, but it compiled"),
         Err(error) => error.to_string(),
