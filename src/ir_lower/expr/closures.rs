@@ -591,12 +591,11 @@ pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         | ExprKind::PostDecrement(target) => target == name,
         // A nested closure that takes the same name BY REFERENCE can store through it from
         // anywhere, including after this one returns.
-        ExprKind::Closure { params, body, capture_refs, .. } => {
+        ExprKind::Closure { params, capture_refs, .. } => {
             capture_refs.iter().any(|capture| capture == name)
                 || params
                     .iter()
                     .any(|(_, _, default, _)| default.as_ref().is_some_and(|default| expr_writes_local(default, name)))
-                || body_writes_local(body, name)
         }
 
         // Calls: a bare `$name` argument binds to a by-reference parameter for some callees and

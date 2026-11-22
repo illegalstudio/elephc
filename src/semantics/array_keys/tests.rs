@@ -154,6 +154,10 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $a = []; while ($argc > 1) { break; } if (PHP_OS_FAMILY === 'Windows') { $a[false] = 1; }",
         "<?php $values = [[1]]; while ($argc > 1) { $ignore = function () { $values = 1; }; break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[1]]; while ($argc > 1) { $values = [[1]]; break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; while ($argc > 1) { $values = [[1]]; continue; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; while ($argc > 1) { $ignore = function () { $values = 1; }; continue; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; while ($argc > 1) { try { $values = [[1]]; break; } catch (Exception $error) {} } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; while ($argc > 1) { while ($argc > 2) { $values = [[1]]; break 2; } break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { if (true) { $values = [[1]]; } $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { if (false && ($values = [1])) {} $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[false ?: 0][false] = 2; }",
@@ -217,6 +221,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = []; foreach ([10] as $value) { $values[$value] = 1; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = ($values[0] = 1); }",
         "<?php $values = [[1]]; do { $values[0] = 1; } while ($values[0][false] = false);",
+        "<?php $values = [['a']]; do { $values = ['ab']; continue; } while (false); $values[0][false] = 'x';",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][($values = [1]) ? false : 0] = 2; }",
         "<?php $values = [[1]]; $writer = function() use (&$values): void { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } };",
         "<?php function guarded_dynamic_mixed_depth(int $key): void { $values = [[[1]], 2]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][false] = 2; } }",
@@ -258,6 +263,21 @@ fn strict_array_key_source_validation_handles_long_boolean_chains() {
     let source = format!("<?php $values = [1]; if ({condition}) {{ $values[0] = 2; }}");
     crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
         .expect("boolean-chain validation remains bounded");
+}
+
+/// Deeply nested loops keep strict source validation linear in the AST depth.
+#[test]
+fn strict_array_key_source_validation_handles_deep_loops() {
+    let mut source = String::from("<?php ");
+    for depth in 0..24 {
+        source.push_str(&format!("foreach ([1] as $value{depth}) {{ "));
+    }
+    source.push_str("echo 1;");
+    for _ in 0..24 {
+        source.push_str(" }");
+    }
+    crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+        .expect("nested-loop validation remains bounded");
 }
 
 /// Typed selectors are checked on array places without normalizing away their original kinds.

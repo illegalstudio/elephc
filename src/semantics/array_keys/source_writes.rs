@@ -202,7 +202,7 @@ fn definite_array_type(ty: &PhpType) -> bool {
 }
 
 /// Flow facts for one PHP activation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct LocalFacts {
     values: HashMap<String, ValueFact>,
 }
@@ -1783,8 +1783,6 @@ fn validate_stmt(
             let first_exit_reachable = first_flow.false_reachable;
             let first_body_entry = first_flow.when_true;
             let first_exit = first_flow.when_false;
-            let validated_first_body =
-                validate_branch(body, &first_body_entry, properties, profile, current_class)?;
             let first_break_flow = collect_loop_break_flow(
                 body,
                 &first_body_entry,
@@ -1792,11 +1790,9 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let first_falls_through = first_break_flow.fallthrough.is_some();
-            let first_body = first_break_flow
-                .fallthrough
-                .clone()
-                .unwrap_or(validated_first_body);
+            let first_back_edge = first_break_flow.back_edge();
+            let first_reaches_condition = first_back_edge.is_some();
+            let first_body = first_back_edge.unwrap_or_else(|| first_body_entry.clone());
             let repeated_flow = validate_condition_flow(
                 condition,
                 &first_body,
@@ -1804,27 +1800,25 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let repeated_condition_reachable = first_body_reachable && first_falls_through;
+            let repeated_condition_reachable =
+                first_body_reachable && first_reaches_condition;
             let repeated_body_reachable =
                 repeated_condition_reachable && repeated_flow.true_reachable;
             let repeated_exit_reachable =
                 repeated_condition_reachable && repeated_flow.false_reachable;
             let repeated_body_entry = repeated_flow.when_true;
             let repeated_exit = repeated_flow.when_false;
-            validate_branch(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_break_flow = collect_loop_break_flow(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let repeated_break_flow = if repeated_body_entry == first_body_entry {
+                first_break_flow.clone()
+            } else {
+                collect_loop_break_flow(
+                    body,
+                    &repeated_body_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )?
+            };
             let mut normal_exits = Vec::new();
             if first_exit_reachable {
                 normal_exits.push(first_exit);
@@ -1846,6 +1840,9 @@ fn validate_stmt(
                 &normal_exits,
                 &break_flows,
                 locals,
+                properties,
+                profile,
+                current_class,
             );
         }
         StmtKind::Foreach {
@@ -1860,13 +1857,6 @@ fn validate_stmt(
                 iteration.set(key, ValueFact::Unknown);
             }
             iteration.set(value_var, ValueFact::Unknown);
-            let validated_iteration = validate_branch(
-                body,
-                &iteration,
-                properties,
-                profile,
-                current_class,
-            )?;
             let break_flow = collect_loop_break_flow(
                 body,
                 &iteration,
@@ -1875,10 +1865,8 @@ fn validate_stmt(
                 current_class,
             )?;
             let mut normal_exits = vec![entry.clone()];
-            if let Some(iteration) = &break_flow.fallthrough {
-                normal_exits.push(iteration.clone());
-            } else if break_flow.exits.is_empty() {
-                normal_exits.push(validated_iteration);
+            if let Some(iteration) = break_flow.back_edge() {
+                normal_exits.push(iteration);
             }
             *locals = merge_loop_exits(
                 body,
@@ -1887,12 +1875,13 @@ fn validate_stmt(
                 &normal_exits,
                 &[&break_flow],
                 &entry,
+                properties,
+                profile,
+                current_class,
             );
         }
         StmtKind::DoWhile { body, condition } => {
             let entry = locals.clone();
-            let validated_first_body =
-                validate_branch(body, &entry, properties, profile, current_class)?;
             let first_break_flow = collect_loop_break_flow(
                 body,
                 &entry,
@@ -1900,11 +1889,9 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let first_falls_through = first_break_flow.fallthrough.is_some();
-            let first_body = first_break_flow
-                .fallthrough
-                .clone()
-                .unwrap_or(validated_first_body);
+            let first_back_edge = first_break_flow.back_edge();
+            let first_reaches_condition = first_back_edge.is_some();
+            let first_body = first_back_edge.unwrap_or_else(|| entry.clone());
             let first_flow = validate_condition_flow(
                 condition,
                 &first_body,
@@ -1912,29 +1899,27 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let repeated_body_reachable = first_falls_through && first_flow.true_reachable;
-            let first_exit_reachable = first_falls_through && first_flow.false_reachable;
+            let repeated_body_reachable =
+                first_reaches_condition && first_flow.true_reachable;
+            let first_exit_reachable =
+                first_reaches_condition && first_flow.false_reachable;
             let first_exit = first_flow.when_false;
             let repeated_body_entry = first_flow.when_true;
-            let validated_repeated_body = validate_branch(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_break_flow = collect_loop_break_flow(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_falls_through = repeated_break_flow.fallthrough.is_some();
-            let repeated_body = repeated_break_flow
-                .fallthrough
-                .clone()
-                .unwrap_or(validated_repeated_body);
+            let repeated_break_flow = if repeated_body_entry == entry {
+                first_break_flow.clone()
+            } else {
+                collect_loop_break_flow(
+                    body,
+                    &repeated_body_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )?
+            };
+            let repeated_back_edge = repeated_break_flow.back_edge();
+            let repeated_reaches_condition = repeated_back_edge.is_some();
+            let repeated_body =
+                repeated_back_edge.unwrap_or_else(|| repeated_body_entry.clone());
             let repeated_flow = validate_condition_flow(
                 condition,
                 &repeated_body,
@@ -1943,7 +1928,7 @@ fn validate_stmt(
                 current_class,
             )?;
             let repeated_exit_reachable = repeated_body_reachable
-                && repeated_falls_through
+                && repeated_reaches_condition
                 && repeated_flow.false_reachable;
             let repeated_exit = repeated_flow.when_false;
             let mut normal_exits = Vec::new();
@@ -1964,6 +1949,9 @@ fn validate_stmt(
                 &normal_exits,
                 &break_flows,
                 &entry,
+                properties,
+                profile,
+                current_class,
             );
         }
         StmtKind::For {
@@ -1994,8 +1982,6 @@ fn validate_stmt(
             let first_exit_reachable = first_flow.false_reachable;
             let first_body_entry = first_flow.when_true;
             let first_exit = first_flow.when_false;
-            let validated_first_body =
-                validate_branch(body, &first_body_entry, properties, profile, current_class)?;
             let first_break_flow = collect_loop_break_flow(
                 body,
                 &first_body_entry,
@@ -2003,11 +1989,10 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let first_falls_through = first_break_flow.fallthrough.is_some();
-            let mut first_body = first_break_flow
-                .fallthrough
-                .clone()
-                .unwrap_or(validated_first_body);
+            let first_back_edge = first_break_flow.back_edge();
+            let first_reaches_update = first_back_edge.is_some();
+            let mut first_body =
+                first_back_edge.unwrap_or_else(|| first_body_entry.clone());
             if let Some(update) = update {
                 validate_stmt(
                     update,
@@ -2032,27 +2017,25 @@ fn validate_stmt(
                     false_reachable: false,
                 },
             };
-            let repeated_condition_reachable = first_body_reachable && first_falls_through;
+            let repeated_condition_reachable =
+                first_body_reachable && first_reaches_update;
             let repeated_body_reachable =
                 repeated_condition_reachable && repeated_flow.true_reachable;
             let repeated_exit_reachable =
                 repeated_condition_reachable && repeated_flow.false_reachable;
             let repeated_body_entry = repeated_flow.when_true;
             let repeated_exit = repeated_flow.when_false;
-            validate_branch(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let repeated_break_flow = collect_loop_break_flow(
-                body,
-                &repeated_body_entry,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let repeated_break_flow = if repeated_body_entry == first_body_entry {
+                first_break_flow.clone()
+            } else {
+                collect_loop_break_flow(
+                    body,
+                    &repeated_body_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )?
+            };
             let mut normal_exits = Vec::new();
             if first_exit_reachable {
                 normal_exits.push(first_exit);
@@ -2074,6 +2057,9 @@ fn validate_stmt(
                 &normal_exits,
                 &break_flows,
                 locals,
+                properties,
+                profile,
+                current_class,
             );
         }
         StmtKind::Switch { cases, default, .. } => {
@@ -2169,10 +2155,21 @@ fn validate_branch(
 }
 
 /// Facts from breaks that directly leave the loop whose body is being analyzed.
+#[derive(Clone)]
 struct LoopBreakFlow {
     fallthrough: Option<LocalFacts>,
     exits: Vec<LocalFacts>,
+    continues: Vec<LocalFacts>,
     complete: bool,
+}
+
+impl LoopBreakFlow {
+    /// Merges paths that reach this loop's next condition or update.
+    fn back_edge(&self) -> Option<LocalFacts> {
+        let mut exits = self.continues.clone();
+        exits.extend(self.fallthrough.iter().cloned());
+        (!exits.is_empty()).then(|| merge_exits(&exits))
+    }
 }
 
 /// Replays reachable body paths to snapshot facts exactly where `break 1` executes.
@@ -2185,6 +2182,7 @@ fn collect_loop_break_flow(
 ) -> Result<LoopBreakFlow, CompileError> {
     let mut fallthrough = Some(entry.clone());
     let mut exits = Vec::new();
+    let mut continues = Vec::new();
     let mut complete = true;
     for stmt in body {
         let Some(mut locals) = fallthrough.take() else { break; };
@@ -2192,10 +2190,16 @@ fn collect_loop_break_flow(
             StmtKind::Break(level) => {
                 if *level == 1 {
                     exits.push(locals);
+                } else {
+                    complete = false;
                 }
             }
-            StmtKind::Continue(_) => {
-                complete = false;
+            StmtKind::Continue(level) => {
+                if *level == 1 {
+                    continues.push(locals);
+                } else {
+                    complete = false;
+                }
             }
             StmtKind::Return(_) | StmtKind::Throw(_) => {
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
@@ -2217,6 +2221,7 @@ fn collect_loop_break_flow(
                     current_class,
                 )?;
                 exits.extend(branch.exits);
+                continues.extend(branch.continues);
                 complete &= branch.complete;
                 fallthrough = branch.fallthrough;
                 continue;
@@ -2230,6 +2235,7 @@ fn collect_loop_break_flow(
                     current_class,
                 )?;
                 exits.extend(nested.exits);
+                continues.extend(nested.continues);
                 complete &= nested.complete;
                 fallthrough = nested.fallthrough;
                 continue;
@@ -2243,12 +2249,48 @@ fn collect_loop_break_flow(
                     current_class,
                 )?;
                 exits.extend(nested.exits);
+                continues.extend(nested.continues);
                 complete &= nested.complete;
                 let mut paths = vec![locals];
                 if let Some(exit) = nested.fallthrough {
                     paths.push(exit);
                 }
                 fallthrough = Some(merge_exits(&paths));
+                continue;
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body: None,
+            } => {
+                let mut flows = vec![collect_loop_break_flow(
+                    try_body,
+                    &locals,
+                    properties,
+                    profile,
+                    current_class,
+                )?];
+                for catch in catches {
+                    let mut catch_entry = locals.clone();
+                    if let Some(variable) = &catch.variable {
+                        catch_entry.set(variable, ValueFact::Unknown);
+                    }
+                    flows.push(collect_loop_break_flow(
+                        &catch.body,
+                        &catch_entry,
+                        properties,
+                        profile,
+                        current_class,
+                    )?);
+                }
+                let mut fallthroughs = Vec::with_capacity(flows.len());
+                for flow in flows {
+                    exits.extend(flow.exits);
+                    continues.extend(flow.continues);
+                    complete &= flow.complete;
+                    fallthroughs.push(flow.fallthrough);
+                }
+                fallthrough = merge_optional_exits(fallthroughs);
                 continue;
             }
             StmtKind::IfDef {
@@ -2275,11 +2317,14 @@ fn collect_loop_break_flow(
                     LoopBreakFlow {
                         fallthrough: Some(locals),
                         exits: Vec::new(),
+                        continues: Vec::new(),
                         complete: true,
                     }
                 };
                 exits.extend(then_flow.exits);
                 exits.extend(else_flow.exits);
+                continues.extend(then_flow.continues);
+                continues.extend(else_flow.continues);
                 complete &= then_flow.complete && else_flow.complete;
                 fallthrough = merge_optional_exits([
                     then_flow.fallthrough,
@@ -2301,6 +2346,7 @@ fn collect_loop_break_flow(
     Ok(LoopBreakFlow {
         fallthrough,
         exits,
+        continues,
         complete,
     })
 }
@@ -2324,6 +2370,7 @@ fn collect_loop_break_if(
         current_class,
     )?;
     let mut exits = Vec::new();
+    let mut continues = Vec::new();
     let mut fallthroughs = Vec::new();
     let mut complete = true;
     if condition_flow.true_reachable {
@@ -2335,6 +2382,7 @@ fn collect_loop_break_if(
             current_class,
         )?;
         exits.extend(then_flow.exits);
+        continues.extend(then_flow.continues);
         complete &= then_flow.complete;
         fallthroughs.push(then_flow.fallthrough);
     }
@@ -2360,6 +2408,7 @@ fn collect_loop_break_if(
                 current_class,
             )?;
             exits.extend(body_flow.exits);
+            continues.extend(body_flow.continues);
             complete &= body_flow.complete;
             fallthroughs.push(body_flow.fallthrough);
         }
@@ -2376,6 +2425,7 @@ fn collect_loop_break_if(
                 current_class,
             )?;
             exits.extend(else_flow.exits);
+            continues.extend(else_flow.continues);
             complete &= else_flow.complete;
             fallthroughs.push(else_flow.fallthrough);
         } else {
@@ -2385,6 +2435,7 @@ fn collect_loop_break_if(
     Ok(LoopBreakFlow {
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
+        continues,
         complete,
     })
 }
@@ -2405,6 +2456,9 @@ fn merge_loop_exits(
     normal_exits: &[LocalFacts],
     break_flows: &[&LoopBreakFlow],
     fallback: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
 ) -> LocalFacts {
     let mut exits = normal_exits.to_vec();
     for flow in break_flows {
@@ -2416,16 +2470,223 @@ fn merge_loop_exits(
     let mut merged = merge_exits(&exits);
     if break_flows.iter().any(|flow| !flow.complete) {
         for (name, fact) in &mut merged.values {
-            let bypassed_write = crate::ir_lower::body_writes_local(body, name)
-                || condition
-                    .is_some_and(|condition| crate::ir_lower::expr_writes_local(condition, name))
-                || update.is_some_and(|update| crate::ir_lower::stmt_writes_local(update, name));
-            if bypassed_write {
+            let body_writes = crate::ir_lower::body_writes_local(body, name);
+            let condition_writes = condition
+                .is_some_and(|condition| crate::ir_lower::expr_writes_local(condition, name));
+            let update_writes =
+                update.is_some_and(|update| crate::ir_lower::stmt_writes_local(update, name));
+            if body_writes
+                && !condition_writes
+                && !update_writes
+                && body_writes_only_static_fact(
+                    body,
+                    name,
+                    &fallback.get(name),
+                    properties,
+                    profile,
+                    current_class,
+                )
+            {
+                *fact = fallback.get(name);
+            } else if body_writes || condition_writes || update_writes {
                 *fact = ValueFact::Unknown;
             }
         }
     }
     merged
+}
+
+/// Proves that every lexical write to one local stores the same static fact.
+///
+/// This is deliberately narrower than general flow inference. It is used only
+/// when an outer-loop jump prevents exact snapshot propagation, and accepts
+/// constant assignments plus control-flow wrappers around them. Any dynamic
+/// expression, aliasing write, call, or container mutation fails closed.
+fn body_writes_only_static_fact(
+    body: &[Stmt],
+    name: &str,
+    expected: &ValueFact,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> bool {
+    body.iter().all(|stmt| {
+        if !crate::ir_lower::stmt_writes_local(stmt, name) {
+            return true;
+        }
+        match &stmt.kind {
+            StmtKind::Assign { name: target, value }
+            | StmtKind::TypedAssign {
+                name: target,
+                value,
+                ..
+            } if target == name => {
+                infer_expr(
+                    value,
+                    &LocalFacts::default(),
+                    properties,
+                    profile,
+                    current_class,
+                ) == *expected
+            }
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                !crate::ir_lower::expr_writes_local(condition, name)
+                    && body_writes_only_static_fact(
+                        then_body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                    && elseif_clauses.iter().all(|(condition, body)| {
+                        !crate::ir_lower::expr_writes_local(condition, name)
+                            && body_writes_only_static_fact(
+                                body,
+                                name,
+                                expected,
+                                properties,
+                                profile,
+                                current_class,
+                            )
+                    })
+                    && else_body.as_ref().is_none_or(|body| {
+                        body_writes_only_static_fact(
+                            body,
+                            name,
+                            expected,
+                            properties,
+                            profile,
+                            current_class,
+                        )
+                    })
+            }
+            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+                !crate::ir_lower::expr_writes_local(condition, name)
+                    && body_writes_only_static_fact(
+                        body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+            }
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_deref()
+                    .is_none_or(|stmt| !crate::ir_lower::stmt_writes_local(stmt, name))
+                    && condition.as_ref().is_none_or(|condition| {
+                        !crate::ir_lower::expr_writes_local(condition, name)
+                    })
+                    && update.as_deref().is_none_or(|stmt| {
+                        !crate::ir_lower::stmt_writes_local(stmt, name)
+                    })
+                    && body_writes_only_static_fact(
+                        body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+            }
+            StmtKind::Foreach {
+                array,
+                key_var,
+                value_var,
+                body,
+                ..
+            } => {
+                value_var != name
+                    && key_var.as_deref() != Some(name)
+                    && !crate::ir_lower::expr_writes_local(array, name)
+                    && body_writes_only_static_fact(
+                        body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+            }
+            StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                body_writes_only_static_fact(
+                    then_body,
+                    name,
+                    expected,
+                    properties,
+                    profile,
+                    current_class,
+                ) && else_body.as_ref().is_none_or(|body| {
+                    body_writes_only_static_fact(
+                        body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                })
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => body_writes_only_static_fact(
+                body,
+                name,
+                expected,
+                properties,
+                profile,
+                current_class,
+            ),
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                body_writes_only_static_fact(
+                    try_body,
+                    name,
+                    expected,
+                    properties,
+                    profile,
+                    current_class,
+                ) && catches.iter().all(|catch| {
+                    body_writes_only_static_fact(
+                        &catch.body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                }) && finally_body.as_ref().is_none_or(|body| {
+                    body_writes_only_static_fact(
+                        body,
+                        name,
+                        expected,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                })
+            }
+            _ => false,
+        }
+    })
 }
 
 /// Keeps only facts that agree on every possible control-flow exit.
