@@ -16,6 +16,49 @@ use super::stmts::{walk_program, walk_stmt};
 use super::call_types::{walk_function_name, walk_method_name};
 use super::{walk_static_receiver, Pass};
 
+/// Walks a left-leaning chain of binary operators (`$a && $b && ... && $z`, `'a' . 'b' . ...`)
+/// with a loop along its left spine.
+///
+/// The parser builds such a chain left-deep, so recursing into `left` costs one `walk_expr`
+/// frame per operand. That frame is large (one arm per `ExprKind`), and a few hundred operands
+/// exhausted the test thread's stack. Only the left spine is iterated: a right operand is
+/// walked recursively as before.
+fn walk_binary_chain<P: Pass>(
+    left: Expr,
+    op: crate::parser::ast::BinOp,
+    right: Expr,
+    pass: &mut P,
+) -> ExprKind {
+    let mut pending = vec![(op, right)];
+    let mut spans = Vec::new();
+    let mut innermost = left;
+    while matches!(innermost.kind, ExprKind::BinaryOp { .. }) {
+        let Expr { kind: ExprKind::BinaryOp { left, op, right }, span } = innermost else {
+            unreachable!("the loop condition checked the variant")
+        };
+        spans.push(span);
+        pending.push((op, *right));
+        innermost = *left;
+    }
+    let mut acc = walk_expr(innermost, pass);
+    // `pending` holds the operators from the outermost inward; fold them back outermost-last.
+    while let Some((op, right)) = pending.pop() {
+        let right = walk_expr(right, pass);
+        match spans.pop() {
+            Some(span) => {
+                acc = Expr {
+                    kind: ExprKind::BinaryOp { left: Box::new(acc), op, right: Box::new(right) },
+                    span,
+                };
+            }
+            None => {
+                return ExprKind::BinaryOp { left: Box::new(acc), op, right: Box::new(right) };
+            }
+        }
+    }
+    unreachable!("the outermost operator is always folded last")
+}
+
 /// Recursively walks an expression AST, applying `pass` transformations to magic constants and
 /// string literals, and recursing into all expression subtrees.
 ///
@@ -47,11 +90,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             property,
         },
 
-        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
-            left: Box::new(walk_expr(*left, pass)),
-            op,
-            right: Box::new(walk_expr(*right, pass)),
-        },
+        ExprKind::BinaryOp { left, op, right } => walk_binary_chain(*left, op, *right, pass),
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(walk_expr(*value, pass)),
             target: walk_instanceof_target(target, pass, span),

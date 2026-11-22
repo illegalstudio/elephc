@@ -139,7 +139,6 @@ pub fn flatten_classes(
         }
     }
 
-    let inherited_implementations = index_declared_implementations(program);
     let mut cache = HashMap::default();
     let mut stack = Vec::new();
     let mut flattened = Vec::new();
@@ -184,11 +183,6 @@ pub fn flatten_classes(
                             continue;
                         }
                     };
-                let imported_methods = drop_abstract_methods_implemented_by_ancestor(
-                    imported_methods,
-                    extends.as_ref().map(|parent| parent.as_str()),
-                    &inherited_implementations,
-                );
                 let merged_props = match merge::merge_class_properties(
                     &imported_props,
                     properties,
@@ -450,69 +444,4 @@ fn trait_alias_source_trait(
             .any(|candidate| candidate.name.eq_ignore_ascii_case(method))
             .then(|| trait_name.as_str().to_string())
     })
-}
-
-/// Per class: its parent and the instance methods it declares WITH a body.
-type DeclaredImplementations = HashMap<String, (Option<String>, HashSet<String>)>;
-
-/// Indexes, for every class declaration, its parent and its directly declared implementations.
-fn index_declared_implementations(program: &Program) -> DeclaredImplementations {
-    let mut index = HashMap::default();
-    for stmt in program {
-        if let StmtKind::ClassDecl { name, extends, methods, .. } = &stmt.kind {
-            index.insert(
-                php_symbol_key(name),
-                (
-                    extends.as_ref().map(|parent| php_symbol_key(parent.as_str())),
-                    methods
-                        .iter()
-                        .filter(|method| !method.is_abstract && !method.is_static)
-                        .map(|method| php_symbol_key(&method.name))
-                        .collect(),
-                ),
-            );
-        }
-    }
-    index
-}
-
-/// Drops an ABSTRACT method a trait imports when an ancestor class already implements it.
-///
-/// A trait's `abstract public function getParentKey();` states a requirement, not a
-/// declaration to install: when the parent class provides the implementation, php keeps it and
-/// the requirement is met. Laravel's `HasOne extends HasOneOrMany` and uses
-/// `ComparesRelatedModels` for exactly that. Left in, the abstract import was applied over the
-/// inherited body and refused as "Cannot make concrete method abstract".
-fn drop_abstract_methods_implemented_by_ancestor(
-    imported: Vec<ClassMethod>,
-    parent: Option<&str>,
-    index: &DeclaredImplementations,
-) -> Vec<ClassMethod> {
-    if parent.is_none() || !imported.iter().any(|method| method.is_abstract) {
-        return imported;
-    }
-    imported
-        .into_iter()
-        .filter(|method| {
-            if !method.is_abstract || method.is_static {
-                return true;
-            }
-            let key = php_symbol_key(&method.name);
-            let mut cursor = parent.map(php_symbol_key);
-            let mut seen = HashSet::default();
-            while let Some(class_key) = cursor {
-                if !seen.insert(class_key.clone()) {
-                    break;
-                }
-                let Some((next, implemented)) = index.get(&class_key) else {
-                    break;
-                };
-                if implemented.contains(&key) {
-                    return false;
-                }
-                cursor = next.clone();
-            }
-            true
-        })
-        .collect()
 }

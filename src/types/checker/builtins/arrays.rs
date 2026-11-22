@@ -30,9 +30,16 @@ pub(crate) fn union_member_is_countable_array(ty: &PhpType) -> bool {
 pub(crate) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
-        PhpType::Union(members) => members
-            .iter()
-            .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
+        // A boxed union lowers as a Mixed cell whatever its members, and the boxed path raises
+        // php's `TypeError` at run time for a payload that is not an array: `int|string` at
+        // `array_values()` compiles, as php compiles it. A compact nullable (`?int`) has no boxed
+        // cell, so it keeps the compile-time refusal.
+        PhpType::Union(members) => {
+            members
+                .iter()
+                .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }))
+                || ty.codegen_repr() == PhpType::Mixed
+        }
         _ => false,
     }
 }

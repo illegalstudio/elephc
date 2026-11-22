@@ -38,10 +38,31 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     for (index, arg) in cx.args.iter().enumerate() {
         let ty = cx.checker.infer_type(arg, cx.env)?;
         if !ty.is_php_array() && !crate::types::checker::builtins::array_arg_is_gradually_acceptable(&ty) {
-            return Err(CompileError::new(
-                cx.span,
-                &format!("array_merge() argument #{} must be array", index + 1),
-            ));
+            // php binds the operands when the call runs and throws a catchable `TypeError` for a
+            // scalar: the build stands and the call throws. `--strict-locals` keeps the refusal.
+            let given = match &ty {
+                PhpType::Int => Some("int"),
+                PhpType::Float => Some("float"),
+                PhpType::Str => Some("string"),
+                PhpType::Bool => Some("bool"),
+                PhpType::False => Some("false"),
+                _ => None,
+            };
+            let Some(given) = given.filter(|_| !cx.checker.strict_locals) else {
+                return Err(CompileError::new(
+                    cx.span,
+                    &format!("array_merge() argument #{} must be array", index + 1),
+                ));
+            };
+            cx.checker.record_builtin_argument_type_error(
+                arg.span,
+                format!(
+                    "array_merge(): Argument #{} must be of type array, {} given",
+                    index + 1,
+                    given
+                ),
+            );
+            return Ok(PhpType::php_array());
         }
         dynamic_layout |= ty.is_php_array();
         result = Some(match result {

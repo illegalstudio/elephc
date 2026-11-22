@@ -95,6 +95,16 @@ impl Checker {
         if self.classes.contains_key(type_name) || self.interfaces.contains_key(type_name) {
             return false;
         }
+        // An enum, or a class the program declares that its schema has not built yet (the
+        // `declared_class_ancestry` window of override validation), is not absent: the closed
+        // world has it, so an unrelated pair is provably incompatible instead of deferred.
+        if self.enums.contains_key(type_name)
+            || self.declared_class_ancestry.contains_key(type_name)
+            || self.declared_class_parents.contains_key(type_name)
+            || self.pending_class_parents.contains_key(type_name)
+        {
+            return false;
+        }
         self.allows_absent_runtime_class()
     }
 

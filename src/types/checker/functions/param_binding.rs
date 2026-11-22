@@ -67,6 +67,13 @@ impl Checker {
         by_ref: bool,
     ) -> Result<(), CompileError> {
         self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
+        if !by_ref && self.strict_locals {
+            if let Some(detail) = self.strict_locals_static_param_contradiction(expected, actual) {
+                return Err(Self::binding_mismatch_error(
+                    expected, actual, arg.span, context, detail,
+                ));
+            }
+        }
         // Null-only promoted parameters are checked before constructor ABI materialization.
         // Keep by-reference storage outside this value-binding exception.
         if !by_ref && *expected == PhpType::Void && actual.codegen_repr() == PhpType::Mixed {
@@ -236,6 +243,79 @@ impl Checker {
                 }
                 self.require_compatible_arg_type(expected, actual, arg.span, context)
             }
+        }
+    }
+
+    /// The static contradiction `--strict-locals` refuses at a declared by-value parameter.
+    ///
+    /// php binds the argument when the call runs and throws a `TypeError` only if the value
+    /// really is null (a `?int` local at `int`) or really is not an instance of the declared
+    /// class (a `Base` local at the interface `Marker`), so the default build compiles the call
+    /// and the boundary guard throws. `--strict-locals` is the static-analysis mode and keeps the
+    /// refusal. A bare `mixed` argument carries no static contradiction and stays accepted.
+    fn strict_locals_static_param_contradiction(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+    ) -> Option<&'static str> {
+        match actual {
+            PhpType::Union(members)
+                if members.iter().any(|member| matches!(member, PhpType::Void))
+                    && !Self::declared_type_accepts_null(expected)
+                    // A nullable class value at a class parameter is the `ObjectGuard` binding
+                    // php itself accepts in every mode; only the scalar and array shapes refuse.
+                    && (matches!(
+                        expected,
+                        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+                    ) || expected.is_php_array()) =>
+            {
+                Some("the value may be null here, and php throws a TypeError for null at run time")
+            }
+            // Another member php cannot bind to the declared scalar or class: an object or array
+            // at a scalar, a scalar, array or unrelated class at a class.
+            PhpType::Union(members)
+                if members.iter().any(|member| match (expected, member) {
+                    (PhpType::Int | PhpType::Float | PhpType::Bool, PhpType::Object(_))
+                    | (
+                        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str,
+                        PhpType::Array(_) | PhpType::AssocArray { .. },
+                    ) => true,
+                    (PhpType::Object(expected_name), member)
+                        if !expected_name.is_empty() && !expected_name.contains('<') =>
+                    {
+                        match member {
+                            PhpType::Object(name) => {
+                                !name.is_empty()
+                                    && !name.contains('<')
+                                    && !self.type_accepts(expected, member)
+                            }
+                            PhpType::Int
+                            | PhpType::Float
+                            | PhpType::Str
+                            | PhpType::Bool
+                            | PhpType::False
+                            | PhpType::Array(_)
+                            | PhpType::AssocArray { .. } => true,
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }) =>
+            {
+                Some("php throws a TypeError at run time when the value is another member of its type")
+            }
+            PhpType::Object(actual_name) if !actual_name.is_empty() => match expected {
+                PhpType::Object(expected_name)
+                    if !expected_name.is_empty()
+                        && !expected_name.contains('<')
+                        && !actual_name.contains('<')
+                        && !self.type_accepts(expected, actual) =>
+                {
+                    Some("php throws a TypeError when the value is not an instance of the class at run time")
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
