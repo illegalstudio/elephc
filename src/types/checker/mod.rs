@@ -28,6 +28,7 @@ mod callables;
 pub(crate) mod clone_override_storage;
 pub(crate) mod scope_dynamic_storage;
 mod driver;
+mod element_values;
 mod extern_decl;
 mod functions;
 mod generic_bounds;
@@ -389,6 +390,27 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// Locals whose checked type is a proof of what their cell holds, with that type.
+    ///
+    /// An ordinary assigned local is not one: `$t = null; if ($c) { $t = "s"; }` reads `string`
+    /// afterwards while the cell can still hold the `null`. Two bindings are recorded here:
+    /// the key and by-value value variables of an array `foreach` being checked, which hold an
+    /// element of the source, and a local whose guard exits on every other path
+    /// (`if (!is_bool($v)) { throw … }`), whose runtime tag the guard tested. An entry ends at
+    /// the first store to the name, and a loop binding also at the end of its loop;
+    /// `element_values` reads it to decide whether a boxed read may be projected.
+    pub proven_local_views: HashMap<String, PhpType>,
+    /// Names whose proof ended inside each conditional body being checked, innermost last.
+    ///
+    /// A body that may not run is a proof scope (`Checker::begin_proof_scope`): a proof it
+    /// adds must not reach its sibling bodies or the code after it, while a proof it ends is
+    /// gone for every enclosing scope as well.
+    pub proof_scope_invalidations: Vec<HashSet<String>>,
+    /// The proofs the body checked last held where it ended, `None` when it cannot fall through.
+    ///
+    /// The statement that owns the body takes it right after the check to join the bodies that
+    /// reach the code after it (`Checker::record_joined_body_proofs`).
+    pub body_exit_proofs: Option<HashMap<String, PhpType>>,
     /// The counter of the innermost `for` loop whose writes stay on packed storage, with the
     /// `local_conditional_depth` its body runs at.
     ///
@@ -543,6 +565,9 @@ pub(crate) struct Checker {
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Exact element proofs at declared-array appends; conflicting visits retain no proof.
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Scalar views of values written as container elements, agreed by every authoritative
+    /// visit to one scoped expression; see `element_values`.
+    pub element_value_views: crate::types::ElementValueViews,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Declared scalar contracts observed at original local write sites.
@@ -1247,8 +1272,10 @@ impl Checker {
     /// here on the environment entry is the region's own fact and an assignment measures itself
     /// against it in the ordinary way.
     ///
-    /// A no-op for a name no guard has narrowed, which is every name most of the time.
+    /// The store also ends any proof recorded for the name in `proven_local_views`. Otherwise
+    /// a no-op for a name no guard has narrowed, which is every name most of the time.
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
+        self.end_local_proof(name);
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             self.next_guard_binding_revision += 1;
             entry.binding_revision = self.next_guard_binding_revision;
@@ -1306,6 +1333,7 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+        self.end_local_proof(name);
     }
 
     /// Ends a retained local read view before a store or rebinding chooses its new contract.
@@ -1779,6 +1807,7 @@ fn check_types_on_compiler_stack(
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         array_append_element_types: checker.array_append_element_types,
+        element_value_views: checker.element_value_views,
         local_value_read_types: checker.local_value_read_types,
         local_store_contracts: checker.local_store_contracts,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,

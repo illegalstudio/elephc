@@ -227,6 +227,8 @@ impl Checker {
                     crate::semantics::array_keys::validate(self.semantic_profile, &raw_key, k.span)?;
                     let kt = normalized_array_key_type(k, raw_key, self.semantic_profile);
                     let vt = self.infer_type(v, env)?;
+                    self.record_element_value_view(v, &vt, env);
+                    let vt = self.element_storage_type(v, vt);
                     key_ty = Some(match key_ty {
                         Some(current) if current == kt => current,
                         Some(current) => merge_array_key_types(current, kt),
@@ -361,7 +363,11 @@ impl Checker {
                                 .unwrap_or_else(|| self.infer_type(inner, env))?;
                             self.spread_source_element_type(source_ty, elem.span, false)?
                         }
-                        _ => self.infer_type(elem, env)?,
+                        _ => {
+                            let ty = self.infer_type(elem, env)?;
+                            self.record_element_value_view(elem, &ty, env);
+                            self.element_storage_type(elem, ty)
+                        }
                     };
                     elem_ty = Some(match elem_ty {
                         None => ty,

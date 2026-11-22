@@ -109,7 +109,9 @@ pub(crate) use return_alias::{
     ReturnArgAlias,
 };
 pub use result::{LocalStoreContract, LocalStoreContracts};
-pub(crate) use result::{LocalCopyContract, LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
+pub(crate) use result::{
+    ElementValueViews, LocalCopyContract, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
+};
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.

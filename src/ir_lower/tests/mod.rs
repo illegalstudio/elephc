@@ -70,6 +70,7 @@ mod builtin_semantic_profile;
 mod buffer_element_updates;
 mod ref_local_append;
 mod foreach_hash_scalars;
+mod element_value_views;
 mod settype_foreach;
 mod strict_static_bindings;
 mod strict_array_key_shapes;

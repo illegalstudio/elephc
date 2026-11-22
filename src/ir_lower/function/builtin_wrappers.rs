@@ -197,6 +197,7 @@ fn lower_callable_body(
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types are absent in synthesized bodies
         &Default::default(), // checked declared-array append elements
+        &Default::default(), // checked element value views
         &Default::default(), // synthesized bodies have no checked integer read sites
         &Default::default(), // synthesized bodies have no declared local store contracts
         &Default::default(),
