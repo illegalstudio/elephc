@@ -1110,14 +1110,15 @@ fn parse_members_recovering<T>(
 /// kind, and a `{` opened inside parentheses (a `match` in a parameter default) does not end
 /// the member when it closes.
 ///
-/// After a top-level `=` (a property or constant initializer), a top-level `{` ends the member
-/// only when it opens property hooks (`public int $p = 1 { get => 2; }`). Any other `{` there
-/// belongs to the initializer expression (`const X = match (1) { default => 1 };`), so the skip
-/// goes on to the declaration's `;` instead of leaving it to be reported as a stray member.
+/// After a top-level `=` (a property or constant initializer), the `}` closing a top-level `{`
+/// may end an initializer expression (`const X = match (1) { default => 1 };`) or a hook block
+/// (`public int $p = 1 { get => 2; }`, or a malformed `{}`). The token after it decides: the
+/// start of another member ends the skip before that member, and anything else (`;`, `} + 1;`)
+/// continues the skip up to the declaration's `;`. So that `;` is not reported as a stray
+/// member, and a broken hook block does not swallow the next member.
 fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
     let mut open: Vec<&Token> = Vec::new();
     let mut in_initializer = false;
-    let mut brace_ends_member = true;
     let mut index = start;
     while let Some((token, _)) = tokens.get(index) {
         match token {
@@ -1126,11 +1127,6 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
             // or `[` was left unclosed before it.
             Token::RBrace if !open.contains(&&Token::LBrace) => return index,
             Token::Assign if open.is_empty() => in_initializer = true,
-            Token::LBrace if open.is_empty() => {
-                brace_ends_member =
-                    !in_initializer || opens_property_hooks(tokens.get(index + 1).map(|(t, _)| t));
-                open.push(token);
-            }
             Token::LParen | Token::LBracket | Token::LBrace => open.push(token),
             Token::RParen | Token::RBracket => {
                 let opener = if matches!(token, Token::RParen) {
@@ -1148,8 +1144,11 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
                         break;
                     }
                 }
-                if open.is_empty() && brace_ends_member {
-                    return index + 1;
+                if open.is_empty() {
+                    let next = tokens.get(index + 1).map(|(t, _)| t);
+                    if !in_initializer || starts_class_member(next) {
+                        return index + 1;
+                    }
                 }
             }
             Token::Semicolon if open.is_empty() => return index + 1,
@@ -1160,14 +1159,27 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
     index
 }
 
-/// Whether the token after a `{` that follows a property's default value starts a property
-/// hook list (`get`, `set`, `&get`, `final get`, `#[Attr] get`) rather than an expression.
-fn opens_property_hooks(token: Option<&Token>) -> bool {
+/// Whether `token` can only start a new class-like member (a modifier, `function`, `const`,
+/// `case`, `use`, `var` or an attribute group), so it cannot continue an initializer expression
+/// that ended at the `}` before it. `static` and `function` also start closures, but never right
+/// after a `}`.
+fn starts_class_member(token: Option<&Token>) -> bool {
     match token {
-        Some(Token::Identifier(name)) => {
-            name.eq_ignore_ascii_case("get") || name.eq_ignore_ascii_case("set")
-        }
-        Some(Token::Ampersand | Token::Final | Token::AttrOpen) => true,
+        Some(Token::Identifier(name)) => name.eq_ignore_ascii_case("var"),
+        Some(
+            Token::Public
+            | Token::Protected
+            | Token::Private
+            | Token::Static
+            | Token::Abstract
+            | Token::Final
+            | Token::ReadOnly
+            | Token::Function
+            | Token::Const
+            | Token::Case
+            | Token::Use
+            | Token::AttrOpen,
+        ) => true,
         _ => false,
     }
 }

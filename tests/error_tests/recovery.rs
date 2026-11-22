@@ -711,7 +711,8 @@ fn test_class_member_recovery_stops_at_body_with_unclosed_delimiter() {
 
 /// A `{` inside a property or constant initializer (a `match`) does not end the skipped member:
 /// the skip goes on to the declaration's `;`, so that `;` is not reported as a stray member, and
-/// the next member's own error is still reported. Property hooks after a default still end it.
+/// the next member's own error is still reported. A hook block after a default, even an empty or
+/// misspelled one, still ends the member, and so does a `match` followed directly by a member.
 #[test]
 fn test_class_member_recovery_skips_braces_inside_initializers() {
     assert_eq!(
@@ -723,6 +724,8 @@ fn test_class_member_recovery_skips_braces_inside_initializers() {
     for src in [
         "<?php class A { public static readonly int $p = match (1) { default => 1 }; function two(public int $x) {} }",
         "<?php class A { public static readonly int $p = 1 { get => 2; } function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = match (1) { default => 1 } + 1; function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = match (1) { default => 1 } function two(public int $x) {} }",
     ] {
         assert_eq!(
             parse_error_messages(src),
@@ -731,6 +734,18 @@ fn test_class_member_recovery_skips_braces_inside_initializers() {
                 "Cannot declare promoted property outside a constructor".to_string(),
             ],
             "source: {src}",
+        );
+    }
+    for src in [
+        "<?php class A { public int $p = 1 {} function two(public int $x) {} }",
+        "<?php class A { public int $p = 1 { gte => 2; } function two(public int $x) {} }",
+        "<?php class A { public int $p = 1 {} #[A] public function two(public int $x) {} }",
+    ] {
+        let messages = parse_error_messages(src);
+        assert_eq!(messages.len(), 2, "source: {src}, got {messages:?}");
+        assert_eq!(
+            messages[1], "Cannot declare promoted property outside a constructor",
+            "source: {src}, got {messages:?}"
         );
     }
 }
