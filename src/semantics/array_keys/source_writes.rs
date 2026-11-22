@@ -418,6 +418,8 @@ fn source_array_literal_nonempty(expr: &Expr) -> Option<bool> {
 struct ConditionFlow {
     when_true: LocalFacts,
     when_false: LocalFacts,
+    true_reachable: bool,
+    false_reachable: bool,
 }
 
 /// Audits one condition once and returns both of its possible source-order exits.
@@ -446,19 +448,22 @@ fn validate_condition_flow(
                 profile,
                 current_class,
             )?;
-            let truthiness = source_literal_truthiness(left);
-            let when_true = match truthiness {
-                Some(false) => left_flow.when_false.clone(),
-                Some(true) | None => right_flow.when_true,
-            };
-            let when_false = match truthiness {
-                Some(false) => left_flow.when_false,
-                Some(true) => right_flow.when_false,
-                None => merge_exits(&[left_flow.when_false, right_flow.when_false]),
-            };
+            let true_reachable = left_flow.true_reachable && right_flow.true_reachable;
+            let false_from_left = left_flow.false_reachable;
+            let false_from_right = left_flow.true_reachable && right_flow.false_reachable;
+            let when_true = right_flow.when_true;
+            let when_false = merge_reachable_condition_exits(
+                &[
+                    (false_from_left, &left_flow.when_false),
+                    (false_from_right, &right_flow.when_false),
+                ],
+                &left_flow.when_false,
+            );
             Ok(ConditionFlow {
                 when_true,
                 when_false,
+                true_reachable,
+                false_reachable: false_from_left || false_from_right,
             })
         }
         ExprKind::BinaryOp { left, op, right }
@@ -478,19 +483,21 @@ fn validate_condition_flow(
                 profile,
                 current_class,
             )?;
-            let truthiness = source_literal_truthiness(left);
-            let when_true = match truthiness {
-                Some(true) => left_flow.when_true.clone(),
-                Some(false) => right_flow.when_true,
-                None => merge_exits(&[left_flow.when_true.clone(), right_flow.when_true]),
-            };
-            let when_false = match truthiness {
-                Some(true) => left_flow.when_true,
-                Some(false) | None => right_flow.when_false,
-            };
+            let true_from_left = left_flow.true_reachable;
+            let true_from_right = left_flow.false_reachable && right_flow.true_reachable;
+            let when_true = merge_reachable_condition_exits(
+                &[
+                    (true_from_left, &left_flow.when_true),
+                    (true_from_right, &right_flow.when_true),
+                ],
+                &left_flow.when_true,
+            );
+            let when_false = right_flow.when_false;
             Ok(ConditionFlow {
                 when_true,
                 when_false,
+                true_reachable: true_from_left || true_from_right,
+                false_reachable: left_flow.false_reachable && right_flow.false_reachable,
             })
         }
         ExprKind::Not(inner) => {
@@ -504,6 +511,8 @@ fn validate_condition_flow(
             Ok(ConditionFlow {
                 when_true: inner.when_false,
                 when_false: inner.when_true,
+                true_reachable: inner.false_reachable,
+                false_reachable: inner.true_reachable,
             })
         }
         _ => {
@@ -514,11 +523,31 @@ fn validate_condition_flow(
                 profile,
                 current_class,
             )?;
+            let truthiness = source_literal_truthiness(expr);
             Ok(ConditionFlow {
                 when_true: exit.clone(),
                 when_false: exit,
+                true_reachable: truthiness != Some(false),
+                false_reachable: truthiness != Some(true),
             })
         }
+    }
+}
+
+/// Merges only condition exits PHP can reach while retaining a snapshot for source auditing.
+fn merge_reachable_condition_exits(
+    exits: &[(bool, &LocalFacts)],
+    fallback: &LocalFacts,
+) -> LocalFacts {
+    let reachable: Vec<_> = exits
+        .iter()
+        .filter(|(reachable, _)| *reachable)
+        .map(|(_, facts)| (*facts).clone())
+        .collect();
+    if reachable.is_empty() {
+        fallback.clone()
+    } else {
+        merge_exits(&reachable)
     }
 }
 
@@ -1584,14 +1613,18 @@ fn validate_stmt(
             )?;
             let then_entry = condition_flow.when_true;
             let mut fallthrough = condition_flow.when_false;
+            let mut fallthrough_reachable = condition_flow.false_reachable;
             let mut exits = Vec::with_capacity(elseif_clauses.len() + 2);
-            exits.push(validate_branch(
+            let then_exit = validate_branch(
                 then_body,
                 &then_entry,
                 properties,
                 profile,
                 current_class,
-            )?);
+            )?;
+            if condition_flow.true_reachable {
+                exits.push(then_exit);
+            }
             for (condition, body) in elseif_clauses {
                 let condition_flow = validate_condition_flow(
                     condition,
@@ -1601,27 +1634,37 @@ fn validate_stmt(
                     current_class,
                 )?;
                 let body_entry = condition_flow.when_true;
-                exits.push(validate_branch(
+                let body_exit = validate_branch(
                     body,
                     &body_entry,
                     properties,
                     profile,
                     current_class,
-                )?);
+                )?;
+                if fallthrough_reachable && condition_flow.true_reachable {
+                    exits.push(body_exit);
+                }
                 fallthrough = condition_flow.when_false;
+                fallthrough_reachable &= condition_flow.false_reachable;
             }
             if let Some(body) = else_body {
-                exits.push(validate_branch(
+                let else_exit = validate_branch(
                     body,
                     &fallthrough,
                     properties,
                     profile,
                     current_class,
-                )?);
-            } else {
+                )?;
+                if fallthrough_reachable {
+                    exits.push(else_exit);
+                }
+            } else if fallthrough_reachable {
                 exits.push(fallthrough);
             }
-            *locals = merge_exits(&exits);
+            *locals = exits
+                .is_empty()
+                .then_some(locals.clone())
+                .unwrap_or_else(|| merge_exits(&exits));
         }
         StmtKind::While { condition, body } => {
             let first_flow = validate_condition_flow(
@@ -1726,6 +1769,8 @@ fn validate_stmt(
                 None => ConditionFlow {
                     when_true: locals.clone(),
                     when_false: locals.clone(),
+                    true_reachable: true,
+                    false_reachable: false,
                 },
             };
             let first_body_entry = first_flow.when_true;
@@ -1752,6 +1797,8 @@ fn validate_stmt(
                 None => ConditionFlow {
                     when_true: first_body.clone(),
                     when_false: first_body,
+                    true_reachable: true,
+                    false_reachable: false,
                 },
             };
             let repeated_body_entry = repeated_flow.when_true;
