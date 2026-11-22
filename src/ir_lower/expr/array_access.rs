@@ -422,7 +422,9 @@ pub(super) fn lower_subscript_receiver_silently(
                 };
                 // An intermediate link needs the VALUE (the next link reads it): php fetches it
                 // like `??` does, `__isset` and then `__get`, not `isset()`'s `__isset` alone.
-                let probed = super::property_access::lower_property_fetch_mode_from_value(
+                // A boxed receiver may be a native XML view: its children answer natively (a
+                // selection the next link indexes), which only the in-mode probe dispatches.
+                let probed = super::property_access::lower_property_probe_from_value_in_mode(
                     ctx, receiver, property, PropertyFetchMode::Coalesce, array,
                 );
                 // The probe answers null for a name `__isset` denies, whatever `__get` declares,

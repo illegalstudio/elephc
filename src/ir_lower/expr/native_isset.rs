@@ -342,7 +342,21 @@ pub(super) fn array_access_expr_supports_native_isset_probe(
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+                .unwrap_or_else(|| {
+                    // A receiver with no single class (`SimpleXMLElement|false`, `mixed`) may be
+                    // an XML object whose `->child` is a selection: the syntactic `int` guess
+                    // would send `isset($x->child[1])` down the array probe and answer false.
+                    if ctx.classes.contains_key("SimpleXMLElement")
+                        && matches!(
+                            array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_)
+                        )
+                    {
+                        PhpType::Mixed
+                    } else {
+                        infer_expr_type_syntactic(array)
+                    }
+                })
         }
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
