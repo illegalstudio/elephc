@@ -190,6 +190,7 @@ impl Checker {
             method_worklist: Default::default(),
             scope_dynamic_mutation_targets: Default::default(),
             throw_access_sites: HashMap::default(),
+            function_decl_spans: HashMap::default(),
             binding_position: 0,
             builtin_call_types: HashMap::default(),
             closure_generator_spans: HashSet::default(),

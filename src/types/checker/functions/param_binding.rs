@@ -349,6 +349,9 @@ impl Checker {
                 span: arg.span,
                 kind: crate::types::ThrowAccessKind::CallArgumentIntCoercion {
                     prefix,
+                    callee_decl: if internal_callee || callee.contains("::") { None } else {
+                        self.function_decl_spans.get(&crate::names::php_symbol_key(&callee)).copied()
+                    },
                     internal_callee,
                 },
             },
@@ -373,6 +376,7 @@ impl Checker {
                 kind: crate::types::ThrowAccessKind::CallArgumentType {
                     message,
                     internal_callee: true,
+                    callee_decl: None,
                 },
             },
         );
@@ -443,6 +447,9 @@ impl Checker {
                 kind: crate::types::ThrowAccessKind::CallArgumentType {
                     message,
                     internal_callee,
+                    callee_decl: if internal_callee || callee.contains("::") { None } else {
+                        self.function_decl_spans.get(&crate::names::php_symbol_key(&callee)).copied()
+                    },
                 },
             },
         );

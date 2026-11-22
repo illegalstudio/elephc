@@ -316,9 +316,8 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x19");                                         // resolve this exception's effective location
     emitter.instruction("bl __rt_throwable_location_borrowed");                 // line in x0, filename in x1/x2, known flag in x3
     emitter.instruction("cbz x3, __rt_uncaught_trace");                         // no known origin: omit rather than invent
-    abi::emit_symbol_address(emitter, "x0", "_uncaught_exc_in");
-    emitter.instruction(&format!("mov x1, #{}", UNCAUGHT_IN_LEN));              // " in "
-    emitter.instruction("bl __rt_stdout_write");                                // introduce the source location
+    emitter.instruction("mov x0, x19");                                         // the lead-in depends on the throwable
+    emitter.instruction("bl __rt_uncaught_write_in");                           // " in ", or " and defined in " for a callee binding error
     emitter.instruction("mov x0, x19");                                         // this exception's filename
     emitter.instruction("bl __rt_uncaught_write_location_file");                // write it
     abi::emit_symbol_address(emitter, "x0", "_uncaught_exc_colon");
@@ -381,6 +380,44 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the linkage frame
     emitter.instruction("ret");                                                 // back to the caller
+
+    // -- writes the lead-in before the location: " in ", or " and defined in " for a binding
+    // TypeError/ArgumentCountError whose message names the call site (x0 = Throwable) --
+    emitter.blank();
+    emitter.comment("--- runtime: uncaught_write_in ---");
+    emitter.label_global("__rt_uncaught_write_in");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the saved throwable and linkage
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("str x19, [sp]");                                       // preserve the callee-saved throwable register
+    emitter.instruction("add x29, sp, #16");                                    // establish the frame pointer
+    emitter.instruction("mov x19, x0");                                         // keep the throwable across the search
+    emitter.instruction("ldr x10, [x19]");                                      // runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_type_error_class_id", 0);
+    emitter.instruction("cmp x10, x11");                                        // exactly TypeError?
+    emitter.instruction("b.eq __rt_uncaught_write_in_check");                   // yes: look for the call-site clause
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_argument_count_error_class_id", 0);
+    emitter.instruction("cmp x10, x11");                                        // exactly ArgumentCountError?
+    emitter.instruction("b.ne __rt_uncaught_write_in_plain");                   // no other class gets the clause
+    emitter.label("__rt_uncaught_write_in_check");
+    emitter.instruction("ldr x1, [x19, #8]");                                   // message pointer
+    emitter.instruction("ldr x2, [x19, #16]");                                  // message length
+    abi::emit_symbol_address(emitter, "x3", "_uncaught_exc_called_in");
+    emitter.instruction("mov x4, #12");                                         // ", called in "
+    emitter.instruction("bl __rt_strpos");                                      // is the call site named in the message?
+    emitter.instruction("cmp x0, #0");                                          // -1 when absent
+    emitter.instruction("b.lt __rt_uncaught_write_in_plain");                   // an ordinary message keeps " in "
+    abi::emit_symbol_address(emitter, "x0", "_uncaught_exc_and_defined_in");
+    emitter.instruction("mov x1, #16");                                         // " and defined in "
+    emitter.instruction("b __rt_uncaught_write_in_emit");                       // write the clause
+    emitter.label("__rt_uncaught_write_in_plain");
+    abi::emit_symbol_address(emitter, "x0", "_uncaught_exc_in");
+    emitter.instruction(&format!("mov x1, #{}", UNCAUGHT_IN_LEN));              // " in "
+    emitter.label("__rt_uncaught_write_in_emit");
+    emitter.instruction("bl __rt_stdout_write");                                // introduce the source location
+    emitter.instruction("ldr x19, [sp]");                                       // restore the caller's callee-saved register
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the frame
+    emitter.instruction("ret");                                                 // back to the block renderer
 
     // -- activation-chain walker: returns the number of frames printed in x0 --
     emitter.blank();
@@ -706,9 +743,8 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_throwable_location_borrowed");               // filename in rax/rdx, line in rcx, known flag in r8
     emitter.instruction("test r8, r8");                                         // is the origin known?
     emitter.instruction("jz __rt_uncaught_trace");                              // no known origin: omit rather than invent
-    abi::emit_symbol_address(emitter, "rdi", "_uncaught_exc_in");
-    emitter.instruction(&format!("mov esi, {}", UNCAUGHT_IN_LEN));              // " in "
-    emitter.instruction("call __rt_stdout_write");                              // introduce the source location
+    emitter.instruction("mov rax, r12");                                        // the lead-in depends on the throwable
+    emitter.instruction("call __rt_uncaught_write_in");                         // " in ", or " and defined in " for a callee binding error
     emitter.instruction("mov rax, r12");                                        // this exception's filename
     emitter.instruction("call __rt_uncaught_write_location_file");              // write it
     abi::emit_symbol_address(emitter, "rdi", "_uncaught_exc_colon");
@@ -768,6 +804,44 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stdout_write");                              // write the filename
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // back to the caller
+
+    // -- writes the lead-in before the location: " in ", or " and defined in " for a binding
+    // TypeError/ArgumentCountError whose message names the call site (rax = Throwable) --
+    emitter.blank();
+    emitter.comment("--- runtime: uncaught_write_in ---");
+    emitter.label_global("__rt_uncaught_write_in");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the frame pointer
+    emitter.instruction("push r12");                                            // preserve the callee-saved throwable register
+    emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned for the calls below
+    emitter.instruction("mov r12, rax");                                        // keep the throwable across the search
+    emitter.instruction("mov r10, QWORD PTR [r12]");                            // runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_spl_type_error_class_id", 0);
+    emitter.instruction("cmp r10, r11");                                        // exactly TypeError?
+    emitter.instruction("je __rt_uncaught_write_in_check");                     // yes: look for the call-site clause
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_spl_argument_count_error_class_id", 0);
+    emitter.instruction("cmp r10, r11");                                        // exactly ArgumentCountError?
+    emitter.instruction("jne __rt_uncaught_write_in_plain");                    // no other class gets the clause
+    emitter.label("__rt_uncaught_write_in_check");
+    emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // message pointer
+    emitter.instruction("mov rsi, QWORD PTR [r12 + 16]");                       // message length
+    abi::emit_symbol_address(emitter, "rdx", "_uncaught_exc_called_in");
+    emitter.instruction("mov ecx, 12");                                         // ", called in "
+    emitter.instruction("call __rt_strpos");                                    // is the call site named in the message?
+    emitter.instruction("test rax, rax");                                       // -1 when absent
+    emitter.instruction("js __rt_uncaught_write_in_plain");                     // an ordinary message keeps " in "
+    abi::emit_symbol_address(emitter, "rdi", "_uncaught_exc_and_defined_in");
+    emitter.instruction("mov esi, 16");                                         // " and defined in "
+    emitter.instruction("jmp __rt_uncaught_write_in_emit");                     // write the clause
+    emitter.label("__rt_uncaught_write_in_plain");
+    abi::emit_symbol_address(emitter, "rdi", "_uncaught_exc_in");
+    emitter.instruction(&format!("mov esi, {}", UNCAUGHT_IN_LEN));              // " in "
+    emitter.label("__rt_uncaught_write_in_emit");
+    emitter.instruction("call __rt_stdout_write");                              // introduce the source location
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad
+    emitter.instruction("pop r12");                                             // restore the caller's callee-saved register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // back to the block renderer
 
     // -- activation-chain walker: returns the number of frames printed in rax --
     emitter.blank();

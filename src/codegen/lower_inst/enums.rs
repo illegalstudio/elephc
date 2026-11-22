@@ -556,9 +556,21 @@ pub(super) fn lower_argument_string_to_int(
     };
     let (message_label, message_len) = ctx.intern_string_data(data_id)?;
     let float_input = ctx.value_php_type(input)?.codegen_repr() == PhpType::Float;
+    // An empty message selects the probe form: the result is 1 when the string converts and 0
+    // when the binding would throw, so lowering can raise the error from the callee's frame.
+    let probe_only = message_len == 0 && !float_input;
     ctx.load_value_to_result(input)?;
     let type_error_label = ctx.next_label("int_arg_type_error");
     let done_label = ctx.next_label("int_arg_coerce_done");
+    if probe_only {
+        // Only the verdict: the real conversion (and its precision deprecation) is a second,
+        // ordinary `ArgumentStringToInt` on the accepting branch.
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        return store_if_result(ctx, inst);
+    }
     if float_input {
         emit_float_result_into_int_argument_or_jump(ctx, &type_error_label);
     } else {

@@ -1155,6 +1155,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
+    out.push_str(".globl _uncaught_exc_called_in\n_uncaught_exc_called_in:\n    .ascii \", called in \"\n");
+    out.push_str(".globl _uncaught_exc_and_defined_in\n_uncaught_exc_and_defined_in:\n    .ascii \" and defined in \"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
     for (symbol, text) in [
         ("_uncaught_exc_stack_trace", "\\nStack trace:\\n"),

@@ -258,7 +258,29 @@ fn to_string_fn() -> Stmt {
                     e_str(""),
                     e_concat(e_str(": "), e_var("message")),
                 ),
-                e_str(" in "),
+                // php prints `... and defined in FILE:LINE` for a binding TypeError or
+                // ArgumentCountError raised in the callee (exact classes, `, called in ` message).
+                e_ternary(
+                    e_binop(
+                        e_binop(
+                            e_binop(e_call("get_class", vec![e_var("e")]), BinOp::StrictEq, e_str("TypeError")),
+                            BinOp::Or,
+                            e_binop(
+                                e_call("get_class", vec![e_var("e")]),
+                                BinOp::StrictEq,
+                                e_str("ArgumentCountError"),
+                            ),
+                        ),
+                        BinOp::And,
+                        e_binop(
+                            e_call("strpos", vec![e_var("message"), e_str(", called in ")]),
+                            BinOp::StrictNotEq,
+                            crate::synthetic_class::e_bool(false),
+                        ),
+                    ),
+                    e_str(" and defined in "),
+                    e_str(" in "),
+                ),
                 e_method_call(e_var("e"), "getFile", vec![]),
                 e_str(":"),
                 e_method_call(e_var("e"), "getLine", vec![]),

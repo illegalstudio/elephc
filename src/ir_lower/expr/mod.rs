@@ -159,6 +159,7 @@ mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod definite_argument_errors;
+pub(crate) use definite_argument_errors::BIND_ERROR_THUNK_PREFIX;
 mod scoped_values;
 #[cfg(test)]
 pub(crate) use scoped_values::DESCENDANT_QUERIES;

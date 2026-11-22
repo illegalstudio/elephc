@@ -724,6 +724,9 @@ pub(crate) struct Checker {
     /// shared by many nodes makes all of them throw. See that function for why the preludes make
     /// this reachable rather than theoretical.
     pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
+    /// Declaration span of every user function by lower-cased name: a binding `TypeError` php
+    /// raises inside the callee is reported on that line, in that file.
+    pub function_decl_spans: HashMap<String, Span>,
     /// One-based position of the regular parameter the argument being bound fills, or zero when
     /// unknown. Set by the call validators around each bind so a definite mismatch can name
     /// `Argument #N` when it is deferred to a run-time `TypeError`.

@@ -2520,7 +2520,17 @@ fn seed_recursive_closure_binding(
 
 /// Appends lowered closure functions to the module with stable closure-table ids.
 fn add_closures(module: &mut Module, closures: Vec<Function>) {
-    for closure in closures {
+    for mut closure in closures {
+        // A binding-error thunk is an ordinary named function called by name, labelled like the
+        // callee it stands in for.
+        if closure.name.starts_with(super::expr::BIND_ERROR_THUNK_PREFIX) {
+            closure.flags.is_closure = false;
+            closure.flags.is_synthetic = true;
+            closure.lexical_class = None;
+            closure.source_name = closure.display_name.clone();
+            module.add_function(closure);
+            continue;
+        }
         module.add_closure(closure);
     }
 }

@@ -1445,6 +1445,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .insert(closure_name.to_string(), format!("{{closure:{context}:{line}}}"));
     }
 
+    /// Records the exact label a generated function shows in backtraces.
+    pub(crate) fn set_closure_display_label(&mut self, closure_name: &str, label: String) {
+        self.closure_display_names.insert(closure_name.to_string(), label);
+    }
+
     /// Takes the label recorded by [`Self::register_closure_display_name`] for `closure_name`.
     pub(crate) fn take_closure_display_name(&mut self, closure_name: &str) -> Option<String> {
         self.closure_display_names.remove(closure_name)

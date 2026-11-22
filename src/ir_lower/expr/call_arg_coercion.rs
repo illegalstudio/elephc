@@ -670,12 +670,13 @@ fn coerce_weak_int_argument(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     let scope = ctx.loop_storage_scope.clone();
-    let (prefix, internal_callee) =
+    let (prefix, internal_callee, callee_decl) =
         match ctx.throw_access_sites.get(&(scope, arg.span)).map(|info| &info.kind) {
             Some(crate::types::ThrowAccessKind::CallArgumentIntCoercion {
                 prefix,
                 internal_callee,
-            }) => (prefix.clone(), *internal_callee),
+                callee_decl,
+            }) => (prefix.clone(), *internal_callee, *callee_decl),
             _ => return None,
         };
     let given = match ctx.builder.value_php_type(value.value).codegen_repr() {
@@ -689,6 +690,37 @@ fn coerce_weak_int_argument(
         let file = definite_argument_errors::call_site_file(ctx, arg.span);
         format!("{}{} given, called in {} on line {}", prefix, given, file, arg.span.line)
     };
+    // A user function's binding error is raised inside the callee: probe the string first, and
+    // on refusal call the callee-framed thunk. The accepting branch runs the ordinary conversion.
+    if let (Some(decl), "string", Some((callee_label, _))) =
+        (callee_decl, given, prefix.split_once("(): "))
+    {
+        let probe_data = ctx.intern_string("");
+        let accepted = ctx.emit_value(
+            Op::ArgumentStringToInt,
+            vec![value.value],
+            Some(Immediate::Data(probe_data)),
+            PhpType::Bool,
+            Op::ArgumentStringToInt.default_effects(),
+            Some(arg.span),
+        );
+        let refused_block = ctx.builder.create_named_block("bind.refused", Vec::new());
+        let accepted_block = ctx.builder.create_named_block("bind.accepted", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: accepted.value,
+            then_target: accepted_block,
+            then_args: Vec::new(),
+            else_target: refused_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(refused_block);
+        let boxed = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(arg.span));
+        definite_argument_errors::call_binding_error_thunk(
+            ctx, arg.span, callee_label, &message, decl, &[boxed.value],
+        );
+        ctx.builder.terminate(Terminator::Unreachable);
+        ctx.builder.position_at_end(accepted_block);
+    }
     let data = ctx.intern_string(&message);
     Some(ctx.emit_value(
         Op::ArgumentStringToInt,

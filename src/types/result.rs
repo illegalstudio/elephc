@@ -115,6 +115,9 @@ pub enum ThrowAccessKind {
     CallArgumentType {
         /// The message without the `called in` clause.
         message: String,
+        /// Where a user function is declared: php raises the error inside the callee, so the
+        /// exception is located there. `None` for methods and internal callees.
+        callee_decl: Option<Span>,
         /// Whether the callee stands for a php internal function or method
         /// (`Checker::callee_is_php_internal`).
         internal_callee: bool,
@@ -130,6 +133,8 @@ pub enum ThrowAccessKind {
     CallArgumentIntCoercion {
         /// `f(): Argument #N ($p) must be of type int, `
         prefix: String,
+        /// Where a user function is declared (see `CallArgumentType::callee_decl`).
+        callee_decl: Option<Span>,
         /// Whether the callee stands for a php internal function or method
         /// (`Checker::callee_is_php_internal`).
         internal_callee: bool,

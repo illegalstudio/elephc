@@ -98,6 +98,9 @@ impl Checker {
                     ));
                     continue;
                 }
+                if stmt.source_mode != SourceMode::Internal {
+                    self.function_decl_spans.insert(php_symbol_key(name), stmt.span);
+                }
                 let param_names: Vec<String> =
                     params.iter().map(|(n, _, _, _)| n.clone()).collect();
                 let param_type_anns: Vec<Option<TypeExpr>> =
