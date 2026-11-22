@@ -309,9 +309,12 @@ sum_tagged_rhs($argc + 9);
             && !accumulation.contains("__rt_mixed_numeric_add"),
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
+    // The function body ends at `@endfn`; the per-function frame reader emitted after it (present
+    // in every module that can raise) boxes the arguments for a backtrace and releases that box.
+    let function_body = function.split("@endfn").next().unwrap();
     assert!(
-        !function.contains("__rt_decref_mixed"),
-        "frame-only numeric owners must retire without a runtime decref:\n{function}"
+        !function_body.contains("__rt_decref_mixed"),
+        "frame-only numeric owners must retire without a runtime decref:\n{function_body}"
     );
     let condition = function
         .split("@block name=while.cond")

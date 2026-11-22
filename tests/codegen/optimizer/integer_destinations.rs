@@ -233,7 +233,9 @@ $value = $value + 2;
 echo sink($value * 4), intdiv($argc * 12, 5);
 "#;
     for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
-        let assembly = super::checked_numeric_chain::emit_target_assembly(source, target);
+        let assembly = super::without_throwable_machinery(
+            &super::checked_numeric_chain::emit_target_assembly(source, target),
+        );
         assert!(!assembly.contains("call __rt_int_mul_checked"), "{target}");
         assert!(!assembly.contains("bl __rt_int_mul_checked"), "{target}");
         assert!(!assembly.contains("push_call_operand_owner"), "{target}");

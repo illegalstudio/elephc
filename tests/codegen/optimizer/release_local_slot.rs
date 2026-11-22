@@ -123,8 +123,9 @@ for ($i = 0; $i < $argc; $i = (int)($i + 1)) {
 "#;
     for ir_opt in [false, true] {
         let ir = emit_release_ir(source, ir_opt);
+        let user_ir = super::without_throwable_machinery(&ir);
         assert!(
-            !ir.contains("release_local_slot"),
+            !user_ir.contains("release_local_slot"),
             "scalar slot should not retain deferred release with ir_opt={ir_opt}:\n{ir}"
         );
     }
@@ -147,9 +148,15 @@ echo $alias;
         let ir = emit_release_ir(source, ir_opt);
         assert!(ir.contains("promote_local_ref_cell"));
         assert!(ir.contains("store_ref_cell"));
+        // The Throwable string helpers a program that can raise roots hold their own releases;
+        // the property under test is about the user's code.
+        // The data section is out too: its strings spell the fixture directory, which is named
+        // after the op.
+        let user_ir = super::without_throwable_machinery(&ir);
+        let user_ir = user_ir.split_once("\n  function ").map_or(user_ir.as_str(), |(_, code)| code);
         assert!(
-            !ir.contains("release_local_slot"),
-            "ref-bound slot should not use raw release with ir_opt={ir_opt}:\n{ir}"
+            !user_ir.contains("release_local_slot"),
+            "ref-bound slot should not use raw release with ir_opt={ir_opt}:\n{user_ir}"
         );
     }
 }

@@ -172,3 +172,34 @@ mod loop_counter_checked_bounds;
 
 #[path = "optimizer/memory_metrics.rs"]
 mod memory_metrics;
+
+/// Drops the functions of the Throwable string machinery from emitted EIR or assembly text.
+///
+/// A program that can raise roots `__elephc_throwable_*` (which render the uncaught-exception
+/// trace) and the builtin `Error`/`Exception` methods they call. Those bodies are not the user's
+/// code, so a module-wide "the program has no X" assertion must look at every other function.
+/// Works on both formats: a segment starts at an EIR `  function NAME(` line or an assembly
+/// `@fn name=NAME` line and runs to the next one.
+pub(crate) fn without_throwable_machinery(text: &str) -> String {
+    let function_name = |line: &str| -> Option<String> {
+        if let Some(rest) = line.strip_prefix("  function ") {
+            return Some(rest.split('(').next().unwrap_or("").to_string());
+        }
+        let (_, rest) = line.split_once("@fn name=")?;
+        Some(rest.split_whitespace().next().unwrap_or("").to_string())
+    };
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if let Some(name) = function_name(line) {
+            skipping = name.starts_with("__elephc_throwable_")
+                || name.starts_with("Error::")
+                || name.starts_with("Exception::");
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
