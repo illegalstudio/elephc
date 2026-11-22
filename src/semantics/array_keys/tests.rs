@@ -191,6 +191,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [[1]]; if (($flag = 1) ?? ($values = [1])) { $values[0][false] = 2; }",
         "<?php $values = [1]; if (($flag = null) ?? ($values = [[1]])) { $values[0][false] = 2; }",
         "<?php $values = [[1]]; try { throw new Exception(); $values = [1]; } catch (Exception $error) { $values[0][false] = 2; }",
+        "<?php $values = [1]; foreach ($values as &$item) { $item = [1]; } $values[0][false] = 2;",
     ] {
         let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -265,6 +266,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = [1]; foreach ([] as $item) { $values = [[1]]; } $values[0][false] = 2;",
         "<?php try { $values = [1]; throw new Exception(); } catch (Exception $error) { $values[0][false] = 2; }",
         "<?php $values = [1]; while (true) { try { break; $values = [[1]]; } finally { $values[0][false] = 2; } }",
+        "<?php $values = [[1]]; foreach ($values as &$item) { $item = 1; } $values[0][false] = 2;",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));

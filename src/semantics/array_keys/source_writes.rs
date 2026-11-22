@@ -92,6 +92,13 @@ impl ArrayFact {
         }
         Some(())
     }
+
+    /// Replaces every retained element with one value written through a foreach reference.
+    fn fill_values(&mut self, value: &ValueFact) {
+        for (_, stored) in &mut self.entries {
+            *stored = value.clone();
+        }
+    }
 }
 
 /// One local receiver fact retained by the syntax-preserving write audit.
@@ -1887,6 +1894,7 @@ fn validate_stmt(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
             ..
         } => {
@@ -1926,6 +1934,19 @@ fn validate_stmt(
                 profile,
                 current_class,
             );
+            if *value_by_ref && body_reachable {
+                apply_foreach_reference_fact(
+                    array,
+                    value_var,
+                    body,
+                    &entry,
+                    &break_flow,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                );
+            }
         }
         StmtKind::DoWhile { body, condition } => {
             let entry = locals.clone();
@@ -2259,6 +2280,55 @@ fn reachable_statement_prefix(body: &[Stmt]) -> &[Stmt] {
         })
         .map_or(body.len(), |index| index + 1);
     &body[..length]
+}
+
+/// Updates an exact source array when every reachable iteration writes one static ref value.
+#[allow(clippy::too_many_arguments)]
+fn apply_foreach_reference_fact(
+    source: &Expr,
+    value_var: &str,
+    body: &[Stmt],
+    entry: &LocalFacts,
+    flow: &LoopBreakFlow,
+    exit: &mut LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) {
+    let ExprKind::Variable(source_name) = &source.kind else {
+        return;
+    };
+    if !flow.exits.is_empty()
+        || !flow.terminals.is_empty()
+        || !flow.complete
+        || crate::ir_lower::body_writes_local(body, source_name)
+    {
+        return;
+    }
+    let Some(iteration) = flow.back_edge() else {
+        return;
+    };
+    let replacement = iteration.get(value_var);
+    if matches!(replacement, ValueFact::Unknown)
+        || !body_writes_only_static_fact(
+            body,
+            value_var,
+            &replacement,
+            properties,
+            profile,
+            current_class,
+        )
+    {
+        return;
+    }
+    let ValueFact::Array(mut source) = entry.get(source_name) else {
+        return;
+    };
+    if source.entries.is_empty() {
+        return;
+    }
+    source.fill_values(&replacement);
+    exit.set(source_name, ValueFact::Array(source));
 }
 
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
