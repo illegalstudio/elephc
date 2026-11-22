@@ -38,7 +38,7 @@ pub(super) fn emit(emitter: &mut Emitter, native_validation: bool) {
     abi::emit_store_zero_to_local_slot(emitter, CLASS_CALL);
     abi::emit_jump(emitter, "__rt_eval_static_store_body");
     emit_class_entry(emitter);
-    emitter.label("__rt_eval_static_store_body");
+    emitter.label_shared("__rt_eval_static_store_body");
     abi::load_at_offset(emitter, result, FLAGS);
     abi::store_at_offset(emitter, result, CONTEXT);
     abi::emit_store_zero_to_local_slot(emitter, CONTEXT - 8);

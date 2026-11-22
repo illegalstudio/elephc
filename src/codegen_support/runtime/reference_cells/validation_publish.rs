@@ -78,7 +78,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_reference_cell_is_shared");
     abi::store_at_offset(emitter, result, ORIGINAL_SHARED);
     abi::emit_jump(emitter, "__rt_reference_publish_native_initialized");
-    emitter.label("__rt_reference_publish_native_body");
+    emitter.label_shared("__rt_reference_publish_native_body");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
@@ -87,7 +87,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), INITIALIZATION);
     abi::emit_store_zero_to_local_slot(emitter, ARGUMENT_OWNER);
     abi::emit_store_zero_to_local_slot(emitter, PROPOSED);
-    emitter.label("__rt_reference_publish_native_initialized");
+    emitter.label_shared("__rt_reference_publish_native_initialized");
     for offset in [CONTEXT, OUTCOME] {
         abi::load_at_offset(emitter, result, offset);
         abi::emit_branch_if_int_result_zero(emitter, failed);

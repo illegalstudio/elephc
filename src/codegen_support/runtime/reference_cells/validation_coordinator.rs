@@ -22,7 +22,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter, eval_brid
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
     abi::emit_jump(emitter, "__rt_reference_validate_native_body");
     emitter.label_global("__rt_reference_validate_native_with_source");
-    emitter.label("__rt_reference_validate_native_body");
+    emitter.label_shared("__rt_reference_validate_native_body");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [8, 16, 24, 32, PROPOSED].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
