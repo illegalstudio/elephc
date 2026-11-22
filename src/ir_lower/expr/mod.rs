@@ -104,6 +104,7 @@ mod builtin_input_contracts;
 mod builtin_comparisons;
 mod array_push_spread;
 mod borrowed_string_args;
+mod boxed_iterable_source;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;

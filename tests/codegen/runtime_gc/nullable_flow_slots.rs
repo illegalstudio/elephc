@@ -50,6 +50,62 @@ exercise();
     }
 }
 
+/// A lazy getter whose chain continues past the null arm keeps one cached owner, a union slot
+/// read as the member every chain exit stored releases each replaced value, and a boxed
+/// `iterator_to_array()` source is unboxed without keeping or dropping an extra reference.
+#[test]
+fn test_elseif_chain_join_preserves_owners() {
+    let source = r#"<?php
+final class Service {
+    public int $size = 1;
+    public function resize(): void { $this->size++; }
+    public function __destruct() { echo "drop", $this->size, "\n"; }
+}
+final class Owner {
+    private ?Service $service = null;
+    public function get(bool $resize): Service {
+        $service = $this->service;
+        if ($service === null) {
+            $service = new Service();
+            $this->service = $service;
+        } elseif ($resize) {
+            $service->resize();
+        }
+        return $service;
+    }
+}
+function wrap(int|string|array $v): array {
+    if (is_int($v)) { $v = [$v, $v]; }
+    elseif (is_string($v)) { $v = [$v . "!"]; }
+    return $v;
+}
+function labels(string|iterable $labels): string {
+    if ($labels instanceof Traversable) { $labels = iterator_to_array($labels, false); }
+    elseif (!is_array($labels)) { $labels = [$labels]; }
+    return implode("+", $labels);
+}
+function exercise(): void {
+    $owner = new Owner();
+    $first = $owner->get(true);
+    echo $owner->get(true)->size, $owner->get(false)->size, "\n";
+    echo $first === $owner->get(false) ? "same\n" : "different\n";
+    echo count(wrap(1)), count(wrap("x")), count(wrap(["a", "b", "c"])), wrap("x")[0], "\n";
+    echo labels("a"), labels(["b", "c"]), labels(new ArrayIterator(["d", "e"])), "\n";
+}
+exercise();
+exercise();
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "22\nsame\n213x!\nab+cd+e\ndrop2\n22\nsame\n213x!\nab+cd+e\ndrop2\n");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Widened nullable counters and accumulators release every owner in both IR modes.
 #[test]
 fn test_nullable_flow_parameter_widening_releases_initial_cells() {

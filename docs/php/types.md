@@ -318,6 +318,33 @@ echo count($files);
 
 The same applies on the `else` side (`if ($files !== false) { … } else { $files = []; }`) and inside a `while` whose condition narrows. A value the variable's own type cannot hold either — `$files = new stdClass()` above — is still rejected, because re-binding a local to an unrelated type is only allowed in straight-line code; see [Local retyping](#local-retyping). Once the branch has assigned the variable once, later assignments in the same branch are checked against what that first one stored.
 
+Storing a non-null member of a union-typed variable narrows its reads to that member until the next store or join, while the union stays its storage, so the usual normalisation forms compile:
+
+```php
+function zone(DateTimeZone|string $tz): DateTimeZone {
+    if (is_string($tz)) { $tz = new DateTimeZone($tz); }   // or: $tz = new DateTimeZone('UTC');
+    return $tz;                                             // DateTimeZone on both paths
+}
+```
+
+A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. The branch may store through a nested `if`/`elseif`/`else`: when every arm that falls through stores a `string`, `if ($message === null) { if ($path === null) { $message = '…'; } else { $message = sprintf('…', $path); } }` leaves `$message` a `string`.
+
+An `if`/`elseif` chain without a final `else` joins the same way. Each branch that falls out of the chain contributes what it left in the variable, and the implicit fall-through contributes the variable's type with every guard of the chain excluded, since reaching it means every guard was false:
+
+```php
+function wrap(int|string|array $value): array {
+    if (is_int($value)) { $value = [$value]; }
+    elseif (is_string($value)) { $value = [$value]; }
+    return $value;               // neither int nor string is left: an array on every path
+}
+```
+
+Inside a union, `iterable` counts as `array|Traversable` for these guards: `is_array` keeps the array half and leaves `Traversable`, and a failed `instanceof Traversable` leaves the array half. So `if ($files instanceof Traversable) { $files = iterator_to_array($files, false); } elseif (!is_array($files)) { $files = [$files]; }` leaves a `string|iterable $files` an array. A failed `instanceof` of a narrower class such as `ArrayIterator` leaves the whole `iterable`, because another `Traversable` object can still be there.
+
+The same join carries a lazily initialized nullable local through the rest of its chain: after `if ($layout === null) { $layout = new Layout(); } elseif ($resize) { $layout->resize(); }`, `$layout` is a `Layout`, because the `elseif` and the fall-through both start from the null guard's complement.
+
+The variable keeps its wider type when an exit can still hold a wider member: an arm that skips the store or stores a wider value, a fall-through that no guard narrowed (a guard on another variable, a condition that is not a type guard, a null guard on a later clause), or a condition that reassigns the variable. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them. Passing the variable to a by-reference parameter also ends the narrowing.
+
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 
 A `null` argument is the exception, and never fixes a closure parameter's type. It carries no storage the parameter could adopt — a parameter closed to `null` alone could satisfy no other call — so `$f(null)` leaves the parameter open exactly as omitting the argument does, and both spellings of the call accept anything afterwards:

@@ -14,6 +14,7 @@ mod global_bindings;
 mod properties;
 mod properties_null_coalesce;
 mod static_properties;
+mod store_narrowing;
 
 pub(in crate::types::checker) use arrays::expr_is_string_offset_target;
 
