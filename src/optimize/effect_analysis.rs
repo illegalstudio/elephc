@@ -439,7 +439,10 @@ fn callable_has_typed_parameters(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic_type: Option<&TypeExpr>,
 ) -> bool {
-    variadic_type.is_some() || params.iter().any(|(_, ty, _, _)| ty.is_some())
+    // `mixed` accepts every value, so binding it can never raise a TypeError.
+    let binds = |ty: &TypeExpr| !matches!(ty,
+        TypeExpr::Named(name) if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("mixed"));
+    variadic_type.is_some_and(binds) || params.iter().any(|(_, ty, _, _)| ty.as_ref().is_some_and(binds))
 }
 
 /// Adds effects imposed by the callable declaration rather than by its body.
