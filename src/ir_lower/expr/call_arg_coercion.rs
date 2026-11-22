@@ -1058,9 +1058,12 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
 ///
 /// The checker admits an object whose static class could still be one of them
 /// (`object_argument_may_narrow_to`), and the single-class guard below cannot test two targets, so
-/// the call would otherwise run into the callee with an object it cannot use. The probe is the
-/// boxed `mixed` view of the value: an `instanceof` on a value statically typed as an unrelated
-/// class would be answered from the declaration instead of the object.
+/// the call would otherwise run into the callee with an object it cannot use. Members the
+/// argument's own class already satisfies return before any probe is emitted, so the
+/// `instanceof` chain below can only be answered by the object itself (or proven false).
+///
+/// The message names the argument's STATIC class; php names the runtime one, which differs only
+/// when the static type is an interface or a base class.
 fn guard_object_class_union_param(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -1102,14 +1105,13 @@ fn guard_object_class_union_param(
         return value;
     }
     let span = Some(arg.span);
-    let probe = ctx.box_value_as_mixed(value, PhpType::Mixed, span);
     let answers: Vec<LoweredValue> = classes
         .iter()
         .map(|class| {
             let data = ctx.intern_class_name(class);
             ctx.emit_value(
                 Op::InstanceOf,
-                vec![probe.value],
+                vec![value.value],
                 Some(Immediate::Data(data)),
                 PhpType::Bool,
                 Op::InstanceOf.default_effects(),
@@ -1117,7 +1119,6 @@ fn guard_object_class_union_param(
             )
         })
         .collect();
-    crate::ir_lower::ownership::release_if_owned(ctx, probe, span);
     let initialized = ctx.initialized_slots_snapshot();
     let accepted = ctx.builder.create_named_block("object.union.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.union.rejected", Vec::new());
@@ -1140,6 +1141,9 @@ fn guard_object_class_union_param(
     }
     ctx.builder.position_at_end(rejected);
     ctx.restore_initialized_slots(initialized.clone());
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
     let param_name = sig.params.get(index).map(|(name, _)| name.as_str()).unwrap_or("arg");
     let callable = ctx.call_description.as_deref().unwrap_or("call");
     let source = ctx.source_path().unwrap_or("unknown");
