@@ -872,6 +872,29 @@ preserves PHP exponentiation result rules.
 | `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
+A boxed operand written as a container element is first projected to the type
+the checker proved for it. A hash `foreach` binding, a guard-narrowed `mixed`
+local and a branch merge are boxed cells in EIR while the checker types them as
+one scalar or a concrete array, and the checker's container type follows that
+type, not the box. Lowering reads `CheckResult::element_value_views`
+(`src/ir_lower/expr/element_values.rs`) at the three places an element is
+formed, a local append, a local keyed write and an array literal: a scalar is
+extracted with `Cast`, and a local's own array or hash with `MixedUnbox`, so no
+`ArrayToMixed` / `HashToMixed` is emitted for a container that is empty or
+already stores that type. A boxed local read at such a site produces the
+projected value itself, which is what keeps a literal's predicted storage and its
+lowered items in agreement. An operand without a published view, and one whose
+type the container does not store, still widen the container as described below.
+
+An `if`, ternary or `match` merge reconciles a local array whose arms disagree on
+the element storage by boxing every arm's elements (`ArrayToMixed`, or
+`ArrayToHash` / `HashToMixed` when an arm holds a hash). An arm that still holds
+the empty `array<never>` it entered with has nothing to box: it adopts the
+layout the other arms agree on, which is the type the checker joins the two to.
+`$out = []; if ($c) { $out[] = $v; }` therefore leaves `$out` an `array<int>` on
+both paths, and an empty arm joined with a typed hash becomes that hash on its
+own edge.
+
 A local indexed-array append or offset write emits `ArrayToMixed` only when the
 stored value cannot share the element storage. An object whose class is the
 element class, a subclass of it, or an implementation of the element interface

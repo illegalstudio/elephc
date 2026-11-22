@@ -41,6 +41,8 @@ mod ref_place_args;
 mod boxed_user_sort;
 pub(crate) mod declared_callables;
 mod scalar_literals;
+mod element_values;
+pub(crate) use element_values::{container_element_type, project_element_value};
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;

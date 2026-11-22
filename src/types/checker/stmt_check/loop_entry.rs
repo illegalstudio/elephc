@@ -34,6 +34,8 @@ pub(super) fn stabilize_loop_storage(
     for stmt in body { super::super::loop_storage::collect_value_assignment_stmt(stmt, &mut evidence); }
     if let Some(update) = update { super::super::loop_storage::collect_value_assignment_stmt(update, &mut evidence); }
     if let Some(condition) = condition { super::super::loop_storage::collect_value_assignments_from_expr(condition, &mut evidence); }
+    // A read at the top of the body also follows every store an earlier iteration made.
+    checker.end_loop_stored_views(evidence.values.iter().map(|(name, _)| *name));
     let incremented: HashSet<_> = evidence.values.iter().filter_map(|(name, value)| {
         matches!(value, super::super::loop_storage::AssignedValue::Increment(_)).then_some(*name)
     }).collect();
@@ -54,6 +56,18 @@ pub(super) fn stabilize_loop_storage(
     // Taken before `infer` borrows the checker: the candidates a promotable write keeps typed.
     let mut promotable_candidates = checker.promotable_array_candidates.clone();
     promotable_candidates.disqualify(checker.ref_aliased_locals.iter());
+    // A declared `array<K, V>` local keeps its value payload under keyed writes: the body check
+    // rejects a value the declaration does not admit, so the contract must not widen it first.
+    let element_storage = super::super::loop_storage::ElementStorageFacts {
+        declared_hash_values: checker.typed_local_names.iter()
+            .filter(|(name, declared)| matches!(declared,
+                PhpType::AssocArray { value, .. } if value.codegen_repr() != PhpType::Mixed)
+                && matches!(snapshot.get(name.as_str()), Some(PhpType::AssocArray { .. })))
+            .map(|(name, _)| name.clone()).collect(),
+        // A source the body check stores as `mixed` must widen the loop's contract too.
+        boxed_volatile_locals: snapshot.keys()
+            .filter(|name| checker.local_storage_is_boxed_volatile(name)).cloned().collect(),
+    };
     let entry_storage = checker.guarded_union_types.clone();
     let entry_origins = checker.narrowed_local_origins.clone();
     let entry_captures = checker.by_ref_captured_locals.clone();
@@ -117,8 +131,8 @@ pub(super) fn stabilize_loop_storage(
         is_a: &object_is_a, common: &object_common,
     };
     let analysis = super::super::loop_storage::analyze_loop_storage(body, update, condition,
-        &snapshot, packed_counter, &tagged_integer_locals, &promotable_candidates, &mut infer,
-        objects);
+        &snapshot, packed_counter, &tagged_integer_locals, &promotable_candidates,
+        &element_storage, &mut infer, objects);
     let mut incoming = Vec::new();
     for name in &backedges.references {
         if !narrowed.contains(*name) { continue; }

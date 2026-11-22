@@ -46,6 +46,7 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
 fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
+    let value_span = value.span;
     let value = lower_expr(ctx, value);
     // PHP selects the current append target after RHS effects, including reference writes.
     // Loading here also gives the ordinary parent guards the RHS-updated storage type.
@@ -73,6 +74,14 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     };
     let array_ty = ctx.builder.value_php_type(array_value.value);
     let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    // A boxed operand the checker typed as the payload this container stores is appended as
+    // that payload; widening here is a storage change no checked consumer was compiled for.
+    let value = match crate::ir_lower::expr::container_element_type(&array_ty) {
+        Some(element) => crate::ir_lower::expr::project_element_value(
+            ctx, value, value_span, None, Some(&element),
+        ),
+        None => value,
+    };
     let value = coerce_declared_array_append(ctx, &array_ty, value, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
