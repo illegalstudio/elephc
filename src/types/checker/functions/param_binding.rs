@@ -287,14 +287,16 @@ impl Checker {
         }
     }
 
-    /// Returns the strict-call validation signature for Tidy's deliberately widened adapters.
+    /// Returns the strict-call validation signature for prelude functions whose PHP-visible
+    /// parameters are deliberately widened to `mixed`.
     ///
-    /// The injected prelude declares `$config` and `$encoding` as `mixed` so its runtime
-    /// adapters can reproduce internal Tidy's weak scalar coercion and TypeError ordering.
-    /// Under `declare(strict_types=1)` PHP's internal parameter parser still rejects scalars
-    /// against `array|string|null` and `?string`; restore those contract types for the
+    /// The injected Tidy prelude declares `$config` and `$encoding` as `mixed`, and the locale
+    /// prelude declares `setlocale()`'s `$locales` and `...$rest` as `mixed`, so their runtime
+    /// adapters can reproduce the internal functions' weak scalar coercion and TypeError
+    /// ordering. Under `declare(strict_types=1)` PHP's internal parameter parser still rejects
+    /// scalars against `array|string|null` and `?string`; restore those contract types for the
     /// checker's strict validation only, leaving weak-mode runtime behavior untouched.
-    pub(crate) fn tidy_strict_adapter_signature(
+    pub(crate) fn prelude_strict_adapter_signature(
         &self,
         function: Option<&str>,
         owner: Option<&str>,
@@ -304,16 +306,22 @@ impl Checker {
         if !self.strict_types {
             return None;
         }
-        let tidy_function = function.is_some_and(|name| {
+        let function_key = function.map(|name| name.trim_start_matches('\\').to_ascii_lowercase());
+        let tidy_function = function_key.as_deref().is_some_and(|name| {
             matches!(
-                name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+                name,
                 "tidy_parse_string" | "tidy_parse_file" | "tidy_repair_string" | "tidy_repair_file"
             )
         });
+        // A program's own global `setlocale()` replaces the prelude and keeps its declared types.
+        let setlocale_function = function_key.as_deref() == Some("setlocale")
+            && function
+                .and_then(|name| self.fn_decls.get(name))
+                .is_some_and(|decl| decl.internal_prelude);
         let tidy_method = owner
             .zip(callee_desc)
             .is_some_and(|(owner, callee_desc)| self.tidy_prelude_declares_method(owner, callee_desc));
-        if !tidy_function && !tidy_method {
+        if !tidy_function && !tidy_method && !setlocale_function {
             return None;
         }
         let mut adjusted = sig.clone();
@@ -322,14 +330,19 @@ impl Checker {
             if *ty != PhpType::Mixed {
                 continue;
             }
-            if name.eq_ignore_ascii_case("config") {
+            let array_string_or_null = if setlocale_function {
+                name.eq_ignore_ascii_case("locales") || name.eq_ignore_ascii_case("rest")
+            } else {
+                name.eq_ignore_ascii_case("config")
+            };
+            if array_string_or_null {
                 *ty = self.normalize_union_type(vec![
                     PhpType::php_array(),
                     PhpType::Str,
                     PhpType::Void,
                 ]);
                 changed = true;
-            } else if name.eq_ignore_ascii_case("encoding") {
+            } else if !setlocale_function && name.eq_ignore_ascii_case("encoding") {
                 *ty = self.normalize_union_type(vec![PhpType::Str, PhpType::Void]);
                 changed = true;
             }

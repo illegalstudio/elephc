@@ -184,8 +184,8 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
             let plan = self.plan_named_call_args(
                 validation_sig,
                 args,
@@ -234,8 +234,8 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,
