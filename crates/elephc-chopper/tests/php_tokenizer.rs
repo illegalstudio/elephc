@@ -858,6 +858,21 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php $x = match ($a) { 1 => 1 + __halt_compiler() };",
         "<?php function f() { $x = match ($a) { 1 => { __halt_compiler(); } }; }",
         "<?php $f = fn() => { __halt_compiler(); };",
+        "<?php $x = match ($a) { 1 => Foo::class __halt_compiler() };",
+        "<?php $x = match ($a) { Foo::class __halt_compiler() => 1 };",
+        "<?php $x = match ($a) { 1 => exit __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => die __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => yield __halt_compiler() };",
+        "<?php $x = match ($a) { exit __halt_compiler() => 1 };",
+        "<?php $x = match ($a) { 1 => yield from __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new Foo __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new class __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new class extends Foo __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new class($a) __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => empty __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => fn __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => class __halt_compiler() };",
         "<?php function f() { C::{__halt_compiler()}; }",
         "<?php function f() { $o->{__halt_compiler()}; }",
         "<?php function f() { $o?->{__halt_compiler()}; }",
@@ -1917,6 +1932,34 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         (
             "<?php function f() { $x = match ($a) { 1 => { __halt_compiler(); } }; }",
             "syntax error, unexpected token \"{\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => Foo::class __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => exit __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => yield __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => new class __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"{\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => new __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"class\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => empty __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"(\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => class __halt_compiler() };",
+            "syntax error, unexpected token \"class\"",
         ),
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);

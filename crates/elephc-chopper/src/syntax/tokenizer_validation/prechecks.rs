@@ -1682,9 +1682,10 @@ enum MatchHalt {
 /// Classifies a halt inside one `match` arm list.
 ///
 /// A finished arm expects `}`, with or without a separating comma. A finished condition
-/// expects `=>`. A halt after `=>`, after an operator, or inside `()` or `[]` stays generic:
-/// call and array expectation lists belong to the parser, and this precheck must not replace
-/// them with the arm-list `}`.
+/// expects `=>`. `Foo::class`, operand-less `exit`/`die`/`yield` finish an operand.
+/// `new class` still expects `{` through `extends` and `implements`. A halt after `=>`,
+/// after an operator, or inside `()` or `[]` stays generic: call and array expectation
+/// lists belong to the parser, and this precheck must not replace them with the arm-list `}`.
 fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -> MatchHalt {
     let mut paren = 0i32;
     let mut bracket = 0i32;
@@ -1692,6 +1693,7 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     let mut after_arrow = false;
     let mut comma_closed_arm = false;
     let mut deferred = false;
+    let mut anon_header = false;
     let mut previous_significant: Option<i64> = None;
     for token in &tokens[open + 1..halt] {
         let id = token.id();
@@ -1707,13 +1709,11 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
         } else if id == i64::from(b']') {
             bracket -= 1;
         } else if is_halt_brace_open(id) {
-            if id == i64::from(b'{')
-                && paren == 0
-                && bracket == 0
-                && brace == 0
-                && previous_significant == Some(tok::T_DOUBLE_ARROW)
-            {
-                deferred = true;
+            if paren == 0 && bracket == 0 && brace == 0 {
+                if id == i64::from(b'{') && previous_significant == Some(tok::T_DOUBLE_ARROW) {
+                    deferred = true;
+                }
+                anon_header = false;
             }
             brace += 1;
         } else if id == i64::from(b'}') {
@@ -1726,6 +1726,10 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
             if after_arrow {
                 after_arrow = false;
             }
+        } else if paren == 0 && bracket == 0 && brace == 0 && id == tok::T_CLASS {
+            if previous_significant == Some(tok::T_NEW) {
+                anon_header = true;
+            }
         }
         previous_significant = Some(id);
     }
@@ -1734,6 +1738,9 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     }
     if paren > 0 || bracket > 0 || brace > 0 {
         return MatchHalt::Generic;
+    }
+    if anon_header {
+        return MatchHalt::Expect("\"{\"");
     }
     let Some(previous) = previous_significant_index(tokens, halt) else {
         return MatchHalt::Generic;
@@ -1748,17 +1755,53 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     if previous_id == i64::from(b',') {
         return MatchHalt::Expect(if comma_closed_arm { "\"}\"" } else { "\"=>\"" });
     }
-    if match_operand_complete(previous_id) {
+    if previous_id == tok::T_NEW {
+        return MatchHalt::Expect("\"class\"");
+    }
+    if match_keyword_needs_paren(previous_id) {
+        return MatchHalt::Expect("\"(\"");
+    }
+    if previous_id == tok::T_CLASS && !match_operand_complete(tokens, previous) {
+        return MatchHalt::Defer;
+    }
+    if match_operand_complete(tokens, previous) {
         return MatchHalt::Expect(if after_arrow { "\"}\"" } else { "\"=>\"" });
     }
     MatchHalt::Generic
 }
 
-/// Returns whether `id` finishes a match condition or arm operand.
+/// Returns whether a keyword before the halt still needs its `(`.
 ///
-/// Operators, casts and keywords that still take an operand stay open, so the halt keeps the
-/// generic unexpected-token message instead of an arm-list expectation.
-fn match_operand_complete(id: i64) -> bool {
+/// `empty`, `isset`, `eval`, `array`, `list`, `fn` and a nested `match` are not finished
+/// operands. `unset` is reported on the keyword itself, so it stays out of this list.
+fn match_keyword_needs_paren(id: i64) -> bool {
+    const T_EMPTY: i64 = elephc_builtin_contract::token_const_id("T_EMPTY");
+    const T_ISSET: i64 = elephc_builtin_contract::token_const_id("T_ISSET");
+    const T_EVAL: i64 = elephc_builtin_contract::token_const_id("T_EVAL");
+    const T_ARRAY: i64 = elephc_builtin_contract::token_const_id("T_ARRAY");
+    id == T_EMPTY
+        || id == T_ISSET
+        || id == T_EVAL
+        || id == T_ARRAY
+        || id == tok::T_FN
+        || id == tok::T_MATCH
+        || id == tok::T_LIST
+}
+
+/// Returns whether the token at `index` finishes a match condition or arm operand.
+///
+/// `T_CLASS` counts only for `::class`. An anonymous `new class` is still open. Operand-less
+/// `exit`, `die` and `yield` are finished. Operators and keywords that still take an operand
+/// stay open, so the halt keeps the generic message instead of an arm-list expectation.
+fn match_operand_complete<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let id = tokens[index].id();
+    if id == tok::T_CLASS {
+        return previous_significant_index(tokens, index)
+            .is_some_and(|previous| tokens[previous].id() == tok::T_DOUBLE_COLON);
+    }
+    if id == tok::T_EXIT || id == tok::T_YIELD {
+        return true;
+    }
     const T_DEFAULT: i64 = elephc_builtin_contract::token_const_id("T_DEFAULT");
     const T_FILE: i64 = elephc_builtin_contract::token_const_id("T_FILE");
     const T_LINE: i64 = elephc_builtin_contract::token_const_id("T_LINE");
