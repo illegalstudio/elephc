@@ -396,6 +396,11 @@ pub(crate) struct Checker {
     /// adds must not reach its sibling bodies or the code after it, while a proof it ends is
     /// gone for every enclosing scope as well.
     pub proof_scope_invalidations: Vec<HashSet<String>>,
+    /// The proofs the body checked last held where it ended, `None` when it cannot fall through.
+    ///
+    /// The statement that owns the body takes it right after the check to join the bodies that
+    /// reach the code after it (`Checker::record_joined_body_proofs`).
+    pub body_exit_proofs: Option<HashMap<String, PhpType>>,
     /// The counter of the innermost `for` loop whose writes stay on packed storage, with the
     /// `local_conditional_depth` its body runs at.
     ///

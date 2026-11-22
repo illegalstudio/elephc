@@ -101,7 +101,7 @@ impl Checker {
                     // A file already included skips the body, so its proofs stay inside it.
                     let entry_proofs = checker.begin_proof_scope();
                     let checked = body.iter().try_for_each(|stmt| checker.check_stmt(stmt, env));
-                    checker.end_proof_scope(entry_proofs);
+                    let _ = checker.end_proof_scope(entry_proofs);
                     checked
                 });
                 self.definitely_bound_locals.retain(|name| entry.contains(name));

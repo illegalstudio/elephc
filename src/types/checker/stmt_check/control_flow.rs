@@ -638,6 +638,8 @@ impl Checker {
                 );
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
+                // The proofs each arm that falls through ended with, joined after an `else`.
+                let mut arm_exit_proofs = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
@@ -664,6 +666,7 @@ impl Checker {
                     }
                     chain_join.enter_clause(env);
                     errors.extend(self.check_body(body, env));
+                    arm_exit_proofs.extend(self.body_exit_proofs.take());
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
                     ) {
@@ -737,6 +740,7 @@ impl Checker {
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
                     errors.extend(self.check_body(body, env));
+                    arm_exit_proofs.extend(self.body_exit_proofs.take());
                     else_falls_through = !self.body_cannot_fall_through(body);
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
@@ -867,6 +871,12 @@ impl Checker {
                 // tested at run time: a proof a boxed read may be projected to. Recorded after
                 // the join, which ends the proofs of every local the construct touched.
                 self.record_kept_guard_views(kept_guard_names.iter().map(String::as_str), env);
+                // One arm of a chain with an `else` always runs, so what every arm that falls
+                // through proved holds after it. Without an `else` the skipped path proves
+                // nothing new, and the entry proofs the arms kept are still recorded.
+                if else_body.is_some() {
+                    self.record_joined_body_proofs(arm_exit_proofs);
+                }
 
                 if errors.is_empty() {
                     Ok(())
@@ -1048,6 +1058,10 @@ impl Checker {
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 let (try_errors, try_falls_through) = self.check_body_flow(try_body, env);
                 errors.extend(try_errors);
+                // The proofs of each body that completes normally: the code after the statement
+                // is reached through one of them, never through a body an exception left.
+                let mut normal_exit_proofs = Vec::new();
+                normal_exit_proofs.extend(self.body_exit_proofs.take());
                 let try_tail = self.snapshot_flow_exit(env);
                 let mut normal_exits = Vec::new();
                 if try_falls_through {
@@ -1072,6 +1086,10 @@ impl Checker {
                     let catch_loop_counts = self.pending_loop_exit_counts();
                     let (catch_errors, catch_falls_through) = self.check_body_flow(&catch_clause.body, env);
                     errors.extend(catch_errors);
+                    let catch_exit_proofs = self.body_exit_proofs.take();
+                    if reachable {
+                        normal_exit_proofs.extend(catch_exit_proofs);
+                    }
                     if reachable && catch_falls_through {
                         normal_exits.push(self.snapshot_flow_exit(env));
                     } else if !reachable {
@@ -1084,6 +1102,8 @@ impl Checker {
                     self.restore_flow_snapshot(&joined, env);
                 } else { self.restore_flow_snapshot(&try_entry, env); }
                 let function_exits = self.end_finally_region();
+                // The `finally` block runs between those bodies and the next statement.
+                self.begin_proof_carry();
                 if let Some(body) = finally_body {
                     let continuation = falls_through.then(|| self.snapshot_flow_exit(env));
                     self.join_pending_finally_inputs(&pending_exits, &function_exits, falls_through, &try_entry, env);
@@ -1111,6 +1131,7 @@ impl Checker {
                         }
                     }
                 }
+                self.end_proof_carry(normal_exit_proofs);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -1276,7 +1297,7 @@ impl Checker {
             // The update runs only after an iteration, so a proof it records stays inside it.
             let entry_proofs = self.begin_proof_scope();
             let checked = self.check_stmt(update, &mut tail_env);
-            self.end_proof_scope(entry_proofs);
+            let _ = self.end_proof_scope(entry_proofs);
             if let Err(error) = checked {
                 errors.extend(error.flatten());
             }
@@ -1411,7 +1432,8 @@ impl Checker {
             let terminal_body = selected_body.unwrap_or_else(|| std::slice::from_ref(stmt));
             reachable &= !self.body_cannot_fall_through(terminal_body);
         }
-        self.end_proof_scope(entry_proofs);
+        let exit_proofs = self.end_proof_scope(entry_proofs);
+        self.body_exit_proofs = reachable.then_some(exit_proofs);
         (errors, reachable)
     }
 

@@ -523,3 +523,83 @@ unset($same);
     assert_clean_output(source, "[1,null][1,\"s\"][1]|[1,null][1,\"value\"]|\
         [1,null][1,\"s\"]|[1,null][1]|[1,null][1,\"value\"]|seed,value:5y");
 }
+
+/// A proof every path to the next statement holds survives the statement: both arms of an
+/// `if`/`else`, the one arm that falls through, a `try` body that completed (with or without
+/// a `finally`), and a `try` with a `catch` that records the same proof. A `finally` that
+/// stores the local ends it, and an arm that records nothing leaves the local unproven.
+#[test]
+fn test_element_views_joined_branch_proofs() {
+    let source = r#"<?php
+function tryFinally() {
+    $out = [1];
+    foreach (['a' => 5] as $v) {
+        try { $copy = $v; }
+        finally { echo '.'; }
+        $out[] = $copy;
+    }
+    return $out;
+}
+function bothArms(bool $c) {
+    $out = [1];
+    foreach (['a' => 5, 'b' => 7] as $v) {
+        if ($c) { $copy = $v; } else { $copy = $v; }
+        $out[] = $copy;
+    }
+    return $out;
+}
+function exitingArm(bool $c) {
+    $out = ['x'];
+    foreach (['a' => 'p', 'b' => 'q'] as $k => $v) {
+        if ($c && $k === 'a') { continue; } else { $t = $v; }
+        $out[] = $t;
+    }
+    return $out;
+}
+function tryCatchBoth(bool $c) {
+    $out = ['x'];
+    foreach (['a' => 'p', 'b' => 'q'] as $v) {
+        try {
+            if ($c) { throw new RuntimeException('skip'); }
+            $t = $v;
+        } catch (RuntimeException $e) {
+            $t = $v;
+        }
+        $out[] = $t;
+    }
+    return $out;
+}
+function finallyStores() {
+    $out = ['x'];
+    foreach (['a' => 'p'] as $v) {
+        try { $t = $v; }
+        finally { $t = 'f'; }
+        $out[] = $t;
+    }
+    return $out;
+}
+function oneArmOnly(bool $c, int $n) {
+    $text = null;
+    if ($n > 0) { $text = 's'; }
+    $out = [1];
+    foreach (['a' => 'value'] as $value) {
+        if ($c) { $text = $value; } else { echo ''; }
+        $out[] = $text;
+    }
+    return $out;
+}
+$a = tryFinally(); echo implode(',', $a), ' ', $a[1] + 1, in_array(5, $a, true) ? 'y' : 'n', '|';
+$b = bothArms(true); echo implode(',', $b), ' ', $b[2] + 1, in_array(7, $b, true) ? 'y' : 'n', '|';
+$b = bothArms(false); echo implode(',', $b), ' ', $b[1] + 1, in_array(5, $b, true) ? 'y' : 'n', '|';
+$e = exitingArm(true); echo implode(',', $e), ' ', strlen($e[1]), in_array('q', $e, true) ? 'y' : 'n', '|';
+$t = tryCatchBoth(true); echo implode(',', $t), ' ', strlen($t[2]), in_array('q', $t, true) ? 'y' : 'n', '|';
+$t = tryCatchBoth(false); echo implode(',', $t), ' ', strlen($t[1]), in_array('p', $t, true) ? 'y' : 'n', '|';
+$f = finallyStores(); echo implode(',', $f), ' ', strlen($f[1]), in_array('f', $f, true) ? 'y' : 'n', '|';
+echo json_encode(oneArmOnly(false, 0)), json_encode(oneArmOnly(true, 0));
+unset($a, $b, $e, $t, $f);
+"#;
+    assert_clean_output(
+        source,
+        ".1,5 6y|1,5,7 8y|1,5,7 6y|x,q 1y|x,p,q 1y|x,p,q 1y|x,f 1y|[1,null][1,\"value\"]",
+    );
+}

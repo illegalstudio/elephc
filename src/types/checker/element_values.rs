@@ -19,7 +19,8 @@
 //! - A scalar branch merge publishes its type on each proven local its arms read, so the
 //!   merge itself is concrete and a literal's predicted storage matches its lowered items.
 //! - A body that may not run is a proof scope: a proof recorded inside it never reaches a
-//!   sibling body or the code after it, and a proof it ends stays ended.
+//!   sibling body, and a proof it ends stays ended. The code after the statement keeps only
+//!   the proofs every body that reaches it ended with.
 //! - Conflicting authoritative visits disable the site, and storage probes publish nothing.
 
 use std::collections::{HashMap, HashSet};
@@ -294,13 +295,61 @@ impl Checker {
     }
 
     /// Closes a proof scope: the entry proofs the body did not end are all that survives it.
-    pub(crate) fn end_proof_scope(&mut self, mut entry: HashMap<String, PhpType>) {
+    ///
+    /// Returns the proofs that held where the body ended, for the statement that joins it with
+    /// its sibling bodies.
+    pub(crate) fn end_proof_scope(
+        &mut self,
+        mut entry: HashMap<String, PhpType>,
+    ) -> HashMap<String, PhpType> {
         let invalidated = self
             .proof_scope_invalidations
             .pop()
             .expect("proof scopes must be balanced");
         entry.retain(|name, _| !invalidated.contains(name));
-        self.proven_local_views = entry;
+        std::mem::replace(&mut self.proven_local_views, entry)
+    }
+
+    /// Records the proofs every body that reaches the code after a statement ended with.
+    ///
+    /// `exits` holds one entry per body that falls through, and the caller passes it only when
+    /// one of those bodies always runs (an `if` chain with an `else`, a `try` with its
+    /// `catch` blocks). A proof all of them hold is a fact on every path to the next statement:
+    /// `if ($c) { $t = $v; } else { $t = $w; }` leaves `$t` proven, and so does a `try` body
+    /// that completed.
+    pub(crate) fn record_joined_body_proofs(&mut self, exits: Vec<HashMap<String, PhpType>>) {
+        let mut exits = exits.into_iter();
+        let Some(mut joined) = exits.next() else {
+            return;
+        };
+        for exit in exits {
+            joined.retain(|name, ty| exit.get(name) == Some(ty));
+        }
+        self.proven_local_views.extend(joined);
+    }
+
+    /// Opens the scope of a body that always runs after proofs waiting to be recorded.
+    pub(crate) fn begin_proof_carry(&mut self) {
+        self.proof_scope_invalidations.push(HashSet::new());
+    }
+
+    /// Records the proofs carried past a body opened with `begin_proof_carry`.
+    ///
+    /// A `finally` block runs between the bodies it follows and the next statement, so their
+    /// joined proofs survive it except for the names it stores.
+    pub(crate) fn end_proof_carry(&mut self, exits: Vec<HashMap<String, PhpType>>) {
+        let invalidated = self
+            .proof_scope_invalidations
+            .pop()
+            .expect("proof scopes must be balanced");
+        let exits = exits
+            .into_iter()
+            .map(|mut exit| {
+                exit.retain(|name, _| !invalidated.contains(name));
+                exit
+            })
+            .collect();
+        self.record_joined_body_proofs(exits);
     }
 
     /// Ends the proofs of every local a loop can store, before its body is checked.
