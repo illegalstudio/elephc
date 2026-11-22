@@ -123,7 +123,7 @@ For performance-oriented code, elephc exposes compiler extensions beyond standar
 Then compile and run:
 
 ```bash
-elephc myfile.php
+elephc build myfile.php
 ./myfile
 ```
 
@@ -135,7 +135,7 @@ echo "Hello from LFC!\n";
 ```
 
 ```bash
-elephc hello.lfc
+elephc build hello.lfc
 ./hello
 ```
 
@@ -296,9 +296,9 @@ xattr -cr elephc
 
 ```bash
 # Compile tagged PHP or tagless LFC source to a native binary
-elephc hello.php
+elephc build hello.php
 ./hello
-elephc hello.lfc
+elephc build hello.lfc
 
 # Start an eval-backed interactive session with multiline input and cached startup
 elephc repl
@@ -314,16 +314,16 @@ elephc --version
 elephc -V
 
 # Custom heap size (default: 128 MB)
-elephc --heap-size=16777216 heavy.php
+elephc build --heap-size=16777216 heavy.php
 
 # Lower the runtime memory ceiling (PHP's memory_limit)
-elephc --ini memory_limit=8M app.php
+elephc build --ini memory_limit=8M app.php
 
 # Enable runtime heap verification while debugging ownership issues
-elephc --heap-debug heavy.php
+elephc build --heap-debug heavy.php
 
 # Print allocation/free counters to stderr while debugging GC behavior
-elephc --gc-stats heavy.php
+elephc build --gc-stats heavy.php
 
 # Profile a program at the PHP level: bar table on stdout (runtime helper time
 # translated to causes like heap allocation or Mixed cell boxing), Speedscope
@@ -336,12 +336,12 @@ elephc monitor --attach <pid> --live
 
 # Embed the profiling capability (dormant until asked); the .key sidecar it
 # writes lets `elephc monitor <host:port>` profile the service in production
-elephc --with-monitoring app.php
+elephc build --with-monitoring app.php
 
 # Transaction monitoring: a service started with --apm counts every request
 # per route; monitor --apm reads the table, keeps a history and serves the
 # monitor page with its Transactions view
-elephc --web --with-monitoring shop.php
+elephc build --web --with-monitoring shop.php
 ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./shop --listen 0.0.0.0:8080 --apm
 elephc monitor 127.0.0.1:9411 --apm --key shop.key --store /var/lib/shop-apm --serve 127.0.0.1:9000
 
@@ -354,65 +354,65 @@ elephc monitor 127.0.0.1:9411 --apm --reset-routes --key shop.key
 # Beyond HTTP: a consumer counts each Messenger message, a named method counts
 # each call, a library counts each call its host makes into an export; built
 # with --with-apm, they send their counters to a listening collector
-elephc --with-apm --apm-collector 10.0.0.5:9412 \
+elephc build --with-apm --apm-collector 10.0.0.5:9412 \
     --apm-transaction 'App\Jobs\Importer::importBatch' bin/console.php
-elephc --emit staticlib --target ios-arm64 --with-apm --apm-collector 192.168.1.20:9412 Renderer.php
+elephc build --emit staticlib --target ios-arm64 --with-apm --apm-collector 192.168.1.20:9412 Renderer.php
 elephc monitor --apm --listen 0.0.0.0:9412 --key console.key --store /var/lib/shop-apm
 
 # Embed exact per-function call counters (printed to stderr at exit)
-elephc --counters app.php
+elephc build --counters app.php
 
 # Enable compile-time feature branches
-elephc --define DEBUG app.php
+elephc build --define DEBUG app.php
 
 # Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
-elephc --strict-php app.php
+elephc build --strict-php app.php
 
 # Make an incompatible local retype a compile error instead of a warning
-elephc --strict-locals app.php
+elephc build --strict-locals app.php
 
 # Print per-phase compiler timings
-elephc --timings hello.php
+elephc build --timings hello.php
 
 # Emit assembly and a simple source-map sidecar
-elephc --emit-asm --source-map hello.php
+elephc build --emit-asm --source-map hello.php
 
 # Run the front-end checks without writing assembly or a binary
-elephc --check hello.php
+elephc build --check hello.php
 
 # Fall back to stack-only value placement (default is linear-scan registers)
-elephc --regalloc=stack hot.php
+elephc build --regalloc=stack hot.php
 
 # Disable the EIR optimization passes (identity folding, peepholes, dead instruction elimination, …) for A/B comparison
-elephc --no-ir-opt hot.php
+elephc build --no-ir-opt hot.php
 
 # Link extra native libraries or frameworks for FFI
-elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
+elephc build app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
 # Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, tidy, fileinfo, tokenizer, reference, eval, regex, curl, web)
-elephc app.php --with-pdo --with-crypto
+elephc build app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
-elephc app.php --with-mysqli
+elephc build app.php --with-mysqli
 # --with-eval force-links Magician; normal eval use is detected automatically
-elephc app.php --with-eval
+elephc build app.php --with-eval
 
 # Build a shared library exporting #[Export] functions instead of an executable
-elephc --emit cdylib module.php
+elephc build --emit cdylib module.php
 
 # Build a module loaded by real PHP 8.5, using its matching development SDK
-ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext --heap-size=1048576 module.php
+ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc build --emit phpext --heap-size=1048576 module.php
 php -n -d extension=./module.so app.php
 # Export a global constant too; #[Export] final classes expose their public PHP surface
-elephc --emit phpext --export-constant='Demo\VERSION' module.php
+elephc build --emit phpext --export-constant='Demo\VERSION' module.php
 
 # Pin the PHP compatibility profile and silence non-error output
-elephc --php-version 8.3 --quiet app.php
+elephc build --php-version 8.3 --quiet app.php
 
 # Declare, lock, and install the managed PCRE2 package for a regex project
 elephc native add pcre2
-elephc regex.php
+elephc build regex.php
 # Dynamic eval source needs the explicit regex capability
-elephc --with-regex eval_regex.php
+elephc build --with-regex eval_regex.php
 
 # Reproduce committed native state in CI (add --offline when already cached)
 elephc native install --locked
@@ -420,16 +420,16 @@ elephc native install --locked
 # Explicit target selection
 # Supported targets today: macos-aarch64, ios-arm64, ios-sim-arm64,
 # linux-aarch64, linux-x86_64
-elephc --target ios-arm64 --emit staticlib module.php
-elephc --target ios-sim-arm64 --emit staticlib module.php
-elephc --target linux-aarch64 hello.php
-elephc --target linux-x86_64 hello.php
+elephc build --target ios-arm64 --emit staticlib module.php
+elephc build --target ios-sim-arm64 --emit staticlib module.php
+elephc build --target linux-aarch64 hello.php
+elephc build --target linux-x86_64 hello.php
 
 # Compile a standalone prefork HTTP server binary
-elephc --web app.php                          # fastest; trusted application code
-elephc --web --web-isolation=pool app.php     # crash containment + concurrent handlers
-elephc --web --web-isolation=request app.php  # discard all native state after each request
-elephc --web --web-lifecycle=application bootstrap.php # retain one application per worker
+elephc build --web app.php                          # fastest; trusted application code
+elephc build --web --web-isolation=pool app.php     # crash containment + concurrent handlers
+elephc build --web --web-isolation=request app.php  # discard all native state after each request
+elephc build --web --web-lifecycle=application bootstrap.php # retain one application per worker
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 ./app --listen unix:/run/elephc/app.sock  # no TCP port; front it with a proxy
@@ -461,7 +461,7 @@ For the smallest regex first run:
 ```bash
 cd examples/hello-preg
 elephc native add pcre2
-elephc main.php
+elephc build main.php
 ./main
 ```
 
@@ -488,7 +488,7 @@ dependencies](docs/compiling/native-dependencies.md).
 Or via cargo:
 
 ```bash
-cargo run -- hello.php
+cargo run -- build hello.php
 ./hello
 ```
 
@@ -652,14 +652,14 @@ Physical source (`.php` or `.lfc`) → source classification → Lexer → Parse
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
 
 ```bash
-elephc hello.php
+elephc build hello.php
 cat hello.s
 ```
 
 Linked executables are stripped of their symbol table, which is about a quarter of the file and which nothing reads at run time. Pass `--keep-symbols` when a profiler needs the names, or `--debug-info`, which keeps them as well as emitting DWARF:
 
 ```bash
-elephc --keep-symbols hello.php
+elephc build --keep-symbols hello.php
 ```
 
 If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking. For a program that uses generics, `--report-generics` instead prints how its monomorphized instantiations are distributed across templates, one line per template.

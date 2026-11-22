@@ -5,11 +5,11 @@
 // [ini] table of the elephc.toml beside this file: elephc reads the nearest elephc.toml
 // above the compiled PHP file, the same one native dependencies use.
 //
-//   elephc examples/project-ini/main.php
+//   elephc build examples/project-ini/main.php
 //
 // An `--ini` on the command line wins over the file for the same directive:
 //
-//   elephc --ini mbstring.language=English examples/project-ini/main.php
+//   elephc build --ini mbstring.language=English examples/project-ini/main.php
 //
 // Reference PHP prints the same with the values passed as -d flags (or in its php.ini):
 //

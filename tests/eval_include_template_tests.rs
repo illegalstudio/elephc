@@ -81,7 +81,7 @@ fn run_templates(prefix: &str, templates: &[(&str, &[u8])]) -> Output {
 
 /// Compiles `main.php` in `dir`.
 fn compile(dir: &Path) {
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)

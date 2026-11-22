@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with the optional IBM/HCL Client SDK profile:
-// cargo run --features pdo-informix -- examples/pdo-informix/main.php
+// cargo run --features pdo-informix -- build examples/pdo-informix/main.php
 // ELEPHC_INFORMIX_DSN='informix:Driver={IBM INFORMIX ODBC DRIVER};Server=ol_informix;Database=app;UID=app;PWD=secret' ./examples/pdo-informix/main
 $dsn = (string) getenv("ELEPHC_INFORMIX_DSN");
 try {

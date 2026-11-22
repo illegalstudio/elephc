@@ -48,9 +48,9 @@ ifdef DEBUG {
 
 ## CLI usage
 ```bash
-elephc --define DEBUG app.php
-elephc --define DEBUG --define USE_SDL app.php
-elephc --strict-php --define DEBUG app.lfc
+elephc build --define DEBUG app.php
+elephc build --define DEBUG --define USE_SDL app.php
+elephc build --strict-php --define DEBUG app.lfc
 ```
 
 ## Nesting

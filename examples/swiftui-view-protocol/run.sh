@@ -23,7 +23,7 @@ if [ ! -x "$ELEPHC" ]; then
 fi
 
 echo "==> compiling main.php to a native static library"
-(cd "$HERE" && "$ELEPHC" --emit staticlib main.php)
+(cd "$HERE" && "$ELEPHC" build --emit staticlib main.php)
 
 echo "==> compiling the SwiftUI host"
 # -import-objc-header includes the freshly generated ABI-v3 libmain.h through a

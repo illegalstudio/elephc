@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with Microsoft ODBC Driver 18 or 17 installed:
-// cargo run --features pdo-sqlsrv -- examples/pdo-sqlsrv/main.php
+// cargo run --features pdo-sqlsrv -- build examples/pdo-sqlsrv/main.php
 // ELEPHC_SQLSRV_DSN='sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=secret' ./examples/pdo-sqlsrv/main
 $dsn = (string) getenv("ELEPHC_SQLSRV_DSN");
 try {

@@ -10,6 +10,7 @@
 //! - Statement environments must merge conservatively across branches, loops, throws, returns, and unreachable paths.
 
 mod assignments;
+mod chain_join;
 mod control_flow;
 mod foreach_bindings;
 mod loop_entry;

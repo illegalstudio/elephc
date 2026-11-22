@@ -231,6 +231,9 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     if !is_extern && !is_user_function {
         box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
         retype_array_push_values_for_pointer_storage(ctx, canonical, &mut operands, expr.span);
+        boxed_iterable_source::unbox_boxed_iterator_source(
+            ctx, canonical, &mut operands, expr.span,
+        );
     }
     // A packed record address or a `null` passed where the signature (extern, builtin or user)
     // declares a pointer parameter becomes that pointer word; for `?ptr<T>` a null is the word

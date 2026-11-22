@@ -86,6 +86,7 @@ fn compile_web_with_native(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     if regex {
         managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
@@ -96,7 +97,7 @@ fn compile_web_with_native(
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),
-        "elephc --web failed:\n{}",
+        "elephc build --web failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     dir.join(stem)

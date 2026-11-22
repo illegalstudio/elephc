@@ -35,7 +35,7 @@ else
     (cd "$PROJECT_DIR" && cargo build --locked -p elephc-uri --target "$RUST_TARGET")
 fi
 cp "$SCRIPT_DIR/fixtures/ios-uri-link/main.php" "$SCRIPT_DIR/fixtures/ios-uri-link/host.c" "$WORK_DIR/"
-"$PROJECT_DIR/target/debug/elephc" --with-uri --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$PROJECT_DIR/target/debug/elephc" build --with-uri --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 nm -u "$WORK_DIR/libmain.a" > "$WORK_DIR/undefined"
 grep -F elephc_uri_parse "$WORK_DIR/undefined"
 grep -F elephc_uri_component "$WORK_DIR/undefined"

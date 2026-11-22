@@ -130,7 +130,7 @@ After that, an ordinary compile is enough — using any function or class of the
 surface links the bridge and, with it, the managed package:
 
 ```bash
-elephc feed.php
+elephc build feed.php
 ```
 
 Use `--with-xml` when the surface is only reached at runtime, for example
@@ -139,7 +139,7 @@ and force-injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleX
 sees no xml usage:
 
 ```bash
-elephc --with-xml feed.php
+elephc build --with-xml feed.php
 ```
 
 Either way the project must declare `libxml2`: a compile that plans the bridge

@@ -48,7 +48,7 @@ fn emit_fixture_assembly(target: &str) -> String {
         .args(["--emit-asm", "--target", target])
         .arg(&php_path)
         .output()
-        .expect("run elephc --emit-asm");
+        .expect("run elephc build --emit-asm");
     assert!(
         output.status.success(),
         "{target}: emitting assembly failed:\n{}",

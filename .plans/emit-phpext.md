@@ -14,7 +14,7 @@
 ## Scope and status
 
 This plan tracks the implementation of a distinct
-producer output, `elephc --emit phpext`, whose artifact PHP loads through
+producer output, `elephc build --emit phpext`, whose artifact PHP loads through
 `extension=...`. Top-level functions marked `#[Export]` become PHP functions.
 The existing C ABI for `cdylib` and `staticlib` remains compatible.
 Producer exports require explicit parameter and return declarations. Null
@@ -219,7 +219,7 @@ copies only after ownership and benchmarks justify it.
 Proposed invocation:
 
 ```sh
-elephc --emit phpext --php-config /path/to/php-config foo.php -o foo.so
+elephc build --emit phpext --php-config /path/to/php-config foo.php -o foo.so
 php -n -d extension=./foo.so caller.php
 ```
 

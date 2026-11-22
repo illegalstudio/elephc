@@ -94,7 +94,7 @@ cp "$FIXTURE_DIR/main.php" "$FIXTURE_DIR/host.c" "$WORK_DIR/"
 cp "$PROJECT_DIR/examples/gmp/elephc.toml" "$PROJECT_DIR/examples/gmp/elephc.lock" "$WORK_DIR/"
 
 echo "==> compiling GMP-using PHP as an $ELEPHC_TARGET staticlib"
-"$ELEPHC_BIN" --with-gmp --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$ELEPHC_BIN" build --with-gmp --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 test -s "$WORK_DIR/libmain.a"
 test -s "$WORK_DIR/libmain.h"
 

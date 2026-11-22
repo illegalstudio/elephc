@@ -8,7 +8,7 @@
 //
 //   docker run -d --name pg -e POSTGRES_PASSWORD=test -e POSTGRES_USER=test \
 //       -e POSTGRES_DB=testdb -p 55432:5432 postgres:16-alpine
-//   cargo run -- examples/pdo-pgsql/main.php
+//   cargo run -- build examples/pdo-pgsql/main.php
 //   ELEPHC_PG_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test' \
 //       ./examples/pdo-pgsql/main
 //
@@ -17,7 +17,7 @@
 // with the libpq profile. The DSN itself keeps normal libpq keywords:
 //
 //   cargo build -p elephc-pdo --features libpq-gss
-//   ELEPHC_PDO_LIBPQ=1 cargo run -- examples/pdo-pgsql/main.php
+//   ELEPHC_PDO_LIBPQ=1 cargo run -- build examples/pdo-pgsql/main.php
 // Homebrew's keg-only libpq also needs /opt/homebrew/opt/libpq/bin on PATH while
 // the bridge is built.
 

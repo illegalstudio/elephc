@@ -55,9 +55,9 @@ fn elephc_bin() -> String {
     })
 }
 
-/// Runs `elephc --check` on `<dir>/main.php`.
+/// Runs `elephc build --check` on `<dir>/main.php`.
 fn check(dir: &Path) -> Output {
-    Command::new(elephc_bin())
+    Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)

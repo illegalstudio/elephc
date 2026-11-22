@@ -394,7 +394,7 @@ fn emit_assembly_for_target(target: &str, source: &str) -> String {
     let output = command
         .arg(&php_path)
         .output()
-        .expect("run elephc --emit-asm");
+        .expect("run elephc build --emit-asm");
     assert!(
         output.status.success(),
         "{target}: emitting assembly failed:\n{}",

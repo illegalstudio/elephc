@@ -30,7 +30,7 @@ source (an interpreted string, a serialized class name, or a callable table
 behind `mixed`):
 
 ```bash
-elephc --with-gmp program.php
+elephc build --with-gmp program.php
 ```
 
 A missing package fails closed with the `elephc native add gmp` recovery; there
@@ -43,7 +43,7 @@ The same compiled GMP prelude backs `eval()` fragments. Because the fragment
 source is only known at run time, force the surface when it is the only caller:
 
 ```bash
-elephc --with-gmp program.php
+elephc build --with-gmp program.php
 ```
 
 `eval()` supports the whole procedural surface, `new GMP()`, operators,

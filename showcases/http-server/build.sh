@@ -24,7 +24,7 @@ echo "==> Building the elephc compiler"
 ( cd "$ROOT_DIR" && cargo build --release )
 
 echo "==> Compiling the HTTP server showcase"
-"$ROOT_DIR/target/release/elephc" "$SCRIPT_DIR/main.php"
+"$ROOT_DIR/target/release/elephc" build "$SCRIPT_DIR/main.php"
 echo "==> Built: $BIN"
 
 case "$1" in

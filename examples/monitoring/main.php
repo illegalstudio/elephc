@@ -2,7 +2,7 @@
 // elephc monitor — a program with three problems a profiler should tell apart.
 //
 // Build it with the capability, then read it:
-//   cargo run -- --with-monitoring examples/monitoring/main.php
+//   cargo run -- build --with-monitoring examples/monitoring/main.php
 //   cargo run -- monitor examples/monitoring/main.php
 //
 // The capability is dormant until asked, so running ./main on its own behaves
