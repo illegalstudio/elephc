@@ -10,13 +10,21 @@
 use super::*;
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
-pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    terminate_method_call_on_non_object(ctx, method, "null");
+pub(super) fn terminate_method_call_on_null(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    span: Span,
+) {
+    terminate_method_call_on_non_object(ctx, method, "null", span);
 }
 
 /// Emits the PHP fatal terminator for an ordinary method call on `false`.
-pub(super) fn terminate_method_call_on_false(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    terminate_method_call_on_non_object(ctx, method, "false");
+pub(super) fn terminate_method_call_on_false(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    span: Span,
+) {
+    terminate_method_call_on_non_object(ctx, method, "false", span);
 }
 
 /// Emits the PHP fatal terminator naming the runtime receiver type.
@@ -24,6 +32,7 @@ fn terminate_method_call_on_non_object(
     ctx: &mut LoweringContext<'_, '_>,
     method: &str,
     receiver: &str,
+    span: Span,
 ) {
     let message = format!("Call to a member function {}() on {}", method, receiver);
     let message = ctx.intern_string(&message);
@@ -32,7 +41,7 @@ fn terminate_method_call_on_non_object(
         Vec::new(),
         Some(Immediate::Data(message)),
         Op::ThrowError.default_effects(),
-        None,
+        Some(span),
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }

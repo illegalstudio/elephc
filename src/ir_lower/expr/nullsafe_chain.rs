@@ -585,7 +585,7 @@ fn guard_regular_method_receiver(
     expr: &Expr,
 ) -> bool {
     if value_is_definitely_null(ctx, current.value) {
-        terminate_method_call_on_null(ctx, method);
+        terminate_method_call_on_null(ctx, method, expr.span);
         return false;
     }
     if !value_is_nullable(ctx, current.value)
@@ -611,7 +611,7 @@ fn guard_regular_method_receiver(
     });
 
     ctx.builder.position_at_end(fatal_block);
-    terminate_method_call_on_null(ctx, method);
+    terminate_method_call_on_null(ctx, method, expr.span);
 
     ctx.builder.position_at_end(call_block);
     true

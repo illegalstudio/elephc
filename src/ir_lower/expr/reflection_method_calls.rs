@@ -218,7 +218,7 @@ fn lower_reflection_instance_method_invoke_scoped(
     let object = lower_expr(ctx, object_arg);
     if value_is_definitely_null(ctx, object.value) {
         let null_value = lower_null(ctx, expr);
-        terminate_method_call_on_null(ctx, reflected_method);
+        terminate_method_call_on_null(ctx, reflected_method, expr.span);
         return null_value;
     }
     // A `mixed` or untyped receiver would dispatch on its run-time class through the nullable

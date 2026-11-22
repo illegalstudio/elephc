@@ -180,7 +180,7 @@ pub(super) fn lower_method_call(
     }
     if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {
         let null_value = lower_null(ctx, expr);
-        terminate_method_call_on_null(ctx, method);
+        terminate_method_call_on_null(ctx, method, expr.span);
         return null_value;
     }
     // An unknown receiver whose class has `__call()` but not this method is not on the dispatch
@@ -998,10 +998,10 @@ pub(super) fn lower_nullable_regular_method_call(
     });
 
     ctx.builder.position_at_end(null_block);
-    terminate_method_call_on_null(ctx, method);
+    terminate_method_call_on_null(ctx, method, expr.span);
 
     ctx.builder.position_at_end(false_block);
-    terminate_method_call_on_false(ctx, method);
+    terminate_method_call_on_false(ctx, method, expr.span);
 
     ctx.builder.position_at_end(call_block);
     // Re-entering a constructor on an existing `Object|false` view must dispatch against
