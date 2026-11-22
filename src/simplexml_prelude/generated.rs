@@ -2093,7 +2093,10 @@ fn decl_class_simplexmlelement() -> Stmt {
         .method(
             method("getNamespaces")
                 .param_default("recursive", TypeExpr::Bool, e_bool(false))
-                .returns(t_array())
+                .returns(TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                })
                 .body(vec![
                     s_if(
                         e_this_prop("__elephc_recovered"),
@@ -2111,7 +2114,10 @@ fn decl_class_simplexmlelement() -> Stmt {
             method("getDocNamespaces")
                 .param_default("recursive", TypeExpr::Bool, e_bool(false))
                 .param_default("fromRoot", TypeExpr::Bool, e_bool(true))
-                .returns(t_union(vec![t_array(), TypeExpr::False]))
+                .returns(t_union(vec![TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                }, TypeExpr::False]))
                 .body(vec![
                     s_if(
                         e_this_prop("__elephc_recovered"),
@@ -2139,7 +2145,10 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .param("declared", TypeExpr::Bool)
                 .param("recursive", TypeExpr::Bool)
                 .param("root", TypeExpr::Bool)
-                .returns(t_array())
+                .returns(TypeExpr::AssocArray {
+                    key: Box::new(TypeExpr::Str),
+                    value: Box::new(TypeExpr::Str),
+                })
                 .body(vec![
                     s_assign("handle", e_this_prop("__elephc_handle")),
                     s_assign("packed", e_call("elephc_xml_sx_namespace", vec![e_var("handle"), e_cast(CastType::Int, e_var("declared")), e_cast(CastType::Int, e_var("recursive")), e_cast(CastType::Int, e_var("root")), e_neg(e_int(2)), e_int(0)])),
