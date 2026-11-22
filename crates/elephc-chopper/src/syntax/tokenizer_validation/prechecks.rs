@@ -1496,6 +1496,8 @@ enum HaltScope {
     Alternative,
     /// `match (...) {`. `open` is that `{`.
     Match { open: usize },
+    /// `{` after `=>`. PHP rejects that brace, so a halt inside it is not this precheck's error.
+    ArrowBlock,
     /// A computed member brace: `::{`, `->{` or `?->{`.
     Member,
     /// `switch (...) {` or `switch (...):`. `gate` is that `{` or `:`.
@@ -1541,6 +1543,7 @@ fn brace_is_trait_use<T: SourceToken>(tokens: &[T], open: usize) -> bool {
 /// The namespace line is filled by the caller from the brace token. A property-hook container
 /// (`public $x {`) is not a statement list; the `get {` body inside it is. `match`, `switch`
 /// and a computed member stop at their own header, so an enclosing function does not win.
+/// `{` after `=>` is not a statement block either: PHP reports that brace before the halt.
 fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     if let Some(previous) = previous_significant_index(tokens, open) {
         let id = tokens[previous].id();
@@ -1549,6 +1552,9 @@ fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
             || id == tok::T_NULLSAFE_OBJECT_OPERATOR
         {
             return HaltScope::Member;
+        }
+        if id == tok::T_DOUBLE_ARROW {
+            return HaltScope::ArrowBlock;
         }
     }
     if brace_is_trait_use(tokens, open)
@@ -1663,11 +1669,136 @@ fn innermost_halt_scope(scopes: &[HaltScope]) -> Option<&HaltScope> {
     scopes.iter().rev().find(|scope| !matches!(scope, HaltScope::Interpolation))
 }
 
+/// How a halt in a `match` arm list is reported.
+enum MatchHalt {
+    /// An earlier `{` after `=>` is already the parse error.
+    Defer,
+    /// Unexpected token with no expectation list.
+    Generic,
+    /// Unexpected token with PHP's expectation text.
+    Expect(&'static str),
+}
+
+/// Classifies a halt inside one `match` arm list.
+///
+/// A finished arm expects `}`, with or without a separating comma. A finished condition
+/// expects `=>`. A halt after `=>`, after an operator, or inside `()` or `[]` stays generic:
+/// call and array expectation lists belong to the parser, and this precheck must not replace
+/// them with the arm-list `}`.
+fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -> MatchHalt {
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut after_arrow = false;
+    let mut comma_closed_arm = false;
+    let mut deferred = false;
+    let mut previous_significant: Option<i64> = None;
+    for token in &tokens[open + 1..halt] {
+        let id = token.id();
+        if is_trivia_token(id) {
+            continue;
+        }
+        if id == i64::from(b'(') {
+            paren += 1;
+        } else if id == i64::from(b')') {
+            paren -= 1;
+        } else if id == i64::from(b'[') {
+            bracket += 1;
+        } else if id == i64::from(b']') {
+            bracket -= 1;
+        } else if is_halt_brace_open(id) {
+            if id == i64::from(b'{')
+                && paren == 0
+                && bracket == 0
+                && brace == 0
+                && previous_significant == Some(tok::T_DOUBLE_ARROW)
+            {
+                deferred = true;
+            }
+            brace += 1;
+        } else if id == i64::from(b'}') {
+            brace -= 1;
+        } else if paren == 0 && bracket == 0 && brace == 0 && id == tok::T_DOUBLE_ARROW {
+            after_arrow = true;
+            comma_closed_arm = false;
+        } else if paren == 0 && bracket == 0 && brace == 0 && id == i64::from(b',') {
+            comma_closed_arm = after_arrow;
+            if after_arrow {
+                after_arrow = false;
+            }
+        }
+        previous_significant = Some(id);
+    }
+    if deferred {
+        return MatchHalt::Defer;
+    }
+    if paren > 0 || bracket > 0 || brace > 0 {
+        return MatchHalt::Generic;
+    }
+    let Some(previous) = previous_significant_index(tokens, halt) else {
+        return MatchHalt::Generic;
+    };
+    if previous == open {
+        return MatchHalt::Expect("\"}\"");
+    }
+    let previous_id = tokens[previous].id();
+    if previous_id == tok::T_DOUBLE_ARROW {
+        return MatchHalt::Generic;
+    }
+    if previous_id == i64::from(b',') {
+        return MatchHalt::Expect(if comma_closed_arm { "\"}\"" } else { "\"=>\"" });
+    }
+    if match_operand_complete(previous_id) {
+        return MatchHalt::Expect(if after_arrow { "\"}\"" } else { "\"=>\"" });
+    }
+    MatchHalt::Generic
+}
+
+/// Returns whether `id` finishes a match condition or arm operand.
+///
+/// Operators, casts and keywords that still take an operand stay open, so the halt keeps the
+/// generic unexpected-token message instead of an arm-list expectation.
+fn match_operand_complete(id: i64) -> bool {
+    const T_DEFAULT: i64 = elephc_builtin_contract::token_const_id("T_DEFAULT");
+    const T_FILE: i64 = elephc_builtin_contract::token_const_id("T_FILE");
+    const T_LINE: i64 = elephc_builtin_contract::token_const_id("T_LINE");
+    const T_DIR: i64 = elephc_builtin_contract::token_const_id("T_DIR");
+    const T_CLASS_C: i64 = elephc_builtin_contract::token_const_id("T_CLASS_C");
+    const T_FUNC_C: i64 = elephc_builtin_contract::token_const_id("T_FUNC_C");
+    const T_METHOD_C: i64 = elephc_builtin_contract::token_const_id("T_METHOD_C");
+    const T_NS_C: i64 = elephc_builtin_contract::token_const_id("T_NS_C");
+    const T_TRAIT_C: i64 = elephc_builtin_contract::token_const_id("T_TRAIT_C");
+    const T_PROPERTY_C: i64 = elephc_builtin_contract::token_const_id("T_PROPERTY_C");
+    id == i64::from(b')')
+        || id == i64::from(b']')
+        || id == i64::from(b'}')
+        || id == tok::T_LNUMBER
+        || id == tok::T_DNUMBER
+        || id == tok::T_STRING
+        || id == tok::T_VARIABLE
+        || id == tok::T_CONSTANT_ENCAPSED_STRING
+        || id == tok::T_NAME_FULLY_QUALIFIED
+        || id == tok::T_NAME_QUALIFIED
+        || id == tok::T_NAME_RELATIVE
+        || id == T_DEFAULT
+        || id == T_FILE
+        || id == T_LINE
+        || id == T_DIR
+        || id == T_CLASS_C
+        || id == T_FUNC_C
+        || id == T_METHOD_C
+        || id == T_NS_C
+        || id == T_TRAIT_C
+        || id == T_PROPERTY_C
+}
+
 /// Builds the parse or compile diagnostic for one `__halt_compiler` token.
 ///
-/// `None` means the halt is in the outermost scope and stays valid. A class body, match arm
-/// list, computed member and a switch with no `case` yet stay parse errors even when a
-/// function around them is still open. The expectation text is PHP's for that container.
+/// `None` means this halt is not a precheck error. That is the outermost scope, and also a
+/// `{` after `=>`: PHP reports the brace, and a later halt must not replace that parse error.
+/// A class body, match arm list, computed member and a switch with no `case` yet stay parse
+/// errors even when a function around them is still open. The expectation text is PHP's for
+/// that container.
 fn halt_scope_failure<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
@@ -1676,6 +1807,9 @@ fn halt_scope_failure<T: SourceToken>(
 ) -> Option<ValidationError> {
     let statement = halt_is_statement_start(tokens, index);
     let scope = innermost_halt_scope(scopes);
+    if matches!(scope, Some(HaltScope::ArrowBlock)) {
+        return None;
+    }
     if statement {
         match scope {
             None => return None,
@@ -1705,13 +1839,23 @@ fn halt_scope_failure<T: SourceToken>(
                 };
                 return Some(halt_parse_error(source, tokens, index, Some(expecting)));
             }
-            Some(HaltScope::Match { open }) => {
-                let at_open = previous_significant_index(tokens, index) == Some(*open);
-                let expecting = if at_open { Some("\"}\"") } else { None };
-                return Some(halt_parse_error(source, tokens, index, expecting));
-            }
-            Some(HaltScope::ClassLike | HaltScope::Member | HaltScope::Interpolation) => {}
+            Some(
+                HaltScope::ClassLike
+                | HaltScope::Member
+                | HaltScope::Interpolation
+                | HaltScope::ArrowBlock
+                | HaltScope::Match { .. },
+            ) => {}
         }
+    }
+    if let Some(HaltScope::Match { open }) = scope {
+        return match match_halt_decision(tokens, *open, index) {
+            MatchHalt::Defer => None,
+            MatchHalt::Generic => Some(halt_parse_error(source, tokens, index, None)),
+            MatchHalt::Expect(expecting) => {
+                Some(halt_parse_error(source, tokens, index, Some(expecting)))
+            }
+        };
     }
     Some(halt_parse_error(source, tokens, index, None))
 }
