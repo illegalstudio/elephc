@@ -42,6 +42,7 @@ fn phpext_validation_rejects_native_handle_boxing() {
             fs::write(&source, format!("<?php packed class NativeRecord {{ public int $value; }} #[Export] function php_handle(): {return_type} {{ $value = 1; $records = buffer_new<NativeRecord>(1); return {result}; }}")).unwrap();
             for mode in [Some("--check"), Some("--emit-ir"), None] {
                 let mut command = Command::new(compiler_binary());
+                command.arg("build");
                 command.args(["--emit", "phpext"]);
                 if let Some(mode) = mode { command.arg(mode); }
                 let output = command.arg(&source)
@@ -71,6 +72,7 @@ fn phpext_validation_requires_declared_export_types() {
         fs::write(&source, format!("<?php #[Export] {program}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -92,6 +94,7 @@ fn phpext_validation_requires_explicit_nullable_defaults() {
         fs::write(&source, format!("<?php #[Export] function optional({ty} $value = null): mixed {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -120,6 +123,7 @@ fn phpext_validation_rejects_unhosted_runtime_state() {
         fs::write(&source, format!("<?php {program}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -165,6 +169,7 @@ fn phpext_validation_rejects_include_selected_function_variants() {
         fs::write(&source, format!("<?php {main}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode {
                 command.arg(mode);
@@ -207,6 +212,7 @@ fn phpext_validation_rejects_unaudited_core_builtins() {
         fs::write(&source, format!("<?php #[Export] function php_core(): void {{ {body} }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -227,6 +233,7 @@ fn phpext_validation_rejects_user_classes_in_eir() {
     fs::write(&source, "<?php class PhpBox { public int $value = 42; } #[Export] function box_value(): int { $box = new PhpBox(); return $box->value; }").unwrap();
     for mode in [Some("--check"), Some("--emit-ir"), None] {
         let mut command = Command::new(compiler_binary());
+        command.arg("build");
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
@@ -237,7 +244,7 @@ fn phpext_validation_rejects_user_classes_in_eir() {
         assert!(diagnostic.contains("constructs unsupported class 'PhpBox'"), "{mode:?}: {diagnostic}");
         assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
     }
-    let cdylib = Command::new(compiler_binary())
+    let cdylib = Command::new(compiler_binary()).arg("build")
         .args(["--emit", "cdylib", "--emit-ir"]).arg(&source).output().unwrap();
     assert!(cdylib.status.success(), "{}", String::from_utf8_lossy(&cdylib.stderr));
 }
@@ -251,6 +258,7 @@ fn phpext_validation_rejects_parameter_unions_before_sdk() {
         fs::write(&source, format!("<?php #[Export] function identity({ty} $value): {ty} {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -272,7 +280,7 @@ fn phpext_validation_accepts_nullable_parameter_shapes() {
     let source = project.0.join("nullable.php");
     fs::write(&source, "<?php #[Export] function nullable(?int $integer, ?float $float, ?bool $boolean, ?string $string, ?array $value): ?array { return $value; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(compiler_binary())
+        let output = Command::new(compiler_binary()).arg("build")
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
@@ -327,6 +335,7 @@ fn phpext_validation_rejects_defaults_before_sdk() {
         fs::write(&source, format!("<?php #[Export] function php_default_array({ty} $value = {default}): {ty} {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -348,7 +357,7 @@ fn phpext_validation_accepts_supported_defaults() {
     let source = project.0.join("supported_defaults.php");
     fs::write(&source, "<?php #[Export] function defaults(int $integer = -42, float $float = 1.5, bool $boolean = false, string $string = 'text', ?int $nullable = null, array $values = []): array { return [$integer, $float, $boolean, $string, $nullable, $values]; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(compiler_binary())
+        let output = Command::new(compiler_binary()).arg("build")
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
@@ -369,6 +378,7 @@ fn phpext_validation_rejects_options_before_sdk() {
     ] {
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]).args(options);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -391,6 +401,7 @@ fn phpext_validation_rejects_detected_libraries_before_sdk() {
         fs::write(&source, format!("<?php function php_dependency(string $value): string {{ return hash('sha256', $value); }} #[Export] function php_live(string $value): string {{ {body} }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
+            command.arg("build");
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -411,13 +422,13 @@ fn phpext_validation_accepts_pruned_dependencies() {
     let source = project.0.join("pruned.php");
     fs::write(&source, "<?php function unused(string $value): string { return hash('sha256', $value); } #[Export] function php_ok(): int { return 1; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(compiler_binary())
+        let output = Command::new(compiler_binary()).arg("build")
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
         assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
     }
-    let output = Command::new(compiler_binary())
+    let output = Command::new(compiler_binary()).arg("build")
         .args(["--emit", "phpext"]).arg(&source)
         .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
         .output().unwrap();
@@ -433,6 +444,7 @@ fn phpext_validation_rejects_missing_exports_before_sdk() {
     fs::write(&source, "<?php function php_unexported(): int { return 1; }").unwrap();
     for mode in [Some("--check"), Some("--emit-ir"), None] {
         let mut command = Command::new(compiler_binary());
+        command.arg("build");
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
@@ -472,6 +484,7 @@ fn phpext_validation_rejects_hosted_extensions_before_sdk() {
     assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
     for mode in [Some("--check"), Some("--emit-ir"), None] {
         let mut command = Command::new(compiler_binary());
+        command.arg("build");
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)

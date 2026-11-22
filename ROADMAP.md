@@ -986,13 +986,13 @@ and 0.x validation rather than by speculative pass work.
 
 ### Web server (`--web`) — delivered
 
-`elephc --web app.php` compiles a standard PHP file into a standalone prefork
+`elephc build --web app.php` compiles a standard PHP file into a standalone prefork
 HTTP server binary. The produced binary uses `SO_REUSEPORT` prefork workers; each
 request re-runs the top-level PHP body from a fresh state (globals, function
 statics, and static class properties all reset between requests). Run it with
 `--listen host:port` (required) and optionally `--workers N` (default: CPU count).
 
-- [x] **Phase 1** — core serve loop: `elephc --web` compile flag; `--listen`/`--workers`
+- [x] **Phase 1** — core serve loop: `elephc build --web` compile flag; `--listen`/`--workers`
   runtime args; `_elephc_web_handler` entry restructure for per-request invocation;
   `__rt_stdout_write` capture to the response body buffer; `__rt_web_reset`
   per-request state reset (function statics, static properties, concat buffer);

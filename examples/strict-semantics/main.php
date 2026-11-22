@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic --strict-overflow --strict-coercions examples/strict-semantics/main.php
+// Compile with: elephc build --strict-dynamic-code --strict-bools --strict-arithmetic --strict-overflow --strict-coercions examples/strict-semantics/main.php
 // Literal source is verified and compiled ahead of time.
 eval('echo "Verified at compilation", PHP_EOL;');
 

@@ -101,7 +101,7 @@ cp "$FIXTURE_DIR/main.php" "$FIXTURE_DIR/host.c" "$WORK_DIR/"
 cp "$PROJECT_DIR/examples/tidy/elephc.toml" "$PROJECT_DIR/examples/tidy/elephc.lock" "$WORK_DIR/"
 
 echo "==> compiling tidy-using PHP as an $ELEPHC_TARGET staticlib"
-"$ELEPHC_BIN" --with-tidy --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$ELEPHC_BIN" build --with-tidy --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 test -s "$WORK_DIR/libmain.a"
 test -s "$WORK_DIR/libmain.h"
 

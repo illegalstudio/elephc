@@ -1537,9 +1537,9 @@ partial result: those remain that helper's responsibility.
 The default heap is 128 MB (134217728 bytes, PHP's default `memory_limit`). For programs that need more (or less), use:
 
 ```bash
-elephc --heap-size=16777216 heavy.php    # 16MB heap
-elephc --gc-stats heavy.php              # print alloc/free counters to stderr
-elephc --heap-debug heavy.php            # enable runtime heap verification
+elephc build --heap-size=16777216 heavy.php    # 16MB heap
+elephc build --gc-stats heavy.php              # print alloc/free counters to stderr
+elephc build --heap-debug heavy.php            # enable runtime heap verification
 ```
 
 The minimum is 64KB. `--heap-size` sets the reserved capacity (`_heap_max`). A separate

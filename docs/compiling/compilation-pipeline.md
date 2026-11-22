@@ -224,7 +224,7 @@ timing labels.
 You do not have to run the whole pipeline. Several flags stop early or dump an
 intermediate artifact:
 
-- [`--check`](output-and-diagnostics.md#--check) normally runs the front end
+- [`elephc check` / `--check`](output-and-diagnostics.md#elephc-check-and---check) normally runs the front end
   only; when `#[Export]` is present it also lowers EIR and runs library and PHP
   extension call-graph safety without emitting code.
 - [`--emit-ir`](output-and-diagnostics.md#--emit-ir) prints EIR (after `ir-opt`) and stops.

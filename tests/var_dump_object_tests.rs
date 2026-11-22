@@ -116,6 +116,7 @@ fn run_php(stem: &str, source: &str) -> String {
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
@@ -160,6 +161,7 @@ fn run_php_heap_debug(stem: &str, source: &str) -> String {
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
@@ -169,7 +171,7 @@ fn run_php_heap_debug(stem: &str, source: &str) -> String {
     let raw_stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
     assert!(
         compile.status.success(),
-        "elephc --heap-debug compile failed:\n{raw_stderr}"
+        "elephc build --heap-debug compile failed:\n{raw_stderr}"
     );
     let diagnostics = elephc_diagnostics(&raw_stderr);
     assert!(

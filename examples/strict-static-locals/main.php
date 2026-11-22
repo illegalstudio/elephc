@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-locals examples/strict-static-locals/main.php
+// Compile with: elephc build --strict-locals examples/strict-static-locals/main.php
 
 function updateCounter(mixed $replacement): void {
     $counter="scratch";

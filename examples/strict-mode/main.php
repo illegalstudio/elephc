@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict examples/strict-mode/main.php
+// Compile with: elephc build --strict examples/strict-mode/main.php
 function total(array<int> $values): int|float {
     $sum = 0;
     foreach ($values as $value) {

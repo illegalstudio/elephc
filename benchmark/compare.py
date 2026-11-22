@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
-from common import PHP_MODE, atomic_json, php_command, php_jit_problem
+from common import PHP_MODE, atomic_json, compile_command, php_command, php_jit_problem
 
 FIXTURE = Path(__file__).resolve().parent / "diagnostics" / "mixed.php"
 FIELDS = ("arithmetic", "closure", "string", "eval", "json", "body", "wall")
@@ -202,7 +202,7 @@ def main() -> None:
                 environment = bridge_environment(environment, bridges[label])
             # Keep caches isolated from concurrent source changes and other compiler revisions.
             environment["XDG_CACHE_HOME"] = str(cwd / f"cache-{index}")
-            command = [str(compiler), "--quiet", f"--php-version={args.php_version}",
+            command = [*compile_command(compiler), "--quiet", f"--php-version={args.php_version}",
                        f"--heap-size={args.heap_size}", f"--ir-opt={args.ir_opt}", str(source)]
             # Linkers can emit benign diagnostics, so compilation has its own failure contract.
             compiled = subprocess.run(command, cwd=cwd, env=environment, capture_output=True,

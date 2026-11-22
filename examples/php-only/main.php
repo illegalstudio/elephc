@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --php-only examples/php-only/main.php
+// Compile with: elephc build --php-only examples/php-only/main.php
 //
 // Under --php-only the compiler accepts only PHP-compatible constructs:
 // elephc extensions (ifdef, packed class, extern, ptr/buffer, extension

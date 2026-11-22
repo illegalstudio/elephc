@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-indexing examples/strict-indexing/main.php
+// Compile with: elephc build --strict-indexing examples/strict-indexing/main.php
 $stock = ['pens' => 12, 'paper' => null];
 foreach (['pens', 'paper', 'ink'] as $item) {
     try {

@@ -760,7 +760,14 @@ fn a_reset_waits_for_a_write_in_progress() {
     let writing = TableGate::enter(base).expect("the table is open");
     let started = std::time::Instant::now();
     let reset = std::thread::spawn(reset_routes);
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Checked as soon as the reset has raised its flag: a fixed sleep raced
+    // the bounded `GATE_WAIT` on loaded CI runners, where the sleeping
+    // thread woke after the reset had already given up waiting.
+    let gate = shared_word(base, ROUTES_GATE_OFFSET);
+    while gate.load(Ordering::Acquire) & GATE_RESETTING == 0 {
+        assert!(!reset.is_finished(), "the reset raises its flag before running");
+        std::thread::yield_now();
+    }
     assert!(!reset.is_finished(), "the reset waits for the write in progress");
     drop(writing);
     assert!(reset.join().unwrap().contains("route table reset"));

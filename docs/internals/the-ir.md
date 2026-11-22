@@ -1397,7 +1397,7 @@ Required properties:
 `--emit-ir` is a diagnostic output mode:
 
 ```bash
-cargo run -- --emit-ir examples/hello/main.php
+cargo run -- build --emit-ir examples/hello/main.php
 ```
 
 The compiler runs the normal frontend order through type checking and AST

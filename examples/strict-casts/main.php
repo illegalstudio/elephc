@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-casts main.php
+// Compile with: elephc build --strict-casts main.php
 
 function readCount(mixed $value): int {
     return (int) $value;

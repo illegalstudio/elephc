@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-locals examples/strict-eval-locals/main.php
+// Compile with: elephc build --strict-locals examples/strict-eval-locals/main.php
 
 // A runtime plugin keeps parameter declarations and callable capabilities.
 $plugin = $argc > 0 ? '

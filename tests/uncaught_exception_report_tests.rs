@@ -99,7 +99,7 @@ fn elephc_bin() -> String {
 fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)

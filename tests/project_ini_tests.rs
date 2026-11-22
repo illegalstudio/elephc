@@ -55,7 +55,7 @@ fn probe(keys: &[&str]) -> String {
 
 /// Compiles `source` (a path under `root`) with `extra` CLI arguments.
 fn compile(root: &Path, source: &Path, extra: &[&str]) -> Output {
-    Command::new(elephc_bin())
+    Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", root.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(root)

@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --php-only --strict-coercions examples/reflection-invocation/main.php
+// Compile with: elephc build --php-only --strict-coercions examples/reflection-invocation/main.php
 
 // Invocation consumes the current array, including entries added after construction.
 function renderDelivery(string $address, string $subject = 'Update'): string

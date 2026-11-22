@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-initialization examples/strict-initialization/main.php
+// Compile with: elephc build --strict-initialization examples/strict-initialization/main.php
 function showSetting(bool $load): void {
     if ($load) {
         $setting = 'ready';

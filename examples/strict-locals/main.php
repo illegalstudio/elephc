@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-locals examples/strict-locals/main.php
+// Compile with: elephc build --strict-locals examples/strict-locals/main.php
 
 function updateQuantity(mixed $replacement, ?int $quantity = 2): void {
     try {

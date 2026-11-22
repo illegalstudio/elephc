@@ -1,12 +1,14 @@
 //! Purpose:
 //! Owns exact top-level command dispatch plus compiler-option parsing and target selection.
-//! Keeps `elephc native` isolated while preserving every legacy compile invocation.
+//! Routes `elephc build` and `elephc check` to the compiler and requires an explicit command.
 //!
 //! Called from:
 //! - `crate::entry::run()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
+//! - Only an exact `args[1]` of `build`, `check`, `native`, `extension`, `repl`, `monitor`,
+//!   or `test` selects a command; anything else besides the global information flags is
+//!   rejected, with the rewritten `elephc build` command for a legacy compile invocation.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -34,7 +36,7 @@ const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
-pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+pub(crate) const USAGE: &str = "Usage: elephc build|check [OPTIONS] <source-file>";
 
 /// Compiler package version embedded into the binary by Cargo.
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -87,7 +89,7 @@ pub(crate) fn print_mascotte() {
 
 /// Returns true if `-h` or `--help` appears anywhere in the argument list, so
 /// help always wins regardless of position or what else was passed alongside
-/// it (e.g. `elephc --check --help app.php` still shows help).
+/// it (e.g. `elephc build --check --help app.php` still shows help).
 fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
@@ -110,15 +112,17 @@ fn wants_capabilities(args: &[String]) -> bool {
 /// it never gained `iconv`, so `--help` advertised a smaller compiler than the
 /// one the user had, while the typo error beside it — derived from the table —
 /// listed it correctly. Print this const directly and that comes back.
-pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc <COMMAND> [OPTIONS]
+       elephc build [OPTIONS] <source-file>
+       elephc check [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
 Version: ", env!("CARGO_PKG_VERSION"), "
 
-Arguments:
-  <source-file>           Tagged .php or tagless .lfc source file to compile
-
-Subcommands:
+Commands:
+  build <source-file>     Compile a tagged .php or tagless .lfc source file (native
+                          executable by default) with the options below
+  check <source-file>     Analyze a source file only, no codegen (same as `build --check`)
   native <COMMAND>        Native dependency management (see `elephc native --help`)
   repl                    Interactive PHP through eval (see `elephc repl --help`)
   test [PATH]             Compile and run the test suite under PATH, default `tests`
@@ -138,7 +142,8 @@ Modes:
   --no-strict-<feature>   Override a guarantee enabled by --strict
 
 Output modes:
-  --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
+  --check                 Type-check only, no codegen; `elephc check` is the same
+                          (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
@@ -281,12 +286,12 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed compiler, REPL, monitoring, or native package invocation.
+/// A fully parsed build, REPL, test, monitoring, extension, or native package invocation.
 pub(crate) enum Command {
     /// One interactive eval session, or its isolated host build subprocess.
     Repl(crate::repl::ReplCommand),
-    /// The existing PHP compilation command and all of its normalized options.
-    Compile(CliConfig),
+    /// A source build selected by `elephc build`, or analysis only through `elephc check`.
+    Build(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
     /// One validated `elephc extension` hosted-extension command.
@@ -297,7 +302,7 @@ pub(crate) enum Command {
     Test(crate::test_command::TestCommand),
 }
 
-/// Dispatches exact top-level subcommand selectors before falling back to compilation.
+/// Dispatches exact top-level command names and global information flags.
 pub(crate) fn parse_args(args: &[String]) -> Command {
     if args.get(1).map(String::as_str) == Some("repl") {
         return match crate::repl::parse_args(&args[2..]) {
@@ -316,6 +321,16 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             }
         };
+    }
+    if let Some(command @ ("build" | "check")) = args.get(1).map(String::as_str) {
+        let mut build_args = Vec::with_capacity(args.len());
+        build_args.push(args[0].clone());
+        // `check` is `build` in analysis-only mode, so both share one parser and its validation.
+        if command == "check" {
+            build_args.push("--check".to_string());
+        }
+        build_args.extend_from_slice(&args[2..]);
+        return Command::Build(parse_compile_args(&build_args));
     }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
@@ -341,7 +356,23 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
         };
     }
     if args.get(1).map(String::as_str) != Some("native") {
-        return Command::Compile(parse_compile_args(args));
+        // Information flags win in any position, as they do after `build`.
+        if wants_help(args) {
+            println!("{}", help_text());
+            process::exit(0);
+        }
+        if wants_version(args) {
+            println!("elephc {VERSION}");
+            process::exit(0);
+        }
+        if wants_capabilities(args) {
+            print!("{}", capability_report());
+            process::exit(0);
+        }
+        match args.get(1) {
+            Some(_) => fail(&unknown_command_message(args)),
+            None => fail("no command given"),
+        }
     }
 
     match parse_native_args(&args[2..]) {
@@ -357,7 +388,9 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
     }
 }
 
-/// Parses legacy compilation arguments into a normalized configuration.
+/// Parses compilation arguments (`args[0]` program name, options and source after it)
+/// into a normalized configuration. `elephc build` strips its command word first;
+/// `repl` and `test` build the same layout for their host compilations.
 pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
@@ -1194,6 +1227,30 @@ fn format_fail_message(message: &str) -> String {
     )
 }
 
+/// Explains an unrecognized first argument. A legacy compile invocation (an option or a
+/// `.php`/`.lfc` source in first position) gets the full rewritten `elephc build` command.
+fn unknown_command_message(args: &[String]) -> String {
+    let command = &args[1];
+    let legacy = command.starts_with('-') || command.ends_with(".php") || command.ends_with(".lfc");
+    if !legacy {
+        return format!("Unknown command: {command}. Build a source file with `elephc build <source-file>`");
+    }
+    let rewritten: Vec<String> = args[1..].iter().map(|arg| shell_quote(arg)).collect();
+    format!(
+        "Unknown command: {command}. Source compilation now requires the `build` command; \
+         did you mean `elephc build {}`?",
+        rewritten.join(" ")
+    )
+}
+
+/// Quotes one argument for display in a POSIX shell command line when it needs it.
+fn shell_quote(arg: &str) -> String {
+    let plain = !arg.is_empty() && arg.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '=' | ',' | ':' | '@' | '+' | '%')
+    });
+    if plain { arg.to_string() } else { format!("'{}'", arg.replace('\'', "'\\''")) }
+}
+
 /// Prints a formatted parameter-error message to stderr and exits the
 /// process with code 1. Never returns.
 fn fail(message: &str) -> ! {
@@ -1246,10 +1303,12 @@ mod tests {
         assert_eq!(config.emit, Emit::Phpext);
     }
 
-    /// Extracts the compile configuration returned for a legacy invocation.
+    /// Extracts the compile configuration returned for an explicit build.
     fn compile_config(args: &[String]) -> CliConfig {
-        let Command::Compile(config) = parse_args(args) else {
-            panic!("expected compile command");
+        let mut build_args = vec![args[0].clone(), "build".into()];
+        build_args.extend_from_slice(&args[1..]);
+        let Command::Build(config) = parse_args(&build_args) else {
+            panic!("expected build command");
         };
         config
     }
@@ -1940,10 +1999,70 @@ mod tests {
             Command::Native(NativeCommand::List { .. })
         ));
 
-        let explicit_source = vec!["elephc".into(), "./native".into()];
-        let Command::Compile(config) = parse_args(&explicit_source) else {
+        let explicit_source = vec!["elephc".into(), "build".into(), "./native".into()];
+        let Command::Build(config) = parse_args(&explicit_source) else {
             panic!("explicit source path must remain a compile command");
         };
         assert_eq!(config.filename, "./native");
+    }
+
+    /// `build` uses the normal compilation pipeline and accepts its options.
+    #[test]
+    fn build_command_parses_source_and_options() {
+        let args = vec![
+            "elephc".into(),
+            "build".into(),
+            "--quiet".into(),
+            "app.php".into(),
+        ];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected explicit build command");
+        };
+        assert_eq!(config.filename, "app.php");
+        assert!(config.quiet);
+        assert!(!config.check_only);
+        assert_eq!(config.emit, Emit::Executable);
+    }
+
+    /// Explicit relative paths preserve access to source files named `build`.
+    #[test]
+    fn explicit_build_path_remains_a_source_file() {
+        let args = vec!["elephc".into(), "build".into(), "./build".into()];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected a source file");
+        };
+        assert_eq!(config.filename, "./build");
+    }
+
+    /// Verifies that help lists the explicit build command.
+    #[test]
+    fn help_documents_build_command() {
+        assert!(help_text().contains("build <source-file>"));
+        assert!(help_text().contains("check <source-file>"));
+        assert!(help_text().starts_with("Usage: elephc <COMMAND> [OPTIONS]"));
+    }
+
+    /// `check` reuses the build parser with analysis-only mode enabled.
+    #[test]
+    fn check_command_enables_check_only() {
+        let args = vec!["elephc".into(), "check".into(), "--quiet".into(), "app.php".into()];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected a check build");
+        };
+        assert_eq!(config.filename, "app.php");
+        assert!(config.check_only);
+        assert!(config.quiet);
+    }
+
+    /// A legacy compile invocation is answered with the full rewritten `build` command.
+    #[test]
+    fn legacy_invocation_suggests_the_build_command() {
+        let args: Vec<String> = ["elephc", "--check", "my app.php"].map(str::to_string).to_vec();
+        assert!(unknown_command_message(&args)
+            .contains("did you mean `elephc build --check 'my app.php'`?"));
+        let source: Vec<String> = ["elephc", "main.lfc", "--web"].map(str::to_string).to_vec();
+        assert!(unknown_command_message(&source).contains("`elephc build main.lfc --web`"));
+        let typo: Vec<String> = ["elephc", "buidl", "app.php"].map(str::to_string).to_vec();
+        assert!(!unknown_command_message(&typo).contains("did you mean"));
     }
 }

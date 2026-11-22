@@ -28,7 +28,7 @@ fn compile_strict_cli_and_run(source: &str) -> String {
         .expect("failed to run elephc CLI");
     assert!(
         compile_out.status.success(),
-        "elephc --php-only failed: {}",
+        "elephc build --php-only failed: {}",
         String::from_utf8_lossy(&compile_out.stderr)
     );
 
@@ -302,7 +302,7 @@ fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
         .expect("failed to run elephc CLI");
     assert!(
         compile_out.status.success(),
-        "elephc --php-only failed: {}",
+        "elephc build --php-only failed: {}",
         String::from_utf8_lossy(&compile_out.stderr)
     );
 

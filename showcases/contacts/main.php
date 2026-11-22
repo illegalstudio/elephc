@@ -1,6 +1,6 @@
 <?php
 // Contacts — address book CLI with search, CSV export, and file persistence
-// Usage: elephc showcases/contacts/main.php && ./showcases/contacts/main
+// Usage: elephc build showcases/contacts/main.php && ./showcases/contacts/main
 
 require_once 'db.php';
 require_once 'display.php';

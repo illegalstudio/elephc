@@ -83,6 +83,7 @@ fn compile_with_ini(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
@@ -965,7 +966,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
     ] {
         let php = dir.join(format!("prof{}.php", version.replace('.', "")));
         fs::write(&php, &probe).unwrap();
-        let output = Command::new(elephc_bin())
+        let output = Command::new(elephc_bin()).arg("build")
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
             .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
@@ -976,7 +977,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
             .expect("failed to spawn elephc");
         assert!(
             output.status.success(),
-            "elephc --php-version {version} failed:\n{}",
+            "elephc build --php-version {version} failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
         let bin = dir.join(format!("prof{}", version.replace('.', "")));
@@ -991,7 +992,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
     {
         let php = dir.join(format!("proft{index}.php"));
         fs::write(&php, &probe).unwrap();
-        let output = Command::new(elephc_bin())
+        let output = Command::new(elephc_bin()).arg("build")
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
             .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)

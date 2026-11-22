@@ -8,7 +8,7 @@
 //! - Each fixture owns its project and cache and removes both even after an assertion fails.
 //! - Tests submit input through stdin; no external PHP installation is required.
 
-use crate::support::{configure_prebuilt_cli_bridges, elephc_cli_command, ensure_cli_bridge_staticlibs, make_cli_test_dir};
+use crate::support::{configure_prebuilt_cli_bridges, elephc_root_command, ensure_cli_bridge_staticlibs, make_cli_test_dir};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ mod review;
 
 /// Uses authoritative build-job archives for both piped and terminal sessions in CI.
 fn repl_cli_command(directory: &Path) -> Command {
-    let mut command = elephc_cli_command(directory);
+    let mut command = elephc_root_command(directory);
     configure_prebuilt_cli_bridges(&mut command);
     command
 }

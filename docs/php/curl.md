@@ -59,7 +59,7 @@ After that, an ordinary compile is enough — naming any part of the curl surfac
 links the bridge:
 
 ```bash
-elephc app.php
+elephc build app.php
 ```
 
 To force-link the whole `elephc_curl` archive and force-inject the PHP prelude
@@ -67,7 +67,7 @@ even when the compiler sees no curl usage (for example when curl only ever
 appears inside an `eval()` string), pass the bridge flag:
 
 ```bash
-elephc app.php --with-curl
+elephc build app.php --with-curl
 ```
 
 `extension_loaded('curl')` answers `true` exactly when the bridge is linked, and

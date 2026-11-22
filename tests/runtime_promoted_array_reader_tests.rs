@@ -63,6 +63,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     let probe = dir.join("main.php");
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
