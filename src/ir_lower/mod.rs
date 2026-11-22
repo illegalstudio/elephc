@@ -72,8 +72,8 @@ mod core_methods;
 pub(crate) mod tests;
 
 pub(crate) use expr::{
-    body_contains_eval_call, body_writes_local, call_may_mutate_local_argument,
-    expr_writes_local, stmt_writes_local,
+    body_contains_eval_call, body_writes_local, call_mutated_local_arguments, expr_writes_local,
+    stmt_writes_local,
 };
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;

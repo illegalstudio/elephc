@@ -15,8 +15,8 @@ use std::collections::{BTreeSet, HashMap};
 use crate::ast_visit::{self, AstVisitor, SourcePolicy};
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    ArrayEntry, CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind,
-    TypeExpr,
+    ArrayEntry, CastType, CatchClause, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt,
+    StmtKind, TypeExpr,
 };
 use crate::types::PhpType;
 use elephc_semantics::{array_keys::StringKey, SemanticProfile};
@@ -97,6 +97,13 @@ impl ArrayFact {
     fn fill_values(&mut self, value: &ValueFact) {
         for (_, stored) in &mut self.entries {
             *stored = value.clone();
+        }
+    }
+
+    /// Replaces the last insertion-order element retained by a completed reference foreach.
+    fn replace_last(&mut self, value: ValueFact) {
+        if let Some((_, stored)) = self.entries.last_mut() {
+            *stored = value;
         }
     }
 }
@@ -218,6 +225,15 @@ fn definite_array_type(ty: &PhpType) -> bool {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct LocalFacts {
     values: HashMap<String, ValueFact>,
+    foreach_references: HashMap<String, ForeachReference>,
+}
+
+/// One lingering reference left by a by-reference foreach value variable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ForeachReference {
+    source: String,
+    exact_last: bool,
+    definite: bool,
 }
 
 impl LocalFacts {
@@ -238,6 +254,49 @@ impl LocalFacts {
     /// Replaces one local fact after a source-order assignment.
     fn set(&mut self, name: &str, fact: ValueFact) {
         self.values.insert(name.to_owned(), fact);
+    }
+
+    /// Records a source assignment, including writes through a lingering foreach reference.
+    fn assign(&mut self, name: &str, fact: ValueFact) {
+        if let Some(reference) = self.foreach_references.get(name).cloned() {
+            let original = self.get(&reference.source);
+            let updated = match original.clone() {
+                ValueFact::Array(mut array) if reference.exact_last => {
+                    array.replace_last(fact.clone());
+                    ValueFact::Array(array)
+                }
+                ValueFact::Array(_) => ValueFact::Known(PhpType::php_array()),
+                source => source,
+            };
+            let source_fact = if reference.definite {
+                updated
+            } else {
+                merge_value_facts(original, updated)
+            };
+            self.values.insert(reference.source, source_fact);
+        } else {
+            self.foreach_references
+                .retain(|_, reference| reference.source != name);
+        }
+        self.set(name, fact);
+    }
+
+    /// Rebinds a local name without storing through the reference it previously held.
+    fn rebind(&mut self, name: &str, fact: ValueFact) {
+        self.foreach_references.remove(name);
+        self.set(name, fact);
+    }
+
+    /// Remembers that PHP leaves the foreach value variable bound to its last element.
+    fn bind_foreach_reference(&mut self, alias: &str, source: &str, exact_last: bool) {
+        self.foreach_references.insert(
+            alias.to_owned(),
+            ForeachReference {
+                source: source.to_owned(),
+                exact_last,
+                definite: true,
+            },
+        );
     }
 }
 
@@ -531,6 +590,44 @@ fn source_array_literal_nonempty(expr: &Expr) -> Option<bool> {
         ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
         _ => None,
     }
+}
+
+/// Resolves foreach cardinality from either literal syntax or an exact local array fact.
+fn source_array_nonempty(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Option<bool> {
+    source_array_literal_nonempty(expr).or_else(|| {
+        let ValueFact::Array(array) =
+            infer_expr(expr, locals, properties, profile, current_class)
+        else {
+            return None;
+        };
+        Some(!array.entries.is_empty())
+    })
+}
+
+/// Returns the shared element fact for one exact foreach source shape.
+fn source_array_iteration_value(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
+    let ValueFact::Array(array) = infer_expr(expr, locals, properties, profile, current_class)
+    else {
+        return ValueFact::Unknown;
+    };
+    array
+        .entries
+        .into_iter()
+        .map(|(_, value)| value)
+        .reduce(merge_value_facts)
+        .unwrap_or(ValueFact::Unknown)
 }
 
 /// Facts produced by the two possible exits from one condition evaluation.
@@ -1111,14 +1208,8 @@ fn forget_call_mutated_facts(expr: &Expr, locals: &mut LocalFacts) {
     ) {
         return;
     }
-    let mutated: Vec<_> = locals
-        .values
-        .keys()
-        .filter(|name| crate::ir_lower::call_may_mutate_local_argument(expr, name))
-        .cloned()
-        .collect();
-    for name in mutated {
-        locals.set(&name, ValueFact::Unknown);
+    for name in crate::ir_lower::call_mutated_local_arguments(expr) {
+        locals.assign(&name, ValueFact::Unknown);
     }
 }
 
@@ -1468,7 +1559,7 @@ fn record_assignment_fact(
     current_class: Option<&str>,
 ) {
     if let ExprKind::Variable(name) = &target.kind {
-        locals.set(name, value);
+        locals.assign(name, value);
         return;
     }
     let mut indices = Vec::new();
@@ -1479,7 +1570,7 @@ fn record_assignment_fact(
         .into_iter()
         .map(|index| infer_expr(index, locals, properties, profile, current_class))
         .collect::<Vec<_>>();
-    locals.set(
+    locals.assign(
         array,
         nested_array_write_fact(locals.get(array), &indices, value),
     );
@@ -1497,27 +1588,27 @@ fn apply_prelude_facts(
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 let fact = infer_expr(value, locals, properties, profile, current_class);
-                locals.set(name, fact);
+                locals.assign(name, fact);
             }
             StmtKind::TypedAssign {
                 type_expr, name, ..
-            } => locals.set(
+            } => locals.assign(
                 name,
                 ValueFact::Known(crate::types::constant_binding::declared_type(type_expr)),
             ),
             StmtKind::RefAssign { target, source } => {
-                locals.set(target, ValueFact::Unknown);
+                locals.rebind(target, ValueFact::Unknown);
                 if let ExprKind::Variable(source) = &source.kind {
                     locals.set(source, ValueFact::Unknown);
                 }
             }
             StmtKind::StaticVar { name, init } => {
                 let fact = infer_expr(init, locals, properties, profile, current_class);
-                locals.set(name, fact);
+                locals.assign(name, fact);
             }
             StmtKind::ListUnpack { vars, .. } => {
                 for name in vars {
-                    locals.set(name, ValueFact::Unknown);
+                    locals.assign(name, ValueFact::Unknown);
                 }
             }
             StmtKind::Synthetic(body) => {
@@ -1633,38 +1724,38 @@ fn validate_stmt(
         StmtKind::Assign { name, value } => {
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
-            locals.set(name, value);
+            locals.assign(name, value);
         }
         StmtKind::TypedAssign {
             type_expr,
             name,
             value: _,
         } => {
-            locals.set(
+            locals.assign(
                 name,
                 ValueFact::Known(crate::types::constant_binding::declared_type(type_expr)),
             );
         }
         StmtKind::RefAssign { target, source } => {
-            locals.set(target, ValueFact::Unknown);
+            locals.rebind(target, ValueFact::Unknown);
             if let ExprKind::Variable(source) = &source.kind {
                 locals.set(source, ValueFact::Unknown);
             }
         }
         StmtKind::Global { vars } => {
             for name in vars {
-                locals.set(name, ValueFact::Unknown);
+                locals.rebind(name, ValueFact::Unknown);
             }
         }
         StmtKind::StaticVar { name, init } => {
-            locals.set(
+            locals.assign(
                 name,
                 infer_expr(init, locals, properties, profile, current_class),
             );
         }
         StmtKind::ListUnpack { vars, .. } => {
             for name in vars {
-                locals.set(name, ValueFact::Unknown);
+                locals.assign(name, ValueFact::Unknown);
             }
         }
         StmtKind::ArrayAssign {
@@ -1685,13 +1776,13 @@ fn validate_stmt(
                 current_class,
             )?;
             let index = infer_expr(index, locals, properties, profile, current_class);
-            locals.set(array, array_write_fact(receiver, index, value));
+            locals.assign(array, array_write_fact(receiver, index, value));
         }
         StmtKind::ArrayPush { array, value } => {
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
-            locals.set(array, array_push_fact(receiver, value));
+            locals.assign(array, array_push_fact(receiver, value));
         }
         StmtKind::NestedArrayAssign { target, value } => {
             apply_expression_facts(target, locals, properties, profile, current_class);
@@ -1710,7 +1801,7 @@ fn validate_stmt(
                     .into_iter()
                     .map(|index| infer_expr(index, locals, properties, profile, current_class))
                     .collect();
-                locals.set(
+                locals.assign(
                     array,
                     nested_array_write_fact(locals.get(array), &indices, value),
                 );
@@ -1833,48 +1924,16 @@ fn validate_stmt(
             catches,
             finally_body,
         } => {
-            let entry = locals.clone();
-            let mut exits = Vec::new();
-            let try_exit = validate_branch(
+            let flow = collect_try_flow(
                 try_body,
-                &entry,
+                catches,
+                finally_body.as_deref(),
+                locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            if branch_falls_through(try_body) {
-                exits.push(try_exit);
-            }
-            for catch in catches {
-                let mut catch_facts = catch_entry_facts(
-                    &entry,
-                    try_body,
-                    properties,
-                    profile,
-                    current_class,
-                );
-                if let Some(variable) = &catch.variable {
-                    catch_facts.set(variable, ValueFact::Unknown);
-                }
-                validate_block(
-                    &catch.body,
-                    &mut catch_facts,
-                    properties,
-                    profile,
-                    current_class,
-                )?;
-                if branch_falls_through(&catch.body) {
-                    exits.push(catch_facts);
-                }
-            }
-            *locals = if exits.is_empty() {
-                entry
-            } else {
-                merge_exits(&exits)
-            };
-            if let Some(body) = finally_body {
-                validate_block(body, locals, properties, profile, current_class)?;
-            }
+            *locals = flow.fallthrough.unwrap_or(flow.audit_exit);
         }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
@@ -1985,33 +2044,32 @@ fn apply_foreach_reference_fact(
     let ExprKind::Variable(source_name) = &source.kind else {
         return;
     };
-    if !flow.exits.is_empty()
-        || !flow.terminals.is_empty()
-        || !flow.complete
-        || crate::ir_lower::body_writes_local(body, source_name)
-    {
+    if crate::ir_lower::body_writes_local(body, source_name) {
         return;
     }
     let Some(iteration) = flow.back_edge() else {
         return;
     };
     let replacement = iteration.get(value_var);
-    if matches!(replacement, ValueFact::Unknown)
-        || !body_writes_only_static_fact(
-            body,
-            value_var,
-            &replacement,
-            properties,
-            profile,
-            current_class,
-        )
-    {
+    if !body_writes_only_static_fact(
+        body,
+        value_var,
+        &replacement,
+        properties,
+        profile,
+        current_class,
+    ) {
         return;
     }
     let ValueFact::Array(mut source) = entry.get(source_name) else {
         return;
     };
     if source.entries.is_empty() {
+        return;
+    }
+    let exact_last = flow.exits.is_empty() && flow.terminals.is_empty() && flow.complete;
+    exit.bind_foreach_reference(value_var, source_name, exact_last);
+    if matches!(replacement, ValueFact::Unknown) || !exact_last {
         return;
     }
     source.fill_values(&replacement);
@@ -2025,30 +2083,76 @@ struct SwitchFlow {
     can_fallthrough: bool,
 }
 
+/// One statically proven switch entry, an exact miss, or an unresolved loose comparison.
+#[derive(Clone, Copy)]
+enum SwitchSelection {
+    Body(usize),
+    Miss,
+    Unknown,
+}
+
+/// Selects an integer-literal switch arm without approximating PHP loose string comparisons.
+fn source_switch_selection(
+    subject: &ValueFact,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+) -> SwitchSelection {
+    let ValueFact::Integer(subject) = subject else {
+        return SwitchSelection::Unknown;
+    };
+    for (case_index, (labels, _)) in cases.iter().enumerate() {
+        for label in labels {
+            let Some(ValueFact::Integer(label)) =
+                source_expr_fact(label, SemanticProfile::PERMISSIVE)
+            else {
+                return SwitchSelection::Unknown;
+            };
+            if label == *subject {
+                return SwitchSelection::Body(case_index);
+            }
+        }
+    }
+    SwitchSelection::Miss
+}
+
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
 fn validate_switch_flow(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
+    subject: &ValueFact,
     entry: &LocalFacts,
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<SwitchFlow, CompileError> {
     let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
+    let default_position =
+        default.map(|default| crate::termination::switch_default_position(cases, default));
     if let Some(default) = default {
-        bodies.insert(
-            crate::termination::switch_default_position(cases, default),
-            default,
-        );
+        bodies.insert(default_position.expect("default position"), default);
     }
+    let selection = match source_switch_selection(subject, cases) {
+        SwitchSelection::Body(case) => {
+            let position = case
+                + usize::from(default_position.is_some_and(|default| default <= case));
+            SwitchSelection::Body(position)
+        }
+        SwitchSelection::Miss => default_position
+            .map_or(SwitchSelection::Miss, SwitchSelection::Body),
+        SwitchSelection::Unknown => SwitchSelection::Unknown,
+    };
 
     let mut switch_exits = Vec::new();
     let mut outer_jumps = Vec::new();
     let mut prior_fallthrough = None;
-    for body in bodies {
-        let mut inputs = vec![entry.clone()];
+    for (body_index, body) in bodies.into_iter().enumerate() {
+        let mut inputs = Vec::new();
+        if matches!(selection, SwitchSelection::Unknown)
+            || matches!(selection, SwitchSelection::Body(selected) if selected == body_index)
+        {
+            inputs.push(entry.clone());
+        }
         if let Some(fallthrough) = prior_fallthrough.take() {
-            if fallthrough != *entry {
+            if !inputs.contains(&fallthrough) {
                 inputs.push(fallthrough);
             }
         }
@@ -2071,7 +2175,9 @@ fn validate_switch_flow(
     if let Some(fallthrough) = prior_fallthrough {
         switch_exits.push(fallthrough);
     }
-    if default.is_none() {
+    if default.is_none()
+        && matches!(selection, SwitchSelection::Unknown | SwitchSelection::Miss)
+    {
         switch_exits.push(entry.clone());
     }
     let can_fallthrough = !switch_exits.is_empty();
@@ -2295,12 +2401,30 @@ fn validate_control_flow(
                 profile,
                 current_class,
             );
-            let body_reachable = source_array_literal_nonempty(array) != Some(false);
+            let source_nonempty = source_array_nonempty(
+                array,
+                &loop_entry,
+                properties,
+                profile,
+                current_class,
+            );
+            let body_reachable = source_nonempty != Some(false);
+            let iteration_value = source_array_iteration_value(
+                array,
+                &loop_entry,
+                properties,
+                profile,
+                current_class,
+            );
             let mut iteration = loop_entry.clone();
             if let Some(key) = key_var {
-                iteration.set(key, ValueFact::Unknown);
+                iteration.assign(key, ValueFact::Unknown);
             }
-            iteration.set(value_var, ValueFact::Unknown);
+            if *value_by_ref {
+                iteration.rebind(value_var, iteration_value);
+            } else {
+                iteration.assign(value_var, iteration_value);
+            }
             let flow = collect_loop_break_flow(
                 body,
                 &iteration,
@@ -2309,7 +2433,7 @@ fn validate_control_flow(
                 current_class,
             )?;
             let mut normal_exits = Vec::new();
-            if source_array_literal_nonempty(array) != Some(true) {
+            if source_nonempty != Some(true) {
                 normal_exits.push(loop_entry.clone());
             }
             if body_reachable {
@@ -2550,9 +2674,12 @@ fn validate_control_flow(
                 profile,
                 current_class,
             );
+            let subject_fact =
+                infer_expr(subject, &switch_entry, properties, profile, current_class);
             let flow = validate_switch_flow(
                 cases,
                 default.as_deref(),
+                &subject_fact,
                 &switch_entry,
                 properties,
                 profile,
@@ -2711,44 +2838,15 @@ fn collect_loop_break_flow(
                 catches,
                 finally_body,
             } => {
-                let mut flows = vec![collect_loop_break_flow(
+                let flow = collect_try_flow(
                     try_body,
+                    catches,
+                    finally_body.as_deref(),
                     &locals,
                     properties,
                     profile,
                     current_class,
-                )?];
-                for catch in catches {
-                    let mut catch_entry = catch_entry_facts(
-                        &locals,
-                        try_body,
-                        properties,
-                        profile,
-                        current_class,
-                    );
-                    if let Some(variable) = &catch.variable {
-                        catch_entry.set(variable, ValueFact::Unknown);
-                    }
-                    flows.push(collect_loop_break_flow(
-                        &catch.body,
-                        &catch_entry,
-                        properties,
-                        profile,
-                        current_class,
-                    )?);
-                }
-                let flow = merge_parallel_loop_flows(flows);
-                let flow = if let Some(finally_body) = finally_body {
-                    apply_loop_finally(
-                        flow,
-                        finally_body,
-                        properties,
-                        profile,
-                        current_class,
-                    )?
-                } else {
-                    flow
-                };
+                )?;
                 audit_exit = flow.audit_exit;
                 exits.extend(flow.exits);
                 continues.extend(flow.continues);
@@ -2879,6 +2977,45 @@ fn merge_parallel_loop_flows(flows: Vec<LoopBreakFlow>) -> LoopBreakFlow {
         terminals,
         complete,
         audit_exit,
+    }
+}
+
+/// Collects every reachable try and catch path before replaying an optional finally body.
+fn collect_try_flow(
+    try_body: &[Stmt],
+    catches: &[CatchClause],
+    finally_body: Option<&[Stmt]>,
+    entry: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LoopBreakFlow, CompileError> {
+    let mut flows = vec![collect_loop_break_flow(
+        try_body,
+        entry,
+        properties,
+        profile,
+        current_class,
+    )?];
+    for catch in catches {
+        let mut catch_entry =
+            catch_entry_facts(entry, try_body, properties, profile, current_class);
+        if let Some(variable) = &catch.variable {
+            catch_entry.set(variable, ValueFact::Unknown);
+        }
+        flows.push(collect_loop_break_flow(
+            &catch.body,
+            &catch_entry,
+            properties,
+            profile,
+            current_class,
+        )?);
+    }
+    let flow = merge_parallel_loop_flows(flows);
+    if let Some(finally_body) = finally_body {
+        apply_loop_finally(flow, finally_body, properties, profile, current_class)
+    } else {
+        Ok(flow)
     }
 }
 
@@ -3360,6 +3497,37 @@ fn merge_exits(exits: &[LocalFacts]) -> LocalFacts {
             .unwrap_or(ValueFact::Unknown);
         merged.set(&name, fact);
     }
+    let aliases: BTreeSet<_> = exits
+        .iter()
+        .flat_map(|exit| exit.foreach_references.keys().cloned())
+        .collect();
+    for alias in aliases {
+        let references: Vec<_> = exits
+            .iter()
+            .filter_map(|exit| exit.foreach_references.get(&alias))
+            .collect();
+        let sources: BTreeSet<_> = references
+            .iter()
+            .map(|reference| reference.source.clone())
+            .collect();
+        if sources.len() == 1 {
+            merged.foreach_references.insert(
+                alias,
+                ForeachReference {
+                    source: sources.into_iter().next().expect("one reference source"),
+                    exact_last: references.iter().all(|reference| reference.exact_last),
+                    definite: references.len() == exits.len()
+                        && references.iter().all(|reference| reference.definite),
+                },
+            );
+        } else {
+            for source in sources {
+                if matches!(merged.get(&source), ValueFact::Array(_)) {
+                    merged.set(&source, ValueFact::Known(PhpType::php_array()));
+                }
+            }
+        }
+    }
     merged
 }
 
@@ -3732,6 +3900,8 @@ fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
         merge_array_facts(left, right)
             .map(ValueFact::Array)
             .unwrap_or_else(|| ValueFact::Known(PhpType::php_array()))
+    } else if left.is_write_array_parent() && right.is_write_array_parent() {
+        merge_write_parent_facts(left, right)
     } else if let (Some(left), Some(right)) = (left.value_type(), right.value_type()) {
         if left == right {
             ValueFact::Known(left)
@@ -3758,9 +3928,42 @@ fn merge_write_parent_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     let (ValueFact::Array(left), ValueFact::Array(right)) = (&left, &right) else {
         return ValueFact::Known(PhpType::php_array());
     };
-    merge_array_facts_with(left, right, merge_write_parent_facts)
-        .map(ValueFact::Array)
-        .unwrap_or_else(|| ValueFact::Known(PhpType::php_array()))
+    ValueFact::Array(merge_write_parent_arrays(left, right))
+}
+
+/// Unifies write-parent slots, treating an absent branch slot as autovivifiable storage.
+fn merge_write_parent_arrays(left: &ArrayFact, right: &ArrayFact) -> ArrayFact {
+    let mut keys: Vec<_> = left.entries.iter().map(|(key, _)| key.clone()).collect();
+    for (key, _) in &right.entries {
+        if !keys.contains(key) {
+            keys.push(key.clone());
+        }
+    }
+    let entries = keys
+        .into_iter()
+        .map(|key| {
+            let left = left
+                .entries
+                .iter()
+                .find(|(candidate, _)| candidate == &key)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| missing_element(true));
+            let right = right
+                .entries
+                .iter()
+                .find(|(candidate, _)| candidate == &key)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| missing_element(true));
+            (key, merge_write_parent_facts(left, right))
+        })
+        .collect();
+    ArrayFact {
+        entries,
+        maximum_integer: match (left.maximum_integer, right.maximum_integer) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        },
+    }
 }
 
 /// Merges equal-key shapes with the value policy required by their projection context.

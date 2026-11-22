@@ -470,7 +470,7 @@ pub(crate) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
-/// Finds a `global $name` binding inside closure expressions but not named declarations.
+/// Finds a `global $name` binding in every nested scope that can alias captured storage.
 struct GlobalBindingFinder<'a> {
     name: &'a str,
     found: bool,
@@ -759,9 +759,36 @@ fn call_args_write_local(callee: Option<&str>, args: &[Expr], name: &str) -> boo
 
 /// Returns true when a completed call may replace `name` through a bare local argument.
 pub(crate) fn call_may_mutate_local_argument(expr: &Expr, name: &str) -> bool {
+    call_target_args(expr)
+        .is_some_and(|(callee, args)| call_args_may_mutate_local(callee, args, name))
+}
+
+/// Returns every bare local whose binding a completed call may replace.
+pub(crate) fn call_mutated_local_arguments(expr: &Expr) -> Vec<String> {
+    let Some((_callee, args)) = call_target_args(expr) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for arg in args {
+        let value = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        let ExprKind::Variable(name) = &value.kind else {
+            continue;
+        };
+        if call_may_mutate_local_argument(expr, name) && !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+/// Selects the user-visible arguments and optional builtin callee for one call expression.
+fn call_target_args(expr: &Expr) -> Option<(Option<&str>, &[Expr])> {
     match &expr.kind {
         ExprKind::FunctionCall { name: callee, args } => {
-            call_args_may_mutate_local(Some(callee.as_str()), args, name)
+            Some((Some(callee.as_str()), args.as_slice()))
         }
         ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
@@ -773,10 +800,8 @@ pub(crate) fn call_may_mutate_local_argument(expr: &Expr, name: &str) -> bool {
         | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::NewDynamic { args, .. }
-        | ExprKind::NewDynamicObject { args, .. } => {
-            call_args_may_mutate_local(None, args, name)
-        }
-        _ => false,
+        | ExprKind::NewDynamicObject { args, .. } => Some((None, args.as_slice())),
+        _ => None,
     }
 }
 

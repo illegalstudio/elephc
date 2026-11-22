@@ -192,6 +192,17 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [1]; if (($flag = null) ?? ($values = [[1]])) { $values[0][false] = 2; }",
         "<?php $values = [[1]]; try { throw new Exception(); $values = [1]; } catch (Exception $error) { $values[0][false] = 2; }",
         "<?php $values = [1]; foreach ($values as &$item) { $item = [1]; } $values[0][false] = 2;",
+        "<?php $values = [1]; foreach ($values as &$item) {} $item = [1]; $values[0][false] = 2;",
+        "<?php $values = [1]; try { $values = [[1]]; return; } finally { $values[0][false] = 2; }",
+        "<?php $values = [1]; try { $values = [[1]]; throw new Exception(); } finally { $values[0][false] = 2; }",
+        "<?php $values = []; $key = 0; switch (1) { case 1: $key = 1.5; break; } $values[$key] = 1;",
+        "<?php if ($argc) { $values = [[1]]; } else { $values = null; } $values[false] = 1;",
+        "<?php if ($argc) { $values = [[1]]; } else { $values = null; } $values[0][false] = 2;",
+        "<?php $values = [[1]]; $empty = []; foreach ($empty as $item) { $values = [1]; } $values[0][false] = 2;",
+        "<?php $values = [1]; $items = [10]; foreach ($items as $item) { $values = [[1]]; } $values[0][false] = 2;",
+        "<?php $values = [[1]]; if ($argc) { foreach ($values as &$item) {} } $item = [1]; $values[0][false] = 2;",
+        "<?php $values = [1]; foreach ($values as &$item) {} foreach ([[1]] as $item) {} $values[0][false] = 2;",
+        "<?php $values = [1]; foreach ($values as &$item) {} $values = [[1]]; $item = 'ab'; $values[0][false] = 2;",
     ] {
         let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -267,6 +278,12 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php try { $values = [1]; throw new Exception(); } catch (Exception $error) { $values[0][false] = 2; }",
         "<?php $values = [1]; while (true) { try { break; $values = [[1]]; } finally { $values[0][false] = 2; } }",
         "<?php $values = [[1]]; foreach ($values as &$item) { $item = 1; } $values[0][false] = 2;",
+        "<?php $values = [1]; foreach ($values as &$item) { $item = []; } $item = 'ab'; $values[0][false] = 'x';",
+        "<?php $values = [[]]; foreach ($values as &$item) {} $item = 'ab'; $values[0][false] = 'x';",
+        "<?php function replace_unset_key_target(&$value): void { $value = 'ab'; } replace_unset_key_target($values); $values[false] = 'x';",
+        "<?php $values = [[1]]; try { $values = [1]; return; } finally { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; try { $values = [1]; throw new Exception(); } finally { $values[0][false] = 2; }",
+        "<?php $values = [1]; if ($argc) { foreach ($values as &$item) {} } $item = 'ab'; $values[0][false] = 'x';",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
