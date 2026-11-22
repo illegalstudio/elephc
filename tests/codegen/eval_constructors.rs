@@ -407,16 +407,14 @@ echo "bad";');
         "expected eval runtime fatal, stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "");
+    let report = format!("{}{}", out.stdout, out.stderr);
     assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
+        report.contains("Uncaught TypeError: EvalCtorPrepFatalBridge::__construct(): Argument #2 ($need) must be of type EvalCtorPrepFatalNeed, int given"),
+        "output did not contain the constructor argument TypeError: {report}"
     );
     assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
+        !report.contains("panicked at") && !report.contains("thread '"),
+        "output leaked a Rust panic: {report}"
     );
 }
 
