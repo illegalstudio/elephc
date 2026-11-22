@@ -902,6 +902,7 @@ dependencies = [
  "elephc-generics",
  "elephc-iconv",
  "elephc-mbstring",
+ "elephc-memoir",
  "elephc-pcntl",
  "elephc-phar",
  "elephc-process-context",
@@ -928,6 +929,9 @@ dependencies = [
 [[package]]
 name = "elephc-memoir"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "elephc-monitoring-contract"

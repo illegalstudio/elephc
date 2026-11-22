@@ -850,11 +850,11 @@ Follow these technical specifications in full.
 Use a bridge crate when the feature (a) maps cleanly onto a maintained Rust crate,
 (b) is optional (programs that do not use it must not pay for it), and (c) exposes
 a small, stable C ABI surface. Core language semantics and ownership/GC must stay
-on the compiler side. Compiler-only crates such as `elephc-memoir` may centralize
-assembly generation through the compiler emitter and ABI; they are ordinary Rust
-library dependencies, have no bridge registration or `--with-` flag, and are never
-linked as Rust runtime libraries into compiled PHP programs. Keep their emitted
-assembly readable line by line, as required by `AGENTS.md`/`CLAUDE.md`.
+on the compiler side. The `codegen` feature of `elephc-memoir` centralizes
+assembly generation through the compiler emitter and ABI. Its `runtime` feature
+provides Rust eval buffer storage to Magician, which reaches compiled programs
+through the existing Magician bridge. Keep emitted assembly readable line by
+line, as required by `AGENTS.md`/`CLAUDE.md`.
 
 ### 2. Create the crate
 

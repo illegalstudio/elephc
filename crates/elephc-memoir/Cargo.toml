@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "Compiler-side memory-management assembly generation for elephc"
+description = "Memory-management assembly and eval buffer storage for Elephc"
 
 [lib]
 crate-type = ["rlib"]
+
+[features]
+default = []
+codegen = []
+runtime = ["dep:libc"]
+
+[dependencies]
+libc = { version = "0.2", optional = true }

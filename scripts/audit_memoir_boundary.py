@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit Memoir's compiler-only Cargo and Rust source boundary without dependencies."""
+"""Audit Memoir's Cargo features, Rust source and optional Magician archive."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 MEMOIR = "elephc-memoir"
+MAGICIAN = "elephc-magician"
 BANNED_TYPES = {"PhpType", "BuiltinId", "RuntimeFnId"}
 BANNED_MODULES = {"codegen", "codegen_support", "types", "ir", "ir_lower", "pipeline"}
 BANNED_ATTRIBUTES = {"link", "no_mangle", "export_name", "crate_type", "proc_macro"}
@@ -38,8 +39,13 @@ def audit_metadata(metadata: dict, root: Path) -> list[Finding]:
         return [Finding("package", str(expected), "expected one local Memoir workspace package")]
     memoir = matches[0]
     loc = str(expected.relative_to(root))
-    if memoir["dependencies"]:
-        findings.append(Finding("dependency", loc, "Memoir must have no normal, dev, build or target-specific dependencies"))
+    dependencies = memoir["dependencies"]
+    if (len(dependencies) != 1 or dependencies[0]["name"] != "libc"
+            or not dependencies[0].get("optional")
+            or any(dependencies[0].get(key) is not None for key in ("kind", "target", "rename", "path"))):
+        findings.append(Finding("dependency", loc, "Memoir may depend only on optional registry libc for the runtime feature"))
+    if memoir["features"] != {"default": [], "codegen": [], "runtime": ["dep:libc"]}:
+        findings.append(Finding("features", loc, "Memoir must isolate dependency-free codegen from the opt-in libc runtime"))
     if memoir.get("links") is not None:
         findings.append(Finding("native-link", loc, "Memoir must not declare a native links library"))
     library = [t for t in memoir["targets"] if Path(t["src_path"]).resolve() == expected.parent / "src/lib.rs"]
@@ -52,12 +58,18 @@ def audit_metadata(metadata: dict, root: Path) -> list[Finding]:
     if len(compiler) != 1:
         return findings + [Finding("compiler", "Cargo.toml", "expected one root compiler package")]
     compiler = compiler[0]
+    magician_manifest = root / "crates" / MAGICIAN / "Cargo.toml"
+    magicians = [p for p in packages if p["name"] == MAGICIAN
+                 and Path(p["manifest_path"]).resolve() == magician_manifest]
+    if len(magicians) != 1:
+        return findings + [Finding("magician-link", str(magician_manifest), "expected one local Magician workspace package")]
+    consumers = {compiler["id"]: ("codegen", "compiler-link"), magicians[0]["id"]: ("runtime", "magician-link")}
     by_path = {Path(p["manifest_path"]).resolve().parent: p["id"] for p in packages}
     by_name = {p["name"]: p["id"] for p in packages}
     graph: dict[str, list[str]] = {}
-    direct_compiler = []
     for package in packages:
         edges = []
+        direct_memoir = []
         for dependency in package["dependencies"]:
             if dependency.get("kind") is not None:
                 continue  # Build/dev consumers are host tools, not generated-program dependencies.
@@ -68,13 +80,18 @@ def audit_metadata(metadata: dict, root: Path) -> list[Finding]:
                 target = memoir["id"]
             if target:
                 edges.append(target)
-            if package["id"] == compiler["id"] and target == memoir["id"]:
-                direct_compiler.append(dependency)
+            if target == memoir["id"]:
+                direct_memoir.append(dependency)
         graph[package["id"]] = edges
-    if (len(direct_compiler) != 1 or direct_compiler[0].get("optional", False)
-            or direct_compiler[0].get("target") is not None
-            or Path(direct_compiler[0].get("path") or ".").resolve() != expected.parent):
-        findings.append(Finding("compiler-link", "Cargo.toml", "compiler must depend unconditionally on the local Memoir rlib"))
+        if package["id"] in consumers:
+            feature, code = consumers[package["id"]]
+            if (len(direct_memoir) != 1 or direct_memoir[0].get("optional")
+                    or direct_memoir[0].get("target") is not None
+                    or Path(direct_memoir[0].get("path") or ".").resolve() != expected.parent
+                    or direct_memoir[0].get("uses_default_features") is not False
+                    or direct_memoir[0].get("features") != [feature]):
+                manifest = str(Path(package["manifest_path"]).relative_to(root))
+                findings.append(Finding(code, manifest, f"expected a direct local Memoir dependency with only {feature} enabled"))
 
     def reaches_memoir(start: str) -> bool:
         """Handle cycles without hiding indirect production consumers."""
@@ -90,8 +107,8 @@ def audit_metadata(metadata: dict, root: Path) -> list[Finding]:
         return False
 
     for package in packages:
-        if package["id"] not in {memoir["id"], compiler["id"]} and reaches_memoir(package["id"]):
-            findings.append(Finding("runtime-consumer", package["name"], "production dependency reaches Memoir; only the compiler may consume it"))
+        if package["id"] != memoir["id"] and package["id"] not in consumers and reaches_memoir(package["id"]):
+            findings.append(Finding("runtime-consumer", package["name"], "production dependency reaches Memoir outside the compiler and Magician"))
     return findings
 
 
@@ -210,10 +227,12 @@ def audit_source(location: str, source: str) -> list[Finding]:
                     item = tokens[cursor]
                     depth += (item.text == "[") - (item.text == "]")
                     if item.text in BANNED_ATTRIBUTES:
-                        findings.append(Finding("native-export", where, f"attribute {item.text} violates compiler-only emission"))
+                        findings.append(Finding("native-export", where, f"attribute {item.text} would expose a separate native ABI"))
                     cursor += 1
-    if location.endswith("/src/lib.rs"):
-        required = ["#", "!", "[", "forbid", "(", "unsafe_code", ")", "]"]
+    unsafe_policy = {"lib.rs": "deny", "codegen_root.rs": "forbid"}
+    policy = unsafe_policy.get(Path(location).name)
+    if policy:
+        required = ["#", "!", "[", policy, "(", "unsafe_code", ")", "]"]
         depth = 0
         unconditional = False
         for index, token in enumerate(tokens):
@@ -221,7 +240,21 @@ def audit_source(location: str, source: str) -> list[Finding]:
                 unconditional = True
             depth += (token.text == "{") - (token.text == "}")
         if not unconditional:
-            findings.append(Finding("unsafe-policy", location, "crate root must retain unconditional forbid(unsafe_code)"))
+            findings.append(Finding("unsafe-policy", location, f"expected unconditional {policy}(unsafe_code)"))
+    return findings
+
+
+def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
+    """Require the eval registry and reject compiler emitter definitions in Magician."""
+    memoir_symbols = [line for line in symbols.splitlines() if "elephc_memoir" in line]
+    findings = []
+    for symbol in ("allocate", "resolve", "release"):
+        # Legacy and v0 Rust mangling both retain the length-prefixed function path.
+        path = f"13elephc_memoir12eval_buffers{len(symbol)}{symbol}"
+        if not any(path in line for line in memoir_symbols):
+            findings.append(Finding("archive-runtime", location, f"Memoir eval buffer {symbol} is missing"))
+    if any("codegen_root" in line for line in memoir_symbols):
+        findings.append(Finding("archive-codegen", location, "Magician contains Memoir compiler emitter symbols"))
     return findings
 
 
@@ -229,6 +262,8 @@ def main() -> int:
     """Audit this checkout with Cargo's authoritative interpretation of its manifests."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--magician-archive", type=Path, action="append", default=[],
+                        help="inspect a built Magician static archive for Memoir symbols")
     args = parser.parse_args()
     root = args.root.resolve()
     try:
@@ -238,6 +273,9 @@ def main() -> int:
         findings = audit_metadata(metadata, root)
         for path in sorted((root / "crates/elephc-memoir/src").rglob("*.rs")):
             findings.extend(audit_source(path.relative_to(root).as_posix(), path.read_text()))
+        for archive in args.magician_archive:
+            result = subprocess.run(["nm", "-gU", str(archive)], check=True, capture_output=True, text=True)
+            findings.extend(audit_archive_symbols(str(archive), result.stdout))
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"Memoir boundary audit could not complete: {error}", file=sys.stderr)
         return 2
@@ -245,7 +283,7 @@ def main() -> int:
         print(f"{finding.location}: [{finding.code}] {finding.message}", file=sys.stderr)
     if findings:
         return 1
-    print("Memoir boundary: dependency-free compiler rlib; no workspace runtime consumers or native exports.")
+    print("Memoir boundary: isolated compiler codegen and Magician runtime features; no separate native ABI.")
     return 0
 
 

@@ -105,7 +105,7 @@ path = "tests/integration.rs"
 
 [dependencies]
 # Compiler-only memory assembly generation, never a target-program bridge.
-elephc-memoir = { path = "crates/elephc-memoir" }
+elephc-memoir = { path = "crates/elephc-memoir", default-features = false, features = ["codegen"] }
 elephc-generics = { path = "crates/elephc-generics" }
 elephc-chopper = { path = "crates/elephc-chopper" }
 elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }

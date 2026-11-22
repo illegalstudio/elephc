@@ -5,7 +5,7 @@
 //! - Compiler runtime emission and memory integration tests.
 //!
 //! Key details:
-//! - Assembly implementation lives in the compiler-only Memoir crate.
+//! - Assembly implementation lives in the Memoir codegen feature.
 
 pub use elephc_memoir::values::mixed_from_value::*;
 

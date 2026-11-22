@@ -24,10 +24,13 @@ publication, exact chain unlink, consuming container boxing, Mixed symbol public
 external record publication, contained foreign-owner release and conditional
 helper-owner retirement.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
-declarations. It is an ordinary compiler dependency and is never linked as a Rust
-library into compiled PHP programs. Those programs contain the same
-assembly `__rt_*` helpers. EIR ownership analysis and optimization remain in the
-compiler, together with PHP type/reference validation, resource identity policy,
+declarations. The compiler enables Memoir's `codegen` feature to emit the
+assembly `__rt_*` helpers. Magician enables `runtime` for its generation-checked
+eval buffer registry. The registry's Rust code is linked through the existing
+Magician archive when the program needs the bridge. Its thread-local slots and
+libc allocations are independent of the emitted buffer table and heap. EIR
+ownership analysis and optimization remain in the compiler, together with PHP
+type/reference validation, resource identity policy,
 class-specific layout inputs, PHP formatting and output routing, zval pack/unpack,
 platform mapping flags, semantic runtime data, helper ordering and linking. The
 compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval

@@ -32,6 +32,7 @@ crate-type = ["staticlib", "rlib"]
 curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
+elephc-memoir = { path = "../elephc-memoir", default-features = false, features = ["runtime"] }
 elephc-chopper = { path = "../elephc-chopper" }
 elephc-process-context = { path = "../elephc-process-context" }
 elephc-generics = { path = "../elephc-generics" }

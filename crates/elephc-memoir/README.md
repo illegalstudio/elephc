@@ -1,9 +1,15 @@
 # elephc-memoir
 
-Compiler-side assembly generation for Elephc memory management. This crate is
-an ordinary Rust `rlib` dependency of the compiler. It is never linked into
-compiled PHP programs and produces no runtime static archive or `--with-memoir`
-capability. Generated programs continue to use the same emitted `__rt_*` helpers.
+Memoir is the Rust `rlib` for Elephc memory management. The compiler enables
+`codegen` to generate the `__rt_*` assembly helpers. Magician enables `runtime`
+for its Rust eval buffer registry, which travels in the existing Magician static
+archive when a compiled PHP program uses that bridge. Memoir has no default
+features, standalone bridge archive or `--with-memoir` capability.
+
+The runtime registry owns thread-local buffer handles, generation validation,
+zeroed payload allocation and removal before free. Magician keeps cell decoding
+and PHP diagnostics. Eval and compiled buffers retain separate handle namespaces
+and their existing allocators.
 
 ## Boundary
 
@@ -289,16 +295,19 @@ The existing web reset and object clone fingerprints cover the reused emitters.
 ## Boundary gates
 
 Run `python3 -B scripts/audit_memoir_boundary.py` from the workspace to audit Cargo
-metadata and Rust source. The gate rejects dependencies in Memoir, native crate
-outputs/build hooks, workspace production consumers outside the compiler, PHP/EIR
-semantic types, and native export/link attributes. Cargo dependency aliases,
-target-specific entries and indirect workspace consumers are checked. Build/dev
-consumers remain host tools. Source comments and literals do not count as imports
-or attributes. The compiled CLI/bridge-catalog test checks generated-program
+metadata and Rust source. It checks the compiler's `codegen` edge, Magician's
+`runtime` edge and the optional libc dependency. It rejects other workspace
+production consumers, native outputs and build hooks, PHP/EIR semantic types,
+and native export/link attributes. It also checks the codegen module's unsafe
+policy. Cargo dependency aliases, target-specific entries and indirect workspace
+consumers are checked. Build and dev consumers remain host tools. Pass
+`--magician-archive PATH` to verify that a built bridge defines the eval registry
+and excludes the compiler emitters. The compiled CLI/bridge-catalog test checks generated-program
 capabilities, the public capability report and archive registration against the
 live catalog.
 
 All three host CI builders run the boundary audit and its regression tests, plus
-Memoir unit tests and compile-fail documentation examples. The existing assembly
+Memoir unit tests for each feature, compile-fail codegen documentation examples,
+and symbol checks of the plain and curl-enabled Magician archives. The existing assembly
 fingerprints remain the output contract, including the allocator/collector
 cross-assembler matrix.
