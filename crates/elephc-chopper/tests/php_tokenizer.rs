@@ -873,6 +873,15 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php $x = match ($a) { 1 => empty __halt_compiler() };",
         "<?php $x = match ($a) { 1 => fn __halt_compiler() };",
         "<?php $x = match ($a) { 1 => class __halt_compiler() };",
+        "<?php switch ($a) { ?>html<?php __halt_compiler(); }",
+        "<?php switch ($a): ?>html<?php __halt_compiler(); endswitch;",
+        "<?php function f() { switch ($a) { ?>html<?php __halt_compiler(); } }",
+        "<?php $x = match ($a) { 1 => $b++ __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => $b-- __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => $b->p++ __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => new static __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => $b instanceof static __halt_compiler() };",
+        "<?php $x = match ($a) { 1 => static __halt_compiler() };",
         "<?php function f() { C::{__halt_compiler()}; }",
         "<?php function f() { $o->{__halt_compiler()}; }",
         "<?php function f() { $o?->{__halt_compiler()}; }",
@@ -1960,6 +1969,30 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         (
             "<?php $x = match ($a) { 1 => class __halt_compiler() };",
             "syntax error, unexpected token \"class\"",
+        ),
+        (
+            "<?php switch ($a) { ?>html<?php __halt_compiler(); }",
+            "syntax error, unexpected T_INLINE_HTML \"html\", expecting \"case\" or \"default\" or \"}\"",
+        ),
+        (
+            "<?php switch ($a): ?>html<?php __halt_compiler(); endswitch;",
+            "syntax error, unexpected T_INLINE_HTML \"html\", expecting \"endswitch\" or \"case\" or \"default\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => $b++ __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => new static __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => $b instanceof static __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php $x = match ($a) { 1 => static __halt_compiler() };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"::\"",
         ),
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);

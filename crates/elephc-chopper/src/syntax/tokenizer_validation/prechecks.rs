@@ -1755,6 +1755,14 @@ fn match_halt_decision<T: SourceToken>(tokens: &[T], open: usize, halt: usize) -
     if previous_id == i64::from(b',') {
         return MatchHalt::Expect(if comma_closed_arm { "\"}\"" } else { "\"=>\"" });
     }
+    if is_postfix_operator(previous_id) && !match_operand_complete(tokens, previous) {
+        if postfix_operator_follows_operand(tokens, previous) {
+            return MatchHalt::Defer;
+        }
+    }
+    if previous_id == tok::T_STATIC && !match_operand_complete(tokens, previous) {
+        return MatchHalt::Expect("\"::\"");
+    }
     if previous_id == tok::T_NEW {
         return MatchHalt::Expect("\"class\"");
     }
@@ -1795,6 +1803,17 @@ fn match_keyword_needs_paren(id: i64) -> bool {
 /// stay open, so the halt keeps the generic message instead of an arm-list expectation.
 fn match_operand_complete<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     let id = tokens[index].id();
+    if is_postfix_operator(id) {
+        return previous_significant_index(tokens, index)
+            .is_some_and(|previous| postfix_lvalue(tokens, previous));
+    }
+    if id == tok::T_STATIC {
+        const T_INSTANCEOF: i64 = elephc_builtin_contract::token_const_id("T_INSTANCEOF");
+        return previous_significant_index(tokens, index).is_some_and(|previous| {
+            let previous_id = tokens[previous].id();
+            previous_id == tok::T_NEW || previous_id == T_INSTANCEOF
+        });
+    }
     if id == tok::T_CLASS {
         return previous_significant_index(tokens, index)
             .is_some_and(|previous| tokens[previous].id() == tok::T_DOUBLE_COLON);
@@ -1835,6 +1854,98 @@ fn match_operand_complete<T: SourceToken>(tokens: &[T], index: usize) -> bool {
         || id == T_PROPERTY_C
 }
 
+/// Reports a switch halt, or defers when a real `case` or `default` has not started.
+///
+/// Inline HTML and other tokens before the first label belong to `switch_case_html_error`
+/// or the parser. A halt after a label is the outermost-scope `CompileError`. The caller
+/// only uses this when the halt is in statement position.
+fn switch_halt_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    gate: usize,
+    alternative: bool,
+    index: usize,
+) -> Option<ValidationError> {
+    let at_gate = previous_significant_index(tokens, index) == Some(gate);
+    if at_gate {
+        let expecting = if alternative {
+            "\"endswitch\" or \"case\" or \"default\""
+        } else {
+            "\"case\" or \"default\" or \"}\""
+        };
+        return Some(halt_parse_error(source, tokens, index, Some(expecting)));
+    }
+    if !switch_saw_label(tokens, gate, index) {
+        return None;
+    }
+    Some(ValidationError {
+        message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
+        pos: tokens[index].pos(),
+        lexical: false,
+    })
+}
+
+/// Returns whether this switch already opened a `case` or `default` before the halt.
+///
+/// Labels inside a nested brace, call or array do not count. A `default` arm of a `match`
+/// nested in the switch is not a switch label.
+fn switch_saw_label<T: SourceToken>(tokens: &[T], gate: usize, halt: usize) -> bool {
+    const T_DEFAULT: i64 = elephc_builtin_contract::token_const_id("T_DEFAULT");
+    let mut depth = 0i32;
+    for token in &tokens[gate + 1..halt] {
+        let id = token.id();
+        if is_trivia_token(id) {
+            continue;
+        }
+        if is_halt_brace_open(id) || id == i64::from(b'(') || id == i64::from(b'[') {
+            depth += 1;
+            continue;
+        }
+        if id == i64::from(b'}') || id == i64::from(b')') || id == i64::from(b']') {
+            depth -= 1;
+            continue;
+        }
+        if depth == 0 && (id == tok::T_CASE || id == T_DEFAULT) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns whether `id` is PHP's postfix `++` or `--` token.
+fn is_postfix_operator(id: i64) -> bool {
+    const T_INC: i64 = elephc_builtin_contract::token_const_id("T_INC");
+    const T_DEC: i64 = elephc_builtin_contract::token_const_id("T_DEC");
+    id == T_INC || id == T_DEC
+}
+
+/// Returns whether `++` or `--` follows an operand and is therefore not a prefix operator.
+fn postfix_operator_follows_operand<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index)
+        .is_some_and(|previous| match_operand_complete(tokens, previous))
+}
+
+/// Returns whether `index` is a value PHP allows before postfix `++` or `--`.
+///
+/// A variable, an array close, or a property or static name qualifies. A parenthesis or a
+/// literal does not: PHP reports the operator itself.
+fn postfix_lvalue<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let id = tokens[index].id();
+    if id == tok::T_VARIABLE || id == i64::from(b']') {
+        return true;
+    }
+    let name = id == tok::T_STRING
+        || id == tok::T_NAME_FULLY_QUALIFIED
+        || id == tok::T_NAME_QUALIFIED
+        || id == tok::T_NAME_RELATIVE;
+    name && previous_significant_index(tokens, index).is_some_and(|previous| {
+        let previous_id = tokens[previous].id();
+        previous_id == tok::T_OBJECT_OPERATOR
+            || previous_id == tok::T_NULLSAFE_OBJECT_OPERATOR
+            || previous_id == tok::T_DOUBLE_COLON
+    })
+}
+
 /// Builds the parse or compile diagnostic for one `__halt_compiler` token.
 ///
 /// `None` means this halt is not a precheck error. That is the outermost scope, and also a
@@ -1867,20 +1978,7 @@ fn halt_scope_failure<T: SourceToken>(
                 return Some(halt_namespace_unclosed(source, tokens[index].pos(), *line));
             }
             Some(HaltScope::Switch { gate, alternative }) => {
-                let at_gate = previous_significant_index(tokens, index) == Some(*gate);
-                if !at_gate {
-                    return Some(ValidationError {
-                        message: HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE.into(),
-                        pos: tokens[index].pos(),
-                        lexical: false,
-                    });
-                }
-                let expecting = if *alternative {
-                    "\"endswitch\" or \"case\" or \"default\""
-                } else {
-                    "\"case\" or \"default\" or \"}\""
-                };
-                return Some(halt_parse_error(source, tokens, index, Some(expecting)));
+                return switch_halt_error(source, tokens, *gate, *alternative, index);
             }
             Some(
                 HaltScope::ClassLike
@@ -1889,6 +1987,11 @@ fn halt_scope_failure<T: SourceToken>(
                 | HaltScope::ArrowBlock
                 | HaltScope::Match { .. },
             ) => {}
+        }
+    }
+    if let Some(HaltScope::Switch { gate, .. }) = scope {
+        if !switch_saw_label(tokens, *gate, index) {
+            return None;
         }
     }
     if let Some(HaltScope::Match { open }) = scope {
