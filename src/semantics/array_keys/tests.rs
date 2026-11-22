@@ -151,6 +151,8 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [1]; if (false || ($values = [[1]])) { $values[0][false] = 2; }",
         "<?php $values = [1]; while (PHP_OS_FAMILY === 'Windows' && ($values = [[1]])) { $values[0][false] = 2; break; }",
         "<?php $a = []; while ($argc > 1) { break; } if (PHP_OS_FAMILY === 'Windows') { $a[false] = 1; }",
+        "<?php $values = [[1]]; while ($argc > 1) { $ignore = function () { $values = 1; }; break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; while ($argc > 1) { $values = [[1]]; break; } if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { if (true) { $values = [[1]]; } $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { if (false && ($values = [1])) {} $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[false ?: 0][false] = 2; }",
