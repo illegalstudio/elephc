@@ -567,6 +567,23 @@ fn strict_array_key_source_validation_audits_unselected_switch_bodies() {
     }
 }
 
+/// Switch label effects reach matching and no-match exits in PHP evaluation order.
+#[test]
+fn strict_array_key_source_validation_applies_switch_label_effects() {
+    for source in [
+        "<?php $values = [[]]; switch (0) { case count($values = ['ab']): break; } $values[0][false] = 'x';",
+        "<?php $values = ['ab']; switch (0) { case 0: break; case count($values = [[]]): break; } $values[0][false] = 'x';",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    let source = "<?php $values = ['ab']; switch (0) { case count($values = [[]]): break; } $values[0][false] = 'x';";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("an evaluated case label must update the no-match exit");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {

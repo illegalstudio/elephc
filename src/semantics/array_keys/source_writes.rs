@@ -2367,34 +2367,47 @@ fn validate_switch_flow(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<SwitchFlow, CompileError> {
+    let selection = source_switch_selection(subject, cases);
+    let mut direct_inputs = vec![Vec::new(); cases.len()];
+    let mut no_match = None;
+    match selection {
+        SwitchSelection::Body(case) => direct_inputs[case].push(entry.clone()),
+        SwitchSelection::Miss => no_match = Some(entry.clone()),
+        SwitchSelection::Unknown => {
+            let mut label_entry = entry.clone();
+            for (case_index, (labels, _)) in cases.iter().enumerate() {
+                for label in labels {
+                    apply_expression_facts(
+                        label,
+                        &mut label_entry,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                    if !direct_inputs[case_index].contains(&label_entry) {
+                        direct_inputs[case_index].push(label_entry.clone());
+                    }
+                }
+            }
+            no_match = Some(label_entry);
+        }
+    }
+
     let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
     let default_position =
         default.map(|default| crate::termination::switch_default_position(cases, default));
     if let Some(default) = default {
-        bodies.insert(default_position.expect("default position"), default);
+        let position = default_position.expect("default position");
+        bodies.insert(position, default);
+        direct_inputs.insert(position, no_match.take().into_iter().collect());
     }
-    let selection = match source_switch_selection(subject, cases) {
-        SwitchSelection::Body(case) => {
-            let position = case
-                + usize::from(default_position.is_some_and(|default| default <= case));
-            SwitchSelection::Body(position)
-        }
-        SwitchSelection::Miss => default_position
-            .map_or(SwitchSelection::Miss, SwitchSelection::Body),
-        SwitchSelection::Unknown => SwitchSelection::Unknown,
-    };
 
     let mut switch_exits = Vec::new();
     let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
     let mut prior_fallthrough = None;
     for (body_index, body) in bodies.into_iter().enumerate() {
-        let mut inputs = Vec::new();
-        if matches!(selection, SwitchSelection::Unknown)
-            || matches!(selection, SwitchSelection::Body(selected) if selected == body_index)
-        {
-            inputs.push(entry.clone());
-        }
+        let mut inputs = std::mem::take(&mut direct_inputs[body_index]);
         if let Some(fallthrough) = prior_fallthrough.take() {
             if !inputs.contains(&fallthrough) {
                 inputs.push(fallthrough);
@@ -2423,10 +2436,8 @@ fn validate_switch_flow(
     if let Some(fallthrough) = prior_fallthrough {
         switch_exits.push(fallthrough);
     }
-    if default.is_none()
-        && matches!(selection, SwitchSelection::Unknown | SwitchSelection::Miss)
-    {
-        switch_exits.push(entry.clone());
+    if let Some(no_match) = no_match {
+        switch_exits.push(no_match);
     }
     let can_fallthrough = !switch_exits.is_empty();
     let exit = if switch_exits.is_empty() {
