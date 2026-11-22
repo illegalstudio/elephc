@@ -9,6 +9,7 @@
 //! - Branches receive independent facts and only identical facts survive their merge.
 //! - Declared array properties are checked without treating strings or ArrayAccess objects as arrays.
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast_visit::{self, AstVisitor, SourcePolicy};
@@ -19,6 +20,11 @@ use crate::parser::ast::{
 };
 use crate::types::PhpType;
 use elephc_semantics::{array_keys::StringKey, SemanticProfile};
+
+thread_local! {
+    /// Prevents repeated loop-entry refinement from multiplying across nested loop bodies.
+    static LOOP_REFINEMENT_DEPTH: Cell<u8> = const { Cell::new(0) };
+}
 
 /// One exact literal key retained by a source array shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1808,17 +1814,15 @@ fn validate_stmt(
                 repeated_condition_reachable && repeated_flow.false_reachable;
             let repeated_body_entry = repeated_flow.when_true;
             let repeated_exit = repeated_flow.when_false;
-            let repeated_break_flow = if repeated_body_entry == first_body_entry {
-                first_break_flow.clone()
-            } else {
-                collect_loop_break_flow(
-                    body,
-                    &repeated_body_entry,
-                    properties,
-                    profile,
-                    current_class,
-                )?
-            };
+            let repeated_break_flow = collect_repeated_loop_flow(
+                body,
+                &first_body_entry,
+                &repeated_body_entry,
+                &first_break_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
             let mut normal_exits = Vec::new();
             if first_exit_reachable {
                 normal_exits.push(first_exit);
@@ -1846,6 +1850,7 @@ fn validate_stmt(
             );
         }
         StmtKind::Foreach {
+            array,
             key_var,
             value_var,
             body,
@@ -1864,7 +1869,10 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let mut normal_exits = vec![entry.clone()];
+            let mut normal_exits = Vec::new();
+            if source_array_literal_nonempty(array) != Some(true) {
+                normal_exits.push(entry.clone());
+            }
             if let Some(iteration) = break_flow.back_edge() {
                 normal_exits.push(iteration);
             }
@@ -1905,17 +1913,15 @@ fn validate_stmt(
                 first_reaches_condition && first_flow.false_reachable;
             let first_exit = first_flow.when_false;
             let repeated_body_entry = first_flow.when_true;
-            let repeated_break_flow = if repeated_body_entry == entry {
-                first_break_flow.clone()
-            } else {
-                collect_loop_break_flow(
-                    body,
-                    &repeated_body_entry,
-                    properties,
-                    profile,
-                    current_class,
-                )?
-            };
+            let repeated_break_flow = collect_repeated_loop_flow(
+                body,
+                &entry,
+                &repeated_body_entry,
+                &first_break_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
             let repeated_back_edge = repeated_break_flow.back_edge();
             let repeated_reaches_condition = repeated_back_edge.is_some();
             let repeated_body =
@@ -2025,17 +2031,15 @@ fn validate_stmt(
                 repeated_condition_reachable && repeated_flow.false_reachable;
             let repeated_body_entry = repeated_flow.when_true;
             let repeated_exit = repeated_flow.when_false;
-            let repeated_break_flow = if repeated_body_entry == first_body_entry {
-                first_break_flow.clone()
-            } else {
-                collect_loop_break_flow(
-                    body,
-                    &repeated_body_entry,
-                    properties,
-                    profile,
-                    current_class,
-                )?
-            };
+            let repeated_break_flow = collect_repeated_loop_flow(
+                body,
+                &first_body_entry,
+                &repeated_body_entry,
+                &first_break_flow,
+                properties,
+                profile,
+                current_class,
+            )?;
             let mut normal_exits = Vec::new();
             if first_exit_reachable {
                 normal_exits.push(first_exit);
@@ -2216,6 +2220,50 @@ impl LoopBreakFlow {
         exits.extend(self.fallthrough.iter().cloned());
         (!exits.is_empty()).then(|| merge_exits(&exits))
     }
+}
+
+/// Restores the previous nested-loop refinement depth when one bounded replay finishes.
+struct LoopRefinementGuard<'a> {
+    depth: &'a Cell<u8>,
+    previous: u8,
+}
+
+impl Drop for LoopRefinementGuard<'_> {
+    /// Restores the thread-local depth on success, error, or unwinding.
+    fn drop(&mut self) {
+        self.depth.set(self.previous);
+    }
+}
+
+/// Replays one changed loop entry while bounding recursive replays in nested loops.
+fn collect_repeated_loop_flow(
+    body: &[Stmt],
+    first_entry: &LocalFacts,
+    repeated_entry: &LocalFacts,
+    first_flow: &LoopBreakFlow,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LoopBreakFlow, CompileError> {
+    if repeated_entry == first_entry {
+        return Ok(first_flow.clone());
+    }
+    LOOP_REFINEMENT_DEPTH.with(|depth| {
+        if depth.get() > 0 {
+            let mut conservative = first_flow.clone();
+            conservative.complete = false;
+            return Ok(conservative);
+        }
+        let previous = depth.replace(1);
+        let _guard = LoopRefinementGuard { depth, previous };
+        collect_loop_break_flow(
+            body,
+            repeated_entry,
+            properties,
+            profile,
+            current_class,
+        )
+    })
 }
 
 /// Replays reachable body paths to snapshot facts exactly where `break 1` executes.
@@ -2674,7 +2722,15 @@ fn merge_loop_exits(
         exits.extend(flow.exits.iter().cloned());
     }
     if exits.is_empty() {
-        return fallback.clone();
+        let back_edges: Vec<_> = break_flows
+            .iter()
+            .filter_map(|flow| flow.back_edge())
+            .collect();
+        return if back_edges.is_empty() {
+            fallback.clone()
+        } else {
+            merge_exits(&back_edges)
+        };
     }
     let mut merged = merge_exits(&exits);
     if break_flows.iter().any(|flow| !flow.complete) {
