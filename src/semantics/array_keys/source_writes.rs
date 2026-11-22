@@ -2161,6 +2161,7 @@ struct LoopBreakFlow {
     exits: Vec<LocalFacts>,
     continues: Vec<LocalFacts>,
     complete: bool,
+    audit_exit: LocalFacts,
 }
 
 impl LoopBreakFlow {
@@ -2184,19 +2185,29 @@ fn collect_loop_break_flow(
     let mut exits = Vec::new();
     let mut continues = Vec::new();
     let mut complete = true;
+    let mut audit_exit = entry.clone();
     for stmt in body {
-        let Some(mut locals) = fallthrough.take() else { break; };
+        let Some(mut locals) = fallthrough.take() else {
+            validate_stmt(
+                stmt,
+                &mut audit_exit,
+                properties,
+                profile,
+                current_class,
+            )?;
+            continue;
+        };
         match &stmt.kind {
             StmtKind::Break(level) => {
                 if *level == 1 {
-                    exits.push(locals);
+                    exits.push(locals.clone());
                 } else {
                     complete = false;
                 }
             }
             StmtKind::Continue(level) => {
                 if *level == 1 {
-                    continues.push(locals);
+                    continues.push(locals.clone());
                 } else {
                     complete = false;
                 }
@@ -2220,6 +2231,7 @@ fn collect_loop_break_flow(
                     profile,
                     current_class,
                 )?;
+                audit_exit = branch.audit_exit;
                 exits.extend(branch.exits);
                 continues.extend(branch.continues);
                 complete &= branch.complete;
@@ -2234,6 +2246,7 @@ fn collect_loop_break_flow(
                     profile,
                     current_class,
                 )?;
+                audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
                 complete &= nested.complete;
@@ -2248,6 +2261,7 @@ fn collect_loop_break_flow(
                     profile,
                     current_class,
                 )?;
+                audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
                 complete &= nested.complete;
@@ -2283,6 +2297,12 @@ fn collect_loop_break_flow(
                         current_class,
                     )?);
                 }
+                audit_exit = merge_exits(
+                    &flows
+                        .iter()
+                        .map(|flow| flow.audit_exit.clone())
+                        .collect::<Vec<_>>(),
+                );
                 let mut fallthroughs = Vec::with_capacity(flows.len());
                 for flow in flows {
                     exits.extend(flow.exits);
@@ -2315,12 +2335,17 @@ fn collect_loop_break_flow(
                     )?
                 } else {
                     LoopBreakFlow {
-                        fallthrough: Some(locals),
+                        fallthrough: Some(locals.clone()),
                         exits: Vec::new(),
                         continues: Vec::new(),
                         complete: true,
+                        audit_exit: locals,
                     }
                 };
+                audit_exit = merge_exits(&[
+                    then_flow.audit_exit.clone(),
+                    else_flow.audit_exit.clone(),
+                ]);
                 exits.extend(then_flow.exits);
                 exits.extend(else_flow.exits);
                 continues.extend(then_flow.continues);
@@ -2337,10 +2362,12 @@ fn collect_loop_break_flow(
                     complete = false;
                 }
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
+                audit_exit = locals.clone();
                 fallthrough = Some(locals);
                 continue;
             }
         }
+        audit_exit = locals;
         fallthrough = None;
     }
     Ok(LoopBreakFlow {
@@ -2348,10 +2375,11 @@ fn collect_loop_break_flow(
         exits,
         continues,
         complete,
+        audit_exit,
     })
 }
 
-/// Collects break and fallthrough paths across one reachable `if` chain.
+/// Audits an `if` chain while collecting only its reachable loop-control paths.
 fn collect_loop_break_if(
     condition: &Expr,
     then_body: &[Stmt],
@@ -2372,15 +2400,17 @@ fn collect_loop_break_if(
     let mut exits = Vec::new();
     let mut continues = Vec::new();
     let mut fallthroughs = Vec::new();
+    let mut audit_exits = Vec::new();
     let mut complete = true;
+    let then_flow = collect_loop_break_flow(
+        then_body,
+        &condition_flow.when_true,
+        properties,
+        profile,
+        current_class,
+    )?;
     if condition_flow.true_reachable {
-        let then_flow = collect_loop_break_flow(
-            then_body,
-            &condition_flow.when_true,
-            properties,
-            profile,
-            current_class,
-        )?;
+        audit_exits.push(then_flow.audit_exit.clone());
         exits.extend(then_flow.exits);
         continues.extend(then_flow.continues);
         complete &= then_flow.complete;
@@ -2389,9 +2419,6 @@ fn collect_loop_break_if(
     let mut alternative = condition_flow.when_false;
     let mut alternative_reachable = condition_flow.false_reachable;
     for (condition, body) in elseif_clauses {
-        if !alternative_reachable {
-            break;
-        }
         let condition_flow = validate_condition_flow(
             condition,
             &alternative,
@@ -2399,14 +2426,15 @@ fn collect_loop_break_if(
             profile,
             current_class,
         )?;
-        if condition_flow.true_reachable {
-            let body_flow = collect_loop_break_flow(
-                body,
-                &condition_flow.when_true,
-                properties,
-                profile,
-                current_class,
-            )?;
+        let body_flow = collect_loop_break_flow(
+            body,
+            &condition_flow.when_true,
+            properties,
+            profile,
+            current_class,
+        )?;
+        if alternative_reachable && condition_flow.true_reachable {
+            audit_exits.push(body_flow.audit_exit.clone());
             exits.extend(body_flow.exits);
             continues.extend(body_flow.continues);
             complete &= body_flow.complete;
@@ -2415,28 +2443,36 @@ fn collect_loop_break_if(
         alternative = condition_flow.when_false;
         alternative_reachable &= condition_flow.false_reachable;
     }
-    if alternative_reachable {
-        if let Some(else_body) = else_body {
-            let else_flow = collect_loop_break_flow(
-                else_body,
-                &alternative,
-                properties,
-                profile,
-                current_class,
-            )?;
+    if let Some(else_body) = else_body {
+        let else_flow = collect_loop_break_flow(
+            else_body,
+            &alternative,
+            properties,
+            profile,
+            current_class,
+        )?;
+        if alternative_reachable {
+            audit_exits.push(else_flow.audit_exit.clone());
             exits.extend(else_flow.exits);
             continues.extend(else_flow.continues);
             complete &= else_flow.complete;
             fallthroughs.push(else_flow.fallthrough);
-        } else {
-            fallthroughs.push(Some(alternative));
         }
+    } else if alternative_reachable {
+        audit_exits.push(alternative.clone());
+        fallthroughs.push(Some(alternative));
     }
+    let audit_exit = if audit_exits.is_empty() {
+        entry.clone()
+    } else {
+        merge_exits(&audit_exits)
+    };
     Ok(LoopBreakFlow {
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
         continues,
         complete,
+        audit_exit,
     })
 }
 
@@ -2521,13 +2557,14 @@ fn body_writes_only_static_fact(
                 value,
                 ..
             } if target == name => {
-                infer_expr(
-                    value,
-                    &LocalFacts::default(),
-                    properties,
-                    profile,
-                    current_class,
-                ) == *expected
+                !crate::ir_lower::expr_writes_local(value, name)
+                    && infer_expr(
+                        value,
+                        &LocalFacts::default(),
+                        properties,
+                        profile,
+                        current_class,
+                    ) == *expected
             }
             StmtKind::If {
                 condition,
