@@ -775,6 +775,13 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     }
     let source_php_ty = ctx.builder.value_php_type(value.value).clone();
     let source_ty = source_php_ty.codegen_repr();
+    // The union's boxed storage (`Mixed`) is what the later boxing returns early with, so the
+    // class check has to come first.
+    let value = if bindable {
+        guard_object_class_union_param(ctx, value, declared_param_ty, sig, index, arg)
+    } else {
+        value
+    };
     if bindable
         && !ctx.php_strict_types
         && is_nullable_string_param(declared_param_ty)
@@ -1044,6 +1051,175 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
         &param_ty,
         Some(arg.span),
     )
+}
+
+/// Throws php's `TypeError` for an object that is none of the classes a declared union of
+/// several classes (`ConfigurationInterface|ConfigurationExtensionInterface`) names.
+///
+/// The checker admits an object whose static class could still be one of them
+/// (`object_argument_may_narrow_to`), and the single-class guard below cannot test two targets, so
+/// the call would otherwise run into the callee with an object it cannot use. The probe is the
+/// boxed `mixed` view of the value: an `instanceof` on a value statically typed as an unrelated
+/// class would be answered from the declaration instead of the object.
+fn guard_object_class_union_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expected: &PhpType,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> LoweredValue {
+    let PhpType::Object(source_class) = ctx.builder.value_php_type(value.value).codegen_repr()
+    else {
+        return value;
+    };
+    let source_class = source_class.trim_start_matches('\\').to_string();
+    let PhpType::Union(members) = expected else {
+        return value;
+    };
+    if source_class.is_empty()
+        || !members
+            .iter()
+            .all(|member| matches!(member, PhpType::Object(name) if !name.is_empty()) || *member == PhpType::Void)
+    {
+        return value;
+    }
+    let classes: Vec<String> = members
+        .iter()
+        .filter_map(|member| match member {
+            PhpType::Object(name) => Some(name.trim_start_matches('\\').to_string()),
+            _ => None,
+        })
+        .collect();
+    // A member the source's own class satisfies needs no probe; a single class is the nominal
+    // guard's.
+    if classes.len() < 2
+        || classes.iter().any(|class| {
+            class.eq_ignore_ascii_case(&source_class)
+                || nominal_class_implements_or_extends(ctx, &source_class, class)
+        })
+    {
+        return value;
+    }
+    let span = Some(arg.span);
+    let probe = ctx.box_value_as_mixed(value, PhpType::Mixed, span);
+    let answers: Vec<LoweredValue> = classes
+        .iter()
+        .map(|class| {
+            let data = ctx.intern_class_name(class);
+            ctx.emit_value(
+                Op::InstanceOf,
+                vec![probe.value],
+                Some(Immediate::Data(data)),
+                PhpType::Bool,
+                Op::InstanceOf.default_effects(),
+                span,
+            )
+        })
+        .collect();
+    crate::ir_lower::ownership::release_if_owned(ctx, probe, span);
+    let initialized = ctx.initialized_slots_snapshot();
+    let accepted = ctx.builder.create_named_block("object.union.accepted", Vec::new());
+    let rejected = ctx.builder.create_named_block("object.union.rejected", Vec::new());
+    for (position, answer) in answers.iter().enumerate() {
+        let next = if position + 1 == answers.len() {
+            rejected
+        } else {
+            ctx.builder.create_named_block("object.union.next", Vec::new())
+        };
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: answer.value,
+            then_target: accepted,
+            then_args: Vec::new(),
+            else_target: next,
+            else_args: Vec::new(),
+        });
+        if next != rejected {
+            ctx.builder.position_at_end(next);
+        }
+    }
+    ctx.builder.position_at_end(rejected);
+    ctx.restore_initialized_slots(initialized.clone());
+    let param_name = sig.params.get(index).map(|(name, _)| name.as_str()).unwrap_or("arg");
+    let callable = ctx.call_description.as_deref().unwrap_or("call");
+    let source = ctx.source_path().unwrap_or("unknown");
+    let message = format!(
+        "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line {}",
+        callable,
+        index + 1,
+        param_name,
+        crate::types::diagnostic_names::php_type_name(expected),
+        source_class,
+        source,
+        arg.span.line
+    );
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![Expr::new(ExprKind::StringLiteral(message), arg.span)],
+            },
+            arg.span,
+        ),
+    );
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
+    ctx.builder.position_at_end(accepted);
+    ctx.restore_initialized_slots(initialized);
+    value
+}
+
+/// Whether the call being lowered is a method of a class php implements internally, whose
+/// argument errors carry no `, called in FILE on line N` clause.
+fn call_description_is_internal_method(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.call_description
+        .as_deref()
+        .and_then(|callable| callable.split_once("::"))
+        .is_some_and(|(class, _)| {
+            ctx.classes
+                .get(class.trim_start_matches('\\'))
+                .is_some_and(|info| info.is_internal)
+        })
+}
+
+/// Whether class or interface `source` is `target`, extends it or implements it.
+fn nominal_class_implements_or_extends(
+    ctx: &LoweringContext<'_, '_>,
+    source: &str,
+    target: &str,
+) -> bool {
+    fn interface_extends(
+        ctx: &LoweringContext<'_, '_>,
+        interface: &str,
+        target: &str,
+        depth: usize,
+    ) -> bool {
+        if interface.eq_ignore_ascii_case(target) {
+            return true;
+        }
+        depth < 32
+            && ctx.interfaces.get(interface).is_some_and(|info| {
+                info.parents.iter().any(|parent| interface_extends(ctx, parent, target, depth + 1))
+            })
+    }
+    let mut current = Some(source.to_string());
+    while let Some(name) = current {
+        if name.eq_ignore_ascii_case(target) {
+            return true;
+        }
+        let Some(info) = ctx.classes.get(name.as_str()) else {
+            return interface_extends(ctx, &name, target, 0);
+        };
+        if info
+            .interfaces
+            .iter()
+            .any(|interface| interface_extends(ctx, interface, target, 0))
+        {
+            return true;
+        }
+        current = info.parent.clone();
+    }
+    false
 }
 
 /// Checks the active tag of a boxed gradual value against a declared scalar/array union.
@@ -1750,7 +1926,13 @@ fn guard_union_object_param(
         param_name,
         if bare_object { "object" } else { class_name }
     );
-    let suffix = format!(" given, called in {} on line {}", source, arg.span.line);
+    // php names no call site for a method it implements internally
+    // (`ReflectionClass::isInstance(5)`).
+    let suffix = if call_description_is_internal_method(ctx) {
+        " given".to_string()
+    } else {
+        format!(" given, called in {} on line {}", source, arg.span.line)
+    };
     let given = match given {
         Some(text) => Expr::new(ExprKind::StringLiteral(text.to_string()), arg.span),
         None => super::enum_argument_guards::runtime_debug_type(arg, arg.span),

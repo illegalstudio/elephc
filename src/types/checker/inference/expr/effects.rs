@@ -1119,8 +1119,13 @@ impl Checker {
                 // type). Its cell is already boxed; the checker's view follows it, or
                 // `new ReflectionFunction($found)` is refused for `got null` (symfony/polyfill-
                 // deepclone).
+                //
+                // A name the enclosing body never bound is the same case: `use (&$error)` CREATES
+                // `$error` as a null reference the closure later fills (Doctrine's Instantiator,
+                // symfony/finder's `SplFileInfo::getContents()`), so a read after the closure ran
+                // holds whatever it stored, not the `null` an undefined read would give.
                 if self.by_ref_capture_boxed_locals.contains(&name)
-                    && env.get(&name) == Some(&PhpType::Void)
+                    && matches!(env.get(&name), None | Some(&PhpType::Void))
                 {
                     env.insert(name, PhpType::Mixed);
                 }

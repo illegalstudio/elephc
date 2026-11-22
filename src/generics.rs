@@ -403,7 +403,7 @@ pub fn infer_bindings(
     declared_params: &[Option<TypeExpr>],
     actual_types: &[PhpType],
 ) -> Result<Bindings, InferError> {
-    infer_bindings_with_args(type_params, declared_params, actual_types, &[])
+    infer_bindings_with_args(type_params, declared_params, actual_types, &[], None)
 }
 
 /// Infers type arguments, also reading the argument EXPRESSIONS where the type cannot say enough.
@@ -418,11 +418,17 @@ pub fn infer_bindings(
 /// position the annotation documents: the native hint the parameter took over
 /// (`TypeParam::native_hint`), or `mixed` when it documents untyped positions. A native
 /// parameter keeps the error: its author wrote compiler syntax and can write the type argument.
+///
+/// `lexical_class` is the class (and its parent) the CALL is written in. A closure literal's
+/// `self`/`static`/`parent` types mean that class, not whatever scope the bound type is later
+/// read in: `Factory::create(static function (int $code): self { ... })` inside a static method
+/// binds `T` to the enclosing class, where the bare keyword was refused outside a class.
 pub fn infer_bindings_with_args(
     type_params: &[TypeParam],
     declared_params: &[Option<TypeExpr>],
     actual_types: &[PhpType],
     args: &[crate::parser::ast::Expr],
+    lexical_class: Option<(&str, Option<&str>)>,
 ) -> Result<Bindings, InferError> {
     // What php-src reads a PHPDoc parameter as when the annotation cannot be honoured.
     let fallback = |name: &str| {
@@ -434,7 +440,14 @@ pub fn infer_bindings_with_args(
     // Each retry erases one more PHPDoc parameter, so the loop ends within `type_params.len()`.
     let mut erased: Vec<(String, TypeExpr)> = Vec::new();
     loop {
-        match infer_bindings_erasing(type_params, declared_params, actual_types, args, &erased) {
+        match infer_bindings_erasing(
+            type_params,
+            declared_params,
+            actual_types,
+            args,
+            lexical_class,
+            &erased,
+        ) {
             Err(InferError::Unconstrained(param) | InferError::Conflict { param, .. })
                 if fallback(&param).is_some()
                     && !erased.iter().any(|(name, _)| name == &param) =>
@@ -537,6 +550,7 @@ fn infer_bindings_erasing(
     declared_params: &[Option<TypeExpr>],
     actual_types: &[PhpType],
     args: &[crate::parser::ast::Expr],
+    lexical_class: Option<(&str, Option<&str>)>,
     erased: &[(String, TypeExpr)],
 ) -> Result<Bindings, InferError> {
     let names: Vec<String> = type_params
@@ -551,7 +565,7 @@ fn infer_bindings_erasing(
         else {
             continue;
         };
-        bind_from_closure(&names, params, ret, arg, &mut bound)?;
+        bind_from_closure(&names, params, ret, arg, lexical_class, &mut bound)?;
     }
     for (declared, actual) in declared_params.iter().zip(actual_types.iter()) {
         let Some(declared) = declared else { continue };
@@ -699,6 +713,7 @@ fn bind_from_closure(
     declared_params: &[TypeExpr],
     declared_ret: &TypeExpr,
     arg: &crate::parser::ast::Expr,
+    lexical_class: Option<(&str, Option<&str>)>,
     bound: &mut Vec<(String, TypeExpr)>,
 ) -> Result<(), InferError> {
     let crate::parser::ast::ExprKind::Closure {
@@ -709,15 +724,19 @@ fn bind_from_closure(
     else {
         return Ok(());
     };
+    let lexical = |ty: &TypeExpr| match lexical_class {
+        Some((self_class, parent)) => ty.substitute_relative_class_types(self_class, parent),
+        None => ty.clone(),
+    };
     for (declared, (_, actual, _, _)) in declared_params.iter().zip(params.iter()) {
         let Some(actual) = actual else { continue };
         if declared.mentions_type_param(names) {
-            unify_type_exprs(names, declared, actual, bound)?;
+            unify_type_exprs(names, declared, &lexical(actual), bound)?;
         }
     }
     if let Some(actual) = return_type {
         if declared_ret.mentions_type_param(names) {
-            unify_type_exprs(names, declared_ret, actual, bound)?;
+            unify_type_exprs(names, declared_ret, &lexical(actual), bound)?;
         }
     }
     Ok(())

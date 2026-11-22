@@ -120,11 +120,15 @@ impl Checker {
                     ));
                     inference_args.push(arg);
                 }
+                let lexical_class = self.lexical_class_for_generics();
                 generics::infer_bindings_with_args(
                     &template.type_params,
                     &declared_params,
                     &actual_types,
                     &inference_args,
+                    lexical_class
+                        .as_ref()
+                        .map(|(class, parent)| (class.as_str(), parent.as_deref())),
                 )
                 .map_err(|error| {
                     CompileError::new(

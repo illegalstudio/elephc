@@ -2015,6 +2015,11 @@ pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
                         | PhpType::False
                         | PhpType::Float
                         | PhpType::Void
+                        // `object|string` (`ContainerBuilder::addObjectResource()` rewrites the
+                        // object arm to its class name before the write, a flow fact the declared
+                        // union hides): php raises "Cannot access offset of type X on array" only
+                        // if an object reaches the key, so the write compiles with a boxed key.
+                        | PhpType::Object(_)
                 )
             }) =>
         {

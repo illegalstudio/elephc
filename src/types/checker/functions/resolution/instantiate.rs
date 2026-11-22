@@ -20,6 +20,14 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// The class the call being checked is written in, with its parent: what a closure literal's
+    /// `self`/`static`/`parent` types mean at a generic call site.
+    pub(crate) fn lexical_class_for_generics(&self) -> Option<(String, Option<String>)> {
+        let class = self.current_class.clone()?;
+        let parent = self.classes.get(&class).and_then(|info| info.parent.clone());
+        Some((class, parent))
+    }
+
     /// Returns the instantiated function name a call to generic `name` resolves to, creating
     /// the instantiation the first time it is requested.
     ///
@@ -58,11 +66,15 @@ impl Checker {
             ));
             inference_args.push(arg);
         }
+        let lexical_class = self.lexical_class_for_generics();
         let bindings = generics::infer_bindings_with_args(
             &decl.type_params,
             &declared_params,
             &actual_types,
             &inference_args,
+            lexical_class
+                .as_ref()
+                .map(|(class, parent)| (class.as_str(), parent.as_deref())),
         )
         .map_err(|error| CompileError::new(span, &describe_infer_error(name, &error)))?;
         self.finish_generic_instantiation(name, &decl, bindings, span)

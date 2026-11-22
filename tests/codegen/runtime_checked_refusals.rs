@@ -332,3 +332,154 @@ echo \"end\\n\";
     assert!(out.contains(" on line 5\nbool(false)\n"), "{out}");
     assert!(out.ends_with("end\n"), "{out}");
 }
+
+/// A `mixed` value handed to the `object` parameter of a builtin reflection method is php's
+/// run-time question, not a compile refusal (`symfony/dependency-injection` `ServicesResetter`,
+/// doctrine/orm `RawValuePropertyAccessor`, `EntityUserProvider`). php names no call site for an
+/// internal method.
+#[test]
+fn test_mixed_value_at_a_builtin_reflection_object_parameter_is_checked_at_runtime() {
+    let out = compile_and_run(
+        "<?php
+class Pt { public $v = 1; }
+function g(mixed $s): bool { return (new ReflectionClass('Pt'))->isUninitializedLazyObject($s); }
+function h(mixed $s): bool { return (new ReflectionClass('Pt'))->isInstance($s); }
+function k(mixed $s): void { (new ReflectionProperty('Pt', 'v'))->setRawValueWithoutLazyInitialization($s, 5); }
+echo var_export(g(new Pt), true), var_export(h(new Pt), true), var_export(h(new stdClass), true), \"\\n\";
+$p = new Pt; k($p); echo $p->v, \"\\n\";
+try { h(5); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }
+",
+    );
+    assert_eq!(
+        out,
+        "falsetruefalse\n5\nReflectionClass::isInstance(): Argument #1 ($object) must be of type object, int given\n"
+    );
+}
+
+/// A variable a closure creates through `use (&$error)` holds what the closure stored once it
+/// ran, so `throw $error` and `new RuntimeException($error)` after it are checked when they run
+/// (Doctrine's `Instantiator`, symfony/finder `SplFileInfo::getContents()`, symfony/runtime
+/// `FrankenPhpWorkerRunner`).
+#[test]
+fn test_variable_created_by_a_reference_capture_is_not_null_after_the_closure_ran() {
+    let out = compile_and_run(
+        "<?php
+final class C {
+    public function run(string $s): void {
+        set_error_handler(static function (int $code, string $message) use (&$error): bool {
+            $error = new RuntimeException($message);
+            return true;
+        });
+        try { trigger_error($s, E_USER_WARNING); } finally { restore_error_handler(); }
+        if ($error) { throw $error; }
+    }
+    public function msg(string $s): string {
+        set_error_handler(static function ($type, $msg) use (&$error) { $error = $msg; });
+        try { trigger_error($s, E_USER_WARNING); } finally { restore_error_handler(); }
+        if ($s === 'x') { throw new RuntimeException($error); }
+        return $error;
+    }
+}
+$c = new C;
+try { $c->run('first'); } catch (RuntimeException $e) { echo $e->getMessage(), \"\\n\"; }
+try { $c->msg('x'); } catch (RuntimeException $e) { echo $e->getMessage(), \"\\n\"; }
+echo $c->msg('y'), \"\\n\";
+",
+    );
+    assert_eq!(out, "first\nx\ny\n");
+}
+
+/// An `object|string` parameter whose object arm an `if` rewrites to the class name still has
+/// the declared union at the property array key; php fails only if an object reaches the key
+/// (symfony/dependency-injection `ContainerBuilder::addObjectResource()`).
+#[test]
+fn test_object_or_string_parameter_keys_a_property_array_after_the_object_arm_is_rewritten() {
+    let out = compile_and_run(
+        "<?php
+final class B {
+    private array $r = [];
+    public function add(object|string $object): static {
+        if (is_object($object)) { $object = $object::class; }
+        $class = $this->r[$object] ??= new \\ReflectionClass($object);
+        echo $class->getName(), \"\\n\";
+        return $this;
+    }
+    public function put(object|string $object): int {
+        if (is_object($object)) { $object = $object::class; }
+        $this->r[$object] = 1;
+        return count($this->r);
+    }
+}
+$b = new B;
+$b->add(new stdClass)->add('ArrayObject');
+echo $b->put(new stdClass), $b->put('Foo'), \"\\n\";
+",
+    );
+    assert_eq!(out, "stdClass\nArrayObject\n23\n");
+}
+
+/// An object whose static type is an interface may implement a member of a union of unrelated
+/// interfaces; php binds it when the call runs and throws `TypeError` if it implements none
+/// (symfony/framework-bundle `ConfigDumpReferenceCommand`).
+#[test]
+fn test_interface_object_at_a_union_of_other_interfaces_is_checked_at_runtime() {
+    let out = compile_and_run(
+        "<?php
+interface Ext { public function alias(): string; }
+interface Conf { public function tree(): string; }
+interface ConfExt { public function conf(): string; }
+class A implements Ext, ConfExt { public function alias(): string { return 'a'; } public function conf(): string { return 'conf-a'; } }
+class B implements Ext { public function alias(): string { return 'b'; } }
+function find(string $n): Ext { return $n === 'a' ? new A : new B; }
+function url(Conf|ConfExt $e): ?string { return $e instanceof Conf ? $e->tree() : $e->conf(); }
+echo url(find('a')), \"\\n\";
+try { echo url(find('b')), \"\\n\"; } catch (TypeError $t) {
+    echo get_class($t), ' ', str_contains($t->getMessage(), 'url(): Argument #1 ($e) must be of type Conf|ConfExt, ') ? 'named' : $t->getMessage(), \"\\n\";
+}
+",
+    );
+    assert_eq!(out, "conf-a\nTypeError named\n");
+}
+
+/// A closure literal's `self` return type, passed to a PHPDoc-templated factory from a static
+/// method, means the class the call is written in (doctrine/dbal `IBMDB2\Exception\*::new()`).
+#[test]
+fn test_closure_self_return_type_at_a_phpdoc_template_call_binds_the_enclosing_class() {
+    let out = compile_and_run(
+        "<?php
+declare(strict_types=1);
+abstract class AbsE extends Exception {
+    public function __construct(string $message, private readonly ?string $sqlState = null, int $code = 0, ?Throwable $previous = null) {
+        parent::__construct($message, $code, $previous);
+    }
+    public function getSQLState(): ?string { return $this->sqlState; }
+}
+final class Factory {
+    /**
+     * @param callable(int): T $constructor
+     *
+     * @return T
+     *
+     * @template T of AbsE
+     */
+    public static function create(string $message, callable $constructor): AbsE {
+        $code = 0;
+        if (strpos($message, 'SQL30082N') !== false) { $code = -30082; }
+        return $constructor($code);
+    }
+}
+final class ConnErr extends AbsE {
+    public static function new(string $connection): self {
+        $message = 'conn SQL30082N failed';
+        $sqlState = '08001';
+        return Factory::create($message, static function (int $code) use ($message, $sqlState): self {
+            return new self($message, $sqlState, $code);
+        });
+    }
+}
+$e = ConnErr::new('x');
+echo $e->getMessage(), ' ', $e->getCode(), ' ', $e->getSQLState(), \"\\n\";
+",
+    );
+    assert_eq!(out, "conn SQL30082N failed -30082 08001\n");
+}

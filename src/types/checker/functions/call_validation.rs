@@ -956,9 +956,28 @@ impl Checker {
                 true
             }
             PhpType::Union(members) => {
+                // An object whose class implements the argument's interface AND a member of the
+                // union is one php binds at run time: `ExtensionInterface` handed to
+                // `ConfigurationInterface|ConfigurationExtensionInterface` (symfony/framework-
+                // bundle `ConfigDumpReferenceCommand`). The members unrelated by inheritance
+                // still admit it when the argument is an interface (or a non-final class a
+                // subclass could extend), so the closed world cannot disprove the call.
+                let actual_class_may_gain_members = actual_is_interface
+                    || self.classes.get(actual_name.as_str()).is_some_and(|info| !info.is_final);
+                let member_may_hold = |expected_name: &str| {
+                    narrows_to(expected_name)
+                        || (actual_class_may_gain_members
+                            && !expected_name.is_empty()
+                            && (self.interfaces.contains_key(expected_name)
+                                || (actual_is_interface
+                                    && self
+                                        .classes
+                                        .get(expected_name)
+                                        .is_some_and(|info| !info.is_final))))
+                };
                 members.iter().all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
                     && members.iter().any(|member| {
-                        matches!(member, PhpType::Object(name) if narrows_to(name))
+                        matches!(member, PhpType::Object(name) if member_may_hold(name))
                     })
             }
             _ => false,
@@ -1617,6 +1636,13 @@ impl Checker {
                             ) || crate::types::param_binding::gradual_union_requires_runtime_param_guard(
                                 expected_ty,
                                 &actual_ty,
+                            ) || matches!(
+                                crate::types::param_binding::classify_param_binding(
+                                    expected_ty,
+                                    &actual_ty,
+                                    arg,
+                                ),
+                                crate::types::param_binding::ParamBinding::ObjectGuard
                             );
                             if !declared_value_param || !has_runtime_guard {
                                 self.require_compatible_arg_type(
