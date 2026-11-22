@@ -60,7 +60,10 @@ fn strict_global_producers_prescan_keeps_profiles_and_original_source() {
         assert_eq!(value.source_profile.mode, SourceMode::Internal, "{name}");
         assert_eq!(value.producer_binding, Some(crate::parser::ast::ProducerBinding::Identity), "{name}");
     }
-    assert_eq!(constants["GLOBAL_USER_ALIAS"].0.source_profile.mode, SourceMode::Php);
+    assert_eq!(constants["GLOBAL_USER_ALIAS"].0.source_profile.mode, SourceMode::Internal,
+        "an alias replays the prepared producer rather than the consuming declaration mode");
+    assert_eq!(constants["GLOBAL_USER_ALIAS"].0.producer_binding,
+        Some(crate::parser::ast::ProducerBinding::Identity));
     let crate::parser::ast::StmtKind::ConstDecl { value, .. } = &program[0].kind else { panic!("source constant"); };
     assert_eq!(value.producer_binding, None);
     let user = crate::parser::parse(&crate::lexer::tokenize(TRUSTED).unwrap()).unwrap();

@@ -184,11 +184,14 @@ fn collect_constant_decls(
     }
 }
 
-/// Keeps a constant alias at its declaration source while reusing the prepared value producer.
+/// Reuses the prepared value producer while reporting failures at the alias declaration.
+///
+/// The alias span is observable diagnostic context, but its source profile is not a new
+/// evaluation policy. PHP stores the already evaluated constant value, so replaying a trusted
+/// producer for an alias written in user source must retain that producer's semantics.
 fn alias_value(resolved: Expr, alias: &Expr, ty: PhpType) -> (Expr, PhpType) {
     let mut resolved = crate::optimize::fold_constant_expression(resolved);
     resolved.span = alias.span;
-    resolved.source_profile = alias.source_profile;
     (resolved, ty)
 }
 
