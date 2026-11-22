@@ -168,15 +168,27 @@ pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
             Some(!items.is_empty()),
         // A keyed literal (`['k' => 1]`) is decided like a list: non-empty means truthy.
         ExprKind::ArrayLiteralAssoc(items) if items.iter().all(|(key, value)| {
-            literal_truthiness(key).is_some() && literal_truthiness(value).is_some()
+            clean_literal_key(key) && literal_truthiness(value).is_some()
         }) => Some(!items.is_empty()),
         ExprKind::ArrayLiteralMixed(items) if items.iter().all(|item| match item {
             ArrayEntry::Value(value) => literal_truthiness(value).is_some(),
             ArrayEntry::Keyed(key, value) =>
-                literal_truthiness(key).is_some() && literal_truthiness(value).is_some(),
+                clean_literal_key(key) && literal_truthiness(value).is_some(),
             _ => false,
         }) => Some(!items.is_empty()),
         _ => None,
+    }
+}
+
+/// Whether a literal array key is one PHP accepts without an error or a diagnostic: an int,
+/// string or bool, or an integral float. An array key is a fatal "Illegal offset type", and a
+/// fractional float or `null` key raises a deprecation, so an array holding one stays undecided.
+fn clean_literal_key(key: &Expr) -> bool {
+    match &key.kind {
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) => true,
+        ExprKind::FloatLiteral(value) =>
+            value.fract() == 0.0 && value.abs() < 9_223_372_036_854_775_808.0,
+        _ => false,
     }
 }
 

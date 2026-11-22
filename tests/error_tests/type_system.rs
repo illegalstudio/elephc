@@ -1053,6 +1053,27 @@ enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
     );
 }
 
+/// A literal array decides a condition only when building it is clean: an array key is PHP's
+/// fatal "Illegal offset type", and a fractional float or `null` key raises a deprecation, so
+/// such an array is not dropped as a known-true condition and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
+    for key in ["[]", "[1]", "1.5", "null"] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = [{key} => 1] ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = ['k' => [[] => 1]] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = [1, 'a' => 2, 1.5 => 3] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+}
+
 /// A backed-case value is checked for PHP's forbidden constant-expression forms before folding
 /// prunes a branch: a class or user constant does not decide a branch at compile time, so a
 /// variable or call in the branch it skips is still rejected, with PHP's messages.

@@ -152,12 +152,13 @@ enum E: int
     case F = ([1] && ['k' => 1]) ? 5 : $v;
     case G = ([] || ['k' => 0]) ? 6 : $u;
     case H = ['k' => 1] ? 7 : 0;
+    case I = [2.0 => 'a', true => 'b'] ? 9 : $t;
 }
 foreach (E::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
 echo "\n";
 "#,
     );
-    assert_eq!(out, "A=1;B=2;C=3;D=4;F=5;G=6;H=7;\n");
+    assert_eq!(out, "A=1;B=2;C=3;D=4;F=5;G=6;H=7;I=9;\n");
 }
 
 /// A `const` declared in a `require_once`d file backs an enum case (and a property default,
