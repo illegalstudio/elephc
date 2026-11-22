@@ -441,3 +441,73 @@ unset($i, $f, $s, $b, $m, $k, $x);
         5|0|5|2|5,5|5,2|10\n\
         6:1:a");
 }
+
+/// A proof recorded in one branch does not reach its sibling: a copy of a loop binding in the
+/// `if` arm must not let the `else` arm cast the `null` the local still holds there, nor the
+/// code after the branch, a later `switch` case or a `catch` block.
+#[test]
+fn test_element_views_branch_proofs_stay_in_their_branch() {
+    let source = r#"<?php
+function sibling(bool $c, int $n) {
+    $text = null;
+    if ($n > 0) { $text = 's'; }
+    $out = [1];
+    foreach (['a' => 'value'] as $value) {
+        if ($c) { $text = $value; }
+        else { $out[] = $text; }
+    }
+    return $out;
+}
+function afterBranch(bool $c, int $n) {
+    $text = null;
+    if ($n > 0) { $text = 's'; }
+    $out = [1];
+    foreach (['a' => 'value'] as $value) {
+        if ($c) { $text = $value; }
+        $out[] = $text;
+    }
+    return $out;
+}
+function laterCase(int $k, int $n) {
+    $text = null;
+    if ($n > 0) { $text = 's'; }
+    $out = [1];
+    foreach (['a' => 'value'] as $value) {
+        switch ($k) {
+            case 1: $text = $value; break;
+            default: $out[] = $text;
+        }
+    }
+    return $out;
+}
+function inCatch(bool $c, int $n) {
+    $text = null;
+    if ($n > 0) { $text = 's'; }
+    $out = [1];
+    foreach (['a' => 'value'] as $value) {
+        try {
+            if ($c) { throw new RuntimeException('skip'); }
+            $text = $value;
+        } catch (RuntimeException $e) {
+            $out[] = $text;
+        }
+    }
+    return $out;
+}
+function sameBranch(bool $c) {
+    $out = ['seed'];
+    foreach (['a' => 'value'] as $value) {
+        if ($c) { $text = $value; $out[] = $text; }
+    }
+    return $out;
+}
+echo json_encode(sibling(false, 0)), json_encode(sibling(false, 1)), json_encode(sibling(true, 0)), '|';
+echo json_encode(afterBranch(false, 0)), json_encode(afterBranch(true, 0)), '|';
+echo json_encode(laterCase(2, 0)), json_encode(laterCase(2, 1)), '|';
+echo json_encode(inCatch(true, 0)), json_encode(inCatch(false, 0)), '|';
+$same = sameBranch(true); echo implode(',', $same), ':', strlen($same[1]), in_array('value', $same, true) ? 'y' : 'n';
+unset($same);
+"#;
+    assert_clean_output(source, "[1,null][1,\"s\"][1]|[1,null][1,\"value\"]|\
+        [1,null][1,\"s\"]|[1,null][1]|seed,value:5y");
+}

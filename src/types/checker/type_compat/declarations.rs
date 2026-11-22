@@ -854,6 +854,7 @@ impl Checker {
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_proven_local_views = std::mem::take(&mut self.proven_local_views);
+        let saved_proof_scopes = std::mem::take(&mut self.proof_scope_invalidations);
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
@@ -910,6 +911,7 @@ impl Checker {
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;
         self.proven_local_views = saved_proven_local_views;
+        self.proof_scope_invalidations = saved_proof_scopes;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;

@@ -1390,6 +1390,8 @@ impl Checker {
     fn check_body_flow(&mut self, body: &[Stmt], env: &mut TypeEnv) -> (Vec<CompileError>, bool) {
         let mut errors = Vec::new();
         let mut reachable = true;
+        // Every body checked here may be skipped, so the proofs it records stay inside it.
+        let entry_proofs = self.begin_proof_scope();
         for stmt in body {
             let selected_body = self.statement_selected_body_at_entry(stmt, env);
             let pending = self.pending_loop_exit_counts();
@@ -1405,6 +1407,7 @@ impl Checker {
             let terminal_body = selected_body.unwrap_or_else(|| std::slice::from_ref(stmt));
             reachable &= !self.body_cannot_fall_through(terminal_body);
         }
+        self.end_proof_scope(entry_proofs);
         (errors, reachable)
     }
 

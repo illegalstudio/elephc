@@ -18,7 +18,11 @@
 //!   contributes `mixed` to the container's checked element type instead of a view.
 //! - A scalar branch merge publishes its type on each proven local its arms read, so the
 //!   merge itself is concrete and a literal's predicted storage matches its lowered items.
+//! - A body that may not run is a proof scope: a proof recorded inside it never reaches a
+//!   sibling body or the code after it, and a proof it ends stays ended.
 //! - Conflicting authoritative visits disable the site, and storage probes publish nothing.
+
+use std::collections::{HashMap, HashSet};
 
 use super::Checker;
 use crate::parser::ast::{Expr, ExprKind};
@@ -186,9 +190,7 @@ impl Checker {
                 Some(view) => {
                     self.proven_local_views.insert(name.to_string(), view.clone());
                 }
-                None => {
-                    self.proven_local_views.remove(name);
-                }
+                None => self.end_local_proof(name),
             }
             bound_names.push(name.to_string());
         }
@@ -221,7 +223,7 @@ impl Checker {
     /// earlier proof is reinstated.
     pub(crate) fn end_foreach_views(&mut self, bound_names: Vec<String>) {
         for name in bound_names {
-            self.proven_local_views.remove(&name);
+            self.end_local_proof(&name);
         }
     }
 
@@ -272,13 +274,42 @@ impl Checker {
         }
     }
 
+    /// Ends the proof recorded for `name`, here and in every enclosing proof scope.
+    pub(crate) fn end_local_proof(&mut self, name: &str) {
+        self.proven_local_views.remove(name);
+        for invalidated in &mut self.proof_scope_invalidations {
+            invalidated.insert(name.to_string());
+        }
+    }
+
+    /// Opens a proof scope for a body that may not run, returning the proofs it starts with.
+    ///
+    /// A copy or a kept guard complement recorded inside an `if` arm, a `switch` case, a `try`
+    /// block or a loop body holds only where that body ran. Sibling bodies are checked right
+    /// after it against the same checker state, so without a scope the skipped arm's proof
+    /// would authorize a cast in the arm that does run.
+    pub(crate) fn begin_proof_scope(&mut self) -> HashMap<String, PhpType> {
+        self.proof_scope_invalidations.push(HashSet::new());
+        self.proven_local_views.clone()
+    }
+
+    /// Closes a proof scope: the entry proofs the body did not end are all that survives it.
+    pub(crate) fn end_proof_scope(&mut self, mut entry: HashMap<String, PhpType>) {
+        let invalidated = self
+            .proof_scope_invalidations
+            .pop()
+            .expect("proof scopes must be balanced");
+        entry.retain(|name, _| !invalidated.contains(name));
+        self.proven_local_views = entry;
+    }
+
     /// Ends the proofs of every local a loop can store, before its body is checked.
     ///
     /// The body is checked once against the entry facts, but a read at its top also runs after
     /// every store a previous iteration made, and such a store need not be a proven one.
     pub(crate) fn end_loop_stored_views<'n>(&mut self, stored: impl Iterator<Item = &'n str>) {
         for name in stored {
-            self.proven_local_views.remove(name);
+            self.end_local_proof(name);
         }
     }
 

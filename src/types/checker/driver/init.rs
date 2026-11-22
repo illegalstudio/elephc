@@ -128,6 +128,7 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             proven_local_views: HashMap::new(),
+            proof_scope_invalidations: Vec::new(),
             packed_loop_counter: None,
             eval_barrier_active: false,
             eval_native_callables_reachable: false,

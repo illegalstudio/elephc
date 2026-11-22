@@ -378,6 +378,12 @@ while the boxed cell can still hold the `null`, and casting that box would store
   the proof to the copy, which holds the same value. A closure body starts with
   no proofs: a by-value capture is a boxed parameter there, and the closure's
   signature is inferred from that storage.
+
+  A body that may not run (an `if` arm, a `switch` case, a `try` or `catch`
+  block, a loop body) is a proof scope. A proof recorded inside it is dropped
+  when the body ends, so the copy in `if ($c) { $t = $v; } else { $out[] = $t; }`
+  proves nothing in the `else` arm or after the `if`; a proof the body ends
+  stays ended for every enclosing scope.
 - **A branch merge** (`?:`, `??`, `match`) is as proven as its arms, and a
   literal arm is its own type. A scalar merge also publishes its type on each
   proven local its arms read, each arm judged on its own, so the arms produce the

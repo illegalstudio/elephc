@@ -390,6 +390,12 @@ pub(crate) struct Checker {
     /// the first store to the name, and a loop binding also at the end of its loop;
     /// `element_values` reads it to decide whether a boxed read may be projected.
     pub proven_local_views: HashMap<String, PhpType>,
+    /// Names whose proof ended inside each conditional body being checked, innermost last.
+    ///
+    /// A body that may not run is a proof scope (`Checker::begin_proof_scope`): a proof it
+    /// adds must not reach its sibling bodies or the code after it, while a proof it ends is
+    /// gone for every enclosing scope as well.
+    pub proof_scope_invalidations: Vec<HashSet<String>>,
     /// The counter of the innermost `for` loop whose writes stay on packed storage, with the
     /// `local_conditional_depth` its body runs at.
     ///
@@ -1235,7 +1241,7 @@ impl Checker {
     /// The store also ends any proof recorded for the name in `proven_local_views`. Otherwise
     /// a no-op for a name no guard has narrowed, which is every name most of the time.
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
-        self.proven_local_views.remove(name);
+        self.end_local_proof(name);
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             self.next_guard_binding_revision += 1;
             entry.binding_revision = self.next_guard_binding_revision;
@@ -1292,7 +1298,7 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
-        self.proven_local_views.remove(name);
+        self.end_local_proof(name);
     }
 
     /// Ends a retained local read view before a store or rebinding chooses its new contract.
