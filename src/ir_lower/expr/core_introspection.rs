@@ -86,8 +86,13 @@ fn insert_scope_binding(ctx: &mut LoweringContext<'_, '_>, name: &str,
     let key = lower_string_literal(ctx, name, expr);
     let value = ctx.load_local(name, Some(expr.span));
     let value = box_value_as_mixed(ctx, value, expr.span);
+    let mut roots = Vec::new();
+    let value = root_array_literal_item(ctx, value, expr.span, &mut roots);
     ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None,
         Op::HashSet.default_effects(), Some(expr.span));
+    for slot in roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Builds the associative array of locals visible at the current lexical call site.
