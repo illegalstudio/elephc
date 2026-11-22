@@ -1538,14 +1538,49 @@ fn brace_is_trait_use<T: SourceToken>(tokens: &[T], open: usize) -> bool {
     false
 }
 
+/// One delimiter step while a halt scan walks backward.
+enum BackwardDelimiter {
+    /// A closer, or the opener that matches one. The caller stays inside that group.
+    Nested,
+    /// `(`, `[` or `{` with no closer still open.
+    Surface(i64),
+}
+
+/// Updates `depth` for one token in a backward delimiter walk.
+///
+/// `)`, `]` and `}` increase depth. `(`, `[` and `{` decrease it. `T_CURLY_OPEN` and
+/// `T_DOLLAR_OPEN_CURLY_BRACES` decrease it only after a `}` raised it: those tokens open
+/// an interpolation that ends with `}`. A real `{` at depth zero stays a block for the caller.
+fn backward_delimiter(id: i64, depth: &mut i32) -> Option<BackwardDelimiter> {
+    if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
+        *depth += 1;
+        return Some(BackwardDelimiter::Nested);
+    }
+    if is_halt_brace_open(id) && id != i64::from(b'{') {
+        if *depth > 0 {
+            *depth -= 1;
+            return Some(BackwardDelimiter::Nested);
+        }
+        return None;
+    }
+    if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
+        if *depth == 0 {
+            return Some(BackwardDelimiter::Surface(id));
+        }
+        *depth -= 1;
+        return Some(BackwardDelimiter::Nested);
+    }
+    None
+}
+
 /// Classifies a real `{` as a statement block, a class-like body or a namespace body.
 ///
 /// The namespace line is filled by the caller from the brace token. A property-hook container
 /// (`public $x {`) is not a statement list; the `get {` body inside it is. `match`, `switch`
 /// and a computed member stop at their own header, so an enclosing function does not win.
-/// Parentheses and nested braces in that header are skipped, and `Foo::class` is not a
-/// class declaration. `{` after `=>` is not a statement block either: PHP reports that brace
-/// before the halt.
+/// Parentheses, nested braces and interpolation braces in that header are skipped, and
+/// `Foo::class` is not a class declaration. `{` after `=>` is not a statement block either:
+/// PHP reports that brace before the halt.
 fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     if let Some(previous) = previous_significant_index(tokens, open) {
         let id = tokens[previous].id();
@@ -1569,23 +1604,18 @@ fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     let mut cursor = open;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-            cursor = previous;
-            continue;
-        }
-        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                if id == i64::from(b'{') {
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            match delimiter {
+                BackwardDelimiter::Nested => {
+                    cursor = previous;
+                    continue;
+                }
+                BackwardDelimiter::Surface(surface) if surface == i64::from(b'{') => {
                     return HaltScope::Statement;
                 }
-            } else {
-                depth -= 1;
-                cursor = previous;
-                continue;
+                BackwardDelimiter::Surface(_) => {}
             }
-        }
-        if depth > 0 {
+        } else if depth > 0 {
             cursor = previous;
             continue;
         }
@@ -1675,20 +1705,20 @@ fn halt_is_statement_start<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 
 /// Returns whether `semi` sits inside parentheses rather than between statements.
 ///
-/// `for ($i = 0; __halt_compiler()` keeps that semicolon inside the header. `echo 1;` does not.
+/// `for ($i = 0; __halt_compiler()` keeps that semicolon inside the header. An interpolation
+/// `}` does not close it. `echo 1;` does not sit inside parentheses.
 fn semicolon_inside_parentheses<T: SourceToken>(tokens: &[T], semi: usize) -> bool {
     let mut depth = 0i32;
     let mut cursor = semi;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                return id == i64::from(b'(');
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            if let BackwardDelimiter::Surface(surface) = delimiter {
+                return surface == i64::from(b'(');
             }
-            depth -= 1;
-        } else if depth == 0 && (id == i64::from(b';') || id == i64::from(b'{') || id == i64::from(b'}')) {
+        } else if depth == 0
+            && (id == i64::from(b';') || id == i64::from(b'{') || id == i64::from(b'}'))
+        {
             return false;
         }
         cursor = previous;
@@ -1748,16 +1778,16 @@ fn anonymous_class_brace<T: SourceToken>(tokens: &[T], open: usize) -> bool {
     let mut cursor = open;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-            cursor = previous;
-            continue;
-        }
-        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                return false;
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            match delimiter {
+                BackwardDelimiter::Surface(_) => return false,
+                BackwardDelimiter::Nested => {
+                    cursor = previous;
+                    continue;
+                }
             }
-            depth -= 1;
+        }
+        if depth > 0 {
             cursor = previous;
             continue;
         }
@@ -1782,16 +1812,16 @@ fn closure_expression_brace<T: SourceToken>(tokens: &[T], open: usize) -> bool {
     let mut cursor = open;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-            cursor = previous;
-            continue;
-        }
-        if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                return false;
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            match delimiter {
+                BackwardDelimiter::Surface(_) => return false,
+                BackwardDelimiter::Nested => {
+                    cursor = previous;
+                    continue;
+                }
             }
-            depth -= 1;
+        }
+        if depth > 0 {
             cursor = previous;
             continue;
         }
@@ -1867,6 +1897,7 @@ fn is_declaration_modifier(id: i64) -> bool {
 ///
 /// The init and condition clauses expect `;`. The update clause expects `)`. A semicolon
 /// inside a call is not a `for` clause, so this returns none and the earlier error stands.
+/// An interpolation brace inside a clause stays inside the header.
 fn for_header_halt_expectation<T: SourceToken>(tokens: &[T], halt: usize) -> Option<&'static str> {
     let previous = previous_significant_index(tokens, halt)?;
     let previous_id = tokens[previous].id();
@@ -1878,11 +1909,9 @@ fn for_header_halt_expectation<T: SourceToken>(tokens: &[T], halt: usize) -> Opt
     let mut cursor = halt;
     while let Some(before) = previous_significant_index(tokens, cursor) {
         let id = tokens[before].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                if id != i64::from(b'(') {
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            if let BackwardDelimiter::Surface(surface) = delimiter {
+                if surface != i64::from(b'(') {
                     return None;
                 }
                 let keyword = previous_significant_index(tokens, before)?;
@@ -1891,7 +1920,6 @@ fn for_header_halt_expectation<T: SourceToken>(tokens: &[T], halt: usize) -> Opt
                 }
                 return Some(if semis >= 2 { "\")\"" } else { "\";\"" });
             }
-            depth -= 1;
         } else if depth == 0 && id == i64::from(b';') {
             semis += 1;
         }
@@ -2215,22 +2243,22 @@ fn postfix_lvalue<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 /// Returns whether `=>` at `index` belongs to an arrow function rather than a match arm.
 ///
 /// `fn() => 1` and `fn(): int => 1` leave the match condition unfinished. The arm separator
-/// before that arrow function stays in force.
+/// before that arrow function stays in force. An interpolation in the parameter list stays
+/// inside the arrow function.
 fn double_arrow_is_fn_arrow<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     let mut depth = 0i32;
     let mut saw_paren = false;
     let mut cursor = index;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
-        if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
-            depth += 1;
-        } else if id == i64::from(b'(') || id == i64::from(b'[') || id == i64::from(b'{') {
-            if depth == 0 {
-                return false;
-            }
-            depth -= 1;
-            if id == i64::from(b'(') && depth == 0 {
-                saw_paren = true;
+        if let Some(delimiter) = backward_delimiter(id, &mut depth) {
+            match delimiter {
+                BackwardDelimiter::Surface(_) => return false,
+                BackwardDelimiter::Nested => {
+                    if id == i64::from(b'(') && depth == 0 {
+                        saw_paren = true;
+                    }
+                }
             }
         } else if depth == 0 && id == tok::T_FN {
             return saw_paren;

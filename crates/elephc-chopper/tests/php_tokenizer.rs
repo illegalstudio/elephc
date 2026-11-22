@@ -901,6 +901,13 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php $x = match ($a) { C::new __halt_compiler() => 1 };",
         "<?php $x = match ($a) { C::static __halt_compiler() => 1 };",
         "<?php $x = match ($a) { 1 => C::static __halt_compiler() };",
+        "<?php switch (\"{$x}\") { __halt_compiler(); }",
+        "<?php switch (\"${x}\") { __halt_compiler(); }",
+        "<?php function f() { for ($i = \"{$x}\"; __halt_compiler(); ) {} }",
+        "<?php function f() { for ($i = \"${x}\"; __halt_compiler(); ) {} }",
+        "<?php function f() { $x = new class(\"{$a}\") {} __halt_compiler(); }",
+        "<?php function f() { $x = function ($a = \"{$b}\") { return 1; } __halt_compiler(); }",
+        "<?php $x = match ($a) { fn($b = \"{$c}\") => 1 __halt_compiler() => 2 };",
         "<?php function f() { C::{__halt_compiler()}; }",
         "<?php function f() { $o->{__halt_compiler()}; }",
         "<?php function f() { $o?->{__halt_compiler()}; }",
@@ -2095,6 +2102,34 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         (
             "<?php $x = match ($a) { 1 => C::static __halt_compiler() };",
             "syntax error, unexpected token \"__halt_compiler\", expecting \"}\"",
+        ),
+        (
+            "<?php switch (\"{$x}\") { __halt_compiler(); }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
+        ),
+        (
+            "<?php switch (\"${x}\") { __halt_compiler(); }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
+        ),
+        (
+            "<?php function f() { for ($i = \"{$x}\"; __halt_compiler(); ) {} }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \";\"",
+        ),
+        (
+            "<?php function f() { for ($i = \"${x}\"; __halt_compiler(); ) {} }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \";\"",
+        ),
+        (
+            "<?php function f() { $x = new class(\"{$a}\") {} __halt_compiler(); }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php function f() { $x = function ($a = \"{$b}\") { return 1; } __halt_compiler(); }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php $x = match ($a) { fn($b = \"{$c}\") => 1 __halt_compiler() => 2 };",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"=>\"",
         ),
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
