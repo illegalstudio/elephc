@@ -2160,6 +2160,7 @@ struct LoopBreakFlow {
     fallthrough: Option<LocalFacts>,
     exits: Vec<LocalFacts>,
     continues: Vec<LocalFacts>,
+    terminals: Vec<LocalFacts>,
     complete: bool,
     audit_exit: LocalFacts,
 }
@@ -2184,6 +2185,7 @@ fn collect_loop_break_flow(
     let mut fallthrough = Some(entry.clone());
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut terminals = Vec::new();
     let mut complete = true;
     let mut audit_exit = entry.clone();
     for stmt in body {
@@ -2202,6 +2204,7 @@ fn collect_loop_break_flow(
                 if *level == 1 {
                     exits.push(locals.clone());
                 } else {
+                    terminals.push(locals.clone());
                     complete = false;
                 }
             }
@@ -2209,11 +2212,13 @@ fn collect_loop_break_flow(
                 if *level == 1 {
                     continues.push(locals.clone());
                 } else {
+                    terminals.push(locals.clone());
                     complete = false;
                 }
             }
             StmtKind::Return(_) | StmtKind::Throw(_) => {
                 validate_stmt(stmt, &mut locals, properties, profile, current_class)?;
+                terminals.push(locals.clone());
             }
             StmtKind::If {
                 condition,
@@ -2234,6 +2239,7 @@ fn collect_loop_break_flow(
                 audit_exit = branch.audit_exit;
                 exits.extend(branch.exits);
                 continues.extend(branch.continues);
+                terminals.extend(branch.terminals);
                 complete &= branch.complete;
                 fallthrough = branch.fallthrough;
                 continue;
@@ -2249,6 +2255,7 @@ fn collect_loop_break_flow(
                 audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
+                terminals.extend(nested.terminals);
                 complete &= nested.complete;
                 fallthrough = nested.fallthrough;
                 continue;
@@ -2264,6 +2271,7 @@ fn collect_loop_break_flow(
                 audit_exit = nested.audit_exit;
                 exits.extend(nested.exits);
                 continues.extend(nested.continues);
+                terminals.extend(nested.terminals);
                 complete &= nested.complete;
                 let mut paths = vec![locals];
                 if let Some(exit) = nested.fallthrough {
@@ -2275,7 +2283,7 @@ fn collect_loop_break_flow(
             StmtKind::Try {
                 try_body,
                 catches,
-                finally_body: None,
+                finally_body,
             } => {
                 let mut flows = vec![collect_loop_break_flow(
                     try_body,
@@ -2297,20 +2305,24 @@ fn collect_loop_break_flow(
                         current_class,
                     )?);
                 }
-                audit_exit = merge_exits(
-                    &flows
-                        .iter()
-                        .map(|flow| flow.audit_exit.clone())
-                        .collect::<Vec<_>>(),
-                );
-                let mut fallthroughs = Vec::with_capacity(flows.len());
-                for flow in flows {
-                    exits.extend(flow.exits);
-                    continues.extend(flow.continues);
-                    complete &= flow.complete;
-                    fallthroughs.push(flow.fallthrough);
-                }
-                fallthrough = merge_optional_exits(fallthroughs);
+                let flow = merge_parallel_loop_flows(flows);
+                let flow = if let Some(finally_body) = finally_body {
+                    apply_loop_finally(
+                        flow,
+                        finally_body,
+                        properties,
+                        profile,
+                        current_class,
+                    )?
+                } else {
+                    flow
+                };
+                audit_exit = flow.audit_exit;
+                exits.extend(flow.exits);
+                continues.extend(flow.continues);
+                terminals.extend(flow.terminals);
+                complete &= flow.complete;
+                fallthrough = flow.fallthrough;
                 continue;
             }
             StmtKind::IfDef {
@@ -2338,6 +2350,7 @@ fn collect_loop_break_flow(
                         fallthrough: Some(locals.clone()),
                         exits: Vec::new(),
                         continues: Vec::new(),
+                        terminals: Vec::new(),
                         complete: true,
                         audit_exit: locals,
                     }
@@ -2350,6 +2363,8 @@ fn collect_loop_break_flow(
                 exits.extend(else_flow.exits);
                 continues.extend(then_flow.continues);
                 continues.extend(else_flow.continues);
+                terminals.extend(then_flow.terminals);
+                terminals.extend(else_flow.terminals);
                 complete &= then_flow.complete && else_flow.complete;
                 fallthrough = merge_optional_exits([
                     then_flow.fallthrough,
@@ -2374,6 +2389,115 @@ fn collect_loop_break_flow(
         fallthrough,
         exits,
         continues,
+        terminals,
+        complete,
+        audit_exit,
+    })
+}
+
+/// Combines mutually exclusive try and catch paths before an optional finally block.
+fn merge_parallel_loop_flows(flows: Vec<LoopBreakFlow>) -> LoopBreakFlow {
+    let audit_exit = merge_exits(
+        &flows
+            .iter()
+            .map(|flow| flow.audit_exit.clone())
+            .collect::<Vec<_>>(),
+    );
+    let fallthrough = merge_optional_exits(
+        flows
+            .iter()
+            .map(|flow| flow.fallthrough.clone())
+            .collect::<Vec<_>>(),
+    );
+    let complete = flows.iter().all(|flow| flow.complete);
+    let mut exits = Vec::new();
+    let mut continues = Vec::new();
+    let mut terminals = Vec::new();
+    for flow in flows {
+        exits.extend(flow.exits);
+        continues.extend(flow.continues);
+        terminals.extend(flow.terminals);
+    }
+    LoopBreakFlow {
+        fallthrough,
+        exits,
+        continues,
+        terminals,
+        complete,
+        audit_exit,
+    }
+}
+
+/// Control action resumed when a finally body falls through normally.
+#[derive(Clone, Copy)]
+enum LoopResume {
+    Fallthrough,
+    Break,
+    Continue,
+    Terminal,
+}
+
+/// Applies one finally body to every distinct incoming loop-control category.
+fn apply_loop_finally(
+    flow: LoopBreakFlow,
+    finally_body: &[Stmt],
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LoopBreakFlow, CompileError> {
+    let audit_exit = validate_branch(
+        finally_body,
+        &flow.audit_exit,
+        properties,
+        profile,
+        current_class,
+    )?;
+    let mut paths = Vec::with_capacity(4);
+    if let Some(fallthrough) = flow.fallthrough {
+        paths.push((LoopResume::Fallthrough, fallthrough));
+    }
+    if !flow.exits.is_empty() {
+        paths.push((LoopResume::Break, merge_exits(&flow.exits)));
+    }
+    if !flow.continues.is_empty() {
+        paths.push((LoopResume::Continue, merge_exits(&flow.continues)));
+    }
+    if !flow.terminals.is_empty() {
+        paths.push((LoopResume::Terminal, merge_exits(&flow.terminals)));
+    }
+
+    let mut fallthroughs = Vec::new();
+    let mut exits = Vec::new();
+    let mut continues = Vec::new();
+    let mut terminals = Vec::new();
+    let mut complete = flow.complete;
+    for (resume, entry) in paths {
+        let finally_flow = collect_loop_break_flow(
+            finally_body,
+            &entry,
+            properties,
+            profile,
+            current_class,
+        )?;
+        exits.extend(finally_flow.exits);
+        continues.extend(finally_flow.continues);
+        terminals.extend(finally_flow.terminals);
+        complete &= finally_flow.complete;
+        let Some(fallthrough) = finally_flow.fallthrough else {
+            continue;
+        };
+        match resume {
+            LoopResume::Fallthrough => fallthroughs.push(Some(fallthrough)),
+            LoopResume::Break => exits.push(fallthrough),
+            LoopResume::Continue => continues.push(fallthrough),
+            LoopResume::Terminal => terminals.push(fallthrough),
+        }
+    }
+    Ok(LoopBreakFlow {
+        fallthrough: merge_optional_exits(fallthroughs),
+        exits,
+        continues,
+        terminals,
         complete,
         audit_exit,
     })
@@ -2399,6 +2523,7 @@ fn collect_loop_break_if(
     )?;
     let mut exits = Vec::new();
     let mut continues = Vec::new();
+    let mut terminals = Vec::new();
     let mut fallthroughs = Vec::new();
     let mut audit_exits = Vec::new();
     let mut complete = true;
@@ -2413,6 +2538,7 @@ fn collect_loop_break_if(
         audit_exits.push(then_flow.audit_exit.clone());
         exits.extend(then_flow.exits);
         continues.extend(then_flow.continues);
+        terminals.extend(then_flow.terminals);
         complete &= then_flow.complete;
         fallthroughs.push(then_flow.fallthrough);
     }
@@ -2437,6 +2563,7 @@ fn collect_loop_break_if(
             audit_exits.push(body_flow.audit_exit.clone());
             exits.extend(body_flow.exits);
             continues.extend(body_flow.continues);
+            terminals.extend(body_flow.terminals);
             complete &= body_flow.complete;
             fallthroughs.push(body_flow.fallthrough);
         }
@@ -2455,6 +2582,7 @@ fn collect_loop_break_if(
             audit_exits.push(else_flow.audit_exit.clone());
             exits.extend(else_flow.exits);
             continues.extend(else_flow.continues);
+            terminals.extend(else_flow.terminals);
             complete &= else_flow.complete;
             fallthroughs.push(else_flow.fallthrough);
         }
@@ -2471,6 +2599,7 @@ fn collect_loop_break_if(
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
         continues,
+        terminals,
         complete,
         audit_exit,
     })
