@@ -907,9 +907,11 @@ fn test_error_mbstring_text_contracts() {
     }
 }
 
-/// Array-search forms must not reach the string-only backend without the literal rewrite.
+/// php accepts an array search at `str_replace()` (it replaces each element in turn), and the
+/// build computes the same answer for the forms the literal rewrite does not cover
+/// (`tests/codegen/runtime_checked_refusals.rs`), so none of them is refused.
 #[test]
-fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
+fn test_simplexml_followup_str_replace_accepts_array_search_forms() {
     for source in [
         r#"<?php function replace_runtime(string $replacement): string {
             return str_replace(["a", "b"], $replacement, "ab");
@@ -917,9 +919,6 @@ fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
         r#"<?php echo str_replace(search: ["a", "b"], replace: "x", subject: "ab");"#,
         r#"<?php echo str_replace(...[["a", "b"], "x", "ab"]);"#,
     ] {
-        expect_error(
-            source,
-            "str_replace(): Argument #1 ($search) must be of type string, array given",
-        );
+        expect_no_error(source);
     }
 }

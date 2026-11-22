@@ -26,7 +26,14 @@ fn test_nullable_object_lazy_local_join_rejects_nullable_exits() {
     ] {
         let source = format!("<?php final class Service {{}} function get(?Service $service, ?Service $replacement, bool $flag): Service {{ {branch} return $service; }}");
         let error = check_source_strict(&source).expect_err(branch);
-        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+        // A store of the literal `null` after the guard leaves the local definitely null, which
+        // the refusal names as `got null`; every other shape may still be a `Service`.
+        let definitely_null = branch.ends_with("} $service = null;");
+        assert!(
+            error.contains("return type expects Service, got Service|null")
+                || (definitely_null && error.contains("return type expects Service, got null")),
+            "{branch}: {error}"
+        );
     }
 }
 
@@ -331,7 +338,13 @@ fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     // Permissive mode accepts the program, as php does (`$a` is an int throughout at run time);
     // `--strict-locals` still reports the conflicting stores.
     expect_no_error(source);
-    expect_error_strict(source, "cannot reassign $a from float|string to int");
+    // The two union members come out in either order depending on which guard narrowed first.
+    let error = check_source_strict(source).expect_err("strict mode reports the conflicting stores");
+    assert!(
+        error.contains("cannot reassign $a from float|string to int")
+            || error.contains("cannot reassign $a from string|float to int"),
+        "{error}"
+    );
 }
 
 /// Shared classes for the readonly-narrowing fixtures: `Box::$plugin` is readonly, and only

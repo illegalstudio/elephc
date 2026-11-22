@@ -483,3 +483,74 @@ echo $e->getMessage(), ' ', $e->getCode(), ' ', $e->getSQLState(), \"\\n\";
     );
     assert_eq!(out, "conn SQL30082N failed -30082 08001\n");
 }
+
+/// A nullable local at a non-null parameter and a class value at a parameter typed with an
+/// interface it may not implement compile, and the call throws php's `TypeError` when the value
+/// is wrong. `--strict-locals` keeps the compile-time refusal (`tests/error_tests`).
+/// A scalar union at a `string` parameter never throws: php coerces each member.
+#[test]
+fn test_static_param_contradictions_throw_a_type_error_at_run_time() {
+    let out = compile_and_run(
+        "<?php
+function need(int $value): void { echo \"ok \", $value, \"\\n\"; }
+function run(?int $value, bool $flag): void { if ($value === null) { if ($flag) { $value = 40; } } need($value); }
+run(1, false);
+try { run(null, false); } catch (TypeError $e) { echo get_class($e), \"|\", strstr($e->getMessage(), \", called\", true), \"\\n\"; }
+run(null, true);
+interface Marker {}
+class Base {}
+class Impl extends Base implements Marker {}
+function consume(Marker $m): void { echo \"consumed\\n\"; }
+function go(?Base $v): void { if ($v === null) { return; } consume($v); }
+go(new Impl);
+try { go(new Base); } catch (TypeError $e) { echo get_class($e), \"|\", strstr($e->getMessage(), \", called\", true), \"\\n\"; }
+function needS(string $s): void { echo \"s=\", $s, \"\\n\"; }
+function declared(int|string $value): void { needS($value); }
+function sentinel(string|false $value): void { needS($value); }
+declared(5);
+sentinel(false);
+",
+    );
+    assert_eq!(
+        out,
+        "ok 1\nTypeError|need(): Argument #1 ($value) must be of type int, null given\nok 40\nconsumed\nTypeError|consume(): Argument #1 ($m) must be of type Marker, Base given\ns=5\ns=\n"
+    );
+}
+
+/// A scalar union at `array_values()` and a scalar operand at `array_merge()` compile and throw
+/// php's `TypeError` when the call runs (`--strict-locals` keeps refusing the literal operand).
+#[test]
+fn test_scalar_at_an_array_builtin_throws_a_type_error_at_run_time() {
+    let out = compile_and_run(
+        "<?php
+function pick(int|string $v): void { array_values($v); }
+try { pick(1); } catch (TypeError $e) { echo get_class($e), \"|\", $e->getMessage(), \"\\n\"; }
+function bad(array $items): array { return array_merge($items, 7); }
+try { bad([1]); } catch (TypeError $e) { echo get_class($e), \"|\", $e->getMessage(), \"\\n\"; }
+function bad2(array $items): array { return array_merge(7, $items); }
+try { bad2([1]); } catch (TypeError $e) { echo get_class($e), \"|\", $e->getMessage(), \"\\n\"; }
+echo count(array_merge([1], [2])), \"\\n\";
+",
+    );
+    assert_eq!(
+        out,
+        "TypeError|array_values(): Argument #1 ($array) must be of type array, int given\nTypeError|array_merge(): Argument #2 must be of type array, int given\nTypeError|array_merge(): Argument #1 must be of type array, int given\n2\n"
+    );
+}
+
+/// `str_replace()` takes an array search in every spelling php accepts, not only the literal
+/// forms the optimizer rewrites.
+#[test]
+fn test_str_replace_array_search_forms_compute_php_answers() {
+    let out = compile_and_run(
+        "<?php
+function replace_runtime(string $replacement): string {
+    return str_replace([\"a\", \"b\"], $replacement, \"ab\");
+}
+echo replace_runtime(\"x\"), \"\\n\";
+echo str_replace(search: [\"a\", \"b\"], replace: \"x\", subject: \"ab\"), \"\\n\";
+echo str_replace(...[[\"a\", \"b\"], \"x\", \"ab\"]), \"\\n\";
+",
+    );
+    assert_eq!(out, "xx\nxx\nxx\n");
+}

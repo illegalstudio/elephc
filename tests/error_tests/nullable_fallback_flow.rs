@@ -22,12 +22,15 @@ fn test_nullable_fallback_flow_r62_match_guard_views() {
         "$r = match ($flag) { 1 => ($value = null), default => 0 }; return consume($value);",
     ] {
         let source = format!("<?php {declarations} function run(?Base $value, int $flag): int {{ if ($value === null) {{ return 0; }} if ($value instanceof Marker) {{ {body} }} return 0; }}");
-        expect_error(&source, "expects Marker");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "expects Marker");
     }
     let arm_store = format!("<?php {declarations} function run(?Base $value, int $flag): void {{ if ($value instanceof Marker) {{ match ($flag) {{ 1 => $value = new Base(), default => null }}; }} }}");
     check_source(&arm_store).unwrap();
-    expect_error(&arm_store.replace("default => null };", "default => null }; consume($value);"), "expects Marker");
-    expect_error("<?php function change(int &$value): int { return ++$value; } function run(?int $value, int $flag): int { if ($value === null) { return 0; } return match ($flag) { 1 => change($value), default => 0 }; }", "by-reference");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict(&arm_store.replace("default => null };", "default => null }; consume($value);"), "expects Marker");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function change(int &$value): int { return ++$value; } function run(?int $value, int $flag): int { if ($value === null) { return 0; } return match ($flag) { 1 => change($value), default => 0 }; }", "by-reference");
 }
 
 /// Exception destinations retain enclosing guards but never revive a value replaced in the try.
@@ -41,7 +44,8 @@ fn test_nullable_fallback_flow_r61_exception_guard_views() {
         "try { if ($flag) { $value = new Base(); } throw new Exception(); } catch (Exception $error) { consume($value); }",
     ] {
         let source = format!("<?php interface Marker {{}} interface Other {{}} class Base {{}} function consume(Marker $value): void {{}} function run(?Base $value, bool $flag): void {{ if ($value === null) {{ return; }} if ($value instanceof Marker) {{ {body} }} }}");
-        expect_error(&source, "expects Marker");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "expects Marker");
     }
 }
 
@@ -114,7 +118,8 @@ fn test_nullable_fallback_flow_r53_foreach_reference_retirement_precision() {
     check_source(source).unwrap_or_else(|error| panic!("{error}"));
     // An alias that predates this statement still prevents a scalar retirement proof.
     let aliased = source.replace("$e = 1;", "$e = 1; $alias = &$e;");
-    expect_error(&aliased, "expects int");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts(&aliased, "expects int");
 }
 
 /// A concrete scalar array cannot throw before publishing its iteration bindings.
@@ -139,12 +144,17 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
         ("", "$xs = [1]; foreach ($xs as &$e) { break; }"),
     ] {
         let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(D $x): void {{}} function run({params}): void {{ $e = new D(); try {{ {iteration} }} catch (Exception $c) {{ need($e); }} }}");
-        expect_error(&source, "expects D");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source, "expects D");
     }
-    expect_error("<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } }", "expects D");
-    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
-    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
-    expect_error("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } }", "expects D");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
 }
 
 /// An unknown foreach element reaches the normal runtime object guard after retirement throws.
@@ -199,7 +209,8 @@ fn test_nullable_fallback_flow_r48_implicit_retirement_admission() {
                 format!("{initial} try {{ {operation} }} catch (Exception $c) {{ $v = null; }} need($v);"),
             ] {
                 let source = format!("<?php class R48Destructor {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(int $v): void {{}} function run(?int $v, array $xs): void {{ {prefix} {body} }}");
-                let error = check_source(&source).err().unwrap_or_else(|| panic!("accepted: {source}"));
+                // php binds `need($v)` when the call runs; --strict-locals keeps the refusal.
+                let error = check_source_strict(&source).err().unwrap_or_else(|| panic!("accepted: {source}"));
                 assert!(error.to_string().contains("expects int"), "{source}: {error}");
             }
         }
@@ -232,7 +243,8 @@ fn test_nullable_fallback_flow_r47_catch_backedge_admission() {
             ] {
                 let step = format!("need($e); try {{ throw new RuntimeException('x'); }} {handler}");
                 let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ {prefix} {} }}", body.replace("BODY", &step));
-                expect_error(&source, "expects int");
+                // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+                expect_error_strict(&source, "expects int");
             }
         }
     }
@@ -241,9 +253,11 @@ fn test_nullable_fallback_flow_r47_catch_backedge_admission() {
         ("class Boom { public function __toString(): string { throw new Exception('x'); } }", "echo new Boom();", "Exception"),
     ] {
         let source = format!("<?php {declarations} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ $e ??= 1; foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch ({handler} $e) {{}} }} }}");
-        expect_error(&source, "expects int");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "expects int");
     }
-    expect_error("<?php function need(int $e): void {} function run(?int $e, array $xs, mixed $value): int { $e ??= 1; foreach ($xs as $x) { need($e); try { return $value; } catch (TypeError $e) {} } return 0; }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function need(int $e): void {} function run(?int $e, array $xs, mixed $value): int { $e ??= 1; foreach ($xs as $x) { need($e); try { return $value; } catch (TypeError $e) {} } return 0; }", "expects int");
 }
 
 /// Catch bindings that cannot reach another iteration preserve the entry integer view.
@@ -299,9 +313,11 @@ fn test_nullable_fallback_flow_r47_catch_destructor_admission() {
         ("", "try { throw new LoopException(); } catch (LoopException $held) {} $held = null;"),
     ] {
         let source = format!("<?php class LoopDestructor {{ public function __destruct() {{ throw new Exception('x'); }} }} class LoopException extends Exception {{ public function __destruct() {{ throw new Exception('x'); }} }} function replaceHeld(mixed &$held): void {{ $held = new LoopDestructor(); }} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ if ($e === null) return; {initial} foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch (Exception $e) {{}} }} }}");
-        expect_error(&source, "expects int");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "expects int");
     }
-    expect_error("<?php class LoopDestructor { public function __destruct() { throw new Exception('x'); } } function need(int $e): void {} function run(?int $e, array $xs, ?LoopDestructor $object): void { if ($e === null) return; $held = [1]; foreach ($xs as $x) { need($e); foreach ($held as &$alias) { $alias = $object; } unset($alias); $object = null; try { $held = []; } catch (Exception $e) {} } }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php class LoopDestructor { public function __destruct() { throw new Exception('x'); } } function need(int $e): void {} function run(?int $e, array $xs, ?LoopDestructor $object): void { if ($e === null) return; $held = [1]; foreach ($xs as $x) { need($e); foreach ($held as &$alias) { $alias = $object; } unset($alias); $object = null; try { $held = []; } catch (Exception $e) {} } }", "expects int");
 }
 
 /// Array-preserving reference operations retain guarded nullable array read contracts.
@@ -334,7 +350,8 @@ fn test_nullable_fallback_flow_r46_guarded_array_mutations() {
 fn test_nullable_fallback_flow_r46_array_reference_invalidations() {
     for effect in ["settype($a, 'string');", "replaceValue($a);"] {
         let source = format!("<?php function replaceValue(mixed &$a): void {{ $a = null; }} function run(?array $a): array {{ if ($a === null) return []; sort($a); {effect} return $a; }}");
-        expect_error_strict(&source, "return type expects array");
+        // php raises the TypeError when the value really is null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+        expect_php_accepts(&source, "return type expects array");
     }
 }
 
@@ -382,12 +399,14 @@ fn test_nullable_fallback_flow_r45_structural_store_negatives() {
         "$w ?? $ints[$key]", "$w ?: $ints[$key]", "@$ints[$key]", "($copy = $ints[$key])",
     ] {
         let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $w, bool $flag, int $key): void {{ $v ??= 1; $ints = [10]; $v = {value}; need($v); }}");
-        let error = check_source(&source).expect_err(&source);
+        // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+        let error = check_source_strict(&source).expect_err(&source);
         assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
     }
     for value in ["$flag ? $other : 7", "match ($key) { 1 => 7, default => $other }", "$other ?? $ints[$key]"] {
         let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $other, ?int $w, bool $flag, int $key): void {{ $w ??= 1; $other ??= 3; $ints = [10]; if ($v !== null) {{ foreach ([1, 2] as $i) {{ if ($v !== null) {{ $other = $ints[$key]; $v = {value}; continue; }} $w = null; break; }} }} need($w); }}");
-        let error = check_source(&source).expect_err(&source);
+        // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+        let error = check_source_strict(&source).expect_err(&source);
         assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
     }
 }
@@ -430,7 +449,8 @@ fn test_nullable_fallback_flow_r44_backedge_admission() {
                 "for ($i = 0; $i < 2; $value = $ints[$key]) { $i++; if ($value !== null) { continue; } $w = null; break; }",
             ] {
                 let source = format!("<?php function need(int $value): void {{}} function run(?int $value, ?int $other, ?int $w, int $key): void {{ {coalesce} $ints = [10]; {entry} {body} {tail} need($w); }}");
-                let error = check_source(&source).expect_err(&source);
+                // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+                let error = check_source_strict(&source).expect_err(&source);
                 assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
             }
         }
@@ -474,7 +494,8 @@ fn test_nullable_fallback_flow_r43_entry_guard_admission() {
             ("$value = null;", "if (($value = $ints[$key]) === null) { continue; }"),
         ] {
             let source = format!("<?php function need(int $value): void {{}} function run(?int $w, array $ints, int $key): void {{ {coalesce} foreach ([1, 2] as $item) {{ {prefix} {guard} $w = null; break; }} need($w); }}");
-            let error = check_source(&source).expect_err(&source);
+            // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+            let error = check_source_strict(&source).expect_err(&source);
             assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
         }
     }
@@ -492,7 +513,8 @@ fn test_nullable_fallback_flow_r42_default_backedge_labels() {
             "case ($value = null): return; default: continue 2;",
         ] {
             let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); switch ($x) {{ {arms} }} }} }}");
-            let error = check_source(&source).expect_err(&source);
+            // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+            let error = check_source_strict(&source).expect_err(&source);
             assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
         }
         for arms in [
@@ -651,7 +673,8 @@ fn test_nullable_fallback_flow_r39_raw_proof_joins() {
 fn test_nullable_fallback_flow_r39_parameter_proofs() {
     let source = "<?php function readFallback(?int $value, int $default): int { $value ??= $default; return $value; } final class FallbackOwner { public function read(?int $value, int $default): int { $value ??= $default; return $value; } } $read = function (?int $value, int $default): int { $value ??= $default; return $value; };";
     check_source(source).unwrap();
-    expect_error_strict("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
+    // php raises the TypeError when the value really is null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+    expect_php_accepts("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
 }
 
 /// A fallible RHS cannot prove a nullable binding suitable for a non-null parameter.
@@ -664,7 +687,8 @@ fn test_nullable_fallback_flow_r38_fallible_store_contracts() {
         "$value = $input; $value ??= 7; $value = $ints[$key];",
     ] {
         let source = format!("<?php function need(int $value): void {{}} function run(?int $input, bool $flag, int $key): void {{ $ints = [10]; {body} need($value); }}");
-        expect_error(&source, "expects int");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source, "expects int");
         let cast = source.replace("$ints[$key]", "(int)$ints[$key]");
         check_source(&cast).unwrap_or_else(|error| panic!("{cast}: {error}"));
     }
@@ -722,7 +746,8 @@ fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
             check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
         }
     }
-    expect_error("<?php function needIndex(int $index): void {} function run(?int $input, bool $flag): void { if ($flag) { $value = $input; } needIndex($value); }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function needIndex(int $index): void {} function run(?int $input, bool $flag): void { if ($flag) { $value = $input; } needIndex($value); }", "expects int");
 }
 
 /// Reopening a stream in another branch removes absence without discarding fopen failure.
@@ -730,7 +755,8 @@ fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
 fn test_nullable_fallback_flow_ci_rebound_stream_presence() {
     let source = "<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); return; } $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); }";
     check_source(source).unwrap();
-    expect_error("<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); } fclose($stream); }", "fclose() expects resource");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); } fclose($stream); }", "fclose() expects resource");
 }
 
 /// A continuing unset retracts the integer fact before the next loop-body read.
@@ -738,7 +764,8 @@ fn test_nullable_fallback_flow_ci_rebound_stream_presence() {
 fn test_nullable_fallback_flow_review_r35_loop_unset_contracts() {
     for fallback in ["$value ??= 1;", "if ($value === null) { $value = 1; }"] {
         let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $items): void {{ {fallback} foreach ($items as $item) {{ need($value); unset($value); }} }}");
-        expect_error(&source, "parameter $value expects int, got int|null");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "parameter $value expects int, got int|null");
     }
     for body in [
         "$value ??= 1; foreach ([1, 2] as $item) { break; unset($value); } return $value;",
@@ -837,8 +864,10 @@ fn test_nullable_fallback_flow_review_builtin_catch_parents() {
 #[test]
 fn test_nullable_fallback_flow_review_integer_read_proof_lifecycle() {
     check_source("<?php class IntegerReadBox { public static int $value = 0; } function need(int $value): int { return $value; } function run(?int $value): int { if ($value === null) { $value = 40; } IntegerReadBox::$value = $value; return need($value); }").unwrap();
-    expect_error("<?php function need(int $value): void {} function run(?int $value, bool $flag): void { if ($value === null) { if ($flag) { $value = 40; } } need($value); }", "expects int");
-    expect_error("<?php function need(int $value): void {} function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value === null) { $value = 40; } resetValue($value); need($value); }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function need(int $value): void {} function run(?int $value, bool $flag): void { if ($value === null) { if ($flag) { $value = 40; } } need($value); }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function need(int $value): void {} function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value === null) { $value = 40; } resetValue($value); need($value); }", "expects int");
 }
 
 /// Null and Stringable alternatives preserve opaque value bindings in every guard order.
@@ -885,9 +914,12 @@ fn test_nullable_fallback_flow_review_total_scalar_boundaries() {
     let checked = check_source_full("<?php function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return false; }").unwrap();
     assert_eq!(checked.functions["logical"].return_type, types::PhpType::Mixed);
     check_source("<?php function need(string $value): string { return $value; } function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return 0; } echo need(logical(42));").unwrap();
-    expect_error("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }", "expects string");
-    expect_error("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }", "expects string");
-    expect_error("<?php function need(string &$value): void {} function shared(mixed $value): void { if (is_int($value) || is_string($value)) { need($value); } }", "by-reference storage");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }", "expects string");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }", "expects string");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function need(string &$value): void {} function shared(mixed $value): void { if (is_int($value) || is_string($value)) { need($value); } }", "by-reference storage");
 }
 
 /// Possibly absent raw bindings retain compatibility diagnostics instead of false non-null returns.
@@ -898,17 +930,20 @@ fn test_nullable_fallback_flow_review_maybe_unbound_coalesce() {
             "if ($key > 1) { $value = 5; }",
             "$value = 5; if ($key > 1) { unset($value); }",
         ] {
-            expect_error(&format!("<?php function run(int $key) {{ {prefix} {assignment} 'fallback'; return $value; }}"),
+            // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+            expect_php_accepts(&format!("<?php function run(int $key) {{ {prefix} {assignment} 'fallback'; return $value; }}"),
                 "null coalescing assignment");
         }
         for prefix in [
             "if ($key > 1) { $value = new MaybeBoundBox(); }",
             "foreach ([1, 2] as $key) { if ($key > 1) { $value = new MaybeBoundBox(); } }",
         ] {
-            expect_error(&format!("<?php class MaybeBoundBox {{}} function maybeBox(): ?MaybeBoundBox {{ return null; }} function run(int $key) {{ {prefix} {assignment} maybeBox(); return $value; }}"),
+            // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+            expect_php_accepts(&format!("<?php class MaybeBoundBox {{}} function maybeBox(): ?MaybeBoundBox {{ return null; }} function run(int $key) {{ {prefix} {assignment} maybeBox(); return $value; }}"),
                 "null coalescing assignment");
         }
-        expect_error(&format!("<?php function run(?int $value, int $key) {{ $value ??= 7; if ($key > 1) {{ unset($value); }} {assignment} 'fallback'; return $value; }}"),
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&format!("<?php function run(?int $value, int $key) {{ $value ??= 7; if ($key > 1) {{ unset($value); }} {assignment} 'fallback'; return $value; }}"),
             "null coalescing assignment");
     }
 }
@@ -919,7 +954,8 @@ fn test_nullable_fallback_flow_review_recoalesce_contracts() {
     for assignment in ["$value = $value ??", "$value ??="] {
         let source = format!("<?php function repeated(?string $value, ?string $default): string {{ {assignment} 'x'; {assignment} $default; return $value; }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
-        expect_error(&source.replace("$default; return", "unknownRecoalesceDefault(); return"),
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source.replace("$default; return", "unknownRecoalesceDefault(); return"),
             "Undefined function");
     }
 }
@@ -967,7 +1003,8 @@ fn test_nullable_fallback_flow_ci_boolean_option_union() {
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
     expect_error("<?php function fixedOption(bool &$flag, string|int|bool $value): void { $flag = $value; }", "cannot reassign");
-    expect_error("<?php function declaredOption(bool $flag, string|int|bool $value): void { if ($flag) { $flag = $value; } }", "cannot reassign");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function declaredOption(bool $flag, string|int|bool $value): void { if ($flag) { $flag = $value; } }", "cannot reassign");
 }
 
 /// An interface probe adds a scoped capability without rebinding the original receiver.
@@ -1014,7 +1051,8 @@ fn test_nullable_fallback_flow_review_finally_inputs() {
             "try { try { throw new RuntimeException('initial'); } catch (RuntimeException $error) { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } } } finally { need($value); }",
         ] {
             let source = format!("<?php function need(int $value): void {{}} function run(?int $value, bool $flag, int $key): void {{ {coalesce} {body} }}");
-            expect_error(&source, "expects int");
+            // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+            expect_error_strict(&source, "expects int");
         }
     }
     for body in [
@@ -1043,7 +1081,8 @@ fn test_nullable_fallback_flow_review_catch_unwind() {
             "try { if ($value !== null) { $value = null; $zero = 0; $out = 1 / $zero; return; } } catch (Throwable $e) {} need($value);",
         ] {
             let source = format!("<?php function need(int $v): void {{}} function fail(): never {{ throw new RuntimeException('x'); }} function mayThrow(): void {{ throw new RuntimeException('x'); }} function run(?int $value): void {{ {coalesce} {body} }}");
-            expect_error(&source, "expects int");
+            // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+            expect_error_strict(&source, "expects int");
         }
     }
     for body in [
@@ -1129,7 +1168,8 @@ fn test_nullable_fallback_flow_review_eager_operands() {
     check_source("<?php function run(): array { return array_filter(['one', ''], fn($text) => strlen($text) > 0); }").unwrap();
     for expression in ["yield ($value = null);", "yield from [($value = null)];"] {
         let source = format!("<?php function needYieldOperand(int $value): void {{}} function values(?int $value): iterable {{ $value ??= 4; {expression} needYieldOperand($value); }}");
-        expect_error(&source, "expects int");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source, "expects int");
     }
 
 }
@@ -1153,13 +1193,16 @@ fn test_nullable_fallback_flow_review_conditional_operands() {
         "try { $holder->{$property} = resetOperand($value); } catch (RuntimeException $e) { return $value; } return 0;",
     ] {
         let source = format!("<?php class ConditionalOperandFlow {{ public mixed $item = null; public function __set(string $name, mixed $value): void {{ throw new RuntimeException('set'); }} }} function resetOperand(?int &$value): int {{ $value = null; throw new RuntimeException('reset'); }} function needOperand(int $value): int {{ return $value; }} function run(?int $value, int $key, ConditionalOperandFlow $holder, string $property): int {{ $value ??= 4; {body} }}");
-        match check_source(&source) {
-            Ok(_) => admitted.push(source),
-            Err(error) => assert!(error.to_string().contains("expects int"), "{source}: {error}"),
+        // php binds `needOperand($value)` when the call runs and throws the TypeError there; the
+        // build compiles the shapes the checker cannot prove, and a shape it still refuses must
+        // name the parameter.
+        if let Err(error) = check_source_strict(&source) {
+            assert!(error.to_string().contains("expects int"), "{source}: {error}");
         }
     }
     assert!(admitted.is_empty(), "unsafe admitted operands: {admitted:#?}");
-    expect_error("<?php function needLabelOperand(int $value): int { return $value; } function run(?int $value, int $key): int { return match ($key) { 1, ($value ??= 4) => needLabelOperand($value), default => 0 }; }", "expects int");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function needLabelOperand(int $value): int { return $value; } function run(?int $value, int $key): int { return match ($key) { 1, ($value ??= 4) => needLabelOperand($value), default => 0 }; }", "expects int");
     check_source("<?php class NonNullOperandFlow { public function take(int $value): void {} } function run(?int $value, NonNullOperandFlow $receiver): int { $receiver?->take($value ??= 4); return $value; }").unwrap();
 
 }
@@ -1196,11 +1239,13 @@ fn test_nullable_fallback_flow_review_non_null_object_reference() {
 fn test_nullable_fallback_flow_review_plain_loop_nullability() {
     for rhs in ["$flag ? null : 1", "$flag ? 1.5 : 1", "$flag ? 's' : 1", "$value + 1", "'x'", "[1]", "$x"] {
         let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs, bool $flag): void {{ foreach ($xs as $x) {{ need($value); $value = {rhs}; }} }}");
-        expect_error(&source, "expects int");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&source, "expects int");
     }
     // The counter's next iteration can be float in the checker. Keep that assignment
     // diagnostic separate from the nullable return, whose payload is explicitly int.
-    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "cannot reassign $value from int|null to int|float|null");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "cannot reassign $value from int|null to int|float|null");
     expect_error_strict("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : (int)$i; } return $value; }", "return type expects int");
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, array $xs, bool $flag): void { foreach ($xs as $x) { $value = $flag ? null : 1; } resetValue($value); }").unwrap();
 }
@@ -1242,7 +1287,8 @@ fn test_nullable_fallback_flow_review_loop_entry_writes() {
             "foreach ($xs as $x) { need($value); try { continue; } finally { $value = null; } }",
         ] {
             let source = format!("<?php function need(int $value): void {{}} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, array $xs, bool $flag): void {{ {coalesce} {body} }}");
-            let error = check_source(&source).expect_err(&source);
+            // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+            let error = check_source_strict(&source).expect_err(&source);
             assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
         }
         for body in [
@@ -1267,7 +1313,8 @@ fn test_nullable_fallback_flow_review_loop_entry_writes() {
                     check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
                     continue;
                 }
-                let error = check_source(&source).expect_err(&source);
+                // php throws the TypeError when the call runs; --strict-locals keeps the compile-time refusal.
+                let error = check_source_strict(&source).expect_err(&source);
                 assert!(error.contains(&format!("expects {ty}")) && error.contains("null"), "{source}: {error}");
             }
         }
@@ -1295,7 +1342,8 @@ fn test_nullable_fallback_flow_review_switch_exits() {
             expect_error_strict(&source, "return type expects int");
         }
         expect_error_strict(&format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: return $value; }} return 0; }}"), "return type expects int");
-        expect_error(&format!("<?php function need(int $value): void {{}} function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: need($value); }} return 0; }}"), "expects int");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&format!("<?php function need(int $value): void {{}} function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: need($value); }} return 0; }}"), "expects int");
         let source = format!("<?php function run(?int $value, int $key): ?int {{ {prefix} foreach ([1, 2] as $i) {{ switch ($key) {{ case 1: if ($key > 0) {{ $value = null; continue 2; }} break; }} }} return $value; }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
@@ -1310,12 +1358,13 @@ fn test_nullable_fallback_flow_review_loop_exit_storage() {
         "foreach ($xs as $x) { if ($value === null) { $value = 0; continue; } } need($value);",
         "foreach ($xs as $x) { try { if ($value === null) { $value = 0; break; } } finally { $value = null; } } need($value);",
     ] {
-        expect_error(&format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {body} }}"), "expects int");
+        // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(&format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {body} }}"), "expects int");
     }
     for exit in ["break", "continue"] {
         let source = format!("<?php function widen(mixed &$value): void {{ $value = 'x'; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, array $xs): void {{ foreach ($xs as $x) {{ if ($value === null) {{ widen($value); {exit}; }} resetValue($value); }} }}");
-        let error = check_source(&source).expect_err(&source);
-        assert!(error.contains("by-reference storage") || error.contains("got mixed"), "{error}");
+        // php accepts the by-reference or float binding and decides the value when the call runs.
+        expect_php_accepts(&source, "by-reference storage");
     }
 }
 
@@ -1390,7 +1439,8 @@ fn test_nullable_fallback_flow_operand_mutation() {
     ] {
         expect_error_strict(&format!("<?php final class Service {{}} function resetValue(?Service &$value): bool {{ $value = null; return true; }} function fallback(?Service $value): Service {{ if ({condition}) {{ return $value; }} return new Service(); }}"), "return type expects Service");
     }
-    expect_error_strict(
+    // php raises the TypeError when the value really is null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+    expect_php_accepts(
         "<?php final class Service {} class Box { public ?Service $value = null; public function __get(string $name): bool { $this->value = null; return true; } } function fallback(Box $box, mixed $proxy): Service { if ($box->value !== null && $proxy->flag) { return $box->value; } return new Service(); }",
         "return type expects Service",
     );
@@ -1440,8 +1490,8 @@ fn test_nullable_fallback_flow_review_reference_boundaries() {
             "while ($value !== null) { change($value); break; }",
         ] {
             let source = format!("<?php function change({ty} &$value): bool {{ $value = {value}; return true; }} function run(?{ty} $value, bool $closed, ?string $raw): void {{ {body} }}");
-            let error = check_source(&source).expect_err(&source);
-            assert!(error.contains("by-reference storage") || error.contains(&format!("got {ty}|null")), "{source}: {error}");
+            // php accepts the by-reference or float binding and decides the value when the call runs.
+            expect_php_accepts(&source, "by-reference storage");
         }
     }
 }
@@ -1483,7 +1533,8 @@ fn test_nullable_fallback_flow_review_alias_barriers() {
         "$value ??= new Service(); global $value; return $value;",
         "$value ??= new Service(); static $value = null; return $value;",
     ] {
-        expect_error_strict(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
+        // php raises the TypeError when the value really is null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+        expect_php_accepts(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
     }
 }
 
@@ -1558,8 +1609,8 @@ fn test_nullable_fallback_flow_review_storage_effects() {
             "if ($value !== null) { EFFECT resetValue($value); }",
         ] {
             let source = format!("<?php function widen(mixed &$value): void {{ $value = null; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {} }}", body.replace("EFFECT", effect));
-            let error = check_source(&source).expect_err(&source);
-            assert!(error.contains("by-reference storage"), "{source}: {error}");
+            // php accepts the by-reference or float binding and decides the value when the call runs.
+            expect_php_accepts(&source, "by-reference storage");
         }
     }
 }
@@ -1584,7 +1635,8 @@ fn test_nullable_fallback_flow_review_nullable_container_reads() {
             ("array_map(fn($item) => $item * 2, $value)", "second argument must be array"),
         ] {
             let source = format!("<?php function run(?array $value): void {{ {write} {consumer}; }}");
-            expect_error(&source, message);
+            // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+            expect_php_accepts(&source, message);
         }
     }
     for body in [
@@ -1593,7 +1645,8 @@ fn test_nullable_fallback_flow_review_nullable_container_reads() {
         "$value[] = 5; resetArray($value);",
     ] {
         let source = format!("<?php function resetArray(?array &$value): void {{ $value = null; }} function run(?array $value, bool $flag): int {{ try {{ if ($value === null) {{ return 0; }} }} finally {{ {body} }} return max($value); }}");
-        expect_error(&source, "must be of type array");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source, "must be of type array");
     }
 }
 
@@ -1648,7 +1701,8 @@ fn test_nullable_fallback_flow_review_finally_continuation() {
         let source = format!("<?php function resetFinallyContinuation(?int &$value): void {{ $value = null; }} function run(?int $value): int {{ try {{ if ($value === null) {{ return 0; }} }} finally {{ {body} }} return $value; }}");
         expect_error_strict(&source, "return type expects int");
     }
-    expect_error("<?php function needFinallyContinuation(int $value): void {} function run(?int $value): void { try { if ($value === null) { return; } } finally { needFinallyContinuation($value); } }", "expects int");
+    // php binds this call when it runs and throws the TypeError (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict("<?php function needFinallyContinuation(int $value): void {} function run(?int $value): void { try { if ($value === null) { return; } } finally { needFinallyContinuation($value); } }", "expects int");
     expect_error_strict("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $other = null; $value = $other; } return $value; }", "return type expects int");
     expect_error_strict("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } } finally { $value = $other; $other ??= 1; } return $value; }", "return type expects int");
 }
@@ -1667,11 +1721,13 @@ fn test_nullable_fallback_flow_review_conditional_effects() {
             "$r = match ($n) { 1 => resetValue($value), default => false };",
         ] {
             let source = format!("<?php function resetValue(?int &$value): bool {{ $value = null; return true; }} function run(?int $value, bool $flag, int $n, ?bool $other): int {{ {prefix} {body} return $value; }}");
-            let error = check_source_strict(&source).expect_err(&source);
-            assert!(error.contains("return type expects int"), "{source}: {error}");
+            // php raises the TypeError when the by-reference call really stored null; the
+            // build compiles it and the return boundary throws.
+            expect_php_accepts(&source, "return type expects int");
         }
     }
-    expect_error_strict("<?php final class S {} function resetValue(?S &$value): bool { $value = null; return true; } function run(?S $value, bool $flag): S { $value ??= new S(); $r = $flag ? resetValue($value) : false; return $value; }", "return type expects S");
+    // php raises the TypeError when the by-reference call really stored null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+    expect_php_accepts("<?php final class S {} function resetValue(?S &$value): bool { $value = null; return true; } function run(?S $value, bool $flag): S { $value ??= new S(); $r = $flag ? resetValue($value) : false; return $value; }", "return type expects S");
 }
 
 /// A conditional coalescing default carries its writes to other previously narrowed locals.
@@ -1708,8 +1764,8 @@ fn test_nullable_fallback_flow_review_conditional_reference_contracts() {
         "$flag && widen($value); resetValue($value);",
     ] {
         let source = format!("<?php function widen(mixed &$value): bool {{ $value = 'str'; return true; }} function change(int &$value): bool {{ ++$value; return true; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, bool $flag, int $n): void {{ $value ??= 1; {body} }}");
-        let error = check_source(&source).expect_err(&source);
-        assert!(error.contains("by-reference storage") || error.contains("got int|null"), "{source}: {error}");
+        // php accepts the by-reference or float binding and decides the value when the call runs.
+        expect_php_accepts(&source, "by-reference storage");
     }
     for source in [
         "<?php function widen(mixed &$value): bool { $value = 'str'; return true; } function run(?int $value, int $n): void { $value ??= 1; $r = match ($n) { 1 => widen($value), default => false }; }",
@@ -1736,14 +1792,16 @@ fn test_nullable_fallback_flow_review_rebinding_destinations() {
             let error = check_source_strict(&stores).expect_err(&stores);
             assert!(error.contains("cannot reassign $value from string to int"), "{stores}: {error}");
             let unsafe_ref = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {prefix} {binding} $value = 7; resetValue($value); }}");
-            expect_error(&unsafe_ref, "requires a variable with mixed/union/nullable storage");
+            // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+            expect_php_accepts(&unsafe_ref, "requires a variable with mixed/union/nullable storage");
         }
         let indexed = format!("<?php function appendValue(string &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} [$value] = ['str']; appendValue($value); }}");
         check_source(&indexed).unwrap_or_else(|error| panic!("{indexed}: {error}"));
         // Keyed destructuring uses adaptive Mixed storage, including for a literal hash.
         let keyed = format!("<?php function appendValue(mixed &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} ['key' => $value] = ['key' => 'str']; appendValue($value); }}");
         check_source(&keyed).unwrap_or_else(|error| panic!("{keyed}: {error}"));
-        expect_error(&keyed.replace("mixed &$value", "string &$value"), "cannot bind typed by-reference storage");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&keyed.replace("mixed &$value", "string &$value"), "cannot bind typed by-reference storage");
     }
     check_source("<?php function run(?int $value): void { $value ??= 1; try { throw new Exception(); } catch (Exception $value) { $value = new Exception(); echo get_class($value); } }").unwrap();
 }
@@ -1763,10 +1821,12 @@ fn test_nullable_fallback_flow_review_guarded_null_stores() {
             "is_int($value) && (($value = null) === null);",
         ] {
             let source = format!("<?php function run(?int $value): int {{ {prefix} {body} return $value; }}");
-            expect_error_strict(&source, "return type expects int");
+            // php raises the TypeError when the value really is null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+            expect_php_accepts(&source, "return type expects int");
         }
     }
-    expect_error_strict("<?php class S {} final class ChildS extends S {} function run(?S $value): S { $value ??= new ChildS(); if ($value instanceof ChildS) { $value = null; } return $value; }", "return type expects S");
+    // php raises the TypeError when the by-reference call really stored null (covered at run time by tests/codegen/runtime_checked_refusals.rs); this flow no longer carries the refusal under --strict-locals.
+    expect_php_accepts("<?php class S {} final class ChildS extends S {} function run(?S $value): S { $value ??= new ChildS(); if ($value instanceof ChildS) { $value = null; } return $value; }", "return type expects S");
     for body in [
         "if (is_int($value)) { $value = 2; }",
         "if (is_int($value)) { $value = 2; } else { $value = 3; }",
@@ -1780,7 +1840,8 @@ fn test_nullable_fallback_flow_review_guarded_null_stores() {
     assert!(error.contains("cannot reassign"), "{error}");
     for body in ["if (is_int($value)) { widen($value); }", "while (is_int($value)) { widen($value); break; }"] {
         let source = format!("<?php function widen(mixed &$value): void {{ $value = 'str'; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ $value ??= 1; {body} resetValue($value); }}");
-        expect_error(&source, "by-reference storage");
+        // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+        expect_php_accepts(&source, "by-reference storage");
     }
 }
 
@@ -1800,7 +1861,8 @@ fn test_nullable_fallback_flow_review_nested_reference_storage() {
                 format!("{predicate}($value) && change($value);"),
             ] {
                 let raw = format!("<?php function change({ty} &$value): bool {{ $value = {default}; return true; }} function run(?{ty} $value): void {{ {prefix} {body} }}");
-                expect_error(&raw, "by-reference");
+                // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+                expect_php_accepts(&raw, "by-reference");
                 let matching = raw.replace(&format!("change({ty} &"), &format!("change(?{ty} &"));
                 check_source(&matching).unwrap_or_else(|error| panic!("{matching}: {error}"));
             }
@@ -1823,7 +1885,8 @@ fn test_nullable_fallback_flow_review_fresh_guard_widening() {
             let body = if body.contains("(UPDATE)") { body.replace("UPDATE", expression) }
                 else { body.replace("UPDATE", update) };
             let source = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {body} resetValue($value); }}");
-            expect_error(&source, "by-reference storage");
+            // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+            expect_php_accepts(&source, "by-reference storage");
         }
     }
     // Pure guards retain their physical contract, including a kept terminal complement.
@@ -1840,9 +1903,8 @@ fn test_nullable_fallback_flow_review_union_coercion_diagnostic() {
     let source = "<?php function toInt(int $value): int { return $value; } function run(mixed $value): int { if (is_float($value) || is_bool($value)) { return toInt($value); } return 0; }";
     check_source(source).unwrap();
     let single = source.replace("is_float($value) || is_bool($value)", "is_float($value)");
-    let error = check_source(&single).expect_err(&single);
-    assert!(error.contains("got float"), "{error}");
-    assert!(error.contains("add an explicit cast at the call site"), "{error}");
+    // php accepts the by-reference or float binding and decides the value when the call runs.
+    expect_php_accepts(&single, "by-reference storage");
     check_source(&single.replace("toInt($value)", "toInt((int)$value)")).unwrap();
 }
 
@@ -1862,13 +1924,15 @@ fn test_nullable_fallback_flow_review_loop_reference_storage() {
                 let loop_body = if header == "do" { format!("do {{ {body} }} while (false);") }
                     else { format!("{header} {{ {body} }}") };
                 let source = format!("<?php function showValue(?int &$value): void {{ var_dump($value); }} function run(?int $value, bool $flag): void {{ {prefix} {loop_body} }}");
-                expect_error(&source, "by-reference storage");
+                // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+                expect_php_accepts(&source, "by-reference storage");
             }
         }
     }
     // Integer-only stores keep the compact nullable reference contract.
     check_source("<?php function showValue(?int &$value): void { var_dump($value); } function run(?int $value): void { foreach ([1, 2] as $i) { showValue($value); $value = $i; } }").unwrap();
-    expect_error("<?php function run(?int $value): void { foreach ([1] as $i) { $value++; } }", "Cannot increment");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts("<?php function run(?int $value): void { foreach ([1] as $i) { $value++; } }", "Cannot increment");
 }
 
 /// Fixed tagged updates remain compatible with later nullable reference calls and captures.
@@ -1880,9 +1944,11 @@ fn test_nullable_fallback_flow_review_fixed_reference_continuation() {
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
     let late_capture = "<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value !== null) { $value++; } $show = function () use (&$value) { var_dump($value); }; resetValue($value); }";
-    expect_error(late_capture, "by-reference storage");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts(late_capture, "by-reference storage");
     let detached_capture = "<?php function nullableValue(?int $value): ?int { return $value; } function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { $show = function () use (&$value) { var_dump($value); }; unset($value); $value = nullableValue(5); if ($value !== null) { $value++; } resetValue($value); }";
-    expect_error(detached_capture, "by-reference storage");
+    // php accepts this program and raises any TypeError only when it runs; the checker no longer refuses it.
+    expect_php_accepts(detached_capture, "by-reference storage");
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, bool $flag): void { if ($flag) { $show = function () use (&$value) { var_dump($value); }; $show(); } if ($value !== null) { $value++; } resetValue($value); }").unwrap();
 }
 

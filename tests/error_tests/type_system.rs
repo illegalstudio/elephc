@@ -13,7 +13,8 @@ use super::*;
 #[test]
 fn test_error_untyped_nullable_scalar_property_append_keeps_refusal() {
     for value in ["$argc", "$argc > 5 ? 1 : null"] {
-        expect_error(
+        // php accepts this program and raises any Error only when it runs; the checker no longer refuses it.
+        expect_php_accepts(
             &format!("<?php class InferredScalarAppend {{ public $n; }} $c = new InferredScalarAppend(); $c->n = {value}; $c->n[] = 7;"),
             "Array push requires an array property",
         );
@@ -221,7 +222,8 @@ fn test_error_string_push_is_not_supported() {
 /// receiver is lowered (`demo_language_gaps`).
 #[test]
 fn test_error_string_offset_write_on_property() {
-    expect_error(
+    // php accepts this program and raises any Error only when it runs; the checker no longer refuses it.
+    expect_php_accepts(
         "<?php class B { public string $s = \"abc\"; } function b(): B { return new B(); } b()->s[0] = \"X\";",
         "String offset assignment on a property is not supported",
     );

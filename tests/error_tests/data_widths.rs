@@ -157,7 +157,8 @@ fn test_packed_class_named_like_a_width_is_embedded_as_a_class() {
 #[test]
 fn test_error_generic_native_storage_carriers_reject_wrong_values() {
     for width in ["u32", "u8", "f32"] {
-        expect_error(
+        // php throws this TypeError at run time (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+        expect_error_strict(
             &format!(
                 r#"<?php
 final class Cell<T> {{

@@ -1032,7 +1032,8 @@ fn test_error_generic_trait_use_violating_a_bound() {
 /// argument is refused like any typed parameter.
 #[test]
 fn test_error_generic_trait_member_is_typed_at_its_instantiation() {
-    expect_error(
+    // php throws this TypeError at run time (tests/codegen/runtime_checked_refusals.rs); --strict-locals keeps the compile-time refusal.
+    expect_error_strict(
         "<?php \
          trait Holder<T> { private T $item; public function put(T $v): void { $this->item = $v; } } \
          class IntBox { use Holder<int>; } \
