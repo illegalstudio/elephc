@@ -434,6 +434,8 @@ pub(crate) struct Checker {
     pub current_function: Option<String>,
     /// `CheckOptions::tolerate_runtime_faults`, copied when the checker is built.
     pub(crate) tolerate_runtime_faults: bool,
+    /// `CheckOptions::demotable_runtime_faults`, copied when the checker is built.
+    pub(crate) demotable_runtime_faults: bool,
     /// The class whose method body the method pass is walking while faults are tolerated.
     ///
     /// Set only around one method body, never around a nested function's resolution
@@ -2085,6 +2087,9 @@ pub struct CheckOptions {
     /// rewrite needs no second round whenever every tolerated fault is demoted in place; the
     /// pipeline checks again, as before, when one is not.
     pub tolerate_runtime_faults: bool,
+    /// The program holds class files php would only load on demand, so a run-time fault in one is
+    /// still refused (and demoted afterwards) instead of compiling to its run-time behaviour.
+    pub demotable_runtime_faults: bool,
 }
 
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.

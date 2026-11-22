@@ -107,6 +107,7 @@ pub(super) fn check_types_impl(
     checker.lint_warnings = options.lint;
     checker.strict_locals = options.strict_locals;
     checker.tolerate_runtime_faults = options.tolerate_runtime_faults;
+    checker.demotable_runtime_faults = options.demotable_runtime_faults;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
     // paths behave exactly as they did before this feature.

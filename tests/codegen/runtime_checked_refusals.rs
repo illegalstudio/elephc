@@ -293,6 +293,45 @@ echo strlen(\"abc\"), \"\\n\";
     );
 }
 
+/// An array held in a variable (or returned by a call) at a builtin `string` parameter keeps the
+/// surrounding `catch (TypeError)`, and an unused `strtoupper([1]);` is not dropped as pure.
+#[test]
+fn test_array_variable_at_a_builtin_string_parameter_keeps_the_catch_and_the_throw() {
+    let out = compile_and_run(
+        "<?php
+function g($x) { return $x; }
+$a = [1];
+try { echo strtoupper($a); } catch (TypeError $e) { echo \"caught1\\n\"; }
+try { strtoupper([1]); } catch (TypeError $e) { echo \"caught2\\n\"; }
+try { $r = strlen($a); } catch (TypeError $e) { echo \"caught3\\n\"; }
+try { strtoupper(g([1])); } catch (TypeError $e) { echo \"caught4\\n\"; }
+try { strtoupper($a); } catch (TypeError $e) { echo \"caught5\\n\"; }
+$s = \"ok\";
+echo strtoupper($s), strlen($s . \"x\"), \"\\n\";
+",
+    );
+    assert_eq!(out, "caught1\ncaught2\ncaught3\ncaught4\ncaught5\nOK3\n");
+}
+
+/// Uncaught, an unused `strtoupper($a);` over an array still raises the fatal `TypeError`.
+#[test]
+fn test_uncaught_unused_builtin_call_over_an_array_variable_is_a_fatal_type_error() {
+    let reached = compile_and_run_expect_failure(
+        "<?php
+$a = [1];
+strtoupper($a);
+echo \"unreached\\n\";
+",
+    );
+    assert!(
+        reached.contains(
+            "Fatal error: Uncaught TypeError: strtoupper(): Argument #1 ($string) must be of type string, array given in "
+        ),
+        "{reached}"
+    );
+    assert!(!reached.contains("unreached"), "{reached}");
+}
+
 /// Uncaught, the builtin's `TypeError` carries no `called in` clause, like php.
 #[test]
 fn test_uncaught_array_at_a_builtin_string_parameter_is_a_fatal_type_error() {
@@ -309,6 +348,93 @@ echo strlen([]);
     );
     assert!(reached.contains("#0 {main}"), "{reached}");
     assert!(reached.contains("thrown in "), "{reached}");
+}
+
+/// Reading a name no slot or dynamic entry holds warns `Undefined property: C::$x` and yields
+/// null, for a declared class, a `stdClass`, an untyped (mixed) receiver and a class built from a
+/// runtime name. Probes (`??`, `isset`) stay silent and a created dynamic property reads back.
+#[test]
+fn test_undefined_property_read_warns_and_yields_null() {
+    let out = compile_and_run_capture(
+        "<?php
+class C { public $y = 1; }
+$o = new stdClass;
+echo \"A\\n\";
+echo $o->nope;
+echo \"B\\n\";
+$c = new C;
+var_dump($c->x);
+$v = $c->zz ?? \"dflt\";
+echo $v, isset($c->q) ? \"s\" : \"u\", isset($o->q) ? \"s\" : \"u\", \"\\n\";
+var_dump($o->k);
+function f($p) { return $p->w; }
+var_dump(f($c));
+var_dump(f($o));
+$u = \"Exception\";
+$e = new $u(\"m\");
+var_dump($e->zip);
+$o->d = 5;
+var_dump($o->d);
+",
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "A\nB\nNULL\ndfltuu\nNULL\nNULL\nNULL\nNULL\nint(5)\n"
+    );
+    for expected in [
+        "Undefined property: stdClass::$nope in ",
+        "Undefined property: C::$x in ",
+        "Undefined property: stdClass::$k in ",
+        "Undefined property: C::$w in ",
+        "Undefined property: stdClass::$w in ",
+        "Undefined property: Exception::$zip in ",
+    ] {
+        assert_eq!(
+            out.stderr.matches(&format!("Warning: {expected}")).count(),
+            1,
+            "{expected}: {}",
+            out.stderr
+        );
+    }
+    assert_eq!(out.stderr.matches("Warning:").count(), 6, "{}", out.stderr);
+}
+
+/// The silent probes (`isset`, `empty`, `??`, `@`, nullsafe, every link of a chain) over a name no
+/// dynamic-hash class created never print `Undefined property`; only the final value read does.
+#[test]
+fn test_undefined_property_probes_stay_silent_on_dynamic_hash_classes() {
+    let out = compile_and_run_capture(
+        "<?php
+#[AllowDynamicProperties]
+class D { public $a = 1; }
+$o = new stdClass;
+$d = new D;
+echo isset($o->q) ? \"s\" : \"u\", \"\\n\";
+echo empty($o->r) ? \"e\" : \"n\", \"\\n\";
+echo $o->t ?? \"d\", \"\\n\";
+echo isset($d->q) ? \"s\" : \"u\", empty($d->q) ? \"e\" : \"n\", $d->q ?? \"d\", \"\\n\";
+function h($p) { return isset($p->q) ? \"s\" : \"u\"; }
+echo h($o), h($d), \"\\n\";
+echo isset($o->a->b) ? \"s\" : \"u\", empty($o->a->b) ? \"e\" : \"n\", $o->a->b ?? \"d\", \"\\n\";
+echo isset($o->a['k']) ? \"s\" : \"u\", empty($o->a['k']) ? \"e\" : \"n\", $o->a['k'] ?? \"d\", \"\\n\";
+echo isset($d->a->b) ? \"s\" : \"u\", isset($d->z->b) ? \"s\" : \"u\", \"\\n\";
+$o->v = 3; $d->w = 4;
+echo isset($o->v) ? \"s\" : \"u\", empty($o->v) ? \"e\" : \"n\", $o->v, $d->w, isset($d->w) ? \"s\" : \"u\", \"\\n\";
+echo @$o->zz, \"x\\n\";
+$o->cnt = 1; $o->cnt++; echo $o->cnt, \"\\n\";
+$o->arr = []; $o->arr[] = 1; echo count($o->arr), \"\\n\";
+echo isset($o?->q) ? \"s\" : \"u\", \"\\n\";
+echo $o?->nn, \"n\\n\";
+",
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "u\ne\nd\nued\nuu\nued\nued\nuu\nsn34s\nx\n2\n1\nu\nn\n"
+    );
+    assert_eq!(out.stderr.matches("Warning:").count(), 1, "{}", out.stderr);
+    assert!(out.stderr.contains("Warning: Undefined property: stdClass::$nn in "), "{}", out.stderr);
 }
 
 /// A checked-arithmetic key that overflows to float keeps php's warning text and line for a

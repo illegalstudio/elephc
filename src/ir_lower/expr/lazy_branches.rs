@@ -208,6 +208,16 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
                 let receiver = lower_array_access_with_missing_warning(ctx, array, index, object, false);
                 refine_member_receiver(ctx, receiver, object)
             }
+            // A link on a dynamic-hash class (stdClass, `AllowDynamicProperties`) is a silent fetch.
+            ExprKind::PropertyAccess { object: inner, property: inner_property }
+                if matches!(
+                    super::native_isset::property_isset_action(ctx, inner, inner_property, object),
+                    Some(super::native_isset::IssetPropertyAction::Fallback)
+                ) =>
+            {
+                let receiver = super::array_access::lower_subscript_receiver_silently(ctx, object);
+                refine_member_receiver(ctx, receiver, object)
+            }
             _ => lower_member_receiver(ctx, object, value),
         };
         if native_property_method_for_value(ctx, object.value, property,

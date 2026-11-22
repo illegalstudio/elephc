@@ -1058,7 +1058,16 @@ pub(super) fn lower_stdclass_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
-    emit_stdclass_get_call(ctx, object, property)?;
+    if property_fetch_mode(inst).is_read() {
+        // A value read of a name the object never created warns `Undefined property` and answers
+        // null; `isset()`, `empty()` and `??` stay silent and take the shared runtime getter.
+        // The standard object keeps its property hash at offset 8.
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        emit_scope_dynamic_property_hash_probe(ctx, "stdClass", property, base_reg, 8, true)?;
+    } else {
+        emit_stdclass_get_call(ctx, object, property)?;
+    }
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }

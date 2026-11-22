@@ -179,8 +179,9 @@ fn test_error_undefined_class() {
 /// Verifies the error diagnostic for undefined property.
 #[test]
 fn test_error_undefined_property() {
-    // accessing an absent property on an object reports undefined property with the class name.
-    expect_error(
+    // accessing an absent property on an object reports undefined property with the class name
+    // under --strict-locals; otherwise php's run-time warning applies (runtime_checked_refusals).
+    expect_error_strict(
         "<?php class Box {} $b = new Box(); echo $b->missing;",
         "Undefined property: Box::missing",
     );
@@ -209,7 +210,7 @@ echo $box->stored;
 /// Recording one same-pair `__set` store must not make unrelated missing names readable.
 #[test]
 fn test_magic_set_same_pair_reentry_does_not_open_other_properties() {
-    expect_error(
+    expect_error_strict(
         r#"<?php
 class Box {
     public function __set(string $name, mixed $value): void {

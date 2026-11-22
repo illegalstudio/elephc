@@ -217,7 +217,7 @@ pub(super) fn lower_lazy_isset_operand(
             if !property_probe_needs_runtime_name_form(ctx, object) {
                 return None;
             }
-            let object = lower_expr(ctx, object);
+            let object = lower_subscript_receiver_silently(ctx, object);
             let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
@@ -422,7 +422,17 @@ pub(super) fn lower_lazy_empty_without_native(
         // never-created name answers `true` instead of raising. Unlike `isset()` it needs the
         // VALUE: php asks `__isset` and then `__get`, which is the `??` fetch (`Coalesce`).
         if property_probe_needs_runtime_name_form(ctx, object) {
-            let object = lower_expr(ctx, object);
+            let object = lower_subscript_receiver_silently(ctx, object);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
+        // A class answering undeclared names from its dynamic hash (stdClass, a class allowing
+        // dynamic properties): `empty()` is a silent fetch there too, never `Undefined property`.
+        if matches!(
+            property_isset_action(ctx, object, property, &args[0]),
+            Some(IssetPropertyAction::Fallback)
+        ) {
+            let object = lower_subscript_receiver_silently(ctx, object);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }

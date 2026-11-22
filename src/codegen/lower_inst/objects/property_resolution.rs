@@ -485,7 +485,8 @@ pub(super) fn resolve_property_runtime_action(
                     ),
                 });
             }
-            let warns_on_miss = property_name_is_scope_dynamic(ctx, class_name, property);
+            // php warns for EVERY name a value read finds in neither a slot nor the hash.
+            let warns_on_miss = true;
             Ok(
                 match dynamic_property_hash_offset_for_class(ctx, class_name, property)? {
                     Some(hash_offset) => PropertyRuntimeAction::DynamicHash {

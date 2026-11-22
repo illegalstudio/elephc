@@ -516,6 +516,12 @@ impl Checker {
             }
             // A read php answers with a Warning and null when it runs, judged against this
             // class and the descendants the checker knows; see `RuntimeFault::UndefinedProperty`.
+            // The build stands: lowering resolves the name as a dynamic property, so the read
+            // prints php's `Warning: Undefined property: C::$x` and yields null. Only
+            // `--strict-locals` (and the autoload demotion that owns the fault) keeps the refusal.
+            if !self.strict_locals && !self.tolerate_runtime_faults && !self.demotable_runtime_faults {
+                return Ok(PhpType::Mixed);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),

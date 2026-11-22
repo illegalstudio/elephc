@@ -90,7 +90,7 @@ fn lower_polymorphic_object_prop_get_from_loaded_object(
 
     if let Some(stdclass_label) = stdclass_label {
         ctx.emitter.label(&stdclass_label);
-        emit_stdclass_get_from_loaded_object(ctx, property);
+        emit_stdclass_read_from_loaded_object(ctx, property, property_fetch_mode(inst))?;
         cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
         store_if_result(ctx, inst)?;
         abi::emit_jump(ctx.emitter, &done_label);
@@ -319,7 +319,9 @@ pub(super) fn lower_mixed_prop_get(
     )? {
         return Ok(());
     }
-    if !candidates.is_empty() || has_hash_arms || !magic_groups.is_empty() {
+    // A value read with no candidate class still needs the ladder: its miss arm names the run-time
+    // class in php's `Undefined property` warning, which the shared stdClass helper never prints.
+    if !candidates.is_empty() || has_hash_arms || !magic_groups.is_empty() || mode.is_read() {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
@@ -528,7 +530,7 @@ pub(super) fn lower_declared_mixed_prop_get(
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         emit_mixed_object_payload_or_null(ctx, &null_label);
     }
-    emit_stdclass_get_from_loaded_object(ctx, property);
+    emit_stdclass_read_from_loaded_object(ctx, property, mode)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
@@ -1961,6 +1963,22 @@ pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>,
         abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    }
+}
+
+/// Reads a static property name from an already-unboxed stdClass payload for a fetch mode: a
+/// value read of a name the object never created warns `Undefined property`, a probe is silent.
+pub(super) fn emit_stdclass_read_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    property: &str,
+    mode: PropertyFetchMode,
+) -> Result<()> {
+    if mode.is_read() {
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        emit_scope_dynamic_property_hash_probe(ctx, "stdClass", property, base_reg, 8, true)
+    } else {
+        emit_stdclass_get_from_loaded_object(ctx, property);
+        Ok(())
     }
 }
 

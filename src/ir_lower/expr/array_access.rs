@@ -446,6 +446,27 @@ pub(super) fn lower_subscript_receiver_silently(
             );
         }
     }
+    // A link on a class that answers undeclared names from its dynamic hash (stdClass, a class
+    // allowing dynamic properties): every link of an `isset()`/`empty()`/`??` chain is a silent
+    // fetch in php, so a name nothing created never reports `Undefined property` mid-chain.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if matches!(
+            super::native_isset::property_isset_action(ctx, object, property, array),
+            Some(super::native_isset::IssetPropertyAction::Fallback)
+        ) {
+            let receiver = lower_subscript_receiver_silently(ctx, object);
+            let probed = super::property_access::lower_property_fetch_mode_from_value(
+                ctx, receiver, property, PropertyFetchMode::Coalesce, array,
+            );
+            if matches!(
+                ctx.builder.value_php_type(probed.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                return probed;
+            }
+            return ctx.box_value_as_mixed(probed, PhpType::Mixed, Some(array.span));
+        }
+    }
     lower_element_receiver(ctx, array)
 }
 

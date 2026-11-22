@@ -126,6 +126,7 @@ impl Checker {
             current_method: None,
             current_function: None,
             tolerate_runtime_faults: false,
+            demotable_runtime_faults: false,
             tolerating_runtime_faults_in: None,
             tolerable_fault_spans: HashSet::default(),
             body_tolerated_faults: Vec::new(),

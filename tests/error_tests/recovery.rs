@@ -370,7 +370,7 @@ fn test_function_body_index_error_from_top_level_call_is_reported() {
 /// the backend.
 #[test]
 fn test_function_body_undefined_property_from_top_level_call_is_reported() {
-    expect_error(
+    expect_error_strict(
         "<?php class P { public $a = 1; } function f(P $p) { return $p->nope; } echo f(new P);",
         "Undefined property: P::nope",
     );
@@ -389,7 +389,7 @@ fn test_untyped_function_body_errors_from_top_level_call_are_reported() {
         "{:?}",
         messages
     );
-    expect_error(
+    expect_error_strict(
         "<?php class P { public $a = 1; } function f($p) { return $p->nope; } echo f(new P);",
         "Undefined property: P::nope",
     );

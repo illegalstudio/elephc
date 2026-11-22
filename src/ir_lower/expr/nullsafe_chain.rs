@@ -352,10 +352,25 @@ fn lower_nullsafe_postfix_segment(
             // A receiver whose class is only known at run time has no compile-time visibility
             // answer, so a probe has to reach the ladder through the runtime-name form to keep
             // php's silence. Every other receiver keeps the ordinary named read.
-            if !warn_on_missing
-                && property_probe_needs_runtime_name_form_for_type(
+            // A class answering undeclared names from its dynamic hash (stdClass, a class allowing
+            // dynamic properties) must not warn `Undefined property` for a name nothing created.
+            let dynamic_hash_receiver = !warn_on_missing
+                && super::property_access::singular_object_class(
                     &ctx.builder.value_php_type(current.value),
                 )
+                .is_some_and(|(class, _)| {
+                    crate::types::checker::builtin_stdclass::is_stdclass(class)
+                        || ctx.classes.get(class).is_some_and(|info| {
+                            info.allow_dynamic_properties
+                                || (info.dynamic_property_hash_is_name_addressable()
+                                    && info.visible_property(property).is_none())
+                        })
+                });
+            if !warn_on_missing
+                && (dynamic_hash_receiver
+                    || property_probe_needs_runtime_name_form_for_type(
+                        &ctx.builder.value_php_type(current.value),
+                    ))
             {
                 // A chain segment's value is read on (the next link) or is the `??` answer, so
                 // the fetch is `??`'s: `__isset` and then `__get`.

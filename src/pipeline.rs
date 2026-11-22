@@ -1437,6 +1437,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         registers_autoloader: autoload_registry.rule_count() > 0,
         // Decided with the deferrable files below.
         tolerate_runtime_faults: false,
+        demotable_runtime_faults: false,
     };
     // A class file the autoload pass loaded is one php would only have parsed when something
     // asked for the class. When the checker refuses one, that file is handed back to the runtime
@@ -1700,6 +1701,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
     let check_options = types::CheckOptions {
         tolerate_runtime_faults,
+        demotable_runtime_faults: !deferrable_class_files.is_empty(),
         ..check_options
     };
     // What `runtime_faults` makes of the faults a round tolerated but could not all demote in

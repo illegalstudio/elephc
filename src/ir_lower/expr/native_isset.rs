@@ -387,7 +387,18 @@ pub(super) fn lower_lazy_property_isset_operand(
         return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
     }
     match property_isset_action(ctx, object, property, arg)? {
-        IssetPropertyAction::Fallback => None,
+        // The ordinary read would warn `Undefined property` for a name nothing created; `isset()`
+        // is a silent probe, so a plain (non-nullsafe) access asks the quiet fetch instead.
+        IssetPropertyAction::Fallback if matches!(arg.kind, ExprKind::PropertyAccess { .. }) => {
+            let object = lower_subscript_receiver_silently(ctx, object);
+            let probed = super::property_access::lower_property_isset_probe_from_value(
+                ctx, object, property, arg);
+            Some(super::lazy_isset::probe_value_is_set(ctx, probed, arg))
+        }
+        IssetPropertyAction::Fallback => {
+            let probed = super::nullsafe_chain::lower_with_missing_warning(ctx, arg, false)?;
+            Some(super::lazy_isset::probe_value_is_set(ctx, probed, arg))
+        }
         IssetPropertyAction::Magic => {
             let object = lower_member_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
