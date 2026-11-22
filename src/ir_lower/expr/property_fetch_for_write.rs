@@ -298,7 +298,7 @@ fn lower_property_write_source_from_value(
     let mutable_fetch = !matches!(
         mode,
         Some(crate::ir_lower::stmt::PropertyDimensionFetchMode::ReadWrite)
-    );
+    ) || readwrite_property_has_attached_array_slot(ctx, object_value.value, property);
     if let Some(mode) = mode.filter(|_| !dimension_guarded) {
         crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
     }
@@ -371,6 +371,28 @@ fn lower_property_write_source_from_value(
         value: result,
         receiver: Some(object_value),
     }
+}
+
+/// Keeps compound reads attached only when the declared slot is already a concrete array.
+///
+/// Nullable, mixed, union, and uninitialized slots need the ordinary read path so PHP can raise
+/// before a write initializes storage. A non-null array slot has no scalar or missing state to
+/// preserve, and detaching its compound read would lose the property's COW publication target.
+fn readwrite_property_has_attached_array_slot(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.trim_start_matches('\\')) else {
+        return false;
+    };
+    class_info.visible_property(property).is_some_and(|(_, (_, ty))| {
+        ty.is_php_array()
+            || matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    })
 }
 
 /// Rejects an uninitialized typed container before its mutable foreach fetch reaches codegen.
