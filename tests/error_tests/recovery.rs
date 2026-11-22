@@ -708,3 +708,29 @@ fn test_class_member_recovery_stops_at_body_with_unclosed_delimiter() {
         );
     }
 }
+
+/// A `{` inside a property or constant initializer (a `match`) does not end the skipped member:
+/// the skip goes on to the declaration's `;`, so that `;` is not reported as a stray member, and
+/// the next member's own error is still reported. Property hooks after a default still end it.
+#[test]
+fn test_class_member_recovery_skips_braces_inside_initializers() {
+    assert_eq!(
+        parse_error_messages(
+            "<?php class A { static const X = match (1) { default => 1 }; public function f() {} }",
+        ),
+        vec!["Class constants cannot be declared static".to_string()],
+    );
+    for src in [
+        "<?php class A { public static readonly int $p = match (1) { default => 1 }; function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = 1 { get => 2; } function two(public int $x) {} }",
+    ] {
+        assert_eq!(
+            parse_error_messages(src),
+            vec![
+                "Static properties cannot be readonly".to_string(),
+                "Cannot declare promoted property outside a constructor".to_string(),
+            ],
+            "source: {src}",
+        );
+    }
+}

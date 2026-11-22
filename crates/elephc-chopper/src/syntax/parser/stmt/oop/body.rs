@@ -1109,8 +1109,15 @@ fn parse_members_recovering<T>(
 /// that body's `}` instead of swallowing the next member. A `)` or `]` only closes its own
 /// kind, and a `{` opened inside parentheses (a `match` in a parameter default) does not end
 /// the member when it closes.
+///
+/// After a top-level `=` (a property or constant initializer), a top-level `{` ends the member
+/// only when it opens property hooks (`public int $p = 1 { get => 2; }`). Any other `{` there
+/// belongs to the initializer expression (`const X = match (1) { default => 1 };`), so the skip
+/// goes on to the declaration's `;` instead of leaving it to be reported as a stray member.
 fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
     let mut open: Vec<&Token> = Vec::new();
+    let mut in_initializer = false;
+    let mut brace_ends_member = true;
     let mut index = start;
     while let Some((token, _)) = tokens.get(index) {
         match token {
@@ -1118,6 +1125,12 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
             // No `{` of this member is open: this is the enclosing body's `}`, even when a `(`
             // or `[` was left unclosed before it.
             Token::RBrace if !open.contains(&&Token::LBrace) => return index,
+            Token::Assign if open.is_empty() => in_initializer = true,
+            Token::LBrace if open.is_empty() => {
+                brace_ends_member =
+                    !in_initializer || opens_property_hooks(tokens.get(index + 1).map(|(t, _)| t));
+                open.push(token);
+            }
             Token::LParen | Token::LBracket | Token::LBrace => open.push(token),
             Token::RParen | Token::RBracket => {
                 let opener = if matches!(token, Token::RParen) {
@@ -1135,7 +1148,7 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
                         break;
                     }
                 }
-                if open.is_empty() {
+                if open.is_empty() && brace_ends_member {
                     return index + 1;
                 }
             }
@@ -1145,6 +1158,18 @@ fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
         index += 1;
     }
     index
+}
+
+/// Whether the token after a `{` that follows a property's default value starts a property
+/// hook list (`get`, `set`, `&get`, `final get`, `#[Attr] get`) rather than an expression.
+fn opens_property_hooks(token: Option<&Token>) -> bool {
+    match token {
+        Some(Token::Identifier(name)) => {
+            name.eq_ignore_ascii_case("get") || name.eq_ignore_ascii_case("set")
+        }
+        Some(Token::Ampersand | Token::Final | Token::AttrOpen) => true,
+        _ => false,
+    }
 }
 
 /// Parses everything after `const` in a class, interface, trait or enum body.
