@@ -861,9 +861,16 @@ fn lower_array_access_from_values_with_receiver_pins(
             let warning = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
             operands.push(warning.value);
         }
+        // A silent read keyed by a boxed checked-arithmetic result still converts that key: a
+        // float one (`$a[PHP_INT_MAX + 1] ?? x`) prints php's "not representable as an int"
+        // warning, which needs this statement's line, so the read advertises `MAY_WARN`.
+        let mut effects = op.default_effects();
+        if op == Op::ArrayGetSilent && matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed)) {
+            effects |= Effects::MAY_WARN;
+        }
         ctx.emit_value(op, operands,
             (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
-            result_type, op.default_effects(), Some(expr.span))
+            result_type, effects, Some(expr.span))
     };
     if op == Op::StrCharAt {
         // The backend returns a view into the receiver. The common stabilization below

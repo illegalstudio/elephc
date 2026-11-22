@@ -135,13 +135,21 @@ fn lower_native_container_isset_offset_probe(
                     Some(expr.span),
                 )
             } else {
-                // `isset()` is a silent probe even when the key is absent.
+                // `isset()` is a silent probe even when the key is absent. A key born of checked
+                // integer arithmetic can still be a float that php reports ("not representable
+                // as an int"), and that warning needs this statement's line.
+                let mut probe_effects = Op::ArrayGetMixedKeySilent.default_effects();
+                if ctx.builder.value_defining_instruction(index_value.value).is_some_and(|producer| {
+                    matches!(producer.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+                }) {
+                    probe_effects |= Effects::MAY_WARN;
+                }
                 let read_value = ctx.emit_value(
                     Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Mixed,
-                    Op::ArrayGetMixedKeySilent.default_effects(),
+                    probe_effects,
                     Some(expr.span),
                 );
                 let is_null = ctx.emit_value(

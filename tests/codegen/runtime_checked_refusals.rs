@@ -225,3 +225,94 @@ fn test_refusal_independent_of_adoption_skips_the_erasure_rerun() {
     assert!(line.contains(" erasure_reruns=0 "), "{line}");
     assert!(!line.contains(" erasure_rerun_skipped=0 "), "{line}");
 }
+
+/// A non-numeric string literal at an `int` parameter is php's run-time `TypeError`, not a compile
+/// refusal; a numeric one is coerced (`f("5")` is 5, silently).
+#[test]
+fn test_non_numeric_string_at_an_int_parameter_throws_a_catchable_type_error() {
+    let out = compile_and_run(
+        "<?php function f(int $i) { return $i; }
+try { f(\"x\"); } catch (\\Throwable $t) { echo get_class($t), \"|\", substr($t->getMessage(), 0, 55), \"\\n\"; }
+try { f(\"42abc\"); } catch (TypeError $t) { echo \"leading numeric\\n\"; }
+var_dump(f(\"5\"));
+",
+    );
+    assert_eq!(
+        out,
+        "TypeError|f(): Argument #1 ($i) must be of type int, string given\nleading numeric\nint(5)\n"
+    );
+}
+
+/// The same refusal uncaught prints php's fatal block.
+#[test]
+fn test_uncaught_non_numeric_string_at_an_int_parameter_is_a_fatal_type_error() {
+    let reached = compile_and_run_expect_failure(
+        "<?php function f(int $i) { return $i; }
+f(\"x\");
+",
+    );
+    assert!(
+        reached.contains(
+            "Fatal error: Uncaught TypeError: f(): Argument #1 ($i) must be of type int, string given, called in "
+        ),
+        "{reached}"
+    );
+    assert!(reached.contains("Stack trace:"), "{reached}");
+    assert!(reached.contains("thrown in "), "{reached}");
+}
+
+/// An array at a builtin's `string` parameter throws php's `TypeError` when the call runs.
+#[test]
+fn test_array_at_a_builtin_string_parameter_throws_a_catchable_type_error() {
+    let out = compile_and_run(
+        "<?php
+try { strlen([]); } catch (\\Throwable $t) { echo get_class($t), \"|\", $t->getMessage(), \"\\n\"; }
+try { echo strtoupper(string: [1]); } catch (TypeError $t) { echo $t->getMessage(), \"\\n\"; }
+echo strlen(\"abc\"), \"\\n\";
+",
+    );
+    assert_eq!(
+        out,
+        "TypeError|strlen(): Argument #1 ($string) must be of type string, array given\nstrtoupper(): Argument #1 ($string) must be of type string, array given\n3\n"
+    );
+}
+
+/// Uncaught, the builtin's `TypeError` carries no `called in` clause, like php.
+#[test]
+fn test_uncaught_array_at_a_builtin_string_parameter_is_a_fatal_type_error() {
+    let reached = compile_and_run_expect_failure(
+        "<?php
+echo strlen([]);
+",
+    );
+    assert!(
+        reached.contains(
+            "Fatal error: Uncaught TypeError: strlen(): Argument #1 ($string) must be of type string, array given in "
+        ),
+        "{reached}"
+    );
+    assert!(reached.contains("#0 {main}"), "{reached}");
+    assert!(reached.contains("thrown in "), "{reached}");
+}
+
+/// A checked-arithmetic key that overflows to float keeps php's warning text and line for a
+/// coalesce, an `isset` and an `@`-silenced read (00886abb2e lowers the key to a typed read).
+#[test]
+fn test_overflowing_checked_key_warns_like_php_with_its_own_line() {
+    let out = compile_and_run_capture_merged(
+        "<?php
+$a = [1];
+$i = PHP_INT_MAX;
+var_dump($a[$i + 1] ?? 'none');
+var_dump(isset($a[$i + 1]));
+echo @$a[$i + 1];
+echo \"end\\n\";
+",
+    )
+    .stdout;
+    let warning = "Warning: The float 9.223372036854776E+18 is not representable as an int, cast occurred in ";
+    assert_eq!(out.matches(warning).count(), 2, "{out}");
+    assert!(out.contains(" on line 4\nstring(4) \"none\"\n"), "{out}");
+    assert!(out.contains(" on line 5\nbool(false)\n"), "{out}");
+    assert!(out.ends_with("end\n"), "{out}");
+}

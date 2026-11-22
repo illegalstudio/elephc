@@ -431,7 +431,7 @@ expect_builtin_arity_error!(
 // `test_str_replace_array_subject_answers_an_array`), so it is no longer refused here.
 
 // Tests that a named argument reaches the same refusal, numbered by the parameter it names.
-expect_builtin_arity_error!(
+expect_builtin_strict_error!(
     test_error_named_array_argument_at_a_string_parameter,
     "<?php echo htmlentities(string: [1, 2]);",
     "htmlentities(): Argument #1 ($string) must be of type string, array given"
@@ -439,7 +439,7 @@ expect_builtin_arity_error!(
 
 // Tests that a bare `array` parameter is refused at a string parameter like a literal is: its
 // layout is unknown until run time, and neither layout is a string.
-expect_builtin_arity_error!(
+expect_builtin_strict_error!(
     test_error_bare_array_parameter_at_a_string_parameter,
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"

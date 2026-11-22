@@ -21,6 +21,7 @@ pub(crate) mod spl;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -442,7 +443,24 @@ impl Checker {
                 for arg in args {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
-                reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
+                if let Some((arg_span, message)) = reject_array_at_string_param(
+                    name,
+                    &def.params,
+                    def.variadic.is_some(),
+                    args,
+                    &arg_types,
+                ) {
+                    // A builtin whose php signature takes `array|string` here (elephc narrows the
+                    // contract to `string`) keeps the honest refusal: throwing would be wrong.
+                    // `--strict-locals` keeps the refusal of a definite mismatch too.
+                    if self.strict_locals || php_accepts_array_at_string_param(name) {
+                        return Err(CompileError::new(arg_span, &message));
+                    }
+                    // php binds the argument when the call RUNS: the build stands and the call
+                    // throws its `TypeError` (no `called in` clause: the callee is internal).
+                    self.record_builtin_argument_type_error(arg_span, message);
+                    return Ok(Some(def.return_type.clone()));
+                }
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
                     name: &builtin_key,
                     args,
@@ -555,16 +573,16 @@ fn reject_array_at_string_param(
     variadic: bool,
     args: &[Expr],
     arg_types: &[PhpType],
-) -> Result<(), CompileError> {
+) -> Option<(Span, String)> {
     if name.eq_ignore_ascii_case("str_replace") || name.eq_ignore_ascii_case("str_ireplace") {
-        return Ok(());
+        return None;
     }
     let fixed = if variadic { params.len().saturating_sub(1) } else { params.len() };
     for (index, (arg, ty)) in args.iter().zip(arg_types).enumerate() {
         // A named argument reaches the same parameter by name, and php numbers it by that
         // parameter's position; a spread's targets are unknown until it is unpacked.
         let index = match &arg.kind {
-            ExprKind::Spread(_) => return Ok(()),
+            ExprKind::Spread(_) => return None,
             ExprKind::NamedArg { name: written, .. } => {
                 match params[..fixed].iter().position(|(param, _)| param == written) {
                     Some(position) => position,
@@ -578,9 +596,9 @@ fn reject_array_at_string_param(
         let is_array = ty.is_php_array()
             || matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. });
         if *param_ty == PhpType::Str && is_array {
-            return Err(CompileError::new(
+            return Some((
                 arg.span,
-                &format!(
+                format!(
                     "{}(): Argument #{} (${}) must be of type string, array given",
                     name,
                     index + 1,
@@ -589,7 +607,7 @@ fn reject_array_at_string_param(
             ));
         }
     }
-    Ok(())
+    None
 }
 
 /// Returns the real argument count of a call whose every spread has a written-out length.
@@ -616,4 +634,25 @@ fn spread_expanded_arg_count(args: &[Expr]) -> Option<usize> {
         }
     }
     Some(total)
+}
+
+/// Returns whether php itself accepts an array at one of the builtin's parameters that elephc's
+/// contract narrows to `string` (`substr_replace`, `preg_replace`, ...), so a run-time
+/// `TypeError` would be wrong where php computes an answer.
+pub(crate) fn php_accepts_array_at_string_param(name: &str) -> bool {
+    matches!(
+        name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+        "substr_replace"
+            | "preg_replace"
+            | "preg_filter"
+            | "preg_replace_callback"
+            | "preg_replace_callback_array"
+            | "strtr"
+            | "implode"
+            | "join"
+            | "setlocale"
+            | "mb_ereg_replace"
+            | "mb_convert_encoding"
+            | "mb_convert_variables"
+    )
 }

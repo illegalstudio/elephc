@@ -80,7 +80,7 @@ fn test_error_closure_ref_param_requires_variable() {
 /// Verifies that a typed parameter rejects a mismatched argument type at the call site.
 #[test]
 fn test_error_function_typed_param_rejects_wrong_argument() {
-    expect_error(
+    expect_error_strict(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
         "Function 'foo' parameter $x expects int, got string — PHP throws `TypeError` for the non-numeric string \"hello\" at an `int` parameter",
     );

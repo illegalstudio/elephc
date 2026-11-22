@@ -326,6 +326,17 @@ macro_rules! expect_builtin_arity_error {
     };
 }
 
+/// Like [`expect_builtin_arity_error`] for a diagnostic only `--strict-locals` keeps: php throws it at run time.
+macro_rules! expect_builtin_strict_error {
+    ($test_name:ident, $src:expr, $expected:expr) => {
+        /// Verifies the strict-mode refusal supplied by this fixture.
+        #[test]
+        fn $test_name() {
+            expect_error_strict($src, $expected);
+        }
+    };
+}
+
 /// Verifies resolver error.
 fn resolver_error(src: &str) -> elephc::errors::CompileError {
     resolve_main_source(src).expect_err("expected resolver to fail")

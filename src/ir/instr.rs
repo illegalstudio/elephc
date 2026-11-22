@@ -2164,6 +2164,10 @@ impl Op {
                 | Op::IShrA
                 | Op::Call
                 | Op::ArraySet
+                // A silent read keyed by a boxed checked-arithmetic result may warn about the
+                // float key conversion (`array_access.rs` adds `MAY_WARN` then).
+                | Op::ArrayGetSilent
+                | Op::ArrayGetMixedKeySilent
                 | Op::HashSet
                 | Op::DescriptorArgSet
                 | Op::ArraySetMixedKey

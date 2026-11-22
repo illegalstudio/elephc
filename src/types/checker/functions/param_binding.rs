@@ -356,6 +356,28 @@ impl Checker {
         true
     }
 
+    /// Records a builtin call's argument php rejects with `TypeError` when the call runs (an
+    /// array at a `string` parameter). The message is php's complete wording; the callee is
+    /// internal, so lowering appends no `called in` clause.
+    pub(crate) fn record_builtin_argument_type_error(
+        &mut self,
+        span: crate::span::Span,
+        message: String,
+    ) {
+        crate::types::checker::record_throw_access_site(
+            &mut self.throw_access_sites,
+            self.current_loop_storage_scope.clone(),
+            span,
+            crate::types::ThrowAccessInfo {
+                span,
+                kind: crate::types::ThrowAccessKind::CallArgumentType {
+                    message,
+                    internal_callee: true,
+                },
+            },
+        );
+    }
+
     /// Drops a deferred mismatch recorded for `arg` by an earlier visit of the same call: the
     /// checker re-checks bodies as types settle, and only the last visit's verdict is true.
     pub(crate) fn forget_definite_param_mismatch(&mut self, arg: &Expr) {
@@ -503,6 +525,22 @@ impl Checker {
         let actual_is_array =
             actual.is_php_array() || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         if self.strict_types && strict_param_binding_rejection(expected, actual).is_some() {
+            return given_scalar(actual);
+        }
+        // Weak mode: a string or float LITERAL php refuses at an `int`/`float` parameter (the
+        // non-numeric `"x"`, `"42abc"`, NAN, an out-of-range spelling) is a certain run-time
+        // `TypeError`, not a compile refusal. A numeric literal never reaches this arm: it binds
+        // (`f("5")` is 5) or deprecates, and `classify_param_binding` says which.
+        if !self.strict_types
+            && !self.strict_locals
+            && matches!(expected, PhpType::Int | PhpType::Float)
+            && matches!(arg.kind, ExprKind::StringLiteral(_) | ExprKind::FloatLiteral(_))
+            && matches!(actual, PhpType::Str | PhpType::Float)
+            && matches!(
+                classify_param_binding(expected, actual, arg),
+                ParamBinding::TypeError(_)
+            )
+        {
             return given_scalar(actual);
         }
         let given = if literal_null {
