@@ -259,13 +259,14 @@ fn strict_cache_disk_headers_require_matching_semantics() {
     let _guard = store::lock_for_test();
     let fixture = Fixture::new();
     let config = fixture.configure(true);
+    let source = std::fs::canonicalize(&fixture.source).unwrap();
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true);
     let segments = segments::segment_script_with_semantics(b"<?php return true;", segments::ParseMode::Fresh, profile);
-    file_store::store_entry_with_semantics(&config, &fixture.source, None, 0, 0, &segments, profile);
-    assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, profile).is_some());
-    assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, SemanticProfile::PERMISSIVE).is_none());
-    assert!(file_store::contains_with_semantics(&fixture.source, profile));
-    assert!(!file_store::contains_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE));
+    file_store::store_entry_with_semantics(&config, &source, None, 0, 0, &segments, profile);
+    assert!(file_store::load_entry_with_semantics(&config, &source, None, 0, profile).is_some());
+    assert!(file_store::load_entry_with_semantics(&config, &source, None, 0, SemanticProfile::PERMISSIVE).is_none());
+    assert!(file_store::contains_with_semantics(&source, profile));
+    assert!(!file_store::contains_with_semantics(&source, SemanticProfile::PERMISSIVE));
     // Change only the neutral ABI field, leaving the stored IR decodable.
     let directory = std::fs::read_dir(fixture.dir.join("cache")).unwrap().next().unwrap().unwrap().path();
     let entry = std::fs::read_dir(directory).unwrap().next().unwrap().unwrap().path();
@@ -275,7 +276,7 @@ fn strict_cache_disk_headers_require_matching_semantics() {
     assert!(
         file_store::load_entry_with_semantics(
             &config,
-            &fixture.source,
+            &source,
             None,
             0,
             profile,
@@ -286,7 +287,7 @@ fn strict_cache_disk_headers_require_matching_semantics() {
     bytes[16..24].copy_from_slice(&profile.bits().to_le_bytes());
     bytes[12..16].copy_from_slice(&(elephc_semantics::SEMANTICS_ABI_VERSION + 1).to_le_bytes());
     std::fs::write(&entry, bytes).unwrap();
-    assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, profile).is_none());
+    assert!(file_store::load_entry_with_semantics(&config, &source, None, 0, profile).is_none());
 }
 
 /// Disk cache variants keep separate files and path invalidation removes all of them.
