@@ -618,7 +618,11 @@ echo iterator_apply(new Range(), "tick", ["!"]);
 ```
 
 AOT constraints: `iterator_to_array()` accepts literal or dynamic scalar
-`preserve_keys` values and applies PHP truthiness at runtime. `iterator_apply()`
+`preserve_keys` values and applies PHP truthiness at runtime. The source of
+`iterator_to_array()`, `iterator_count()` and `iterator_apply()` may be a
+union-typed variable that a guard narrowed to `iterable` or to a `Traversable`
+object, such as a `string|iterable $files` inside
+`if ($files instanceof Traversable)`. `iterator_apply()`
 accepts statically known Traversable objects and runtime-dispatched
 `Traversable` or `iterable` values; if an `iterable` value is an array at
 runtime, the program aborts because PHP's `iterator_apply()` signature requires

@@ -583,6 +583,9 @@ impl Checker {
                 let storage_entry = self.guarded_union_types.clone();
                 let mut flow = self.snapshot_conditional_flow(env);
                 self.exclude_conditional_binding_entry(&mut flow);
+                if else_body.is_some() {
+                    self.exclude_conditional_read_entry(&mut flow);
+                }
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.
@@ -616,7 +619,15 @@ impl Checker {
                 // branch diverged, or a call inside it purged the narrowing).
                 let mut join_key: Option<String> = None;
                 let mut then_exit_ty: Option<PhpType> = None;
+                // The union a joined local keeps as storage while its read view narrows.
+                let mut join_storage: Option<PhpType> = None;
                 let single_clause = clauses.len() == 1;
+                // An `elseif` chain without `else` joins its union-typed locals over the clause
+                // exits and the guards' complement, which is what its fall-through holds.
+                let mut chain_join = super::chain_join::ChainJoin::begin(
+                    self, !single_clause && else_body.is_none(),
+                    clauses.iter().map(|(cond, _)| *cond), env,
+                );
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
 
@@ -643,6 +654,7 @@ impl Checker {
                         ));
                         env.insert(guard.var.clone(), guard.then_ty.clone());
                     }
+                    chain_join.enter_clause(env);
                     errors.extend(self.check_body(body, env));
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
@@ -651,6 +663,7 @@ impl Checker {
                             self.observe_terminal_flow_storage(&mut flow, env);
                         } else {
                             self.observe_conditional_flow_exit(&mut flow, env);
+                            chain_join.exit_clause(env);
                         }
                     }
                     // Preserve lazy-property joins and nullable locals initialized on their null arm.
@@ -668,12 +681,23 @@ impl Checker {
                                             matches!((member, ty), (PhpType::Int, PhpType::Int)
                                                 | (PhpType::Object(_), PhpType::Object(_)))
                                                 && self.type_contains_values(member, ty)))));
-                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local)
+                        // `if (is_string($tz)) { $tz = new DateTimeZone($tz); }` stores a member
+                        // of the union the guard narrowed: the exit joins with the complement.
+                        let union_storage = saved.iter().find(|(name, _)| name == &guard.var)
+                            .and_then(|(_, original)| original.clone())
+                            .filter(|original| matches!(original, PhpType::Union(_))
+                                && !Self::narrowed_place_key_is_property(&guard.var)
+                                && self.local_flow_read_is_stable(&guard.var)
+                                && branch_exit.is_some_and(|ty| !self.type_contains_values(ty, original)
+                                    && self.merged_assignment_type(original, ty).as_ref() == Some(original)));
+                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local
+                            || union_storage.is_some())
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
+                            join_storage = union_storage;
                         }
                     }
                     if !self.body_cannot_fall_through(body) {
@@ -765,9 +789,23 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
+                // Only a strictly narrower join is a fact worth keeping over the union storage.
+                let union_join = joined.as_ref().zip(join_storage.as_ref())
+                    .filter(|((_, ty), storage)| self.union_join_is_narrower(ty, storage))
+                    .map(|((key, ty), storage)| super::chain_join::NarrowedUnionJoin {
+                        name: key.clone(), read: ty.clone(), storage: storage.clone(),
+                    });
+                // The same fact for a chain: every exit that reaches the code after it, the
+                // fall-through complement included. A chain whose clauses all diverge keeps
+                // the complement itself below.
+                let chain_joins = if keep_complement_after_if {
+                    Vec::new()
+                } else {
+                    chain_join.finish(self, &saved_vars, env)
+                };
                 let joined_local_key = joined.as_ref().filter(|(key, ty)|
                     !Self::narrowed_place_key_is_property(key)
-                        && matches!(ty, PhpType::Int | PhpType::Object(_)))
+                        && (matches!(ty, PhpType::Int | PhpType::Object(_)) || union_join.is_some()))
                     .map(|(key, _)| key.clone());
                 if !keep_complement_after_if {
                     self.restore_guarded_storage_provenance(&storage_entry);
@@ -776,6 +814,9 @@ impl Checker {
                     }
                     if let Some((key, joined)) = joined {
                         env.insert(key, joined);
+                    }
+                    for join in &chain_joins {
+                        env.insert(join.name.clone(), join.read.clone());
                     }
                 } else {
                     for (var, original) in &saved_vars {
@@ -802,7 +843,13 @@ impl Checker {
                 if let Some(key) = joined_local_key {
                     self.keep_conditional_views(&mut flow, env, std::iter::once(key));
                 }
+                self.keep_conditional_views(&mut flow, env,
+                    chain_joins.iter().map(|join| join.name.clone()));
                 self.finish_statement_conditional_flow(flow, env);
+                // The joined view reads narrower than the slot, which keeps the union contract.
+                for join in union_join.into_iter().chain(chain_joins) {
+                    self.publish_narrowed_union_join(join, env);
+                }
 
                 if errors.is_empty() {
                     Ok(())

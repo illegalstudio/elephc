@@ -347,6 +347,10 @@ fn check_assign_value_type(
                     checker.guarded_union_types.remove(name);
                 }
             }
+            // A plain store proves the stored member the way a coalescing one does below.
+            super::store_narrowing::narrow_local_to_stored_value(
+                checker, name, value, &ty, stored_non_null, env,
+            );
         }
         // The assignment merge protects the slot's contract. A coalescing store also proves
         // the current value's narrower type, without changing boxed parameter storage.
