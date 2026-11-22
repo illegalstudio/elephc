@@ -2259,6 +2259,9 @@ fn validate_switch_flow(
                 inputs.push(fallthrough);
             }
         }
+        if inputs.is_empty() {
+            validate_branch(body, entry, properties, profile, current_class)?;
+        }
         let mut fallthroughs = Vec::new();
         for input in inputs {
             let flow = collect_loop_break_flow(

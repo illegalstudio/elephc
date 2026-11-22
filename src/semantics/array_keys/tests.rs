@@ -479,6 +479,19 @@ fn strict_array_key_source_validation_tracks_multilevel_loop_jumps() {
     }
 }
 
+/// Exact switch selection still audits source bodies that cannot contribute runtime exits.
+#[test]
+fn strict_array_key_source_validation_audits_unselected_switch_bodies() {
+    for source in [
+        "<?php $values = []; switch (1) { case 2: $values[false] = 1; case 1: break; }",
+        "<?php $values = []; switch (1) { default: $values[false] = 1; case 1: break; }",
+    ] {
+        let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .expect_err("strict source validation must audit unselected switch bodies");
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {
