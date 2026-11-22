@@ -634,8 +634,9 @@ pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         | ExprKind::PostDecrement(target) => target == name,
         // A nested closure that takes the same name BY REFERENCE can store through it from
         // anywhere, including after this one returns.
-        ExprKind::Closure { params, capture_refs, .. } => {
+        ExprKind::Closure { params, body, capture_refs, .. } => {
             capture_refs.iter().any(|capture| capture == name)
+                || body_declares_global_binding(body, name)
                 || params
                     .iter()
                     .any(|(_, _, default, _)| default.as_ref().is_some_and(|default| expr_writes_local(default, name)))
@@ -1094,10 +1095,12 @@ mod tests {
             "<?php $outer = function () { $inner = function () { global $value; $value = null; }; };",
         );
         assert!(body_declares_global_binding(&global, "value"));
+        assert!(body_writes_local(&global, "value"));
 
         let local = outer_closure_body(
             "<?php $outer = function () { $inner = function () { $value = null; }; };",
         );
         assert!(!body_declares_global_binding(&local, "value"));
+        assert!(!body_writes_local(&local, "value"));
     }
 }
