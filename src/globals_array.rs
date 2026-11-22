@@ -70,11 +70,6 @@ pub const BARE_USE_MESSAGE: &str = concat!(
     "($GLOBALS['name']) is supported, not $GLOBALS as a whole array"
 );
 
-/// Diagnostic for `$GLOBALS[$expr]` with a key that is not a literal string.
-pub const DYNAMIC_KEY_MESSAGE: &str = concat!(
-    "Unsupported use of $GLOBALS: the key must be a literal string ",
-    "($GLOBALS['name']), a computed key is not supported"
-);
 
 /// The function a whole-array READ of `$GLOBALS` calls (`array_keys($GLOBALS)`,
 /// `$GLOBALS[$name]`): it answers the closed world's globals that are set, as an array

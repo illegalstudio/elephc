@@ -95,6 +95,7 @@ pub(crate) mod intl_locale_prelude;
 pub(crate) mod bcmath_number_prelude;
 pub(crate) mod stdclass_by_ref_walk;
 pub(crate) mod php_token_prelude;
+pub mod globals_dynamic;
 pub(crate) mod globals_snapshot_prelude;
 pub mod closed_world_extract_refs;
 pub(crate) mod stream_args_prelude;

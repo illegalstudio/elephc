@@ -218,19 +218,12 @@ fn parse_expr_bp_inner(
                 // `_eir_global_name` storage instead of treating `$GLOBALS` as an ordinary array.
                 if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS") {
                     let ExprKind::StringLiteral(key) = &index.kind else {
-                        // A computed key READ indexes the globals snapshot; a write cannot.
-                        let next = tokens.get(*pos).map(|(token, _)| token);
-                        if crate::globals_array::is_write_token(next)
-                            || matches!(next, Some(Token::LBracket))
-                        {
-                            return Err(CompileError::new(
-                                span,
-                                crate::globals_array::DYNAMIC_KEY_MESSAGE,
-                            ));
-                        }
+                        // A computed key stays `$GLOBALS[$key]` for `crate::globals_dynamic`, which
+                        // knows the closed world's names: it turns a read into a snapshot element
+                        // and a write into a dispatch over them.
                         lhs = Expr::new(
                             ExprKind::ArrayAccess {
-                                array: Box::new(crate::globals_array::snapshot_call(lhs.span)),
+                                array: Box::new(lhs),
                                 index: Box::new(index),
                             },
                             span,

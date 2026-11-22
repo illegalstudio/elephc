@@ -363,7 +363,40 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
     }) {
         features.class_methods_introspection = true;
     }
+    // An open boxed callable site (a `callable` parameter, a Mixed element) gets the whole ladder
+    // of builtin wrappers during codegen, after this scan: every builtin whose callable policy is
+    // dynamic, `method_exists`, `restore_error_handler` and `clone_with` among them, whether or
+    // not the program names it. Their bodies reference those builtins' runtime routines, and
+    // nothing in the instruction stream says so, so the site itself decides (otherwise a program
+    // that only relays a closure through `callable $callback` fails to link:
+    // "Undefined symbols: __rt_member_exists").
+    if all_lowered_functions(module).any(|function| function_has_open_callable_site(module, function)) {
+        features.class_methods_introspection = true;
+        features.handler_state = true;
+        features.object_clone = true;
+    }
     features
+}
+
+/// Whether a function invokes a boxed callable whose possible targets are not a finite name set.
+fn function_has_open_callable_site(module: &Module, function: &Function) -> bool {
+    let mut analysis = None;
+    function.instructions.iter().any(|inst| {
+        if inst.op != Op::CallableDescriptorInvoke {
+            return false;
+        }
+        let Some(&callable) = inst.operands.first() else { return false; };
+        let boxed = function.value(callable).is_some_and(|value| {
+            matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        });
+        boxed
+            && analysis
+                .get_or_insert_with(|| {
+                    crate::codegen::callable_reachability::CallableReachabilityAnalysis::new(module, function)
+                })
+                .candidates(callable)
+                .is_none()
+    })
 }
 
 /// Reports, under `ELEPHC_EXPLAIN_EVAL_BRIDGE`, what links the eval bridge (the interpreter and

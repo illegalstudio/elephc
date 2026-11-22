@@ -349,6 +349,8 @@ fn try_lower_source_at_for_target_with_reachability(
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::filter_var_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let mut ast = ast;
+    crate::globals_dynamic::lower(&mut ast).expect("computed GLOBALS key lowering failed");
     let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
         .expect("object-cast prelude failed");

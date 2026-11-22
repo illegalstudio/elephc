@@ -1229,6 +1229,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     {
         forced_groups.insert(crate::filter_var_prelude::FILTER_VAR_GROUP.to_string());
     }
+    // Computed-key `$GLOBALS[$name]` accesses become snapshot reads and helper calls, which the
+    // backend-gap prelude then declares.
+    let mut ast = ast;
+    if let Err(e) = crate::globals_dynamic::lower(&mut ast) {
+        crate::progress::clear();
+        errors::report(&e);
+        process::exit(1);
+    }
     let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
     // The early injection only saw the entry program: a `var_export()` that first appears in an
     // autoloaded file (Nette's `Helpers::formatValue`) found no declaration, fell through to the

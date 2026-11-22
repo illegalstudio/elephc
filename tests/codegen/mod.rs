@@ -172,6 +172,7 @@ mod gmp_class;
 mod gmp_math;
 mod random;
 mod misc;
+mod globals_dynamic;
 mod pointers;
 mod pointer_strings;
 mod nullable_pointers;
