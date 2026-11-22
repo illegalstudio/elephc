@@ -2045,23 +2045,21 @@ fn source_class_is_a(class: &str, target: &str, properties: &PropertyFacts) -> b
     false
 }
 
-/// Reports whether a source throw is consumed by one of the following catch clauses.
-fn terminal_is_caught(
+/// Reports whether one catch clause consumes a source throw.
+fn terminal_matches_catch(
     terminal: &TerminalFlow,
-    catches: &[CatchClause],
+    catch: &CatchClause,
     properties: &PropertyFacts,
 ) -> bool {
     let TerminalKind::Throw(class) = &terminal.kind else {
         return false;
     };
-    catches.iter().any(|catch| {
-        catch.exception_types.iter().any(|handler| {
-            let handler = handler.as_str();
-            class.as_deref().map_or_else(
-                || normalized_class_name(handler) == "throwable",
-                |class| source_class_is_a(class, handler, properties),
-            )
-        })
+    catch.exception_types.iter().any(|handler| {
+        let handler = handler.as_str();
+        class.as_deref().map_or_else(
+            || normalized_class_name(handler) == "throwable",
+            |class| source_class_is_a(class, handler, properties),
+        )
     })
 }
 
@@ -3161,11 +3159,22 @@ fn collect_try_flow(
         profile,
         current_class,
     )?;
-    try_flow
-        .terminals
-        .retain(|terminal| !terminal_is_caught(terminal, catches, properties));
+    let mut caught_entries = vec![Vec::new(); catches.len()];
+    let mut escaping = Vec::new();
+    for terminal in std::mem::take(&mut try_flow.terminals) {
+        if let Some(index) = catches
+            .iter()
+            .position(|catch| terminal_matches_catch(&terminal, catch, properties))
+        {
+            caught_entries[index].push(terminal.facts);
+        } else {
+            escaping.push(terminal);
+        }
+    }
+    try_flow.terminals = escaping;
     let mut flows = vec![try_flow];
-    for catch in catches {
+    let mut exact_catch_flows = Vec::new();
+    for (catch, exact_entries) in catches.iter().zip(caught_entries) {
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
         if let Some(variable) = &catch.variable {
@@ -3178,9 +3187,36 @@ fn collect_try_flow(
             profile,
             current_class,
         )?);
+        let mut distinct_entries = Vec::new();
+        for mut exact_entry in exact_entries {
+            if let Some(variable) = &catch.variable {
+                exact_entry.set(variable, ValueFact::Unknown);
+            }
+            if exact_entry != catch_entry && !distinct_entries.contains(&exact_entry) {
+                distinct_entries.push(exact_entry);
+            }
+        }
+        for exact_entry in distinct_entries {
+            exact_catch_flows.push(collect_loop_break_flow(
+                &catch.body,
+                &exact_entry,
+                properties,
+                profile,
+                current_class,
+            )?);
+        }
     }
     let flow = merge_parallel_loop_flows(flows);
     if let Some(finally_body) = finally_body {
+        for exact_flow in exact_catch_flows {
+            apply_loop_finally(
+                exact_flow,
+                finally_body,
+                properties,
+                profile,
+                current_class,
+            )?;
+        }
         apply_loop_finally(flow, finally_body, properties, profile, current_class)
     } else {
         Ok(flow)

@@ -459,6 +459,11 @@ fn strict_array_key_source_validation_routes_caught_throws_before_finally() {
     let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
         .expect_err("an unmatched throw must retain its terminal facts");
     assert!(error.message.contains("strict-array-keys"), "{error:?}");
+
+    let source = "<?php $values = [1]; try { $values = [[1]]; throw new Exception(); } catch (Exception $error) {} finally { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("a caught throw must retain its exact facts through finally");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
 }
 
 /// A nested loop audits one changed repeated entry before the refinement bound applies.
