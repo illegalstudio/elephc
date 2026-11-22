@@ -1893,6 +1893,7 @@ fn validate_stmt(
             body,
             ..
         } => {
+            apply_expression_facts(array, locals, properties, profile, current_class);
             let entry = locals.clone();
             let mut iteration = entry.clone();
             if let Some(key) = key_var {

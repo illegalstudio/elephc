@@ -253,6 +253,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = [[1]]; while (true) { $values = [1]; } $values[0][false] = 2;",
         "<?php function replace_key_target(&$value): void { $value = ['ab']; } $values = [[]]; replace_key_target($values); $values[0][false] = 'x';",
         "<?php $values = [[]]; try { $values = ['ab']; throw new Exception(); } catch (Exception $error) { $values[0][false] = 'x'; }",
+        "<?php $values = [[]]; foreach (($values = ['ab']) as $item) {} $values[0][false] = 'x';",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
