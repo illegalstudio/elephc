@@ -761,13 +761,39 @@ pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
 /// `substr()`, and the `preg_replace_callback` lowering then refused the now-`Mixed` subject —
 /// eleven SPL tests failing on a program that had been compiling.
 fn call_args_write_local(callee: Option<&str>, args: &[Expr], name: &str) -> bool {
+    args.iter().any(|arg| expr_writes_local(arg, name))
+        || call_args_may_mutate_local(callee, args, name)
+}
+
+/// Returns true when a completed call may replace `name` through a bare local argument.
+pub(crate) fn call_may_mutate_local_argument(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name: callee, args } => {
+            call_args_may_mutate_local(Some(callee.as_str()), args, name)
+        }
+        ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
+        | ExprKind::NullsafeDynamicMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::NewDynamic { args, .. }
+        | ExprKind::NewDynamicObject { args, .. } => {
+            call_args_may_mutate_local(None, args, name)
+        }
+        _ => false,
+    }
+}
+
+/// Checks only callee writes through arguments, excluding writes made while evaluating them.
+fn call_args_may_mutate_local(callee: Option<&str>, args: &[Expr], name: &str) -> bool {
     let ref_params = callee
         .and_then(crate::builtins::registry::lookup)
         .map(|def| def.ref_params.as_slice());
     args.iter().enumerate().any(|(index, arg)| {
-        if expr_writes_local(arg, name) {
-            return true;
-        }
         let passes_bare_local = expr_is_variable(arg, name)
             || matches!(&arg.kind, ExprKind::NamedArg { value, .. } if expr_is_variable(value, name));
         if !passes_bare_local {

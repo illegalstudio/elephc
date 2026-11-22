@@ -1113,7 +1113,7 @@ fn forget_call_mutated_facts(expr: &Expr, locals: &mut LocalFacts) {
     let mutated: Vec<_> = locals
         .values
         .keys()
-        .filter(|name| crate::ir_lower::expr_writes_local(expr, name))
+        .filter(|name| crate::ir_lower::call_may_mutate_local_argument(expr, name))
         .cloned()
         .collect();
     for name in mutated {

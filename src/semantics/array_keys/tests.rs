@@ -184,6 +184,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function mixed_typed_parents(int $key, array<int> $left, array<string> $right): void { $values = [$left, $right]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function ordered_write(): int { $values = [1]; if (PHP_OS_FAMILY === 'Windows') { return ($values = [[1]]) ? ($values[0][false] = 2) : 0; } return 0; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $writer = ($values = [[1]]) ? function () use ($values): void { $values[0][false] = 2; } : null; }",
+        "<?php count($values = [[]]); if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
     ] {
         let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -254,6 +255,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php function replace_key_target(&$value): void { $value = ['ab']; } $values = [[]]; replace_key_target($values); $values[0][false] = 'x';",
         "<?php $values = [[]]; try { $values = ['ab']; throw new Exception(); } catch (Exception $error) { $values[0][false] = 'x'; }",
         "<?php $values = [[]]; foreach (($values = ['ab']) as $item) {} $values[0][false] = 'x';",
+        "<?php count($values = ['ab']); $values[0][false] = 'x';",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));

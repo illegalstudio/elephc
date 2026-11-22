@@ -295,8 +295,8 @@ pub(crate) use callable_tracking::{
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{
-    body_contains_eval_call, body_writes_local, expr_writes_local, lower_closure_for_assignment,
-    stmt_writes_local,
+    body_contains_eval_call, body_writes_local, call_may_mutate_local_argument,
+    expr_writes_local, lower_closure_for_assignment, stmt_writes_local,
 };
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
