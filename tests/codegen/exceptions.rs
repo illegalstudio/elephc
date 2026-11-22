@@ -1945,3 +1945,71 @@ if ($argc > 5) { eval('echo 1;'); }
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Regression for elephc-k542: an uncaught builtin or operator error reaches the uncaught-exception
+/// renderer, which prints `Stack trace:` and `thrown in` through the Throwable string helpers, even
+/// when the source spells no throwable type. The helpers were only rooted for a program that named
+/// one, so `1 % 0` printed the `Fatal error` line alone.
+///
+/// Oracle: `php -n` prints the line, `Stack trace:`, `#0 {main}` and `  thrown in FILE on line 2`.
+#[test]
+fn test_uncaught_modulo_by_zero_prints_trace_without_spelling_a_throwable() {
+    let err = compile_and_run_expect_failure("<?php\n$x = 1 % 0;\n");
+    assert!(
+        err.contains("Fatal error: Uncaught DivisionByZeroError: Modulo by zero in "),
+        "missing fatal line: {err:?}"
+    );
+    assert!(
+        err.contains("\nStack trace:\n#0 {main}\n  thrown in ") && err.contains(" on line 2"),
+        "missing Stack trace / thrown lines: {err:?}"
+    );
+}
+
+/// Same for `intdiv()`. Its internal-function frame (`#0 FILE(3): intdiv(1, 0)`) is a separate
+/// gap (bead elephc-9d0); the trailer is asserted here.
+#[test]
+fn test_uncaught_intdiv_by_zero_prints_trace_without_spelling_a_throwable() {
+    let err = compile_and_run_expect_failure("<?php\n\necho intdiv(1, 0);\n");
+    assert!(
+        err.contains("Fatal error: Uncaught DivisionByZeroError: Division by zero in "),
+        "missing fatal line: {err:?}"
+    );
+    assert!(
+        err.contains("\nStack trace:\n#") && err.contains("{main}\n  thrown in ") && err.contains(" on line 3"),
+        "missing Stack trace / thrown lines: {err:?}"
+    );
+}
+
+/// An uncaught `ValueError` from a builtin, again with no throwable type in the source.
+#[test]
+fn test_uncaught_builtin_error_prints_trace_without_spelling_a_throwable() {
+    let err = compile_and_run_expect_failure("<?php\necho str_repeat(\"a\", -1);\n");
+    assert!(
+        err.contains("Fatal error: Uncaught ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0 in "),
+        "missing fatal line: {err:?}"
+    );
+    assert!(
+        err.contains("\nStack trace:\n#") && err.contains("{main}\n  thrown in ") && err.contains(" on line 2"),
+        "missing Stack trace / thrown lines: {err:?}"
+    );
+}
+
+/// The size win of b9a7b231d0 that the fix must keep: a program that cannot raise does not root the
+/// Throwable helpers, so `echo 1;` lowers only a handful of functions.
+#[test]
+fn test_program_that_cannot_raise_does_not_root_throwable_helpers() {
+    let dir = make_cli_test_dir("elephc_k542_ir");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").expect("write fixture");
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("run elephc --emit-ir");
+    assert!(output.status.success(), "emit-ir failed");
+    let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
+    let functions = text.lines().filter(|line| line.starts_with("  function ")).count();
+    let _ = fs::remove_dir_all(dir);
+    assert!(functions <= 20, "echo 1; lowered {functions} functions");
+    assert!(!text.contains("__elephc_throwable_to_string"), "helpers rooted for echo 1;");
+}

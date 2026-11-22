@@ -59,6 +59,12 @@ pub(crate) fn expr_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     effect.may_throw || effect.has_side_effects
 }
 
+/// Returns true when running `stmts` can raise a catchable error, judged without any
+/// whole-program summary: every call the summaries would have resolved counts as throwing.
+pub(crate) fn block_may_raise(stmts: &[crate::parser::ast::Stmt]) -> bool {
+    effects::block_may_throw(stmts)
+}
+
 #[cfg(test)]
 mod tests;
 

@@ -89,10 +89,21 @@ pub fn helpers_needed(
     {
         return true;
     }
-    usage.classes.iter().chain(usage.literals.iter()).any(|name| {
+    if usage.classes.iter().chain(usage.literals.iter()).any(|name| {
         let name = name.rsplit('\\').next().unwrap_or(name);
         name == "throwable" || name.ends_with("exception") || name.ends_with("error")
-    })
+    }) {
+        return true;
+    }
+    // An engine or builtin error (`1 % 0`, `intdiv(1, 0)`, a builtin's `TypeError`) reaches the
+    // uncaught-exception renderer, which prints `Stack trace:` through these helpers, whatever the
+    // source spells. Only a program none of whose statements can raise cannot reach it.
+    let user: Program = program
+        .iter()
+        .filter(|stmt| !inventory.owns_top_level_declaration(stmt))
+        .cloned()
+        .collect();
+    crate::optimize::block_may_raise(&user)
 }
 
 /// `if (condition) { then } [else { otherwise }]`, without elseif arms.
