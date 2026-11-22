@@ -364,3 +364,29 @@ run(1);
         "778|757|777|888|86|422|167|37|thrown2|1515|2522"
     );
 }
+
+/// A declared `array<int>` local is an ordinary frame slot: bound by reference to a hash
+/// parameter it is converted in place, exactly like an inferred list, and the call leaves a
+/// clean heap. php prints `374` for the same program (it does not enforce the generic
+/// annotations).
+#[test]
+fn test_declared_list_local_binds_to_hash_reference_parameter() {
+    let source = r#"<?php
+function put(array<int, int> &$m): void { $m[9] = 7; }
+function run(): void { array<int> $ids = [4, 5]; put($ids); echo count($ids), $ids[9], $ids[0]; }
+run();
+"#;
+    assert_eq!(run_clean(source), "374");
+}
+
+/// A declared `array<int>` local bound to a written `array<mixed> &` parameter is boxed in
+/// place. php prints `3x4`.
+#[test]
+fn test_declared_list_local_binds_to_array_mixed_reference_parameter() {
+    let source = r#"<?php
+function add(array<mixed> &$a): void { $a[] = 'x'; }
+function run(): void { array<int> $ids = [4, 5]; add($ids); echo count($ids), $ids[2], $ids[0]; }
+run();
+"#;
+    assert_eq!(run_clean(source), "3x4");
+}
