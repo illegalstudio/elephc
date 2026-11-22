@@ -178,6 +178,7 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); setlocale(...[LC_ALL, 0]);",
         "<?php declare(strict_types=1); $f = setlocale(...); $f(LC_ALL, ...[0]);",
         "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, ...[0]);",
+        "<?php declare(strict_types=1); setlocale(LC_ALL, ...[false]);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$locales"), "{source}: {error}");
@@ -189,10 +190,32 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, \"C\", 0);",
         "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", ...[0]);",
         "<?php declare(strict_types=1); $f = setlocale(...); ($f)(LC_ALL, \"C\", ...[0]);",
+        "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", ...[false]);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$rest"), "{source}: {error}");
     }
+}
+
+/// Verifies a literal unpack keeps the strict check a directly written argument gets for
+/// every declared function, not only the `setlocale()` adapter: `null` into `string` is
+/// refused, while `null` into a nullable or implicitly nullable slot is still accepted.
+#[test]
+fn test_strict_literal_unpack_checks_null_against_declared_types() {
+    let error = compile_expect_type_error(
+        "<?php declare(strict_types=1); function f(string $s): void {} f(...[null]);",
+    );
+    assert!(error.contains("$s"), "{error}");
+    let out = compile_and_run(r#"<?php
+declare(strict_types=1);
+function g(?string $s): void { var_dump($s); }
+function h(string $s = null): void { var_dump($s); }
+function k(int|false $v, float ...$rest): void { var_dump($v, $rest); }
+g(...[null]);
+h(...[null]);
+k(...[false, 1.5]);
+"#);
+    assert_eq!(out, "NULL\nNULL\nbool(false)\narray(1) {\n  [0]=>\n  float(1.5)\n}\n");
 }
 
 /// Verifies strict files keep accepting every `array|string|null` locale argument, directly
@@ -209,8 +232,10 @@ var_dump(setlocale(LC_ALL, "0"));
 $f = setlocale(...);
 var_dump($f(LC_ALL, "xx_XX", ["C"]));
 var_dump(setlocale(LC_ALL, ...["xx_XX", ["C"]]));
+var_dump(setlocale(LC_ALL, ...[null]));
+var_dump(setlocale(LC_ALL, ...[[false]]));
 "#, &[("LC_ALL", OsStr::new("C"))]);
-    assert_eq!(out, "string(1) \"C\"\n".repeat(6));
+    assert_eq!(out, "string(1) \"C\"\n".repeat(8));
 }
 
 /// Verifies compiled PCRE character classes follow `setlocale(LC_CTYPE)` (issue #2380).

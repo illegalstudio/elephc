@@ -330,12 +330,20 @@ impl Checker {
             }
             let actual = self.infer_type(arg, caller_env)?;
             self.require_strict_types_param_binding(&expected, &actual, arg.span, &context)?;
-            // The scalar rule above only judges scalar-to-scalar pairs. A scalar element
-            // unpacked into a declared type with no compatible member (`int` into
-            // `array|string|null`) is a TypeError too. Callable slots keep their own string
-            // binding rules and are left to the planned binding.
-            let scalar_actual =
-                matches!(actual, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+            // The scalar rule above only judges scalar-to-scalar pairs. A scalar, `false` or
+            // `null` element unpacked into a declared type with no compatible member (`int` or
+            // `false` into `array|string|null`, `null` into `string`) is a TypeError too.
+            // Callable slots keep their own string binding rules and are left to the planned
+            // binding.
+            let scalar_actual = matches!(
+                actual,
+                PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Str
+                    | PhpType::Void
+            );
             if scalar_actual && !Self::type_has_callable_member(&expected) {
                 self.require_compatible_arg_type(&expected, &actual, arg.span, &context)?;
             }
