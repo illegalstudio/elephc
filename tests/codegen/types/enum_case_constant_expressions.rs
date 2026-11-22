@@ -136,3 +136,63 @@ echo "\n";
     );
     assert_eq!(out, "A=1;B=2;C=3;D=4;F=5;G=6;H=7;I=8;\n");
 }
+
+/// A non-empty keyed array is a known-true condition, like a list: PHP decides the branch at
+/// compile time and skips the variable, under `!`, a `(bool)` cast, `&&` and `||` too.
+#[test]
+fn test_enum_case_values_decide_branches_on_literal_keyed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+enum E: int
+{
+    case A = ['k' => 1] ? 1 : $x;
+    case B = [1 => 'a', 'b'] ? 2 : $y;
+    case C = !['k' => 1] ? $z : 3;
+    case D = (bool) ['k' => [1]] ? 4 : $w;
+    case F = ([1] && ['k' => 1]) ? 5 : $v;
+    case G = ([] || ['k' => 0]) ? 6 : $u;
+    case H = ['k' => 1] ? 7 : 0;
+}
+foreach (E::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "A=1;B=2;C=3;D=4;F=5;G=6;H=7;\n");
+}
+
+/// A `const` declared in a `require_once`d file backs an enum case (and a property default,
+/// which reads the same collected constants), as it does in php.
+#[test]
+fn test_enum_case_values_fold_constants_from_required_files() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require_once __DIR__ . '/consts.php';
+enum Route: string
+{
+    case Orders = PREFIX . 'orders';
+    case Users = \Api\BASE . 'users';
+}
+class Client { public $root = PREFIX . 'v1'; }
+foreach (Route::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo Route::from('/api/orders')->name, '|', (new Client)->root, "\n";
+"#,
+            ),
+            (
+                "consts.php",
+                r#"<?php
+namespace {
+    const PREFIX = '/api/';
+}
+namespace Api {
+    const BASE = '/base/';
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Orders=/api/orders;Users=/base/users;Orders|/api/v1\n");
+}

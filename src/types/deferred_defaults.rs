@@ -10,7 +10,7 @@
 //! - Finding a possible error is distinct from selecting an unconditional property error.
 //! - Lazy branches retain their expression structure rather than becoming eager root errors.
 
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind};
 
 /// Preserves a declared class-constant spelling independently of its normalized value or Error.
 pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
@@ -166,6 +166,16 @@ pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
         ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
         ExprKind::ArrayLiteral(items) if items.iter().all(|item| literal_truthiness(item).is_some()) =>
             Some(!items.is_empty()),
+        // A keyed literal (`['k' => 1]`) is decided like a list: non-empty means truthy.
+        ExprKind::ArrayLiteralAssoc(items) if items.iter().all(|(key, value)| {
+            literal_truthiness(key).is_some() && literal_truthiness(value).is_some()
+        }) => Some(!items.is_empty()),
+        ExprKind::ArrayLiteralMixed(items) if items.iter().all(|item| match item {
+            ArrayEntry::Value(value) => literal_truthiness(value).is_some(),
+            ArrayEntry::Keyed(key, value) =>
+                literal_truthiness(key).is_some() && literal_truthiness(value).is_some(),
+            _ => false,
+        }) => Some(!items.is_empty()),
         _ => None,
     }
 }
@@ -214,13 +224,26 @@ pub(crate) fn prune_literal_branches(expr: &mut Expr) {
                     *expr = Expr::new(ExprKind::BoolLiteral(false), expr.span),
                 BinOp::Or if literal_truthiness(left) == Some(true) =>
                     *expr = Expr::new(ExprKind::BoolLiteral(true), expr.span),
+                // The shared folder does not decide array operands (`[1] && ['k' => 1]`).
+                BinOp::And | BinOp::Or if literal_truthiness(left).is_some() => {
+                    if let Some(truthy) = literal_truthiness(right) {
+                        *expr = Expr::new(ExprKind::BoolLiteral(truthy), expr.span);
+                    }
+                }
                 _ => {}
+            }
+        }
+        ExprKind::Not(inner) | ExprKind::Cast { target: CastType::Bool, expr: inner } => {
+            prune_literal_branches(inner);
+            if let Some(truthy) = literal_truthiness(inner) {
+                let negate = matches!(expr.kind, ExprKind::Not(_));
+                *expr = Expr::new(ExprKind::BoolLiteral(truthy != negate), expr.span);
             }
         }
         ExprKind::ArrayAccess { array, index } => {
             prune_literal_branches(array); prune_literal_branches(index);
         }
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::Negate(inner) | ExprKind::BitNot(inner)
         | ExprKind::NamedArg { value: inner, .. } | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. } =>
             prune_literal_branches(inner),

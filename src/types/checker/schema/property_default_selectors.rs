@@ -134,7 +134,9 @@ pub(crate) fn collect_globals(program: &Program, globals: &mut HashMap<String, E
     for statement in program {
         match &statement.kind {
             StmtKind::ConstDecl { name, value } => { globals.insert(name.clone(), value.clone()); }
-            StmtKind::NamespaceBlock { body, .. } => collect_globals(body, globals),
+            // A `require_once`d file's declarations stay inside its include guard.
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => collect_globals(body, globals),
             _ => {}
         }
     }
