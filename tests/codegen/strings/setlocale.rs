@@ -107,6 +107,31 @@ eval('try { setlocale(LC_ALL, "C", new stdClass()); } catch (TypeError $e) { ech
     );
 }
 
+/// Verifies an array element that is an object without `__toString()` throws PHP's `Error`
+/// when its turn comes instead of taking the environment locale, while a Stringable element
+/// still converts.
+#[test]
+fn test_setlocale_array_object_element_without_to_string_throws() {
+    let out = compile_and_run(r#"<?php
+class LocaleName { public function __toString(): string { return "C"; } }
+try {
+    setlocale(LC_ALL, ["xx_XX", new stdClass(), "C"]);
+} catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+var_dump(setlocale(LC_ALL, ["C", new stdClass()]));
+var_dump(setlocale(LC_ALL, ["xx_XX", new LocaleName()]));
+eval('try { setlocale(LC_ALL, [new stdClass()]); } catch (Error $e) { echo $e->getMessage(), "\n"; }');
+"#);
+    assert_eq!(
+        out,
+        "Error: Object of class stdClass could not be converted to string\n\
+         string(1) \"C\"\n\
+         string(1) \"C\"\n\
+         Object of class stdClass could not be converted to string\n"
+    );
+}
+
 /// Verifies an invalid later argument throws without applying an earlier valid candidate.
 #[test]
 fn test_setlocale_validates_every_argument_before_changing_the_locale() {
@@ -131,8 +156,8 @@ var_dump(setlocale(LC_CTYPE, "0"));
 }
 
 /// Verifies `declare(strict_types=1)` rejects scalar locale arguments, including the extra
-/// variadic candidates and calls through a captured `setlocale(...)`, against the
-/// `array|string|null` contract (issue #2404).
+/// variadic candidates, calls through a captured `setlocale(...)` and `call_user_func()` /
+/// `call_user_func_array()` callbacks, against the `array|string|null` contract (issue #2404).
 #[test]
 fn test_setlocale_strict_rejects_scalar_locale_arguments() {
     for source in [
@@ -140,6 +165,14 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); setlocale(LC_ALL, 1.5);",
         "<?php declare(strict_types=1); setlocale(LC_ALL, true);",
         "<?php declare(strict_types=1); $f = setlocale(...); $f(LC_ALL, 0);",
+        "<?php declare(strict_types=1); $f = setlocale(...); ($f)(LC_ALL, 0);",
+        "<?php declare(strict_types=1); (setlocale(...))(LC_ALL, 0);",
+        "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, 0);",
+        "<?php declare(strict_types=1); call_user_func(setlocale(...), LC_ALL, 0);",
+        "<?php declare(strict_types=1); $f = setlocale(...); call_user_func($f, LC_ALL, 0);",
+        "<?php declare(strict_types=1); call_user_func_array('setlocale', [LC_ALL, 0]);",
+        "<?php declare(strict_types=1); call_user_func_array(setlocale(...), [LC_ALL, 0]);",
+        "<?php declare(strict_types=1); $f = setlocale(...); call_user_func_array($f, [LC_ALL, 0]);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$locales"), "{source}: {error}");
@@ -148,6 +181,7 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", 0);",
         "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", \"C\", false);",
         "<?php declare(strict_types=1); $f = setlocale(...); $f(LC_ALL, \"C\", 0);",
+        "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, \"C\", 0);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$rest"), "{source}: {error}");
