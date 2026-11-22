@@ -243,6 +243,22 @@ var_dump(f(\"5\"));
     );
 }
 
+/// A promoted constructor parameter takes the same path: `new Box("bad")` compiles and php's
+/// `TypeError` names `Box::__construct()`.
+#[test]
+fn test_non_numeric_string_at_a_promoted_int_constructor_parameter_throws_a_type_error() {
+    let out = compile_and_run(
+        "<?php class Box { public function __construct(public int $value) {} }
+try { new Box(\"bad\"); } catch (TypeError $t) { echo get_class($t), \"|\", strstr($t->getMessage(), \", called\", true), \"\\n\"; }
+echo (new Box(\"7\"))->value, \"\\n\";
+",
+    );
+    assert_eq!(
+        out,
+        "TypeError|Box::__construct(): Argument #1 ($value) must be of type int, string given\n7\n"
+    );
+}
+
 /// The same refusal uncaught prints php's fatal block.
 #[test]
 fn test_uncaught_non_numeric_string_at_an_int_parameter_is_a_fatal_type_error() {

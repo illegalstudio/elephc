@@ -861,7 +861,9 @@ fn test_error_too_few_args_with_defaults() {
 /// Input: `class Box { public function __construct(public int $value) {} } new Box("bad");`
 #[test]
 fn test_error_promoted_property_type_mismatch() {
-    expect_error(
+    // php raises this TypeError at run time (tests/codegen/runtime_checked_refusals.rs);
+    // --strict-locals keeps the compile-time refusal.
+    expect_error_strict(
         r#"<?php
 class Box {
     public function __construct(public int $value) {}
