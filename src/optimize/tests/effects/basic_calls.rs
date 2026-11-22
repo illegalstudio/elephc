@@ -467,7 +467,9 @@ fn test_program_function_effects_propagate_throwing_calls() {
     );
 }
 
-/// Declared dynamic int returns can throw, while inferred and native int returns stay pure.
+/// Declared dynamic int returns can throw and inferred returns stay pure. Native `int`
+/// parameters keep `may_throw`: php raises a TypeError when `nativeInt('abc')` binds the
+/// argument, and callable-value calls see only this summary (php-src compliance, 2026-11-22).
 #[test]
 fn test_function_effects_keep_declared_int_return_verification() {
     let tokens = crate::lexer::tokenize("<?php function checked(mixed $input): int { return $input; } function inferred(mixed $input) { return $input; } function nativeInt(int $input): int { return $input; } function changed(int $input, mixed $replacement): int { $input = $replacement; return $input; } function relay(int $input): int { return NATIVEINT($input); } function strlen(mixed $input): mixed { return $input; } function shadowed(mixed $input): int { return STRLEN($input); }").unwrap();
@@ -476,7 +478,7 @@ fn test_function_effects_keep_declared_int_return_verification() {
     assert!(effects["checked"].may_throw);
     assert!(effects["changed"].may_throw);
     assert_eq!(effects["inferred"], Effect::PURE);
-    assert_eq!(effects["nativeInt"], Effect::PURE);
-    assert_eq!(effects["relay"], Effect::PURE);
+    assert_eq!(effects["nativeInt"], Effect::PURE.with_may_throw());
+    assert_eq!(effects["relay"], Effect::PURE.with_may_throw());
     assert!(effects["shadowed"].may_throw);
 }
