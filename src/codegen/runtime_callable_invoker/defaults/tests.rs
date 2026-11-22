@@ -126,10 +126,10 @@ fn nested_deferred_default_resolves_to_native_helper() {
     let default = Expr::new(ExprKind::ArrayLiteral(vec![
         Expr::new(ExprKind::Throw(Box::new(exception)), Span::dummy()),
     ]), Span::dummy());
-    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
-    helper.callable_default = Some(default.clone());
-    module.add_closure(helper);
     let sig = signature(vec![("items".into(), PhpType::php_array())], vec![Some(default)], vec![true], None);
+    let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
+    helper.callable_default = Some(sig.default_value(0).expect("present helper default"));
+    module.add_closure(helper);
     assert!(matches!(&resolve_invoker_defaults(&module, None, &sig)[0],
         Some(InvokerDefaultValue::EirHelper(name)) if name == "native_default"));
     assert!(!module.required_runtime_features.eval_bridge);
