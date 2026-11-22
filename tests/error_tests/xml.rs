@@ -245,14 +245,28 @@ fn simplexml_constructor_requires_data() {
     expect_xml_error("<?php new SimpleXMLElement();", "__construct");
 }
 
-/// Native counters refuse reference/static layouts which cannot store their numeric replacement.
+/// Native counters refuse a by-reference parameter, whose caller slot cannot take the numeric
+/// replacement. php itself accepts these (`$xml++` on `<r>2</r>` leaves `int(3)`), so this is a
+/// storage limit of the compiler, not a php rule; the static-local shape below IS accepted.
 #[test]
 fn simplexml_counter_rejects_unboxable_storage() {
     for source in [
         "<?php function bump(SimpleXMLElement &$xml): void { $xml++; } $xml = new SimpleXMLElement('<r>2</r>'); bump($xml);",
         "<?php class CounterXml extends SimpleXMLElement {} function bump(CounterXml &$xml): void { --$xml; } $xml = new CounterXml('<r>2</r>'); bump($xml);",
-        "<?php function bump(): void { static $xml; $xml = new SimpleXMLElement('<r>2</r>'); ++$xml; } bump();",
     ] {
         expect_xml_error(source, "Copy it into a plain local first");
     }
+}
+
+/// `++` on a SimpleXMLElement held in a `static` local is valid php (`int(3)`): the untyped static
+/// is boxed `mixed`, so the checker no longer refuses it with the former "Copy it into a plain
+/// local first" diagnostic. The run-time answer is pinned by
+/// `test_simplexml_counter_on_a_static_local_follows_php` in
+/// `tests/codegen/simplexml/boxed_operators.rs`.
+#[test]
+fn simplexml_counter_on_a_static_local_is_accepted_like_php() {
+    expect_php_accepts(
+        "<?php function bump(): void { static $xml; $xml = new SimpleXMLElement('<r>2</r>'); ++$xml; } bump();",
+        "Copy it into a plain local first",
+    );
 }

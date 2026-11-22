@@ -24,7 +24,8 @@ fn test_first_class_builtin_non_literal_arguments() {
 
 /// `str_replace()`'s fourth argument is the by-reference `$count`, so a literal there is php's
 /// "could not be passed by reference", directly and through callable syntax alike.
-/// `str_ireplace()` has no `$count` support yet and keeps its arity refusal.
+/// `str_ireplace()` takes the same by-reference `$count` (`__elephc_str_ireplace_count`), so it
+/// refuses a literal there in the same words; php raises `Error` for it at run time.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
     expect_error(
@@ -35,10 +36,13 @@ fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
         "<?php $callback = str_replace(...); $callback('a', 'b', 'aAa', 0);",
         "parameter $count must be passed a variable",
     );
-    expect_error("<?php str_ireplace('a', 'b', 'aAa', 0);", "3 arguments");
+    expect_error(
+        "<?php str_ireplace('a', 'b', 'aAa', 0);",
+        "str_ireplace(): Argument #4 ($count) could not be passed by reference",
+    );
     expect_error(
         "<?php $callback = str_ireplace(...); $callback('a', 'b', 'aAa', 0);",
-        "3 arguments",
+        "parameter $count must be passed a variable",
     );
 }
 

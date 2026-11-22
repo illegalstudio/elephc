@@ -28,10 +28,13 @@ fn rebound_names(result: &elephc::types::CheckResult) -> Vec<String> {
 /// failed with `cannot reassign $i from int|float to string` while the hoisted form compiled.
 #[test]
 fn test_for_initializer_counter_retypes_after_the_loop() {
-    expect_warning(
-        "<?php for ($i = 0; $i < $argc; $i++) {} $i = \"done\"; echo $i;",
-        "changes type from int|float to string",
-    );
+    let source = "<?php for ($i = 0; $i < $argc; $i++) {} $i = \"done\"; echo $i;";
+    expect_no_error(source);
+    // The "changes type" lint only names a retype that crosses the scalar/heap storage boundary
+    // (`retype_crosses_storage_boundary`): `int|float` is already a boxed cell, so storing a
+    // string into it abandons nothing and php-compliant code gets no notice.
+    expect_no_warning(source, "changes type");
+    expect_error_strict(source, "cannot reassign $i");
 }
 
 /// A straight-line `unset` after the loop now ends the counter binding the initializer created.

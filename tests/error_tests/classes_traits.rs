@@ -627,7 +627,19 @@ fn test_error_class_attribute_args_non_string_attr() {
 /// that is not supported yet".
 #[test]
 fn test_error_class_attribute_const_args_are_not_silently_dropped() {
+    // A user class constant is still a deferred symbolic reference the flat helper cannot echo.
     expect_error(
+        "<?php class Config { const NAME = 'n'; } #[Foo(Config::NAME)] class C {} class_attribute_args('C', 'Foo');",
+        "requested attribute uses argument metadata that is not supported yet",
+    );
+}
+
+/// `Attribute::TARGET_CLASS` is a built-in constant the compiler folds to its value, so the flat
+/// helper echoes it like a literal (`1`, as `ReflectionAttribute::getArguments()` reports); the
+/// run-time answer is pinned in `tests/codegen/oop/attributes.rs`.
+#[test]
+fn test_class_attribute_builtin_const_args_are_folded_not_refused() {
+    expect_php_accepts(
         "<?php #[Attribute(Attribute::TARGET_CLASS)] class MyAttr {} class_attribute_args('MyAttr', 'Attribute');",
         "requested attribute uses argument metadata that is not supported yet",
     );

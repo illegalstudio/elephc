@@ -287,6 +287,8 @@ class Identity {
 }
 $number = identity((new C(7))->get());
 $text = identity((new C("seven"))->get());
+$direct_number = identity(7);
+$direct_text = identity("seven");
 $method_number = (new Identity())->id(7);
 $method_text = (new Identity())->id("seven");
 $static_number = Identity::copy(9);
@@ -308,13 +310,24 @@ $static_text = Identity::copy("nine");
             types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
         })
         .expect("annotated declarations must specialize");
+        // A class whose templates exist only in PHPDoc is a `DocView` overlay, not a template
+        // (commit 44245f395c): `C` stays ONE ordinary class, so `get()` answers its untyped
+        // property's type, `mixed`, whatever `new C(7)` was written with, and the function
+        // template follows (`identity<mixed>`). The two top-level passes disagree on this call
+        // (`int` before the method bodies settle, `mixed` after), which must not be refused.
+        for name in ["number", "text"] {
+            assert_eq!(
+                result.global_env.get(name), Some(&types::PhpType::Mixed), "{name}, strict={strict}"
+            );
+        }
+        // The function template itself is active in either mode.
         assert_eq!(
-            result.global_env.get("number"),
+            result.global_env.get("direct_number"),
             Some(&types::PhpType::Int),
             "strict={strict}"
         );
         assert_eq!(
-            result.global_env.get("text"),
+            result.global_env.get("direct_text"),
             Some(&types::PhpType::Str),
             "strict={strict}"
         );

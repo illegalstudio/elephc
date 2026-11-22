@@ -792,7 +792,11 @@ class Wad {
         .find(|(name, _)| name == "entries")
         .map(|(_, ty)| ty.clone())
         .expect("missing entries property");
-    assert_eq!(entries_ty, declared_array_contract());
+    // An untyped property with no default is `mixed` from its declaration on (schema: "implicitly
+    // holds null but remains freely writable", commit 7a0f5064d3), so the array a method
+    // returns is stored through the boxed cell and never narrows the slot; the declared method
+    // return below is what keeps the array contract.
+    assert_eq!(entries_ty, PhpType::Mixed);
 
     let load_entries = wad
         .methods
@@ -2260,28 +2264,36 @@ fn test_unknown_callee_does_not_over_reach() {
 /// parameters and the known-signature path rejects one outright — but the conservatism must not
 /// depend on which call syntax reached the callee.
 ///
-/// Read off the decision, like its ordinary-call sibling above: neither shape records a kill or a
-/// re-bind site, so the piped value's slot is never abandoned. The store that follows widens it,
-/// and `--strict-locals` keeps the hard error.
+/// Read off the decision, like its ordinary-call sibling above
+/// (`test_unknown_callee_siblings_can_be_unset_and_rebound`): the piped value's reference is held
+/// only for the call, so `unset()` detaches the binding and the kill is sound (it IS recorded),
+/// while no shape records a re-bind site. The store that follows is valid in both modes
+/// (`--strict-locals` included), as for an ordinary unresolved callee.
 #[test]
-fn test_unresolved_pipe_target_arg_not_killable() {
-    for source in [
-        "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
-
-        "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
+fn test_unresolved_pipe_target_arg_uses_rebindable_boxed_storage() {
+    for (source, kills) in [
+        (
+            "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; unset($a); $a = \"s\"; echo $a, $r; }",
+            1,
+        ),
+        (
+            "<?php function g(callable $cb) { $a = 1; $r = $a |> $cb; $a = \"s\"; echo $a, $r; }",
+            0,
+        ),
     ] {
         let result = check_source_full(source).expect("the pipe fixture must type-check");
-        assert!(
-            result.local_bind_kill_sites.is_empty(),
-            "an unresolved pipe target's value is never killable: {:?}",
+        assert_eq!(
+            result.local_bind_kill_sites.len(),
+            kills,
+            "unexpected kill sites for the pipe fixture: {:?}",
             result.local_bind_kill_sites
         );
         assert!(
             result.local_retype_sites.is_empty(),
-            "…and never re-bound either: {:?}",
+            "an unresolved pipe target's value is never re-bound: {:?}",
             result.local_retype_sites
         );
-        expect_error_strict(source, "cannot reassign");
+        expect_no_error_strict(source);
     }
 }
 
@@ -2986,7 +2998,13 @@ fn test_retype_at_a_dummy_span_is_not_recorded() {
         Stmt::assign("a", Expr::string_lit("s")),
         Stmt::echo(Expr::var("a")),
     ];
-    let result = elephc::types::check(&program).expect("permissive retype should type-check");
+    // The "changes type" notice is a lint: the default check stays silent (`CheckOptions::lint`), so
+    // the test opts in the way `check_source_full` does.
+    let result = elephc::types::check_with_options(
+        &program,
+        elephc::types::CheckOptions { lint: true, ..Default::default() },
+    )
+    .expect("permissive retype should type-check");
     assert!(
         result.local_retype_sites.is_empty(),
         "a retype was recorded at a span that names no node: {:?}",
@@ -3497,7 +3515,10 @@ fn test_mixed_storage_store_sites_are_recorded_once() {
 /// `Span::dummy()` is what every compiler-generated AST node carries, so a store site filed under
 /// it would box locals at every other dummy-span assignment in the program — and, worse, the
 /// checker would type this local `Mixed` while lowering never saw the site that boxes its slot.
-/// Refusing to mark keeps the two halves in lock-step: the body reports today's error instead.
+/// Refusing to mark keeps the two halves in lock-step. The permissive build no longer reports an
+/// error for the divergent store (the local widens through its kept slot, as php lets any local
+/// hold any type), so the refusal is read off the recorded sites; `--strict-locals` still reports
+/// today's error.
 #[test]
 fn test_mixed_storage_marking_at_dummy_spans_is_refused() {
     use elephc::parser::ast::{Expr, Stmt, StmtKind};
@@ -3512,9 +3533,19 @@ fn test_mixed_storage_marking_at_dummy_spans_is_refused() {
         },
         Span::dummy(),
     )];
-    let error = elephc::types::check(&program)
-        .err()
-        .expect("a divergent assignment at dummy spans must stay an error");
+    let result = elephc::types::check(&program)
+        .expect("the permissive build widens a divergent dummy-span store");
+    assert!(
+        result.mixed_storage_store_sites.is_empty(),
+        "a marking at dummy spans was recorded: {:?}",
+        result.mixed_storage_store_sites
+    );
+    let error = elephc::types::check_with_options(
+        &program,
+        elephc::types::CheckOptions { strict_locals: true, ..Default::default() },
+    )
+    .err()
+    .expect("a divergent assignment at dummy spans must stay an error under --strict-locals");
     assert!(
         error.message.contains("cannot reassign"),
         "expected today's diagnostic, got: {}",

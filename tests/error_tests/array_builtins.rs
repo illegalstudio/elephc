@@ -959,7 +959,8 @@ fn test_error_array_walk_recursive_wrong_args() {
 fn test_error_array_udiff_wrong_args() {
     expect_error(
         "<?php function c($a, $b) { return 0; } array_udiff([1], [2]);",
-        "array_udiff() takes exactly 3 arguments",
+        // The contract is variadic (php takes any number of arrays before the comparator).
+        "array_udiff() takes at least 3 arguments",
     );
 }
 
