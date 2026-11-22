@@ -507,6 +507,18 @@ fn strict_array_key_source_validation_bounds_nested_catch_replays() {
     assert!(error.message.contains("strict-array-keys"), "{error:?}");
 }
 
+/// Implicit and equal caught paths keep conservative facts in the published continuation.
+#[test]
+fn strict_array_key_source_validation_preserves_conservative_catch_paths() {
+    for source in [
+        "<?php function fail_before_array_change(): void { throw new Exception(); } $values = ['ab']; try { fail_before_array_change(); $values = [[]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 'x';",
+        "<?php function dynamic_payload(): mixed { return 1; } $values = [[1]]; try { if ($argc > 0) { throw new Exception(); } $values = dynamic_payload(); throw new RuntimeException(); } catch (Exception $error) {} $values[0][false] = 2;",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
 /// A nested loop audits one changed repeated entry before the refinement bound applies.
 #[test]
 fn strict_array_key_source_validation_audits_bounded_nested_replay() {

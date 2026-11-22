@@ -2132,6 +2132,116 @@ fn catch_entry_facts(
     catch_entry
 }
 
+/// Reports whether an explicit throw operand can fail before publishing its snapshot.
+fn explicit_throw_operand_may_throw(
+    expr: &Expr,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+) -> bool {
+    if let ExprKind::NewObject { class_name, args } = &expr.kind {
+        let class = normalized_class_name(class_name.as_str());
+        let builtin_throwable = !properties.parents.contains_key(&class)
+            && source_class_is_a(&class, "throwable", properties);
+        if builtin_throwable {
+            return args
+                .iter()
+                .any(|arg| crate::optimize::source_expression_may_throw(arg, profile));
+        }
+    }
+    crate::optimize::source_expression_may_throw(expr, profile)
+}
+
+/// Finds a reachable throw edge for which the source walk has no exact fact snapshot.
+fn block_has_untracked_throw(
+    body: &[Stmt],
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+) -> bool {
+    reachable_statement_prefix(body)
+        .iter()
+        .any(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
+}
+
+/// Separates explicit throw terminals from implicit expression and statement failures.
+fn stmt_has_untracked_throw(
+    stmt: &Stmt,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+) -> bool {
+    match &stmt.kind {
+        StmtKind::Throw(expr) => explicit_throw_operand_may_throw(expr, properties, profile),
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => {
+            block_has_untracked_throw(body, properties, profile)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            crate::optimize::source_expression_may_throw(condition, profile)
+                || block_has_untracked_throw(then_body, properties, profile)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    crate::optimize::source_expression_may_throw(condition, profile)
+                        || block_has_untracked_throw(body, properties, profile)
+                })
+                || else_body.as_ref().is_some_and(|body| {
+                    block_has_untracked_throw(body, properties, profile)
+                })
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            block_has_untracked_throw(then_body, properties, profile)
+                || else_body.as_ref().is_some_and(|body| {
+                    block_has_untracked_throw(body, properties, profile)
+                })
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            crate::optimize::source_expression_may_throw(condition, profile)
+                || block_has_untracked_throw(body, properties, profile)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref()
+                .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
+                || condition.as_ref().is_some_and(|condition| {
+                    crate::optimize::source_expression_may_throw(condition, profile)
+                })
+                || update
+                    .as_deref()
+                    .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
+                || block_has_untracked_throw(body, properties, profile)
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            crate::optimize::source_expression_may_throw(array, profile)
+                || block_has_untracked_throw(body, properties, profile)
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_has_untracked_throw(try_body, properties, profile)
+                || catches
+                    .iter()
+                    .any(|catch| block_has_untracked_throw(&catch.body, properties, profile))
+                || finally_body.as_ref().is_some_and(|body| {
+                    block_has_untracked_throw(body, properties, profile)
+                })
+        }
+        _ => crate::optimize::source_statement_may_throw(stmt, profile),
+    }
+}
+
 /// Excludes statements after the first unconditional control transfer from reachable facts.
 fn reachable_statement_prefix(body: &[Stmt]) -> &[Stmt] {
     let length = body
@@ -3220,6 +3330,7 @@ fn collect_try_flow(
         profile,
         current_class,
     )?;
+    let has_untracked_throw = block_has_untracked_throw(try_body, properties, profile);
     let mut caught_entries = vec![Vec::new(); catches.len()];
     let mut escaping = Vec::new();
     for terminal in std::mem::take(&mut try_flow.terminals) {
@@ -3235,7 +3346,7 @@ fn collect_try_flow(
     try_flow.terminals = escaping;
     let exact_replay = replaying_exact_catch();
     let mut flows = vec![try_flow];
-    let mut conservative_audit_flows = Vec::new();
+    let mut isolated_audit_flows = Vec::new();
     for (catch, exact_entries) in catches.iter().zip(caught_entries) {
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
@@ -3247,7 +3358,7 @@ fn collect_try_flow(
             if let Some(variable) = &catch.variable {
                 exact_entry.set(variable, ValueFact::Unknown);
             }
-            if exact_entry != catch_entry && !distinct_entries.contains(&exact_entry) {
+            if !distinct_entries.contains(&exact_entry) {
                 distinct_entries.push(exact_entry);
             }
         }
@@ -3261,17 +3372,49 @@ fn collect_try_flow(
             )?);
             continue;
         }
+        if has_untracked_throw {
+            flows.push(replay_exact_catch(|| {
+                collect_loop_break_flow(
+                    &catch.body,
+                    &catch_entry,
+                    properties,
+                    profile,
+                    current_class,
+                )
+            })?);
+            if exact_replay {
+                continue;
+            }
+            for exact_entry in distinct_entries {
+                if exact_entry == catch_entry {
+                    continue;
+                }
+                isolated_audit_flows.push(replay_exact_catch(|| {
+                    collect_loop_break_flow(
+                        &catch.body,
+                        &exact_entry,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                })?);
+            }
+            continue;
+        }
+        let catch_entry_is_exact = distinct_entries.contains(&catch_entry);
         for exact_entry in distinct_entries {
-            flows.push(replay_exact_catch(|| collect_loop_break_flow(
+            flows.push(replay_exact_catch(|| {
+                collect_loop_break_flow(
                 &catch.body,
                 &exact_entry,
                 properties,
                 profile,
                 current_class,
-            ))?);
+                )
+            })?);
         }
-        if !exact_replay {
-            conservative_audit_flows.push(replay_exact_catch(|| {
+        if !exact_replay && !catch_entry_is_exact {
+            isolated_audit_flows.push(replay_exact_catch(|| {
                 collect_loop_break_flow(
                     &catch.body,
                     &catch_entry,
@@ -3284,9 +3427,9 @@ fn collect_try_flow(
     }
     let flow = merge_parallel_loop_flows(flows);
     if let Some(finally_body) = finally_body {
-        for conservative_flow in conservative_audit_flows {
+        for audit_flow in isolated_audit_flows {
             apply_loop_finally(
-                conservative_flow,
+                audit_flow,
                 finally_body,
                 properties,
                 profile,

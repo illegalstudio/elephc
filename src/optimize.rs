@@ -135,6 +135,24 @@ pub(crate) fn with_expression_semantics<T>(profile: elephc_semantics::SemanticPr
     f()
 }
 
+/// Reports whether evaluating one source expression can throw under the selected profile.
+pub(crate) fn source_expression_may_throw(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    let _profile = scoped_semantic_profile(profile);
+    effects::expr_effect(expr).may_throw || !exception_flow::active_expr_thrown_types(expr).is_empty()
+}
+
+/// Reports whether executing one source statement can throw under the selected profile.
+pub(crate) fn source_statement_may_throw(
+    stmt: &Stmt,
+    profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    let _profile = scoped_semantic_profile(profile);
+    effects::stmt_may_throw(stmt)
+}
+
 /// Folds constants whose values or builtin availability depend on the compile target.
 ///
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
