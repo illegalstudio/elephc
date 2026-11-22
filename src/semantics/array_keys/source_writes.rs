@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Flow facts are deliberately small and conservative: unknown receivers remain checker work.
-//! - Branches receive independent facts and only identical facts survive their merge.
+//! - Branches merge only conservative common facts, including autovivifying write-parent shapes.
 //! - Declared array properties are checked without treating strings or ArrayAccess objects as arrays.
 
 use std::cell::Cell;
@@ -2076,10 +2076,11 @@ fn apply_foreach_reference_fact(
     exit.set(source_name, ValueFact::Array(source));
 }
 
-/// Reachable exits and multi-level jumps produced by one switch statement.
+/// Reachable exits, terminals, and multi-level jumps produced by one switch statement.
 struct SwitchFlow {
     exit: LocalFacts,
     outer_jumps: Vec<OuterLoopJump>,
+    terminals: Vec<LocalFacts>,
     can_fallthrough: bool,
 }
 
@@ -2143,6 +2144,7 @@ fn validate_switch_flow(
 
     let mut switch_exits = Vec::new();
     let mut outer_jumps = Vec::new();
+    let mut terminals = Vec::new();
     let mut prior_fallthrough = None;
     for (body_index, body) in bodies.into_iter().enumerate() {
         let mut inputs = Vec::new();
@@ -2168,6 +2170,7 @@ fn validate_switch_flow(
             switch_exits.extend(flow.exits);
             switch_exits.extend(flow.continues);
             outer_jumps.extend(flow.outer_jumps);
+            terminals.extend(flow.terminals);
             fallthroughs.push(flow.fallthrough);
         }
         prior_fallthrough = merge_optional_exits(fallthroughs);
@@ -2189,6 +2192,7 @@ fn validate_switch_flow(
     Ok(SwitchFlow {
         exit,
         outer_jumps,
+        terminals,
         can_fallthrough,
     })
 }
@@ -2278,10 +2282,11 @@ fn collect_repeated_loop_flow(
 struct NestedControlFlow {
     fallthrough: Option<LocalFacts>,
     outer_jumps: Vec<OuterLoopJump>,
+    terminals: Vec<LocalFacts>,
     audit_exit: LocalFacts,
 }
 
-/// Validates a nested breakable statement and preserves its outbound multi-level jumps.
+/// Validates a nested breakable statement and preserves outbound jumps and terminals.
 #[allow(clippy::too_many_arguments)]
 fn validate_control_flow(
     stmt: &Stmt,
@@ -2308,7 +2313,7 @@ fn validate_control_flow(
         validate_expression_writes(stmt, entry, properties, profile, current_class)?;
     }
 
-    let (outer_jumps, can_fallthrough, audit_exit) = match &stmt.kind {
+    let (outer_jumps, terminals, can_fallthrough, audit_exit) = match &stmt.kind {
         StmtKind::While { condition, body } => {
             let first_condition = validate_condition_flow(
                 condition,
@@ -2356,6 +2361,13 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 outer_jumps.extend(repeated_flow.outer_jumps.clone());
             }
+            let mut terminals = Vec::new();
+            if first_condition.true_reachable {
+                terminals.extend(first_flow.terminals.clone());
+            }
+            if repeated_body_reachable {
+                terminals.extend(repeated_flow.terminals.clone());
+            }
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -2383,7 +2395,7 @@ fn validate_control_flow(
                 profile,
                 current_class,
             );
-            (outer_jumps, can_fallthrough, audit_exit)
+            (outer_jumps, terminals, can_fallthrough, audit_exit)
         }
         StmtKind::Foreach {
             array,
@@ -2470,7 +2482,10 @@ fn validate_control_flow(
             let outer_jumps = body_reachable
                 .then(|| flow.outer_jumps.clone())
                 .unwrap_or_default();
-            (outer_jumps, can_fallthrough, audit_exit)
+            let terminals = body_reachable
+                .then(|| flow.terminals.clone())
+                .unwrap_or_default();
+            (outer_jumps, terminals, can_fallthrough, audit_exit)
         }
         StmtKind::DoWhile { body, condition } => {
             let first_flow = collect_loop_break_flow(
@@ -2503,6 +2518,10 @@ fn validate_control_flow(
             let mut outer_jumps = first_flow.outer_jumps.clone();
             if repeated_body_reachable {
                 outer_jumps.extend(repeated_flow.outer_jumps.clone());
+            }
+            let mut terminals = first_flow.terminals.clone();
+            if repeated_body_reachable {
+                terminals.extend(repeated_flow.terminals.clone());
             }
             let repeated_back_edge = repeated_flow.back_edge();
             let repeated_reaches_condition = repeated_back_edge.is_some();
@@ -2541,7 +2560,7 @@ fn validate_control_flow(
                 profile,
                 current_class,
             );
-            (outer_jumps, can_fallthrough, audit_exit)
+            (outer_jumps, terminals, can_fallthrough, audit_exit)
         }
         StmtKind::For {
             init,
@@ -2632,6 +2651,13 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 outer_jumps.extend(repeated_flow.outer_jumps.clone());
             }
+            let mut terminals = Vec::new();
+            if first_condition.true_reachable {
+                terminals.extend(first_flow.terminals.clone());
+            }
+            if repeated_body_reachable {
+                terminals.extend(repeated_flow.terminals.clone());
+            }
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -2659,7 +2685,7 @@ fn validate_control_flow(
                 profile,
                 current_class,
             );
-            (outer_jumps, can_fallthrough, audit_exit)
+            (outer_jumps, terminals, can_fallthrough, audit_exit)
         }
         StmtKind::Switch {
             subject,
@@ -2685,7 +2711,12 @@ fn validate_control_flow(
                 profile,
                 current_class,
             )?;
-            (flow.outer_jumps, flow.can_fallthrough, flow.exit)
+            (
+                flow.outer_jumps,
+                flow.terminals,
+                flow.can_fallthrough,
+                flow.exit,
+            )
         }
         _ => unreachable!("nested control flow is filtered above"),
     };
@@ -2693,6 +2724,7 @@ fn validate_control_flow(
     Ok(Some(NestedControlFlow {
         fallthrough: can_fallthrough.then_some(audit_exit.clone()),
         outer_jumps,
+        terminals,
         audit_exit,
     }))
 }
@@ -2915,6 +2947,7 @@ fn collect_loop_break_flow(
                     current_class,
                 )? {
                     audit_exit = nested.audit_exit;
+                    terminals.extend(nested.terminals);
                     route_nested_outer_jumps(
                         nested.outer_jumps,
                         &mut exits,
@@ -3037,24 +3070,7 @@ fn apply_loop_finally(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<LoopBreakFlow, CompileError> {
-    let mut audit_inputs = Vec::new();
-    audit_inputs.extend(flow.fallthrough.iter().cloned());
-    audit_inputs.extend(flow.exits.iter().cloned());
-    audit_inputs.extend(flow.continues.iter().cloned());
-    audit_inputs.extend(flow.outer_jumps.iter().map(|jump| jump.facts.clone()));
-    audit_inputs.extend(flow.terminals.iter().cloned());
-    let audit_entry = if audit_inputs.is_empty() {
-        flow.audit_exit.clone()
-    } else {
-        merge_exits(&audit_inputs)
-    };
-    let audit_exit = validate_branch(
-        finally_body,
-        &audit_entry,
-        properties,
-        profile,
-        current_class,
-    )?;
+    let fallback_audit_exit = flow.audit_exit.clone();
     let mut paths = Vec::with_capacity(4);
     if let Some(fallthrough) = flow.fallthrough {
         paths.push((LoopResume::Fallthrough, fallthrough));
@@ -3077,6 +3093,7 @@ fn apply_loop_finally(
     let mut continues = Vec::new();
     let mut outer_jumps = Vec::new();
     let mut terminals = Vec::new();
+    let mut audit_exits = Vec::new();
     let mut complete = flow.complete;
     for (resume, entry) in paths {
         let finally_flow = collect_loop_break_flow(
@@ -3086,6 +3103,7 @@ fn apply_loop_finally(
             profile,
             current_class,
         )?;
+        audit_exits.push(finally_flow.audit_exit.clone());
         exits.extend(finally_flow.exits);
         continues.extend(finally_flow.continues);
         outer_jumps.extend(finally_flow.outer_jumps);
@@ -3106,6 +3124,17 @@ fn apply_loop_finally(
             LoopResume::Terminal => terminals.push(fallthrough),
         }
     }
+    let audit_exit = if audit_exits.is_empty() {
+        validate_branch(
+            finally_body,
+            &fallback_audit_exit,
+            properties,
+            profile,
+            current_class,
+        )?
+    } else {
+        merge_exits(&audit_exits)
+    };
     Ok(LoopBreakFlow {
         fallthrough: merge_optional_exits(fallthroughs),
         exits,
@@ -3290,10 +3319,10 @@ fn merge_loop_exits(
 
 /// Proves that every lexical write to one local stores the same static fact.
 ///
-/// This is deliberately narrower than general flow inference. It is used only
-/// when an outer-loop jump prevents exact snapshot propagation, and accepts
-/// constant assignments plus control-flow wrappers around them. Any dynamic
-/// expression, aliasing write, call, or container mutation fails closed.
+/// This is deliberately narrower than general flow inference. It preserves facts
+/// when exact path snapshots are unavailable and proves stable reference-foreach
+/// stores. It accepts constant assignments plus control-flow wrappers around them;
+/// any dynamic expression, aliasing write, call, or container mutation fails closed.
 fn body_writes_only_static_fact(
     body: &[Stmt],
     name: &str,
