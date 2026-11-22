@@ -596,8 +596,8 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
 /// The smoke list above only proves the node lowers at all. `["k" => 1, ...[2], 3]` is the shape
 /// the ORDER matters for -- the spread's elements take the next free integer key where the
 /// spread sits -- so each form has to emit its own op, in source order, into the one hash the
-/// literal opens with. The bare value appends through a generic `runtime_call` rather than an
-/// op of its own, so this also pins that the call takes the literal's hash as its receiver.
+/// literal opens with. A protected owner slot may carry that hash across throwing writes. The
+/// bare value appends through a generic `runtime_call`, so this also pins the shared receiver.
 #[test]
 fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
     let text = lower_program(vec![stmt(StmtKind::Assign {
@@ -631,10 +631,25 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
         .find_map(|line| line.split_once(": Heap(Hash)"))
         .map(|(value, _)| value.trim())
         .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
+    let acquired = text.lines().find_map(|line| line.contains(&format!("= acquire {hash} "))
+        .then(|| line.split_once(':').map(|(value, _)| value.trim())).flatten());
+    let owner_slot = acquired.and_then(|acquired| text.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix(&format!("store_local {acquired} "))
+            .and_then(|rest| rest.split_whitespace().next())
+    }));
     for op in ["hash_set", "hash_spread", "runtime_call"] {
+        let receiver = text.lines().find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix(&format!("{op} "))
+                .and_then(|rest| rest.split_whitespace().next())
+        }).unwrap_or_else(|| panic!("missing {op} in mixed-literal EIR: {text}"));
+        let shared = receiver == hash || owner_slot.is_some_and(|slot| text.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with(&format!("{receiver}: ")) && line.contains(&format!("load_local {slot}"))
+        }));
         assert!(
-            text.lines()
-                .any(|line| line.trim().starts_with(&format!("{op} {hash} "))),
+            shared,
             "{op} does not write into the literal's own hash {hash}: {text}"
         );
     }
