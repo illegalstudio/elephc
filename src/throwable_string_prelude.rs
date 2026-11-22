@@ -58,6 +58,43 @@ pub fn inject(
     combined
 }
 
+/// Whether the program can hold a Throwable it might render to a string, so the helpers must be
+/// kept as reachability roots.
+///
+/// The three bodies are called only from the `__toString()` / `getTraceAsString()` bodies of the
+/// builtin `Exception` and `Error`, and a program reaches a Throwable object only by catching one,
+/// handing one to an exception handler, or constructing one (its own `Exception` subclass names its
+/// parent). Rooting them for every program kept them -- and their `new TypeError`, which pulled the
+/// whole `Error` method surface into lowering -- in `<?php echo 1;`. Source the compiler cannot see
+/// (an opaque `eval`, a runtime include, a dynamic call), `--web` and a forced interpreter keep them.
+///
+/// Over-approximate by design: any class name ending in `exception` or `error`, or `Throwable`
+/// itself, counts, so a miss cannot happen for a program that spells a throwable type.
+pub fn helpers_needed(
+    program: &Program,
+    inventory: &crate::optimize::reachability::PreludeInventory,
+    always: bool,
+) -> bool {
+    if always {
+        return true;
+    }
+    let usage = crate::session_prelude::user_source_usage(program, inventory);
+    if usage.opaque_eval
+        || usage.reaches_unseen_callable()
+        || usage.includes_runtime_php
+        || usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.references("set_exception_handler")
+        || usage.references("error_get_last")
+    {
+        return true;
+    }
+    usage.classes.iter().chain(usage.literals.iter()).any(|name| {
+        let name = name.rsplit('\\').next().unwrap_or(name);
+        name == "throwable" || name.ends_with("exception") || name.ends_with("error")
+    })
+}
+
 /// `if (condition) { then } [else { otherwise }]`, without elseif arms.
 fn if_(condition: crate::parser::ast::Expr, then_body: Vec<Stmt>, else_body: Option<Vec<Stmt>>) -> Stmt {
     crate::synthetic_class::s_if(condition, then_body, Vec::new(), else_body)

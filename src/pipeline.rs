@@ -2244,11 +2244,18 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     ));
     // Lowering calls the Throwable string helpers for `getTraceAsString()`, `__toString()` and a
     // Throwable's string conversion; no declaration-level call edge leads to them.
-    exported_function_names.extend(
-        crate::throwable_string_prelude::FUNCTIONS
-            .iter()
-            .map(|name| name.to_string()),
-    );
+    // Only for a program that can hold a Throwable (`throwable_string_prelude::helpers_needed`).
+    if crate::throwable_string_prelude::helpers_needed(
+        &ast,
+        &prelude_inventory,
+        web || with_crates.contains("eval"),
+    ) {
+        exported_function_names.extend(
+            crate::throwable_string_prelude::FUNCTIONS
+                .iter()
+                .map(|name| name.to_string()),
+        );
+    }
     // `assert($x)` is routed to its prelude helper during lowering, after this pass; no call edge
     // names the helper in the AST, so without a root the pruner removed it and the compiled binary
     // died with `Call to undefined function __elephc_assert_one_arg()`.

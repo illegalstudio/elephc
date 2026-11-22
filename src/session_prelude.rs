@@ -47,6 +47,16 @@ pub fn inject_cli_session_surface(
     if !needs_callable_session_handler {
         declarations.retain(|stmt| !crate::web_prelude::is_callable_session_handler_decl(&stmt.kind));
     }
+    // A program nothing of which can reach the session surface does not get it at all. Its bodies
+    // are pruned whole when unreached, but until then every pass that decides what the program
+    // uses reads them: `session_decode()` calls `unserialize()`, which registered the SPL and
+    // date/time builtin classes (some ninety class thunks) in `<?php echo 1;`, and `max()` in the
+    // cookie code declared a forced backend helper and the throwable machinery behind it.
+    if !autoloaded_save_handler
+        && !unseen_source_may_call(&user_usage)
+        && !names_a_declaration(&user_usage, &declarations) {
+        return program;
+    }
     let declarations = crate::magic_constants::substitute_file_constants(declarations, entry_path);
     inventory.record_program(SESSION_PRELUDE_GROUP, &declarations);
 
@@ -74,7 +84,7 @@ pub fn unseen_source_may_call_sessions(
 /// legitimately contain dynamic calls. Scanning them made every program that merely named
 /// `PDO` look like it reached unseen source, which forced the whole session group and kept
 /// every declaration of the binary alive.
-fn user_source_usage(
+pub(crate) fn user_source_usage(
     program: &Program,
     inventory: &PreludeInventory,
 ) -> crate::prelude_prune::usage::Usage {
@@ -99,4 +109,24 @@ pub(crate) fn program_registers_save_handler(program: &[crate::parser::ast::Stmt
 /// every `eval` as unseen forced the whole session group into `<?php eval('return 1;');`.
 fn unseen_source_may_call(usage: &crate::prelude_prune::usage::Usage) -> bool {
     usage.opaque_eval || usage.reaches_unseen_callable() || usage.includes_runtime_php
+}
+
+/// Whether the user's own source names a function, class or interface that `declarations` declares,
+/// by call, by `new`/type/`extends`, or by a literal a probe or callback spells.
+fn names_a_declaration(
+    usage: &crate::prelude_prune::usage::Usage,
+    declarations: &[crate::parser::ast::Stmt],
+) -> bool {
+    use crate::parser::ast::StmtKind;
+    declarations.iter().any(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } => {
+            let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+            usage.functions.contains(&key) || usage.literals.contains(&key)
+        }
+        StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } => {
+            let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+            usage.classes.contains(&key) || usage.literals.contains(&key)
+        }
+        _ => false,
+    })
 }

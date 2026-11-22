@@ -6,10 +6,17 @@
 //!
 //! Key details:
 //! - A leaf helper has no user-code effects (throw/warn/fatal/output/refcount/I/O) and no
-//!   callable or object operand, so its call site cannot observe `_php_diagnostic_*`.
+//!   callable or object operand, so its call site cannot observe the published site.
 //! - A callback-capable helper keeps the publication because it can re-enter PHP code.
 
 use super::*;
+
+/// The word a call site publishes its `{file, line}` record through (`_php_site` on Mach-O).
+///
+/// A site used to be five stores to `_php_diagnostic_*`; it is one pointer store to a static record
+/// now, which is the property both tests below pin: present before a call that can run PHP code,
+/// absent before one that cannot.
+const PUBLISHED_SITE: &str = "php_site";
 
 /// Compiles a fixture and returns its function assembly body.
 fn function_asm(source: &str, name: &str) -> String {
@@ -58,7 +65,7 @@ echo leaf_search($argc + 9), "\n";
         .expect("search loop body");
     assert!(body.contains("__rt_strpos"), "{body}");
     assert!(
-        !body.contains("_php_diagnostic_line"),
+        !body.contains(PUBLISHED_SITE),
         "a leaf search helper must not publish a diagnostic site:\n{body}"
     );
 }
@@ -86,7 +93,7 @@ echo callback_loop($argc + 4), "\n";
         .nth(1)
         .expect("callback loop body");
     assert!(
-        body.contains("_php_diagnostic_line"),
+        body.contains(PUBLISHED_SITE),
         "a callback-capable helper must publish a call site:\n{body}"
     );
 }
