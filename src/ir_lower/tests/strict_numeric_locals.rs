@@ -124,9 +124,12 @@ fn strict_numeric_locals_guard_writes_and_updates_on_every_target() {
         }
         let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
         let function = module.functions.iter().find(|function| function.name == "numericBindings").unwrap();
-        assert!(function.instructions.iter().filter(|instruction|
-            instruction.op == crate::ir::Op::ThrowTypeError).count() >= 4,
-            "{name}: {}", crate::ir::print_function(function));
+        assert_eq!(function.instructions.iter().filter(|instruction|
+            instruction.op == crate::ir::Op::ThrowTypeError).count(), 3,
+            "{name}: compound, prefix, and postfix updates need direct guards: {}",
+            crate::ir::print_function(function));
+        assert!(module.required_runtime_features.native_reference_validation,
+            "{name}: the ordinary assignment guard is carried by its checked reference store");
         assert!(!module.semantic_profile.contains(StrictFeature::Overflow));
         assert!(!module.semantic_profile.contains(StrictFeature::Coercions));
         crate::ir::validate_module(&module).unwrap();
