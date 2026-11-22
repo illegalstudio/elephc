@@ -406,6 +406,12 @@ impl Checker {
         decl: &crate::types::checker::FnDecl,
         param_types: &mut [(String, crate::types::PhpType)],
     ) {
+        // An `#[Export]` function is called from outside the program, through the scalar C ABI,
+        // which has no `mixed`: its undeclared parameters keep the seed `int` the ABI marshals,
+        // not the gradual reading an uncalled PHP function gets.
+        if crate::exports::has_export_attribute_groups(&decl.attributes) {
+            return;
+        }
         for (idx, (_, param_ty)) in param_types.iter_mut().enumerate() {
             let declared = decl.param_types.get(idx).and_then(|ty| ty.as_ref()).is_some();
             let has_default = decl.defaults.get(idx).and_then(|d| d.as_ref()).is_some();

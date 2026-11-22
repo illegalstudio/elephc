@@ -30,7 +30,12 @@ fn emit_release_ir(source: &str, ir_opt: bool) -> String {
     );
     let text = String::from_utf8(output.stdout).expect("EIR output should be UTF-8");
     let _ = fs::remove_dir_all(&dir);
-    text
+    // The module header lists the source files, and this fixture's directory is named after the
+    // op under test, so the header is not part of the instruction stream the tests search.
+    match (text.find("  sources {"), text.find("  data {")) {
+        (Some(start), Some(end)) if start < end => format!("{}{}", &text[..start], &text[end..]),
+        _ => text,
+    }
 }
 
 /// Compiles and runs one heap-debug fixture through the CLI in a fixed optimizer mode.

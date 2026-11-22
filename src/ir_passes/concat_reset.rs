@@ -989,6 +989,8 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::ICheckedMulToInt
             | Op::ICheckedNumericChainToInt
             | Op::ICheckedPow
+            // Pure: the overflow flag of an integer add/sub/mul, read from the operands alone.
+            | Op::IOverflows
             | Op::IDiv
             | Op::ISDiv
             | Op::ISMod

@@ -181,7 +181,13 @@ pub fn public_c_name(php_name: &str) -> String {
 /// attribute. The match is on the last segment of the attribute name so both
 /// the bare and fully-qualified spellings are accepted.
 pub(crate) fn has_export_attribute(stmt: &Stmt) -> bool {
-    for group in &stmt.attributes {
+    has_export_attribute_groups(&stmt.attributes)
+}
+
+/// [`has_export_attribute`] for a declaration's attribute groups alone, which the checker keeps
+/// on its function declarations after the statement itself is gone.
+pub(crate) fn has_export_attribute_groups(groups: &[crate::parser::ast::AttributeGroup]) -> bool {
+    for group in groups {
         for attr in &group.attributes {
             if attr
                 .name
