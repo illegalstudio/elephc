@@ -17,6 +17,7 @@ fn assert_phpext_frontend_accepts(project: &Project, file: &str, source_text: &s
     fs::write(&source, source_text).unwrap();
     for mode in ["--check", "--emit-ir"] {
         let output = Command::new(compiler_binary())
+            .arg("build")
             .args(["--emit", "phpext", mode])
             .arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
