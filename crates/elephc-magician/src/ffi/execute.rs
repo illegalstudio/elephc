@@ -201,6 +201,10 @@ pub extern "C" fn __elephc_eval_report_runtime_fatal(status: i64) {
             "Fatal error: eval() runtime failed"
         } else if status == i64::from(EvalStatus::UnsupportedConstruct.code()) {
             "Fatal error: eval() fragment uses an unsupported construct"
+        } else if status == i64::from(EvalStatus::EscapingPcntlCallable.code()) {
+            // No clause: the status itself names the cause, and the compiled side has the same
+            // constant for programs that link no bridge.
+            "Fatal error: PCNTL handler/closure cannot escape its eval context"
         } else {
             return;
         };

@@ -21,3 +21,4 @@ touches:
 ## Ruled out
 - The invoker/IR side: the IR matched the baseline up to acquire/release elision, and a native by-ref callee (`b('loc', 5)`) was clean.
 - Debugging recipe that worked: `--keep-symbols` build, lldb batch with `breakpoint command add` printing x0/pc/lr on `_rt_decref_mixed`/`_rt_incref`/`_rt_heap_free_safe` (lldb strips one leading underscore: `_rt_...`), and the bridge libs need `cb.sh build --workspace` before the CLI can link.
+- The merged `__elephc_eval_report_runtime_fatal` only worded statuses 1 and 5, so the escaping-PCNTL status (6) exited silently once the bridge is linked (the constant text exists only for bridge-less programs). It now prints "Fatal error: PCNTL handler/closure cannot escape its eval context".
