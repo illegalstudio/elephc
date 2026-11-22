@@ -17,7 +17,7 @@ struct Origins { expected: SourceProfile, count: usize }
 impl AstVisitor for Origins {
     /// Observes typed parameter, property and constant defaults through the shared AST traversal.
     fn declared_value(&mut self, _hint: &TypeExpr, value: &Expr) {
-        assert_eq!(value.source_profile, self.expected, "declaration at {:?}", value.span);
+        assert_eq!(value.source_profile, self.expected, "declaration origin mismatch");
         self.count += 1;
     }
 }
