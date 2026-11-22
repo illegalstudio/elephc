@@ -624,7 +624,7 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     )
 }
 
-/// Applies one eval parameter type and reports a strict rejection as PHP's `TypeError`.
+/// Applies one eval parameter type and reports a rejected call as PHP's `TypeError`.
 ///
 /// `callee`, `number`, and `parameter` describe the source call so PHP code can catch the
 /// thrown `TypeError` with the same message php-src builds at a call boundary.
@@ -678,17 +678,6 @@ fn eval_method_parameter_value_with_error(
         {
             return values.cast_float(value);
         }
-        if let Some((callee, number, parameter)) = error {
-            return eval_throw_argument_type_error(
-                callee,
-                number,
-                parameter,
-                param_type,
-                value,
-                context,
-                values,
-            );
-        }
     } else {
         for variant in param_type.variants() {
             if let Some(coerced) =
@@ -697,6 +686,17 @@ fn eval_method_parameter_value_with_error(
                 return Ok(coerced);
             }
         }
+    }
+    if let Some((callee, number, parameter)) = error {
+        return eval_throw_argument_type_error(
+            callee,
+            number,
+            parameter,
+            param_type,
+            value,
+            context,
+            values,
+        );
     }
     eval_throw_type_error(&format!("Value does not satisfy {}",
         crate::eval_ir::php_type_label(param_type)), context, values)
