@@ -321,6 +321,15 @@ fn strict_array_key_source_validation_handles_deep_loops() {
         .expect("fact-changing nested-loop validation remains bounded");
 }
 
+/// A nested loop audits one changed repeated entry before the refinement bound applies.
+#[test]
+fn strict_array_key_source_validation_audits_bounded_nested_replay() {
+    let source = "<?php $values = []; $key = 0; $source = 1; while ($outer) { while ($inner) { $values[$key] = 1; $key = $source; } $source = 1.5; $key = 1; }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("nested repeated float key must be rejected");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {

@@ -2432,12 +2432,13 @@ fn collect_repeated_loop_flow(
         return Ok(first_flow.clone());
     }
     LOOP_REFINEMENT_DEPTH.with(|depth| {
-        if depth.get() > 0 {
+        let previous = depth.get();
+        if previous >= 2 {
             let mut conservative = first_flow.clone();
             conservative.complete = false;
             return Ok(conservative);
         }
-        let previous = depth.replace(1);
+        depth.set(previous + 1);
         let _guard = LoopRefinementGuard { depth, previous };
         collect_loop_break_flow(
             body,
@@ -3158,7 +3159,7 @@ fn body_writes_only_static_fact(
     })
 }
 
-/// Keeps only facts that agree on every possible control-flow exit.
+/// Keeps the strongest shared fact across every possible control-flow exit.
 fn merge_exits(exits: &[LocalFacts]) -> LocalFacts {
     let mut names = BTreeSet::new();
     for exit in exits {
@@ -3166,12 +3167,11 @@ fn merge_exits(exits: &[LocalFacts]) -> LocalFacts {
     }
     let mut merged = LocalFacts::default();
     for name in names {
-        let first = exits[0].get(&name);
-        let fact = if exits.iter().skip(1).all(|exit| exit.get(&name) == first) {
-            first
-        } else {
-            ValueFact::Unknown
-        };
+        let fact = exits
+            .iter()
+            .map(|exit| exit.get(&name))
+            .reduce(merge_value_facts)
+            .unwrap_or(ValueFact::Unknown);
         merged.set(&name, fact);
     }
     merged
