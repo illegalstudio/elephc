@@ -611,19 +611,14 @@ fn test_error_wrong_arg_count() {
     );
 }
 
-/// Verifies the two `string` storage shapes that cannot take the boxed `mixed` contract
-/// PHP's string increment needs: a by-reference parameter aliases a caller slot whose
-/// declared `string` type must not change, and a `static` local's initializer writes its
-/// symbol with the declared `string` representation. Both must be source-level errors.
+/// Verifies that a by-reference `string` parameter cannot take the boxed `mixed` contract
+/// PHP's string increment needs because it aliases a caller slot whose declared type must not
+/// change. Static locals use managed binding origins and are covered by the codegen suite.
 #[test]
-fn test_error_increment_string_in_unboxable_storage() {
+fn test_error_increment_string_in_by_ref_parameter() {
     expect_error(
         "<?php function f(string &$r): void { $r++; } $v = \"az\"; f($v);",
         "it is a by-reference parameter",
-    );
-    expect_error(
-        "<?php function g(): string { static $s = \"aa\"; $s++; return $s; } g();",
-        "it is a static local",
     );
 }
 
@@ -1950,10 +1945,13 @@ fn test_ref_aliased_local_can_detach_and_rebind() {
     expect_no_error("<?php $a = 1; $r =& $a; unset($a); $a = \"x\";");
 }
 
-/// Static locals are never killable.
+/// Unsetting a static local detaches the function-local name while preserving the persistent
+/// static binding, so a later assignment establishes an independent local contract.
 #[test]
-fn test_static_local_not_killable() {
-    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "cannot reassign");
+fn test_static_local_can_detach_and_rebind() {
+    let source = "<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();";
+    expect_no_error(source);
+    expect_no_error_strict(source);
 }
 
 /// Global-bound locals are never killable.

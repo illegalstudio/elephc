@@ -1440,9 +1440,10 @@ var_dump($c);
 
 /// Verifies the string increment survives the storage shapes that are not a plain
 /// straight-line local: a loop-carried local (the spreadsheet-column idiom), a `string`
-/// function parameter, and a boxed `mixed` local that happens to hold a string.
+/// function parameter, a persistent static binding, and a boxed `mixed` local that happens to
+/// hold a string.
 #[test]
-fn test_string_increment_loop_parameter_and_mixed_local() {
+fn test_string_increment_loop_parameter_static_and_mixed_local() {
     let out = compile_and_run(
         r#"<?php
 $col = "A";
@@ -1451,6 +1452,8 @@ for ($i = 0; $i < 30; $i++) { $out[] = $col; $col++; }
 echo implode(",", $out), "\n";
 function bump(string $s): string { $s++; return $s; }
 echo bump("az"), " ", bump("Zz"), " ", bump("a9"), "\n";
+function static_bump(): string { static $s = "aa"; $s++; return $s; }
+echo static_bump(), " ", static_bump(), "\n";
 $m = $argc > 99 ? 1 : "az";
 $m++;
 var_dump($m);
@@ -1459,7 +1462,7 @@ var_dump($m);
     assert_eq!(
         out,
         "A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD\n\
-         ba AAa b0\nstring(2) \"ba\"\n"
+         ba AAa b0\nab ac\nstring(2) \"ba\"\n"
     );
 }
 
