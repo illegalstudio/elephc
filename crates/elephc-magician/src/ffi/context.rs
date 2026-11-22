@@ -486,20 +486,32 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// that has not already been freed.
 #[export_name = "__elephc_eval_context_free_v2"]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) -> *mut crate::value::RuntimeCell {
+    unsafe { release_eval_context(ctx, None) }
+        .map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
+}
+
+/// Drops one context lease, preserving a detached callback's exception through any final cleanup.
+///
+/// # Safety
+/// A non-null context must be live and the caller must own one ABI lease.
+pub(super) unsafe fn release_eval_context(
+    ctx: *mut ElephcEvalContext,
+    incoming: Option<crate::value::RuntimeCellHandle>,
+) -> Option<crate::value::RuntimeCellHandle> {
     let Some(context) = (unsafe { ctx.as_mut() }) else {
-        return ptr::null_mut();
+        return incoming;
     };
     if !context.release_abi_owner() || context.teardown_active()
         || crate::context::pcntl_runtime::defer_context_free(ctx)
         || !context.begin_teardown()
     {
-        return ptr::null_mut();
+        return incoming;
     }
     // Reclaim the allocation while callback-sensitive releases run. Nested ABI teardown observes
     // `teardown_active` and returns without taking a second Box, while this owner keeps the context
     // live across every destructor callback.
     let mut context = unsafe { Box::from_raw(ctx) };
-    let mut thrown = context.take_pending_throw();
+    let mut thrown = incoming.or_else(|| context.take_pending_throw());
     loop {
         let cells = context.take_persistent_cell_owners();
         if cells.is_empty() {
@@ -531,7 +543,7 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
     } else {
         drop_eval_context_box(context);
     }
-    thrown.map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
+    thrown
 }
 
 /// Unregisters every process-global callback into one context, then drops it immediately.
@@ -565,10 +577,15 @@ fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
             .stream_resources_mut()
             .release_curl_easy_private_values(&mut values);
     }
+    if context.has_abi_owners() {
+        // Cleanup above can run a PHP destructor that publishes a new buffer callback.
+        context.end_teardown();
+        let _ = Box::into_raw(context);
+        return;
+    }
     context.unregister_dynamic_object_context();
     crate::context::untrack_reflection_identities_for_context(ctx);
     crate::context::unregister_live_native_context(ctx);
-    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

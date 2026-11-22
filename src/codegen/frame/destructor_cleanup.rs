@@ -57,17 +57,7 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
     ctx.emitter.label_global(&callback);
     enter_borrowed_frame(ctx.emitter);
     super::emit_instr_exit(ctx);
-    let arm = ctx.emitter.target.arch == Arch::AArch64;
-    ctx.emitter.instruction(if arm { "str xzr, [sp]" } else { "mov QWORD PTR [rsp], 0" }); // accumulate child failures while continuing the cleanup walk
-    for index in 0..owners.len() {
-        let step = format!("{callback}_owner_{index}");
-        abi::emit_symbol_address(ctx.emitter, if arm { "x0" } else { "rdi" }, &step);
-        ctx.emitter.instruction(if arm { "mov x1, x29" } else { "mov rsi, rbp" }); // pass the still-readable original frame to this cleanup step
-        ctx.emitter.instruction(if arm { "mov x2, sp" } else { "mov rdx, rsp" }); // retain pending status in this walker's own stack storage
-        abi::emit_call_label(ctx.emitter, "__rt_cleanup_call");
-    }
-    ctx.emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rax, QWORD PTR [rsp]" }); // report whether any owner cleanup produced a throwable
-    ctx.emitter.instruction(if arm { "lsl x0, x0, #1" } else { "shl eax, 1" }); // convert the cleanup flag to the shared pending status
+    elephc_memoir::frame_owners::emit_cleanup_steps(ctx.emitter, &callback, owners.len());
     leave_borrowed_frame(ctx.emitter);
     for (index, owner) in owners.iter().enumerate() {
         let step = format!("{callback}_owner_{index}");

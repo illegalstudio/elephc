@@ -200,11 +200,7 @@ pub fn emit_ob_result_to_bytes(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the result cell for the string cast
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the handler result to a PHP string pair
     emitter.label("__rt_ob_res_persist");
-    emitter.instruction("bl __rt_str_persist");                                 // copy the (possibly borrowed) pair while the cell is alive
-    emitter.instruction("stp x1, x2, [sp, #8]");                                // save the owned replacement pair
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the result cell for release
-    emitter.instruction("bl __rt_decref_any");                                  // release the handler result cell
-    emitter.instruction("ldp x1, x2, [sp, #8]");                                // return the owned replacement pair
+    elephc_memoir::buffers::output::emit_persist_result_and_release_cell(emitter);
     emitter.instruction("mov x0, #1");                                          // report that the contents were replaced
     emitter.instruction("b __rt_ob_res_done");                                  // finish
     emitter.label("__rt_ob_res_none");
@@ -244,13 +240,7 @@ fn emit_ob_result_to_bytes_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the result cell for the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the handler result to a PHP string pair
     emitter.label("__rt_ob_res_persist_x86");
-    emitter.instruction("call __rt_str_persist");                               // copy the (possibly borrowed) pair while the cell is alive
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the owned replacement pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned replacement length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the result cell for release
-    emitter.instruction("call __rt_decref_any");                                // release the handler result cell
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // return the owned replacement pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // return the owned replacement length
+    elephc_memoir::buffers::output::emit_persist_result_and_release_cell(emitter);
     emitter.instruction("mov eax, 1");                                          // report that the contents were replaced
     emitter.instruction("jmp __rt_ob_res_done_x86");                            // finish
     emitter.label("__rt_ob_res_none_x86");

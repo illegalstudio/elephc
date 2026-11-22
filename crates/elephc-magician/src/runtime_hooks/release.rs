@@ -24,13 +24,9 @@ fn release_native_cells_with_status(
     cells: impl IntoIterator<Item = RuntimeCellHandle>,
     pending: Option<RuntimeCellHandle>,
 ) -> (Option<RuntimeCellHandle>, bool) {
-    let mut thrown = pending.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
-    let mut caught = false;
-    for cell in cells {
-        let status = unsafe { super::externs::__elephc_eval_value_release_v3(cell.as_ptr(), &mut thrown) };
-        caught |= status != 0;
-    }
-    ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
+    elephc_memoir::runtime_owners::release_owned_cells(cells, pending, |cell, thrown| {
+        (unsafe { super::externs::__elephc_eval_value_release_v3(cell, thrown) }) != 0
+    })
 }
 
 impl ElephcRuntimeOps {

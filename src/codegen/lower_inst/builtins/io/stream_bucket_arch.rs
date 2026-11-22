@@ -149,29 +149,11 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 64);
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    abi::emit_store_to_sp(ctx.emitter, "x0", 48);
-    // The caller owns the bucket during append; retain the inserted child immediately after it.
-    abi::emit_push_reg(ctx.emitter, "x0");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 80);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    abi::emit_pop_reg(ctx.emitter, "x0");
+    elephc_memoir::values::packed_slots::emit_publish_appended_owner(ctx.emitter, 48, 80);
     if prepend {
         let shift = ctx.next_label("sbp_shift");
         let insert = ctx.next_label("sbp_insert");
-        ctx.emitter.instruction("ldr x9, [x0]");                                // load the post-append brigade length
-        ctx.emitter.instruction("sub x9, x9, #1");                              // point at the appended bucket's last slot
-        ctx.emitter.instruction("add x10, x0, #24");                            // compute the brigade payload base
-        ctx.emitter.instruction("ldr x11, [x10, x9, lsl #3]");                  // preserve the appended bucket while shifting
-        ctx.emitter.label(&shift);
-        ctx.emitter.instruction("cmp x9, #0");                                  // check whether the front slot is now available
-        ctx.emitter.instruction(&format!("b.eq {}", insert));                   // finish once every prior bucket moved right
-        ctx.emitter.instruction("sub x12, x9, #1");                             // select the preceding bucket slot
-        ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                 // load the preceding bucket pointer
-        ctx.emitter.instruction("str x13, [x10, x9, lsl #3]");                  // shift the preceding bucket one slot right
-        ctx.emitter.instruction("mov x9, x12");                                 // continue toward the brigade head
-        ctx.emitter.instruction(&format!("b {}", shift));                       // shift the next preceding bucket
-        ctx.emitter.label(&insert);
-        ctx.emitter.instruction("str x11, [x10]");                              // install the prepended bucket at index zero
+        elephc_memoir::values::packed_slots::emit_rotate_tail_to_front(ctx.emitter, &shift, &insert);
     }
     ctx.emitter.instruction("mov x1, x0");                                      // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("mov x2, #0");                                      // indexed-array Mixed payloads do not use the high word
@@ -259,29 +241,11 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 48);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 64);
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    abi::emit_store_to_sp(ctx.emitter, "rax", 48);
-    // The caller owns the bucket during append; retain the inserted child immediately after it.
-    abi::emit_push_reg(ctx.emitter, "rax");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 80);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    abi::emit_pop_reg(ctx.emitter, "rax");
+    elephc_memoir::values::packed_slots::emit_publish_appended_owner(ctx.emitter, 48, 80);
     if prepend {
         let shift = ctx.next_label("sbp_shift");
         let insert = ctx.next_label("sbp_insert");
-        ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                    // load the post-append brigade length
-        ctx.emitter.instruction("sub r10, 1");                                  // point at the appended bucket's last slot
-        ctx.emitter.instruction("lea r11, [rax + 24]");                         // compute the brigade payload base
-        ctx.emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");           // preserve the appended bucket while shifting
-        ctx.emitter.label(&shift);
-        ctx.emitter.instruction("test r10, r10");                               // check whether the front slot is now available
-        ctx.emitter.instruction(&format!("jz {}", insert));                     // finish once every prior bucket moved right
-        ctx.emitter.instruction("lea rcx, [r10 - 1]");                          // select the preceding bucket slot
-        ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");          // load the preceding bucket pointer
-        ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdx");          // shift the preceding bucket one slot right
-        ctx.emitter.instruction("mov r10, rcx");                                // continue toward the brigade head
-        ctx.emitter.instruction(&format!("jmp {}", shift));                     // shift the next preceding bucket
-        ctx.emitter.label(&insert);
-        ctx.emitter.instruction("mov QWORD PTR [r11], r8");                     // install the prepended bucket at index zero
+        elephc_memoir::values::packed_slots::emit_rotate_tail_to_front(ctx.emitter, &shift, &insert);
     }
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("xor esi, esi");                                    // indexed-array Mixed payloads do not use the high word

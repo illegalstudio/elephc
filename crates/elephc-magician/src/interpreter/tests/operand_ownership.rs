@@ -553,7 +553,7 @@ $closure = function() {};"#,
 
     for (method_name, expected) in [("hit", true), ("missing", false)] {
         let method = values.string(method_name).unwrap();
-        let callback = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        let callback = values.alloc(FakeValue::Array(vec![RuntimeCellHandle::from_raw(object.as_ptr()), method]));
         values.retain(object).unwrap();
         let releases = values.releases.len();
         assert_eq!(

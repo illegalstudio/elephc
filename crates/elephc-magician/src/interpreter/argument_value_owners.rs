@@ -12,6 +12,7 @@
 use super::*;
 use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
+use elephc_memoir::owner_layout::ArgumentPin;
 use crate::runtime_hooks::owner_frames::{RuntimeOwners, RuntimeOwnerSlot, with_runtime_owners};
 use crate::value::RuntimeCell;
 
@@ -22,7 +23,7 @@ pub(super) struct ArgumentValueOwner(Rc<RefCell<Option<ArgumentValueLease>>>);
 /// Holds the foreign owner and, after native entry, its stable mutable root record.
 struct ArgumentValueLease {
     value: RuntimeCellHandle,
-    pin: Option<Box<UnsafeCell<[u64; 6]>>>,
+    pin: Option<Box<UnsafeCell<ArgumentPin>>>,
 }
 
 /// Keeps ordinary arguments allocation-free while reference candidates carry shared provenance.
@@ -58,9 +59,9 @@ impl RuntimeOwners for ArgumentCleanupOwner {
                 let lease = owner.0.borrow();
                 if let Some(lease) = lease.as_ref() {
                     if let Some(pin) = &lease.pin {
-                        // The six-word C ABI stores its owning cell at byte16. Native entry
-                        // clears that word before consuming the lease; the old Rust field is stale.
-                        let slot = unsafe { pin.get().cast::<u64>().add(2) }.cast::<*mut RuntimeCell>();
+                        // Native entry clears the actual owner slot when it consumes the lease.
+                        let slot = unsafe { std::ptr::addr_of!((*pin.get()).validation.owner) }
+                            .cast::<*mut RuntimeCell>();
                         if !unsafe { *slot }.is_null() { visit(slot); }
                     } else {
                         lease.value.visit_owned_slots(visit);
@@ -90,7 +91,7 @@ impl ArgumentValueOwner {
             if owner.pin.is_some() || owner.value.is_borrowed() { return Ok(()); }
             owner.value
         };
-        let pin = Box::new(UnsafeCell::new([0u64; 6]));
+        let pin = Box::new(UnsafeCell::new(ArgumentPin::default()));
         if !values.pin_native_reference_argument_owner(value, pin.get().cast(), cell, staging)? {
             return Ok(());
         }
@@ -233,8 +234,14 @@ mod tests {
     #[test]
     fn pending_argument_pin_owner_slot_disappears_at_native_consumption() {
         let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
-        let pin = Box::new(UnsafeCell::new([0, 0, value.as_ptr() as u64, 0x105, 16, 32]));
+        let pin = Box::new(UnsafeCell::new(ArgumentPin {
+            validation: Default::default(), native_cell: 16, staging: 32,
+        }));
         let record = pin.get();
+        unsafe {
+            (*record).validation.owner = value.as_ptr() as u64;
+            (*record).validation.kind = ArgumentPin::PENDING as u64;
+        }
         let owner = ArgumentCleanupOwner::Reference(ArgumentValueOwner(Rc::new(RefCell::new(
             Some(ArgumentValueLease { value, pin: Some(pin) }),
         ))));
@@ -243,10 +250,13 @@ mod tests {
             assert_eq!(unsafe { *slot }, value.as_ptr());
             slots.push(slot as usize);
         });
-        assert_eq!(slots, [unsafe { record.cast::<u64>().add(2) } as usize],
+        assert_eq!(slots, [unsafe { record.cast::<u8>().add(ArgumentPin::OWNER) } as usize],
             "only the native pin field owns the transferred source lease");
         // This is the native activate transition, which clears before releasing the source.
-        unsafe { (*record)[2] = 0; (*record)[3] = 0x205; }
+        unsafe {
+            (*record).validation.owner = 0;
+            (*record).validation.kind = ArgumentPin::ACTIVE as u64;
+        }
         owner.visit_owned_slots(&mut |_| panic!("the consumed pin and stale descriptor own no value"));
     }
 }

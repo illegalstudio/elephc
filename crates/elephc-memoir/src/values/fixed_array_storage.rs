@@ -122,3 +122,61 @@ fn resize_x86_64(emitter: &mut impl Emitter, storage_offset: usize) {
     emitter.label("__rt_spl_fixed_set_size_done");
     emitter.instruction("mov QWORD PTR [r9], r10");                             // store new logical fixed size
 }
+
+/// Retires the old Mixed owner and publishes its staged replacement.
+/// The caller has validated the index in x10 or r10 into storage in x9 or r9.
+pub fn emit_replace_slot(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("add x12, x9, #24");                                    // point at first storage slot
+            emitter.instruction("ldr x0, [x12, x10, lsl #3]");                          // load previous Mixed cell
+            emitter.instruction("str x9, [sp, #40]");                                   // preserve storage across release
+            emitter.instruction("str x10, [sp, #48]");                                  // preserve offset across release
+            emitter.instruction("bl __rt_decref_mixed");                                // release previous slot value if present
+            emitter.instruction("ldr x9, [sp, #40]");                                   // reload storage after release
+            emitter.instruction("ldr x10, [sp, #48]");                                  // reload offset after release
+            emitter.instruction("add x12, x9, #24");                                    // restore storage slot base
+            emitter.instruction("ldr x13, [sp, #16]");                                  // reload owned Mixed replacement
+            emitter.instruction("str x13, [x12, x10, lsl #3]");                         // store replacement Mixed cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage slot
+            emitter.instruction("mov rax, QWORD PTR [r12 + r10 * 8]");                  // load previous Mixed cell
+            emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // preserve storage across release
+            emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve offset across release
+            emitter.instruction("call __rt_decref_mixed");                              // release previous slot value if present
+            emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload storage after release
+            emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload offset after release
+            emitter.instruction("lea r12, [r9 + 24]");                                  // restore storage slot base
+            emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload owned Mixed replacement
+            emitter.instruction("mov QWORD PTR [r12 + r10 * 8], r13");                  // store replacement Mixed cell
+        }
+    }
+}
+
+/// Retires the old Mixed owner and clears the slot.
+/// The caller has validated the index in x10 or r10 into storage in x9 or r9.
+pub fn emit_unset_slot(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("add x11, x9, #24");                                    // point at first storage slot
+            emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load existing Mixed cell
+            emitter.instruction("str x11, [sp, #32]");                                  // preserve storage slot base across release
+            emitter.instruction("str x10, [sp, #40]");                                  // preserve offset across release
+            emitter.instruction("bl __rt_decref_mixed");                                // release existing Mixed cell if present
+            emitter.instruction("ldr x11, [sp, #32]");                                  // reload storage slot base
+            emitter.instruction("ldr x10, [sp, #40]");                                  // reload offset
+            emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // mark slot unset/null
+        }
+        Arch::X86_64 => {
+            emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage slot
+            emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // load existing Mixed cell
+            emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve storage slot base across release
+            emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve offset across release
+            emitter.instruction("call __rt_decref_mixed");                              // release existing Mixed cell if present
+            emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload storage slot base
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload offset
+            emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // mark slot unset/null
+        }
+    }
+}

@@ -9,15 +9,16 @@
 //! - Extended records share the visitor field but can use the middle words differently.
 
 use crate::{Arch, AssemblyEmitter, FrameOffset, TargetAbi};
+use crate::owner_layout::ExtendedActivation;
 
 /// Offset of the previous activation link in the shared prefix.
-pub const PREVIOUS: usize = 0;
+pub const PREVIOUS: usize = ExtendedActivation::PREVIOUS;
 /// Offset of the callback invoked while unwinding the activation.
-pub const CLEANUP: usize = 8;
+pub const CLEANUP: usize = ExtendedActivation::CLEANUP;
 /// Offset of the callback's data, such as a frame pointer or an owner slot.
-pub const DATA: usize = 16;
+pub const DATA: usize = ExtendedActivation::DATA;
 /// Size of the prefix shared by compact and extended activations.
-pub const PREFIX_BYTES: usize = DATA + 8;
+pub const PREFIX_BYTES: usize = ExtendedActivation::EXTENSION;
 /// Offset of the one transferred owner after the prefix of a compact guard.
 pub const GUARD_OWNER: usize = PREFIX_BYTES;
 /// Size of a compact transferred-owner guard.
@@ -25,13 +26,13 @@ pub const GUARD_BYTES: usize = GUARD_OWNER + 8;
 /// Offset of the optional native backtrace reader in an ordinary frame.
 pub const FRAME_READER: usize = PREFIX_BYTES;
 /// Offset of the caller's source line in an ordinary frame.
-pub const FRAME_CALLER_LINE: usize = FRAME_READER + 8;
+pub const FRAME_CALLER_LINE: usize = ExtendedActivation::LINE_OR_STACK;
 /// Offset of the saved temporary stack base in an extended operand activation.
-pub const OPERAND_STACK_BASE: usize = PREFIX_BYTES + 8;
+pub const OPERAND_STACK_BASE: usize = ExtendedActivation::LINE_OR_STACK;
 /// Offset of the pure GC owner visitor shared by all extended activations.
-pub const OWNER_VISITOR: usize = PREFIX_BYTES + 16;
+pub const OWNER_VISITOR: usize = ExtendedActivation::OWNER_VISITOR;
 /// Size of an ordinary frame or another extended owner activation.
-pub const EXTENDED_BYTES: usize = OWNER_VISITOR + 8;
+pub const EXTENDED_BYTES: usize = ExtendedActivation::BYTES;
 
 /// A saved runtime word in the common native exception record.
 #[derive(Clone, Copy)]

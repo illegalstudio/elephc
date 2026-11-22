@@ -108,7 +108,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
             }
         }
         if !guarded_writeback {
-            let pin = Box::new(std::cell::UnsafeCell::new([0u64; 4]));
+            let pin = Box::new(std::cell::UnsafeCell::new(elephc_memoir::owner_layout::ValidationPin::default()));
             let record = pin.get().cast();
             if let Some(cell) = values.native_mixed_reference_cell(original, record)? {
                 let marker = match values.invoker_ref_cell(cell as *mut *mut crate::value::RuntimeCell) {

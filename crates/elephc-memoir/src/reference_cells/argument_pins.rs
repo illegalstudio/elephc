@@ -10,11 +10,12 @@
 //! - Retiring staging cancels pending associations before the cell address can be reused.
 
 use super::*;
+use crate::owner_layout::{ArgumentPin, ValidationPin};
 
 /// Pending eval argument roots still represent a PHP-visible binding during adapter coercion.
-pub const PENDING: i64 = 0x105;
+pub const PENDING: i64 = ArgumentPin::PENDING;
 /// Acquired eval argument records no longer own their former source value.
-const ACTIVE: i64 = 0x205;
+const ACTIVE: i64 = ArgumentPin::ACTIVE;
 
 /// Emits pending-root creation and the two no-PHP association transitions.
 pub fn emit(emitter: &mut impl Emitter) {
@@ -26,11 +27,11 @@ pub fn emit(emitter: &mut impl Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter, 3), 16);
     abi::emit_call_label(emitter, "__rt_reference_validation_pin_enter");
     abi::load_at_offset(emitter, scratch, 8);
-    abi::emit_store_to_address(emitter, scratch, result, 32);
+    abi::emit_store_to_address(emitter, scratch, result, ArgumentPin::NATIVE_CELL);
     abi::load_at_offset(emitter, scratch, 16);
-    abi::emit_store_to_address(emitter, scratch, result, 40);
+    abi::emit_store_to_address(emitter, scratch, result, ArgumentPin::STAGING);
     abi::emit_load_int_immediate(emitter, scratch, PENDING);
-    abi::emit_store_to_address(emitter, scratch, result, 24);
+    abi::emit_store_to_address(emitter, scratch, result, ValidationPin::KIND);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
     emit_transition(emitter, "activate", true);
@@ -54,22 +55,22 @@ fn emit_transition(emitter: &mut impl Emitter, action: &str, activate: bool) {
     abi::emit_load_symbol_to_reg(emitter, cursor, "_rt_reference_validation_pins_top", 0);
     emitter.label(&next);
     validation_pins::branch_zero(emitter, cursor, &done);
-    abi::emit_load_from_address(emitter, kind, cursor, 24);
+    abi::emit_load_from_address(emitter, kind, cursor, ValidationPin::KIND);
     abi::emit_load_int_immediate(emitter, expected, PENDING);
     validation_pins::branch_not_equal(emitter, kind, expected, &advance);
-    abi::emit_load_from_address(emitter, kind, cursor, if activate { 32 } else { 40 });
+    abi::emit_load_from_address(emitter, kind, cursor, if activate { ArgumentPin::NATIVE_CELL } else { ArgumentPin::STAGING });
     validation_pins::branch_not_equal(emitter, kind, cell, &advance);
     if activate {
         abi::emit_load_int_immediate(emitter, kind, ACTIVE);
-        abi::emit_store_to_address(emitter, kind, cursor, 24);
-        abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, 16);
-        abi::emit_store_zero_to_address(emitter, cursor, 16);
+        abi::emit_store_to_address(emitter, kind, cursor, ValidationPin::KIND);
+        abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, ArgumentPin::OWNER);
+        abi::emit_store_zero_to_address(emitter, cursor, ArgumentPin::OWNER);
     }
-    abi::emit_store_zero_to_address(emitter, cursor, 32);
-    abi::emit_store_zero_to_address(emitter, cursor, 40);
+    abi::emit_store_zero_to_address(emitter, cursor, ArgumentPin::NATIVE_CELL);
+    abi::emit_store_zero_to_address(emitter, cursor, ArgumentPin::STAGING);
     if activate { abi::emit_return(emitter); }
     emitter.label(&advance);
-    abi::emit_load_from_address(emitter, cursor, cursor, 8);
+    abi::emit_load_from_address(emitter, cursor, cursor, ValidationPin::NEXT);
     abi::emit_jump(emitter, &next);
     emitter.label(&done);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
@@ -90,15 +91,15 @@ fn emit_staging_lookup(emitter: &mut impl Emitter) {
     abi::emit_load_symbol_to_reg(emitter, cursor, "_rt_reference_validation_pins_top", 0);
     emitter.label(next);
     validation_pins::branch_zero(emitter, cursor, done);
-    abi::emit_load_from_address(emitter, kind, cursor, 24);
+    abi::emit_load_from_address(emitter, kind, cursor, ValidationPin::KIND);
     abi::emit_load_int_immediate(emitter, expected, PENDING);
     validation_pins::branch_not_equal(emitter, kind, expected, advance);
-    abi::emit_load_from_address(emitter, kind, cursor, 32);
+    abi::emit_load_from_address(emitter, kind, cursor, ArgumentPin::NATIVE_CELL);
     validation_pins::branch_not_equal(emitter, kind, cell, advance);
-    abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, 40);
+    abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, ArgumentPin::STAGING);
     abi::emit_return(emitter);
     emitter.label(advance);
-    abi::emit_load_from_address(emitter, cursor, cursor, 8);
+    abi::emit_load_from_address(emitter, cursor, cursor, ValidationPin::NEXT);
     abi::emit_jump(emitter, next);
     emitter.label(done);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);

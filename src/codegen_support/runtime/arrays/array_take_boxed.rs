@@ -9,6 +9,7 @@
 //! - Pop preserves remaining keys. Shift rebuilds numeric keys while retaining string keys.
 //! - The removed value is retained before unlinking, so removal cannot destroy its payload.
 
+use elephc_memoir::{hash_layout, values::boxed_array};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits boxed cell COW and the shared pop/shift operation for the active target.
@@ -38,52 +39,35 @@ fn emit_take(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count after payload separation
             emitter.instruction("cbz x9, __rt_array_take_empty");               // an empty array returns an owned null cell
             abi::load_at_offset(emitter, "x9", 48);
-            emitter.instruction("ldr x10, [x0, #32]");                          // pop selects the insertion-order tail
+            hash_layout::emit_order_edge(emitter, "x10", "x0", true);
             emitter.instruction("cbz x9, __rt_array_take_entry");               // pop does not need to inspect the head
-            emitter.instruction("ldr x10, [x0, #24]");                          // shift selects the insertion-order head
+            hash_layout::emit_order_edge(emitter, "x10", "x0", false);
             emitter.label("__rt_array_take_entry");
-            emitter.instruction("ldr x0, [x0, #40]");                           // locate the separately allocated hash entries
-            emitter.instruction("add x10, x0, x10, lsl #6");                    // select the sixty-four-byte entry
-            emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the selected key before helpers can relocate registers
+            hash_layout::emit_consume_entry_address(emitter, "x0", "x10");
+            hash_layout::emit_entry_key(emitter, "x10", "x1", "x2");
             abi::store_at_offset(emitter, "x1", 32);
             abi::store_at_offset(emitter, "x2", 40);
-            emitter.instruction("ldr x0, [x10, #40]");                          // per-entry tags describe heterogeneous payloads
-            emitter.instruction("ldp x1, x2, [x10, #24]");                      // borrow the selected value payload words
+            hash_layout::emit_entry_value(emitter, "x10", "x0", "x1", "x2");
             super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_take_deref_done", "x0", "x1", "x2");
-            emitter.instruction("cmp x0, #7");                                  // an existing Mixed value needs a retain rather than nested boxing
-            emitter.instruction("b.ne __rt_array_take_box_value");              // concrete payloads need a new owned cell
-            emitter.instruction("mov x0, x1");                                  // pass the existing Mixed pointer to incref
         }
         Arch::X86_64 => {
             emitter.instruction("cmp QWORD PTR [rax], 0");                      // inspect the live entry count after payload separation
             emitter.instruction("je __rt_array_take_empty");                    // an empty array returns an owned null cell
             abi::load_at_offset(emitter, "r10", 48);
-            emitter.instruction("mov r11, QWORD PTR [rax + 32]");               // pop selects the insertion-order tail
+            hash_layout::emit_order_edge(emitter, "r11", "rax", true);
             emitter.instruction("test r10, r10");                               // inspect the requested removal mode
             emitter.instruction("jz __rt_array_take_entry");                    // pop does not need to inspect the head
-            emitter.instruction("mov r11, QWORD PTR [rax + 24]");               // shift selects the insertion-order head
+            hash_layout::emit_order_edge(emitter, "r11", "rax", false);
             emitter.label("__rt_array_take_entry");
-            emitter.instruction("mov rax, QWORD PTR [rax + 40]");               // locate the separately allocated hash entries
-            emitter.instruction("shl r11, 6");                                  // each hash bucket occupies sixty-four bytes
-            emitter.instruction("add r11, rax");                                // select the entry in the separate storage
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // borrow the selected key's low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // borrow its length or integer sentinel
+            hash_layout::emit_consume_entry_address(emitter, "rax", "r11");
+            hash_layout::emit_entry_key(emitter, "r11", "rdi", "rsi");
             abi::store_at_offset(emitter, "rdi", 32);
             abi::store_at_offset(emitter, "rsi", 40);
-            emitter.instruction("mov rax, QWORD PTR [r11 + 40]");               // per-entry tags describe heterogeneous payloads
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");               // borrow the selected value's low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");               // borrow its paired high word when present
+            hash_layout::emit_entry_value(emitter, "r11", "rax", "rdi", "rsi");
             super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_take_deref_done", "rax", "rdi", "rsi");
-            emitter.instruction("cmp rax, 7");                                  // an existing Mixed value needs a retain rather than nested boxing
-            emitter.instruction("jne __rt_array_take_box_value");               // concrete payloads need a new owned cell
-            emitter.instruction("mov rax, rdi");                                // pass the existing Mixed pointer to incref
         }
     }
-    abi::emit_call_label(emitter, "__rt_incref");
-    abi::emit_jump(emitter, "__rt_array_take_unlink");
-    emitter.label("__rt_array_take_box_value");
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.label("__rt_array_take_unlink");
+    boxed_array::emit_acquire_entry_result(emitter, "__rt_array_take_box_value", "__rt_array_take_unlink");
     abi::store_at_offset(emitter, result, 24);
     abi::load_at_offset(emitter, arg0, 16);
     abi::load_at_offset(emitter, arg1, 32);
@@ -117,11 +101,7 @@ fn emit_take(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, arg0, result);
     abi::load_at_offset(emitter, arg1, 16);
     abi::emit_call_label(emitter, "__rt_hash_spread");
-    let cell = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
-    abi::load_at_offset(emitter, cell, 8);
-    abi::emit_store_to_address(emitter, result, cell, 8);
-    abi::load_at_offset(emitter, result, 16);
-    abi::emit_call_label(emitter, "__rt_decref_hash");
+    boxed_array::emit_publish_hash_replacement(emitter, 8, 16);
     abi::emit_jump(emitter, "__rt_array_take_done");
     emitter.label("__rt_array_take_empty");
     // mixed_from_value intentionally uses the legacy tag/result register on x86_64.
@@ -165,14 +145,12 @@ fn emit_hash_pop(emitter: &mut Emitter) {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the tail
             emitter.instruction("cbz x9, __rt_hash_pop_boxed_empty");           // an empty associative array returns owned null
-            emitter.instruction("ldr x10, [x0, #32]");                          // load the insertion-order tail slot index
-            emitter.instruction("ldr x0, [x0, #40]");                           // locate the separately allocated hash entries
-            emitter.instruction("add x10, x0, x10, lsl #6");                    // scale the tail index by the sixty-four-byte entry size
-            emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the tail key for unlinking
+            hash_layout::emit_order_edge(emitter, "x10", "x0", true);
+            hash_layout::emit_consume_entry_address(emitter, "x0", "x10");
+            hash_layout::emit_entry_key(emitter, "x10", "x1", "x2");
             abi::store_at_offset(emitter, "x1", 16);
             abi::store_at_offset(emitter, "x2", 24);
-            emitter.instruction("ldr x0, [x10, #40]");                          // load the runtime payload tag
-            emitter.instruction("ldp x1, x2, [x10, #24]");                      // borrow the tail payload words
+            hash_layout::emit_entry_value(emitter, "x10", "x0", "x1", "x2");
             super::hash_entry_reference::emit_inline_entry_deref(
                 emitter,
                 "__rt_hash_pop_boxed_deref_done",
@@ -180,24 +158,16 @@ fn emit_hash_pop(emitter: &mut Emitter) {
                 "x1",
                 "x2",
             );
-            emitter.instruction("cmp x0, #7");                                  // existing Mixed payloads need a retained owner
-            emitter.instruction("b.ne __rt_hash_pop_boxed_box_value");          // concrete payloads need a fresh Mixed cell
-            emitter.instruction("mov x0, x1");                                  // pass the existing Mixed cell to incref
         }
         Arch::X86_64 => {
             emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the tail
             emitter.instruction("je __rt_hash_pop_boxed_empty");                // an empty associative array returns owned null
-            emitter.instruction("mov r11, QWORD PTR [rdi + 32]");               // load the insertion-order tail slot index
-            emitter.instruction("mov rdi, QWORD PTR [rdi + 40]");               // locate the separately allocated hash entries
-            emitter.instruction("shl r11, 6");                                  // scale the tail index by the sixty-four-byte bucket size
-            emitter.instruction("add r11, rdi");                                // select the entry in the separate storage
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // preserve the tail key low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // preserve the tail key high word
+            hash_layout::emit_order_edge(emitter, "r11", "rdi", true);
+            hash_layout::emit_consume_entry_address(emitter, "rdi", "r11");
+            hash_layout::emit_entry_key(emitter, "r11", "rdi", "rsi");
             abi::store_at_offset(emitter, "rdi", 16);
             abi::store_at_offset(emitter, "rsi", 24);
-            emitter.instruction("mov rax, QWORD PTR [r11 + 40]");               // load the runtime payload tag
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");               // borrow the tail payload low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");               // borrow its paired high word when present
+            hash_layout::emit_entry_value(emitter, "r11", "rax", "rdi", "rsi");
             super::hash_entry_reference::emit_inline_entry_deref(
                 emitter,
                 "__rt_hash_pop_boxed_deref_done",
@@ -205,16 +175,9 @@ fn emit_hash_pop(emitter: &mut Emitter) {
                 "rdi",
                 "rsi",
             );
-            emitter.instruction("cmp rax, 7");                                  // existing Mixed payloads need a retained owner
-            emitter.instruction("jne __rt_hash_pop_boxed_box_value");           // concrete payloads need a fresh Mixed cell
-            emitter.instruction("mov rax, rdi");                                // pass the existing Mixed cell to incref
         }
     }
-    abi::emit_call_label(emitter, "__rt_incref");
-    abi::emit_jump(emitter, "__rt_hash_pop_boxed_unlink");
-    emitter.label("__rt_hash_pop_boxed_box_value");
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.label("__rt_hash_pop_boxed_unlink");
+    boxed_array::emit_acquire_entry_result(emitter, "__rt_hash_pop_boxed_box_value", "__rt_hash_pop_boxed_unlink");
     abi::store_at_offset(emitter, result, 32);
     abi::load_at_offset(emitter, arg0, 8);
     abi::load_at_offset(emitter, arg1, 16);
@@ -272,14 +235,12 @@ fn emit_hash_shift(emitter: &mut Emitter) {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [x0]");                                // inspect the live entry count before selecting the head
             emitter.instruction("cbz x9, __rt_hash_shift_boxed_empty");         // an empty associative array returns owned null
-            emitter.instruction("ldr x10, [x0, #24]");                          // load the insertion-order head slot index
-            emitter.instruction("ldr x0, [x0, #40]");                           // locate the separately allocated hash entries
-            emitter.instruction("add x10, x0, x10, lsl #6");                    // scale the head index by the sixty-four-byte entry size
-            emitter.instruction("ldp x1, x2, [x10, #8]");                       // preserve the head key for unlinking
+            hash_layout::emit_order_edge(emitter, "x10", "x0", false);
+            hash_layout::emit_consume_entry_address(emitter, "x0", "x10");
+            hash_layout::emit_entry_key(emitter, "x10", "x1", "x2");
             abi::store_at_offset(emitter, "x1", 16);
             abi::store_at_offset(emitter, "x2", 24);
-            emitter.instruction("ldr x0, [x10, #40]");                          // load the runtime payload tag
-            emitter.instruction("ldp x1, x2, [x10, #24]");                      // borrow the head payload words
+            hash_layout::emit_entry_value(emitter, "x10", "x0", "x1", "x2");
             super::hash_entry_reference::emit_inline_entry_deref(
                 emitter,
                 "__rt_hash_shift_boxed_deref_done",
@@ -287,24 +248,16 @@ fn emit_hash_shift(emitter: &mut Emitter) {
                 "x1",
                 "x2",
             );
-            emitter.instruction("cmp x0, #7");                                  // existing Mixed payloads need a retained owner
-            emitter.instruction("b.ne __rt_hash_shift_boxed_box_value");        // concrete payloads need a fresh Mixed cell
-            emitter.instruction("mov x0, x1");                                  // pass the existing Mixed cell to incref
         }
         Arch::X86_64 => {
             emitter.instruction("cmp QWORD PTR [rdi], 0");                      // inspect the live entry count before selecting the head
             emitter.instruction("je __rt_hash_shift_boxed_empty");              // an empty associative array returns owned null
-            emitter.instruction("mov r11, QWORD PTR [rdi + 24]");               // load the insertion-order head slot index
-            emitter.instruction("mov rdi, QWORD PTR [rdi + 40]");               // locate the separately allocated hash entries
-            emitter.instruction("shl r11, 6");                                  // scale the head index by the sixty-four-byte bucket size
-            emitter.instruction("add r11, rdi");                                // select the entry in the separate storage
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // preserve the head key low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // preserve the head key high word
+            hash_layout::emit_order_edge(emitter, "r11", "rdi", false);
+            hash_layout::emit_consume_entry_address(emitter, "rdi", "r11");
+            hash_layout::emit_entry_key(emitter, "r11", "rdi", "rsi");
             abi::store_at_offset(emitter, "rdi", 16);
             abi::store_at_offset(emitter, "rsi", 24);
-            emitter.instruction("mov rax, QWORD PTR [r11 + 40]");               // load the runtime payload tag
-            emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");               // borrow the head payload low word
-            emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");               // borrow its paired high word when present
+            hash_layout::emit_entry_value(emitter, "r11", "rax", "rdi", "rsi");
             super::hash_entry_reference::emit_inline_entry_deref(
                 emitter,
                 "__rt_hash_shift_boxed_deref_done",
@@ -312,16 +265,9 @@ fn emit_hash_shift(emitter: &mut Emitter) {
                 "rdi",
                 "rsi",
             );
-            emitter.instruction("cmp rax, 7");                                  // existing Mixed payloads need a retained owner
-            emitter.instruction("jne __rt_hash_shift_boxed_box_value");         // concrete payloads need a fresh Mixed cell
-            emitter.instruction("mov rax, rdi");                                // pass the existing Mixed cell to incref
         }
     }
-    abi::emit_call_label(emitter, "__rt_incref");
-    abi::emit_jump(emitter, "__rt_hash_shift_boxed_value_ready");
-    emitter.label("__rt_hash_shift_boxed_box_value");
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.label("__rt_hash_shift_boxed_value_ready");
+    boxed_array::emit_acquire_entry_result(emitter, "__rt_hash_shift_boxed_box_value", "__rt_hash_shift_boxed_value_ready");
     abi::load_at_offset(emitter, arg1, 32);                                     // write the removed value into the caller's out-slot
     abi::emit_store_to_address(emitter, result, arg1, 0);
     abi::load_at_offset(emitter, arg0, 8);                                      // remove the head entry before rebuilding

@@ -141,3 +141,39 @@ pub fn emit_raw_ref_payload_callback<E: Emitter>(
     emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore linkage after successful payload cleanup
     emitter.instruction("ret");                                                 // transfer any exceptional exit to the enclosing protected caller
 }
+
+/// Invokes the caller's protected cleanup steps while the borrowed PHP frame remains readable.
+pub fn emit_cleanup_steps(emitter: &mut impl Emitter, callback: &str, count: usize) {
+    let arm = emitter.arch() == Arch::AArch64;
+    emitter.instruction(if arm { "str xzr, [sp]" } else { "mov QWORD PTR [rsp], 0" }); // accumulate child failures while continuing the cleanup walk
+    for index in 0..count {
+        let step = format!("{callback}_owner_{index}");
+        abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &step);
+        emitter.instruction(if arm { "mov x1, x29" } else { "mov rsi, rbp" }); // pass the still-readable original frame to this cleanup step
+        emitter.instruction(if arm { "mov x2, sp" } else { "mov rdx, rsp" }); // retain pending status in this walker's own stack storage
+        abi::emit_call_label(emitter, "__rt_cleanup_call");
+    }
+    emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rax, QWORD PTR [rsp]" }); // report whether any owner cleanup produced a throwable
+    emitter.instruction(if arm { "lsl x0, x0, #1" } else { "shl eax, 1" }); // convert the cleanup flag to the shared pending status
+}
+
+/// Saves the suspended-frame visitor's independent native context on its private stack.
+pub fn emit_save_visit_context(emitter: &mut impl Emitter) {
+    let arm = emitter.arch() == Arch::AArch64;
+    emitter.instruction(if arm { "str x1, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], rsi" }); // retain this traversal's independent native context
+}
+
+/// Reloads the pending visitor context as the third argument of a pure slot visit.
+pub fn emit_load_visit_context(emitter: &mut impl Emitter) {
+    emitter.instruction(if emitter.arch() == Arch::AArch64 {
+        "ldr x2, [sp, #8]"
+    } else { "mov rdx, QWORD PTR [rsp + 8]" });                                  // restore the visitor's private context
+}
+
+/// Passes the real slot address, its normalization tag and the suspended-frame visitor context.
+pub fn emit_visit_frame_slot(emitter: &mut impl Emitter, offset: usize, tag: i64) {
+    emitter.emit_frame_slot_address(emitter.int_arg_reg_name(0), offset);
+    emitter.emit_load_int_immediate(emitter.int_arg_reg_name(1), tag);
+    emit_load_visit_context(emitter);
+    emitter.emit_call_label("__rt_gc_frame_owner_slot");
+}

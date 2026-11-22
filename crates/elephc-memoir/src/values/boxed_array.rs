@@ -388,3 +388,35 @@ pub fn emit_normalize_array_x86_64(emitter: &mut impl Emitter, prefix: &str, inv
     emitter.label(&format!("{}_live", prefix));
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // r11 = live element count from header word 0
 }
+
+/// Acquires the native result before its container can unlink or replace the source entry.
+/// The dereferenced tag and payload arrive in the ordinary Mixed unbox registers.
+pub fn emit_acquire_entry_result(emitter: &mut impl Emitter, box_value: &str, owned: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #7");                                  // a nested Mixed already has its own cell
+            emitter.instruction(&format!("b.ne {box_value}"));                 // box a concrete payload
+            emitter.instruction("mov x0, x1");                                  // acquire an independent owner of the existing cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 7");                                  // a nested Mixed already has its own cell
+            emitter.instruction(&format!("jne {box_value}"));                  // box a concrete payload
+            emitter.instruction("mov rax, rdi");                                 // acquire an independent owner of the existing cell
+        }
+    }
+    emitter.emit_call_label("__rt_incref");
+    emitter.emit_jump(owned);
+    emitter.label(box_value);
+    emitter.emit_call_label("__rt_mixed_from_value");
+    emitter.label(owned);
+}
+
+/// Transfers a newly filled hash into its Mixed cell before retiring the displaced hash.
+pub fn emit_publish_hash_replacement(emitter: &mut impl Emitter, cell_slot: usize, old_slot: usize) {
+    let cell = if emitter.arch() == Arch::AArch64 { "x9" } else { "r10" };
+    let result = emitter.int_result_reg();
+    emitter.load_at_offset(cell, cell_slot);
+    emitter.emit_store_to_address(result, cell, 8);
+    emitter.load_at_offset(result, old_slot);
+    emitter.emit_call_label("__rt_decref_hash");
+}

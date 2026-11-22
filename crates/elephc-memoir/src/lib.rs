@@ -11,6 +11,9 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(any(feature = "codegen", feature = "runtime"))]
+pub mod owner_layout;
+
 #[cfg(feature = "codegen")]
 #[path = "codegen_root.rs"]
 mod codegen_root;
@@ -19,4 +22,14 @@ mod codegen_root;
 pub use codegen_root::*;
 
 #[cfg(feature = "runtime")]
+pub mod cell_retirement;
+#[cfg(feature = "runtime")]
 pub mod eval_buffers;
+#[cfg(feature = "runtime")]
+pub mod object_owners;
+#[cfg(feature = "runtime")]
+pub mod output_handlers;
+#[cfg(feature = "runtime")]
+pub mod runtime_bytes;
+#[cfg(feature = "runtime")]
+pub mod runtime_owners;

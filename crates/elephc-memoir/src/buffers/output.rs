@@ -561,3 +561,17 @@ pub fn emit_handler_queries(emitter: &mut impl Emitter) {
         emitter.instruction("ret");                                                 // return to Rust
     }
 }
+
+/// Persists a result pair before dropping its cell and restores the independent pair for output.
+/// The output mapper keeps the cell at offset zero from SP or eight bytes below RBP.
+pub fn emit_persist_result_and_release_cell(emitter: &mut impl Emitter) {
+    emitter.emit_call_label("__rt_str_persist");
+    crate::strings::owner_pair::emit_preserve_result_pair(emitter, 8, 16, "rdi", |emitter| {
+        if emitter.arch() == Arch::AArch64 {
+            emitter.instruction("ldr x0, [sp, #0]");                             // recover the owned handler result
+        } else {
+            emitter.load_at_offset("rax", 8);
+        }
+        emitter.emit_call_label("__rt_decref_any");
+    });
+}

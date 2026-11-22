@@ -8,86 +8,18 @@
 //! - The registry owns no cells or contexts. Shared validity tokens distinguish address reuse.
 //! - Retirement changes validity flags and queues removals, never mutating a borrowed eval context.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
-
-static ARRAY_REFERENCE_CELLS: OnceLock<Mutex<HashMap<usize, ArrayReferenceObservers>>> = OnceLock::new();
-
-/// Weak observers for one allocation; neither the runtime cell nor an eval context is retained.
-struct ArrayReferenceObservers {
-    lifetime: Weak<AtomicBool>,
-    retirements: Vec<Weak<Mutex<Vec<usize>>>>,
-}
-
-/// Deferred metadata removals drained by the owning context outside native release callbacks.
-#[derive(Default)]
-pub(crate) struct ArrayReferenceRetirements(Arc<Mutex<Vec<usize>>>);
-
-impl ArrayReferenceRetirements {
-    /// Takes the retired addresses without scanning unrelated live array-reference metadata.
-    pub(crate) fn take(&self) -> Vec<usize> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(|error| error.into_inner()))
-    }
-}
-
-/// Shared allocation validity attached to references recorded for one boxed array cell.
-#[derive(Clone)]
-pub(crate) struct ArrayReferenceCellLifetime(Arc<AtomicBool>);
-
-impl ArrayReferenceCellLifetime {
-    /// Reports whether the exact registered allocation still exists at its original address.
-    pub(crate) fn is_live(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
-
-/// Returns the weak registry without retaining runtime allocations or their eval contexts.
-fn array_reference_cells() -> &'static Mutex<HashMap<usize, ArrayReferenceObservers>> {
-    ARRAY_REFERENCE_CELLS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Shares the live allocation token, creating a distinct token after a freed address is reused.
-pub(crate) fn register_array_reference_cell(
-    cell: usize,
-    retirements: &ArrayReferenceRetirements,
-) -> ArrayReferenceCellLifetime {
-    let mut cells = array_reference_cells().lock().unwrap_or_else(|error| error.into_inner());
-    let existing = cells.get(&cell).and_then(|entry| entry.lifetime.upgrade())
-        .filter(|lifetime| lifetime.load(Ordering::Acquire));
-    let lifetime = existing.unwrap_or_else(|| {
-        let lifetime = Arc::new(AtomicBool::new(true));
-        cells.insert(cell, ArrayReferenceObservers {
-            lifetime: Arc::downgrade(&lifetime), retirements: Vec::new(),
-        });
-        lifetime
-    });
-    let observers = &mut cells.get_mut(&cell).unwrap().retirements;
-    let observer = Arc::downgrade(&retirements.0);
-    if !observers.iter().any(|existing| existing.ptr_eq(&observer)) {
-        observers.retain(|observer| observer.strong_count() != 0);
-        observers.push(observer);
-    }
-    ArrayReferenceCellLifetime(lifetime)
-}
-
-/// Invalidates every context's metadata for a cell before the native allocator can reuse it.
-pub(crate) fn retire_array_reference_cell(cell: usize) {
-    let Some(cells) = ARRAY_REFERENCE_CELLS.get() else { return; };
-    let entry = cells.lock().unwrap_or_else(|error| error.into_inner()).remove(&cell);
-    if let Some(entry) = entry {
-        let Some(lifetime) = entry.lifetime.upgrade() else { return; };
-        lifetime.store(false, Ordering::Release);
-        for retirements in entry.retirements.into_iter().filter_map(|queue| queue.upgrade()) {
-            retirements.lock().unwrap_or_else(|error| error.into_inner()).push(cell);
-        }
-    }
-}
+pub(crate) use elephc_memoir::cell_retirement::{
+    CellLifetime as ArrayReferenceCellLifetime,
+    CellRetirements as ArrayReferenceRetirements,
+    observe as register_array_reference_cell,
+};
+#[cfg(test)]
+use elephc_memoir::cell_retirement::retire as retire_array_reference_cell;
 
 /// Receives a validated dying Mixed cell address without letting a panic cross the C ABI.
 #[cfg(not(test))]
 pub(crate) extern "C" fn retire_array_reference_cell_callback(cell: usize) {
-    let _ = std::panic::catch_unwind(|| retire_array_reference_cell(cell));
+    let _ = std::panic::catch_unwind(|| elephc_memoir::cell_retirement::retire(cell));
 }
 
 #[cfg(test)]

@@ -521,3 +521,54 @@ pub fn emit_grow_if_full(emitter: &mut impl Emitter, spare: &str) {
 pub fn emit_grow(emitter: &mut impl Emitter) {
     emitter.emit_call_label("__rt_array_grow");
 }
+
+/// Moves the last owned word to the front without changing length or retaining any element.
+/// The nonempty packed array remains in the native result register.
+pub fn emit_rotate_tail_to_front(emitter: &mut impl Emitter, shift: &str, insert: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // load the post-append brigade length
+            emitter.instruction("sub x9, x9, #1");                              // point at the appended bucket's last slot
+            emitter.instruction("add x10, x0, #24");                            // compute the brigade payload base
+            emitter.instruction("ldr x11, [x10, x9, lsl #3]");                  // preserve the appended bucket while shifting
+            emitter.label(shift);
+            emitter.instruction("cmp x9, #0");                                  // check whether the front slot is now available
+            emitter.instruction(&format!("b.eq {}", insert));                   // finish once every prior bucket moved right
+            emitter.instruction("sub x12, x9, #1");                             // select the preceding bucket slot
+            emitter.instruction("ldr x13, [x10, x12, lsl #3]");                 // load the preceding bucket pointer
+            emitter.instruction("str x13, [x10, x9, lsl #3]");                  // shift the preceding bucket one slot right
+            emitter.instruction("mov x9, x12");                                 // continue toward the brigade head
+            emitter.instruction(&format!("b {}", shift));                       // shift the next preceding bucket
+            emitter.label(insert);
+            emitter.instruction("str x11, [x10]");                              // install the prepended bucket at index zero
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rax]");                    // load the post-append brigade length
+            emitter.instruction("sub r10, 1");                                  // point at the appended bucket's last slot
+            emitter.instruction("lea r11, [rax + 24]");                         // compute the brigade payload base
+            emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");           // preserve the appended bucket while shifting
+            emitter.label(shift);
+            emitter.instruction("test r10, r10");                               // check whether the front slot is now available
+            emitter.instruction(&format!("jz {}", insert));                     // finish once every prior bucket moved right
+            emitter.instruction("lea rcx, [r10 - 1]");                          // select the preceding bucket slot
+            emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");          // load the preceding bucket pointer
+            emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdx");          // shift the preceding bucket one slot right
+            emitter.instruction("mov r10, rcx");                                // continue toward the brigade head
+            emitter.instruction(&format!("jmp {}", shift));                     // shift the next preceding bucket
+            emitter.label(insert);
+            emitter.instruction("mov QWORD PTR [r11], r8");                     // install the prepended bucket at index zero
+        }
+    }
+}
+
+/// Publishes the new packed-array address and acquires the appended word's owner.
+/// The child offset is relative to the temporary stack after spilling the result.
+pub fn emit_publish_appended_owner(emitter: &mut impl Emitter, array_slot: usize, child_slot: usize) {
+    let stack = if emitter.arch() == Arch::AArch64 { "sp" } else { "rsp" };
+    let result = emitter.int_result_reg();
+    emitter.emit_store_to_address(result, stack, array_slot);
+    emitter.emit_push_reg(result);
+    emitter.emit_load_from_address(result, stack, child_slot);
+    emitter.emit_call_label("__rt_incref");
+    emitter.emit_pop_reg(result);
+}

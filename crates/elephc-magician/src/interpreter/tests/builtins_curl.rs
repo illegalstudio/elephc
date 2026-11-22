@@ -536,7 +536,7 @@ fn curl_callback_frame_partial_setup_releases_receivers() {
         values.release(result).unwrap();
         let object = scope.visible_cell("object").unwrap();
         let method = values.string("write").unwrap();
-        let valid = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        let valid = values.alloc(FakeValue::Array(vec![RuntimeCellHandle::from_raw(object.as_ptr()), method]));
         let invalid = values.alloc(FakeValue::Array(vec![]));
         let first = context.stream_resources_mut().open_curl_easy_handle(42);
         let second = if separate_handles {

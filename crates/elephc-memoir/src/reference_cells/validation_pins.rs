@@ -10,11 +10,12 @@
 //! - Every native throw must be contained until the owning publisher removes its records.
 
 use super::*;
+use crate::owner_layout::ValidationPin;
 
 /// Head of the active reference-validation ownership leases.
 pub const TOP: &str = "_rt_reference_validation_pins_top";
 /// Native publishers reserve one aligned record per independently retained value.
-pub const RECORD_BYTES: usize = 32;
+pub const RECORD_BYTES: usize = ValidationPin::BYTES;
 
 /// Subtracts active validation leases using only the explicitly supplied scratch registers.
 /// The reference remains borrowed; this leaf expansion never calls PHP or changes ownership.
@@ -88,7 +89,7 @@ fn subtract_unowned_cell_child(
     let count_next = format!("{prefix}_pin_cell_count_next");
     let counted = format!("{prefix}_pin_cell_counted");
     branch_zero(emitter, scratch, skip);
-    abi::emit_load_from_address(emitter, owners, outer, RECORD_BYTES - 8);
+    abi::emit_load_from_address(emitter, owners, outer, ValidationPin::KIND);
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {owners}, #8"));                  // the record authenticates an exact live managed cell
@@ -121,9 +122,9 @@ fn subtract_unowned_cell_child(
     abi::emit_load_from_address(emitter, node, node, 0);
     emitter.label(&earlier);
     branch_equal(emitter, node, outer, &count);
-    abi::emit_load_from_address(emitter, scratch, node, 16);
+    abi::emit_load_from_address(emitter, scratch, node, ValidationPin::OWNER);
     branch_equal(emitter, scratch, cell, skip);
-    abi::emit_load_from_address(emitter, node, node, 8);
+    abi::emit_load_from_address(emitter, node, node, ValidationPin::NEXT);
     abi::emit_jump(emitter, &earlier);
     emitter.label(&count);
     let word = low_word(emitter, owners);
@@ -146,7 +147,7 @@ fn subtract_unowned_cell_child(
     }
     emitter.label(&count_next);
     branch_zero(emitter, node, &counted);
-    abi::emit_load_from_address(emitter, scratch, node, 16);
+    abi::emit_load_from_address(emitter, scratch, node, ValidationPin::OWNER);
     let advance = format!("{prefix}_pin_cell_advance");
     branch_not_equal(emitter, scratch, cell, &advance);
     match emitter.arch() {
@@ -154,7 +155,7 @@ fn subtract_unowned_cell_child(
         Arch::X86_64 => emitter.instruction(&format!("sub {owners}, 1")),       // exclude each artificial cell lease exactly once
     }
     emitter.label(&advance);
-    abi::emit_load_from_address(emitter, node, node, 8);
+    abi::emit_load_from_address(emitter, node, node, ValidationPin::NEXT);
     abi::emit_jump(emitter, &count_next);
     emitter.label(&counted);
     branch_zero(emitter, owners, subtract);
@@ -236,13 +237,13 @@ pub fn emit(emitter: &mut impl Emitter) {
     abi::store_at_offset(emitter, result, 24);
     abi::emit_symbol_address(emitter, previous, TOP);
     abi::emit_load_from_address(emitter, previous, previous, 0);
-    abi::load_at_offset(emitter, record, 8);
-    abi::emit_store_zero_to_address(emitter, record, 0);
-    abi::emit_store_to_address(emitter, previous, record, 8);
+    abi::load_at_offset(emitter, record, ValidationPin::NEXT);
+    abi::emit_store_zero_to_address(emitter, record, ValidationPin::PREVIOUS);
+    abi::emit_store_to_address(emitter, previous, record, ValidationPin::NEXT);
     abi::load_at_offset(emitter, result, 16);
-    abi::emit_store_to_address(emitter, result, record, 16);
+    abi::emit_store_to_address(emitter, result, record, ValidationPin::OWNER);
     abi::load_at_offset(emitter, result, 24);
-    abi::emit_store_to_address(emitter, result, record, RECORD_BYTES - 8);
+    abi::emit_store_to_address(emitter, result, record, ValidationPin::KIND);
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction("cbz x11, __rt_reference_validation_pin_enter_head"); // the first lease has no successor to relink
@@ -264,21 +265,21 @@ pub fn emit(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_reference_validation_pin_take");
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_reg_move(emitter, record, abi::int_arg_reg_name(emitter, 0));
-    abi::emit_load_from_address(emitter, result, record, 16);
+    abi::emit_load_from_address(emitter, result, record, ValidationPin::OWNER);
     abi::store_at_offset(emitter, result, 8);
-    abi::emit_load_from_address(emitter, previous, record, 24);
+    abi::emit_load_from_address(emitter, previous, record, ValidationPin::KIND);
     abi::emit_load_int_immediate(emitter, result, 0x305);
     branch_equal(emitter, previous, result, "__rt_reference_validation_pin_take_return");
     abi::emit_load_int_immediate(emitter, result, 8);
     branch_not_equal(emitter, previous, result, "__rt_reference_validation_pin_take_unlink");
-    abi::store_at_offset(emitter, record, 16);
+    abi::store_at_offset(emitter, record, ValidationPin::OWNER);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter, 0), 16);
     abi::emit_call_label(emitter, "__rt_reference_argument_pins_forget");
-    abi::load_at_offset(emitter, record, 16);
+    abi::load_at_offset(emitter, record, ValidationPin::OWNER);
     emitter.label("__rt_reference_validation_pin_take_unlink");
-    abi::emit_load_from_address(emitter, previous, record, 0);
+    abi::emit_load_from_address(emitter, previous, record, ValidationPin::PREVIOUS);
     let next = if emitter.arch() == Arch::AArch64 { "x12" } else { "r9" };
-    abi::emit_load_from_address(emitter, next, record, 8);
+    abi::emit_load_from_address(emitter, next, record, ValidationPin::NEXT);
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction("cbz x11, __rt_reference_validation_pin_leave_head"); // an inner lease can retire while another fiber remains suspended
@@ -305,12 +306,12 @@ pub fn emit(emitter: &mut impl Emitter) {
     }
     abi::emit_store_to_address(emitter, previous, next, 0);
     emitter.label("__rt_reference_validation_pin_leave_release");
-    abi::emit_store_zero_to_address(emitter, record, 0);
-    abi::emit_store_zero_to_address(emitter, record, 8);
-    abi::emit_store_zero_to_address(emitter, record, 16);
+    abi::emit_store_zero_to_address(emitter, record, ValidationPin::PREVIOUS);
+    abi::emit_store_zero_to_address(emitter, record, ValidationPin::NEXT);
+    abi::emit_store_zero_to_address(emitter, record, ValidationPin::OWNER);
     // A consumed staging record can be retired again by its original foreign boundary.
     abi::emit_load_int_immediate(emitter, result, 0x305);
-    abi::emit_store_to_address(emitter, result, record, RECORD_BYTES - 8);
+    abi::emit_store_to_address(emitter, result, record, ValidationPin::KIND);
     emitter.label("__rt_reference_validation_pin_take_return");
     abi::load_at_offset(emitter, result, 8);
     abi::emit_frame_restore(emitter, 32);

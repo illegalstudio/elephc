@@ -11,15 +11,7 @@
 
 use super::{ElephcRuntimeOps, EvalStatus, RuntimeCell, RuntimeCellHandle};
 use crate::interpreter::RuntimeValueOps;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-
-static OBJECT_OWNERS: OnceLock<Mutex<HashMap<u64, Vec<usize>>>> = OnceLock::new();
-
-/// Returns the registry of actual runtime-owned closure edges.
-fn object_owners() -> &'static Mutex<HashMap<u64, Vec<usize>>> {
-    OBJECT_OWNERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+use elephc_memoir::object_owners;
 
 /// Acquires one owner for every child and transfers those owners into the native object's lifetime.
 pub(super) fn retain_object_children(
@@ -39,9 +31,9 @@ pub(super) fn retain_object_children(
             }
         }
     }
-    let previous = match object_owners().lock() {
-        Ok(mut owners) => owners.insert(identity, retained),
-        Err(_) => {
+    let previous = match object_owners::replace(identity, retained) {
+        Ok(previous) => previous,
+        Err(retained) => {
             values.release_cells(owned_children(retained))?;
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -54,16 +46,14 @@ pub(super) fn retain_object_children(
 pub(super) extern "C" fn object_gc_child(identity: u64, index: u64) -> usize {
     std::panic::catch_unwind(|| {
         let index = usize::try_from(index).ok()?;
-        let owners = object_owners().lock().ok()?;
-        owners.get(&identity)?.get(index).copied()
+        object_owners::child(identity, index)
     }).ok().flatten().unwrap_or(0)
 }
 
 /// Releases every detached child, returning an owned Throwable only after Rust cleanup has finished.
 pub(super) extern "C" fn release_object_children(identity: u64) -> *mut RuntimeCell {
     std::panic::catch_unwind(|| {
-        let children = object_owners().lock().ok()
-            .and_then(|mut owners| owners.remove(&identity));
+        let children = object_owners::take(identity);
         let thrown = super::release::release_native_cells(owned_children(children.unwrap_or_default()), None);
         crate::ffi::dynamic_destructors::forget_released_object(identity);
         thrown.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr)

@@ -119,3 +119,17 @@ fn test_output_handler_lifecycle_repeated_mbstring() {
     let body = format!("mb_http_output(\"UTF-8\"); {} echo ob_get_level(), \"\\n\";", operation.repeat(128));
     clean(&format!("<?php {}", dynamic(&body)), "0\n");
 }
+
+/// A buffer retains its callback context after the native frame that invoked eval returns.
+#[test]
+fn test_output_handler_lifecycle_survives_eval_frame_return() {
+    clean(r#"<?php
+function keepOutputContext(string $source): void { eval($source); }
+function uppercaseAfterReturn(string $bytes, int $phase): string { return strtoupper($bytes); }
+$source = $argc > 0 ? 'ob_start("uppercaseAfterReturn");' : '';
+keepOutputContext($source);
+echo "handled after return\n";
+ob_end_flush();
+echo "depth=", ob_get_level(), "\n";
+"#, "HANDLED AFTER RETURN\ndepth=0\n");
+}

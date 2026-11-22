@@ -145,11 +145,7 @@ fn emit_pop_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x10, [x9]");                                       // read current storage length
     emitter.instruction("cbz x10, __rt_spl_dll_pop_empty");                     // empty list raises PHP's RuntimeException
-    emitter.instruction("sub x10, x10, #1");                                    // compute the last occupied index
-    emitter.instruction("str x10, [x9]");                                       // shrink storage length by one
-    emitter.instruction("add x11, x9, #24");                                    // point at the first storage element
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // return the removed Mixed cell, transferring ownership
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // clear the stale slot beyond the new length
+    elephc_memoir::values::spl_storage::emit_take_tail(emitter);
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_pop_empty");
     emit_throw_exception_aarch64(
@@ -168,21 +164,7 @@ fn emit_shift_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x10, [x9]");                                       // read current storage length
     emitter.instruction("cbz x10, __rt_spl_dll_shift_empty");                   // empty list raises PHP's RuntimeException
-    emitter.instruction("add x11, x9, #24");                                    // point at the first storage element
-    emitter.instruction("ldr x0, [x11]");                                       // capture the removed first Mixed cell
-    emitter.instruction("mov x12, #1");                                         // start shifting from element index 1
-    emitter.label("__rt_spl_dll_shift_loop");
-    emitter.instruction("cmp x12, x10");                                        // have all live elements been shifted left?
-    emitter.instruction("b.ge __rt_spl_dll_shift_done");                        // finish once the cursor reaches the old length
-    emitter.instruction("ldr x13, [x11, x12, lsl #3]");                         // load the next Mixed pointer
-    emitter.instruction("sub x14, x12, #1");                                    // compute the destination index one slot earlier
-    emitter.instruction("str x13, [x11, x14, lsl #3]");                         // move the Mixed pointer down by one slot
-    emitter.instruction("add x12, x12, #1");                                    // advance the shift cursor
-    emitter.instruction("b __rt_spl_dll_shift_loop");                           // continue compacting storage
-    emitter.label("__rt_spl_dll_shift_done");
-    emitter.instruction("sub x10, x10, #1");                                    // compute the new storage length
-    emitter.instruction("str x10, [x9]");                                       // persist the shortened length
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // clear the stale tail slot
+    elephc_memoir::values::spl_storage::emit_take_head(emitter);
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_aarch64(
@@ -1310,11 +1292,7 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
     emitter.instruction("jz __rt_spl_dll_pop_empty");                           // empty list raises PHP's RuntimeException
-    emitter.instruction("sub r10, 1");                                          // compute last occupied index
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // shrink storage length by one
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // return removed Mixed cell, transferring ownership
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale slot beyond new length
+    elephc_memoir::values::spl_storage::emit_take_tail(emitter);
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_pop_empty");
     emit_throw_exception_x86_64(
@@ -1334,22 +1312,7 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
     emitter.instruction("jz __rt_spl_dll_shift_empty");                         // empty list raises PHP's RuntimeException
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov rax, QWORD PTR [r11]");                            // capture removed first Mixed cell
-    emitter.instruction("mov r12, 1");                                          // start shifting from element index 1
-    emitter.label("__rt_spl_dll_shift_loop");
-    emitter.instruction("cmp r12, r10");                                        // have all live elements been shifted left?
-    emitter.instruction("jge __rt_spl_dll_shift_done");                         // finish once cursor reaches old length
-    emitter.instruction("mov r13, QWORD PTR [r11 + r12 * 8]");                  // load next Mixed pointer
-    emitter.instruction("mov r14, r12");                                        // copy source index for destination calculation
-    emitter.instruction("sub r14, 1");                                          // destination index is one slot earlier
-    emitter.instruction("mov QWORD PTR [r11 + r14 * 8], r13");                  // move Mixed pointer down by one slot
-    emitter.instruction("add r12, 1");                                          // advance shift cursor
-    emitter.instruction("jmp __rt_spl_dll_shift_loop");                         // continue compacting storage
-    emitter.label("__rt_spl_dll_shift_done");
-    emitter.instruction("sub r10, 1");                                          // compute new storage length
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // persist shortened length
-    emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale tail slot
+    elephc_memoir::values::spl_storage::emit_take_head(emitter);
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_x86_64(

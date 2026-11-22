@@ -80,3 +80,38 @@ pub fn emit_retire_row(emitter: &mut impl TargetAbi, row: &str, frame: &str, scr
         emitter.emit_call_label("__rt_heap_free_safe");
     }
 }
+
+/// Saves an owned runtime string pair across an action that might clobber its registers.
+/// AArch64 uses an SP-relative spill and x86-64 uses an RBP-relative spill.
+pub fn emit_preserve_result_pair<E: Emitter>(
+    emitter: &mut E,
+    arm_spill: usize,
+    x86_spill: usize,
+    x86_pointer_result: &str,
+    action: impl FnOnce(&mut E),
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("stp x1, x2, [sp, #{arm_spill}]"));      // save the independent pointer and length
+            action(emitter);
+            emitter.instruction(&format!("ldp x1, x2, [sp, #{arm_spill}]"));      // recover the independent pair
+        }
+        Arch::X86_64 => {
+            emitter.store_at_offset("rax", x86_spill);
+            emitter.store_at_offset("rdx", x86_spill + 8);
+            action(emitter);
+            emitter.load_at_offset(x86_pointer_result, x86_spill);
+            emitter.load_at_offset("rdx", x86_spill + 8);
+        }
+    }
+}
+
+/// Releases the native owned byte block in the caller's architecture-specific spill.
+pub fn emit_release_staged_bytes(emitter: &mut impl Emitter, arm_spill: usize, x86_spill: usize) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.emit_load_from_address("x0", "sp", arm_spill);
+    } else {
+        emitter.load_at_offset("rax", x86_spill);
+    }
+    emitter.emit_call_label("__rt_heap_free_safe");
+}

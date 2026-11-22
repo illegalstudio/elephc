@@ -29,3 +29,46 @@ pub fn emit_store_wrapper_byte(emitter: &mut impl Emitter, base: &str, cursor: &
         Arch::X86_64 => emitter.instruction(&format!("mov BYTE PTR [{base} + {cursor}], {byte}")), // append one byte to the wrapper line
     }
 }
+
+/// Installs the newly persisted fallback URL and releases the independently displaced owner.
+pub fn emit_replace_phar_url(emitter: &mut impl crate::Emitter) {
+    let (pointer, length, previous) = match emitter.arch() {
+        crate::Arch::AArch64 => ("x1", "x2", "x0"),
+        crate::Arch::X86_64 => ("rax", "rdx", "r10"),
+    };
+    emitter.emit_load_symbol_to_reg(previous, "_phar_write_url_ptr", 0);
+    emitter.emit_store_reg_to_symbol(pointer, "_phar_write_url_ptr", 0);
+    emitter.emit_store_reg_to_symbol(length, "_phar_write_url_len", 0);
+    emitter.emit_reg_move(emitter.int_result_reg(), previous);
+    emitter.emit_call_label("__rt_heap_free_safe");
+}
+
+/// Clears a fallback URL before retiring its owner while preserving the caller's result.
+///
+/// The leaf x86-64 open path is unaligned on entry. Finalization already has an aligned frame.
+pub fn emit_clear_phar_url(emitter: &mut impl crate::Emitter, leaf: bool) {
+    match emitter.arch() {
+        crate::Arch::AArch64 => emitter.instruction("stp x0, x30, [sp, #-16]!"), // retain the result and return address across retirement
+        crate::Arch::X86_64 if leaf => emitter.instruction("push rax"),           // preserve the result and align this leaf call
+        crate::Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                // reserve a spill while keeping the call aligned
+            emitter.instruction("mov QWORD PTR [rsp], rax");                   // preserve the finalize status
+        }
+    }
+    let result = emitter.int_result_reg();
+    emitter.emit_load_symbol_to_reg(result, "_phar_write_url_ptr", 0);
+    let scratch = emitter.secondary_scratch_reg();
+    for symbol in ["_phar_write_url_ptr", "_phar_write_url_len"] {
+        emitter.emit_symbol_address(scratch, symbol);
+        emitter.emit_store_zero_to_address(scratch, 0);
+    }
+    emitter.emit_call_label("__rt_heap_free_safe");
+    match emitter.arch() {
+        crate::Arch::AArch64 => emitter.instruction("ldp x0, x30, [sp], #16"),   // restore the caller's result and linkage
+        crate::Arch::X86_64 if leaf => emitter.instruction("pop rax"),            // recover the leaf return value
+        crate::Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                   // recover the finalize status
+            emitter.instruction("add rsp, 16");                                // release the aligned spill
+        }
+    }
+}

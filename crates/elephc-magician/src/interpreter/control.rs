@@ -72,7 +72,7 @@ pub(super) enum BoundNativeFunctionRefSlot {
         original: RuntimeCellHandle,
         cell: u64,
         /// Stable foreign-mutable record remains allocated until native pin retirement completes.
-        pin: Box<std::cell::UnsafeCell<[u64; 4]>>,
+        pin: Box<std::cell::UnsafeCell<elephc_memoir::owner_layout::ValidationPin>>,
     },
     Mixed {
         original: RuntimeCellHandle,
