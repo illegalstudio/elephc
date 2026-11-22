@@ -590,7 +590,10 @@ try {
 #[test]
 fn test_dead_code_elimination_models_constrained_unknown_rethrow_domain() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_constrained_rethrow_domain");
-    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+    // A `callable` parameter is an open callable site: its descriptor ladder reaches builtin
+    // wrappers (method_exists, restore_error_handler, clone_with) whose runtime routines the
+    // matching runtime carries, so the fixture links the runtime this compile asked for.
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 class A extends Exception {}
 function relay(callable $callback): void {
@@ -625,7 +628,7 @@ relay(function (): void {
     );
     let out = assemble_and_run(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &dir,
         &required_libraries,
         &default_link_paths(),
