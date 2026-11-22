@@ -147,6 +147,11 @@ pub(crate) fn source_expression_may_throw(
     effects::expr_effect(expr).may_throw || !exception_flow::active_expr_thrown_types(expr).is_empty()
 }
 
+/// Reports whether one source operand is a scalar literal that cannot dispatch user code.
+pub(crate) fn source_literal_scalar_operand(expr: &Expr) -> bool {
+    effects::literal_scalar_operand(expr)
+}
+
 /// Reports whether executing one source statement can throw under the selected profile.
 pub(crate) fn source_statement_may_throw(
     stmt: &Stmt,

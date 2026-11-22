@@ -536,7 +536,9 @@ fn strict_array_key_source_validation_merges_reachable_catch_entries() {
 
     for source in [
         "<?php function nested_caught_failure(): void { throw new Exception(); } $values = [1]; try { try { nested_caught_failure(); } catch (Throwable $ignored) {} $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;",
+        "<?php function nested_exception_failure(): void { throw new Exception(); } $values = [1]; try { try { nested_exception_failure(); } catch (Exception $ignored) {} $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;",
         "<?php $values = [1]; try { switch (1) { case 1: break; } $values = [[1]]; throw new Exception(); } catch (Exception $error) {} $values[0][false] = 2;",
+        "<?php $values = [[1]]; try { switch ((array) 1) { case 1: break; } $values = [1]; throw new Exception(); } catch (Throwable $error) {} $values[0][false] = 2;",
     ] {
         let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .expect_err("every reachable caught path retains an invalid array receiver");

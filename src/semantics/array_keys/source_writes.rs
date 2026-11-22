@@ -2103,11 +2103,26 @@ fn catch_handles_every_throw(catch: &CatchClause) -> bool {
         .any(|handler| normalized_class_name(handler.as_str()) == "throwable")
 }
 
+/// Reports whether earlier clauses consume every unknown throwable one target clause accepts.
+fn catches_cover_target(
+    catches: &[CatchClause],
+    target: &CatchClause,
+    properties: &PropertyFacts,
+) -> bool {
+    target.exception_types.iter().all(|target_type| {
+        catches.iter().flat_map(|catch| &catch.exception_types).any(|handled_type| {
+            source_class_is_a(target_type.as_str(), handled_type.as_str(), properties)
+        })
+    })
+}
+
 /// Reports whether an unknown implicit throw can reach one catch after earlier clauses.
-fn untracked_throw_may_reach_catch(catches: &[CatchClause], catch_index: usize) -> bool {
-    !catches[..catch_index]
-        .iter()
-        .any(catch_handles_every_throw)
+fn untracked_throw_may_reach_catch(
+    catches: &[CatchClause],
+    catch_index: usize,
+    properties: &PropertyFacts,
+) -> bool {
+    !catches_cover_target(&catches[..catch_index], &catches[catch_index], properties)
 }
 
 /// Starts a catch with unknown facts for locals the try body may have changed before throwing.
@@ -2170,10 +2185,11 @@ fn block_has_untracked_throw(
     body: &[Stmt],
     properties: &PropertyFacts,
     profile: SemanticProfile,
+    target: Option<&CatchClause>,
 ) -> bool {
     reachable_statement_prefix(body)
         .iter()
-        .any(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
+        .any(|stmt| stmt_has_untracked_throw(stmt, properties, profile, target))
 }
 
 /// Separates explicit throw terminals from implicit expression and statement failures.
@@ -2181,13 +2197,14 @@ fn stmt_has_untracked_throw(
     stmt: &Stmt,
     properties: &PropertyFacts,
     profile: SemanticProfile,
+    target: Option<&CatchClause>,
 ) -> bool {
     match &stmt.kind {
         StmtKind::Throw(expr) => explicit_throw_operand_may_throw(expr, properties, profile),
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. } => {
-            block_has_untracked_throw(body, properties, profile)
+            block_has_untracked_throw(body, properties, profile, target)
         }
         StmtKind::If {
             condition,
@@ -2196,13 +2213,13 @@ fn stmt_has_untracked_throw(
             else_body,
         } => {
             crate::optimize::source_expression_may_throw(condition, profile)
-                || block_has_untracked_throw(then_body, properties, profile)
+                || block_has_untracked_throw(then_body, properties, profile, target)
                 || elseif_clauses.iter().any(|(condition, body)| {
                     crate::optimize::source_expression_may_throw(condition, profile)
-                        || block_has_untracked_throw(body, properties, profile)
+                        || block_has_untracked_throw(body, properties, profile, target)
                 })
                 || else_body.as_ref().is_some_and(|body| {
-                    block_has_untracked_throw(body, properties, profile)
+                    block_has_untracked_throw(body, properties, profile, target)
                 })
         }
         StmtKind::IfDef {
@@ -2210,14 +2227,14 @@ fn stmt_has_untracked_throw(
             else_body,
             ..
         } => {
-            block_has_untracked_throw(then_body, properties, profile)
+            block_has_untracked_throw(then_body, properties, profile, target)
                 || else_body.as_ref().is_some_and(|body| {
-                    block_has_untracked_throw(body, properties, profile)
+                    block_has_untracked_throw(body, properties, profile, target)
                 })
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
             crate::optimize::source_expression_may_throw(condition, profile)
-                || block_has_untracked_throw(body, properties, profile)
+                || block_has_untracked_throw(body, properties, profile, target)
         }
         StmtKind::For {
             init,
@@ -2226,18 +2243,18 @@ fn stmt_has_untracked_throw(
             body,
         } => {
             init.as_deref()
-                .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
+                .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile, target))
                 || condition.as_ref().is_some_and(|condition| {
                     crate::optimize::source_expression_may_throw(condition, profile)
                 })
                 || update
                     .as_deref()
-                    .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile))
-                || block_has_untracked_throw(body, properties, profile)
+                    .is_some_and(|stmt| stmt_has_untracked_throw(stmt, properties, profile, target))
+                || block_has_untracked_throw(body, properties, profile, target)
         }
         StmtKind::Foreach { array, body, .. } => {
             crate::optimize::source_expression_may_throw(array, profile)
-                || block_has_untracked_throw(body, properties, profile)
+                || block_has_untracked_throw(body, properties, profile, target)
         }
         StmtKind::Switch {
             subject,
@@ -2248,11 +2265,10 @@ fn stmt_has_untracked_throw(
                 || cases.iter().any(|(labels, body)| {
                     labels.iter().any(|label| {
                         crate::optimize::source_expression_may_throw(label, profile)
-                            || source_switch_comparison_may_throw(subject, label, profile)
-                    }) || block_has_untracked_throw(body, properties, profile)
+                    }) || block_has_untracked_throw(body, properties, profile, target)
                 })
                 || default.as_ref().is_some_and(|body| {
-                    block_has_untracked_throw(body, properties, profile)
+                    block_has_untracked_throw(body, properties, profile, target)
                 })
         }
         StmtKind::Try {
@@ -2260,13 +2276,16 @@ fn stmt_has_untracked_throw(
             catches,
             finally_body,
         } => {
-            (block_has_untracked_throw(try_body, properties, profile)
-                && !catches.iter().any(catch_handles_every_throw))
+            (block_has_untracked_throw(try_body, properties, profile, target)
+                && target.map_or_else(
+                    || !catches.iter().any(catch_handles_every_throw),
+                    |target| !catches_cover_target(catches, target, properties),
+                ))
                 || catches
                     .iter()
-                    .any(|catch| block_has_untracked_throw(&catch.body, properties, profile))
+                    .any(|catch| block_has_untracked_throw(&catch.body, properties, profile, target))
                 || finally_body.as_ref().is_some_and(|body| {
-                    block_has_untracked_throw(body, properties, profile)
+                    block_has_untracked_throw(body, properties, profile, target)
                 })
         }
         _ => crate::optimize::source_statement_may_throw(stmt, profile),
@@ -2279,7 +2298,9 @@ fn source_switch_comparison_may_throw(
     label: &Expr,
     profile: SemanticProfile,
 ) -> bool {
-    source_expr_fact(subject, profile).is_none() || source_expr_fact(label, profile).is_none()
+    let _ = profile;
+    !crate::optimize::source_literal_scalar_operand(subject)
+        || !crate::optimize::source_literal_scalar_operand(label)
 }
 
 /// Excludes statements after the first unconditional control transfer from reachable facts.
@@ -2399,6 +2420,7 @@ fn source_switch_selection(
 
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
 fn validate_switch_flow(
+    subject_expr: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
     subject: &ValueFact,
@@ -2410,6 +2432,7 @@ fn validate_switch_flow(
     let selection = source_switch_selection(subject, cases);
     let mut direct_inputs = vec![Vec::new(); cases.len()];
     let mut no_match = None;
+    let mut comparison_terminals = Vec::new();
     match selection {
         SwitchSelection::Body(case) => direct_inputs[case].push(entry.clone()),
         SwitchSelection::Miss => no_match = Some(entry.clone()),
@@ -2424,6 +2447,12 @@ fn validate_switch_flow(
                         profile,
                         current_class,
                     );
+                    if source_switch_comparison_may_throw(subject_expr, label, profile) {
+                        comparison_terminals.push(TerminalFlow {
+                            kind: TerminalKind::Throw(None),
+                            facts: label_entry.clone(),
+                        });
+                    }
                     if !direct_inputs[case_index].contains(&label_entry) {
                         direct_inputs[case_index].push(label_entry.clone());
                     }
@@ -2444,7 +2473,7 @@ fn validate_switch_flow(
 
     let mut switch_exits = Vec::new();
     let mut outer_jumps = Vec::new();
-    let mut terminals = Vec::new();
+    let mut terminals = comparison_terminals;
     let mut prior_fallthrough = None;
     for (body_index, body) in bodies.into_iter().enumerate() {
         let mut inputs = std::mem::take(&mut direct_inputs[body_index]);
@@ -3009,6 +3038,7 @@ fn validate_control_flow(
             let subject_fact =
                 infer_expr(subject, &switch_entry, properties, profile, current_class);
             let flow = validate_switch_flow(
+                subject,
                 cases,
                 default.as_deref(),
                 &subject_fact,
@@ -3353,7 +3383,6 @@ fn collect_try_flow(
         profile,
         current_class,
     )?;
-    let has_untracked_throw = block_has_untracked_throw(try_body, properties, profile);
     let mut caught_entries = vec![Vec::new(); catches.len()];
     let mut escaping = Vec::new();
     for terminal in std::mem::take(&mut try_flow.terminals) {
@@ -3372,6 +3401,8 @@ fn collect_try_flow(
     for (catch_index, (catch, exact_entries)) in
         catches.iter().zip(caught_entries).enumerate()
     {
+        let has_untracked_throw =
+            block_has_untracked_throw(try_body, properties, profile, Some(catch));
         let mut catch_entry =
             catch_entry_facts(entry, try_body, properties, profile, current_class);
         if let Some(variable) = &catch.variable {
@@ -3387,7 +3418,7 @@ fn collect_try_flow(
             }
         }
         if has_untracked_throw
-            && untracked_throw_may_reach_catch(catches, catch_index)
+            && untracked_throw_may_reach_catch(catches, catch_index, properties)
             && !distinct_entries.contains(&catch_entry)
         {
             distinct_entries.push(catch_entry.clone());
@@ -4343,6 +4374,9 @@ fn static_receiver_name(
 }
 
 /// Merges two expression facts without inventing a union receiver proof.
+///
+/// An exact non-array alternative cannot participate in array-key validation, so an exact array
+/// shape remains authoritative for that audit. An unknown alternative still widens the result.
 fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     if left == right {
         left
@@ -4352,6 +4386,14 @@ fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
             .unwrap_or_else(|| ValueFact::Known(PhpType::php_array()))
     } else if left.is_write_array_parent() && right.is_write_array_parent() {
         merge_write_parent_facts(left, right)
+    } else if matches!(&left, ValueFact::Array(_))
+        && right.value_type().is_some_and(|ty| !ty.is_php_array())
+    {
+        left
+    } else if matches!(&right, ValueFact::Array(_))
+        && left.value_type().is_some_and(|ty| !ty.is_php_array())
+    {
+        right
     } else if let (Some(left), Some(right)) = (left.value_type(), right.value_type()) {
         if left == right {
             ValueFact::Known(left)
