@@ -913,16 +913,10 @@ fn validate_lazy_expression_writes(
                 profile,
                 current_class,
             )?;
-            Ok(match &value.kind {
-                ExprKind::Null => default_exit,
-                ExprKind::BoolLiteral(_)
-                | ExprKind::IntLiteral(_)
-                | ExprKind::FloatLiteral(_)
-                | ExprKind::StringLiteral(_)
-                | ExprKind::ArrayLiteral(_)
-                | ExprKind::ArrayLiteralAssoc(_)
-                | ExprKind::ArrayLiteralMixed(_) => value_exit,
-                _ => merge_exits(&[value_exit, default_exit]),
+            Ok(match source_literal_nullness(value) {
+                Some(true) => default_exit,
+                Some(false) => value_exit,
+                None => merge_exits(&[value_exit, default_exit]),
             })
         }
         ExprKind::Match {
@@ -1770,7 +1764,7 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            if condition_flow.true_reachable {
+            if condition_flow.true_reachable && branch_falls_through(then_body) {
                 exits.push(then_exit);
             }
             for (condition, body) in elseif_clauses {
@@ -1789,7 +1783,10 @@ fn validate_stmt(
                     profile,
                     current_class,
                 )?;
-                if fallthrough_reachable && condition_flow.true_reachable {
+                if fallthrough_reachable
+                    && condition_flow.true_reachable
+                    && branch_falls_through(body)
+                {
                     exits.push(body_exit);
                 }
                 fallthrough = condition_flow.when_false;
@@ -1803,7 +1800,7 @@ fn validate_stmt(
                     profile,
                     current_class,
                 )?;
-                if fallthrough_reachable {
+                if fallthrough_reachable && branch_falls_through(body) {
                     exits.push(else_exit);
                 }
             } else if fallthrough_reachable {
@@ -1895,6 +1892,7 @@ fn validate_stmt(
         } => {
             apply_expression_facts(array, locals, properties, profile, current_class);
             let entry = locals.clone();
+            let body_reachable = source_array_literal_nonempty(array) != Some(false);
             let mut iteration = entry.clone();
             if let Some(key) = key_var {
                 iteration.set(key, ValueFact::Unknown);
@@ -1911,15 +1909,18 @@ fn validate_stmt(
             if source_array_literal_nonempty(array) != Some(true) {
                 normal_exits.push(entry.clone());
             }
-            if let Some(iteration) = break_flow.back_edge() {
-                normal_exits.push(iteration);
+            if body_reachable {
+                if let Some(iteration) = break_flow.back_edge() {
+                    normal_exits.push(iteration);
+                }
             }
+            let break_flows: Vec<_> = body_reachable.then_some(&break_flow).into_iter().collect();
             *locals = merge_loop_exits(
                 body,
                 None,
                 None,
                 &normal_exits,
-                &[&break_flow],
+                &break_flows,
                 &entry,
                 properties,
                 profile,
@@ -2125,13 +2126,17 @@ fn validate_stmt(
             finally_body,
         } => {
             let entry = locals.clone();
-            let mut exits = vec![validate_branch(
+            let mut exits = Vec::new();
+            let try_exit = validate_branch(
                 try_body,
                 &entry,
                 properties,
                 profile,
                 current_class,
-            )?];
+            )?;
+            if branch_falls_through(try_body) {
+                exits.push(try_exit);
+            }
             for catch in catches {
                 let mut catch_facts = catch_entry_facts(
                     &entry,
@@ -2150,9 +2155,15 @@ fn validate_stmt(
                     profile,
                     current_class,
                 )?;
-                exits.push(catch_facts);
+                if branch_falls_through(&catch.body) {
+                    exits.push(catch_facts);
+                }
             }
-            *locals = merge_exits(&exits);
+            *locals = if exits.is_empty() {
+                entry
+            } else {
+                merge_exits(&exits)
+            };
             if let Some(body) = finally_body {
                 validate_block(body, locals, properties, profile, current_class)?;
             }
@@ -2192,6 +2203,14 @@ fn validate_branch(
     Ok(exit)
 }
 
+/// Reports whether at least one path through a validated branch reaches its continuation.
+fn branch_falls_through(body: &[Stmt]) -> bool {
+    matches!(
+        crate::termination::block_terminal_effect(body),
+        crate::termination::TerminalEffect::FallsThrough
+    )
+}
+
 /// Starts a catch with unknown facts for locals the try body may have changed before throwing.
 fn catch_entry_facts(
     entry: &LocalFacts,
@@ -2200,14 +2219,20 @@ fn catch_entry_facts(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> LocalFacts {
+    let reachable_body = reachable_statement_prefix(try_body);
     let mut catch_entry = entry.clone();
-    let changed: Vec<_> = catch_entry
-        .values
-        .keys()
+    let mut candidates: BTreeSet<_> = catch_entry.values.keys().cloned().collect();
+    candidates.extend(crate::types::checker::loop_assigned_local_names(
+        None,
+        reachable_body,
+        None,
+    ));
+    let changed: Vec<_> = candidates
+        .into_iter()
         .filter(|name| {
-            crate::ir_lower::body_writes_local(try_body, name)
+            crate::ir_lower::body_writes_local(reachable_body, name)
                 && !body_writes_only_static_fact(
-                    try_body,
+                    reachable_body,
                     name,
                     &entry.get(name),
                     properties,
@@ -2215,12 +2240,25 @@ fn catch_entry_facts(
                     current_class,
                 )
         })
-        .cloned()
         .collect();
     for name in changed {
         catch_entry.set(&name, ValueFact::Unknown);
     }
     catch_entry
+}
+
+/// Excludes statements after the first unconditional control transfer from reachable facts.
+fn reachable_statement_prefix(body: &[Stmt]) -> &[Stmt] {
+    let length = body
+        .iter()
+        .position(|stmt| {
+            !matches!(
+                crate::termination::stmt_terminal_effect(stmt),
+                crate::termination::TerminalEffect::FallsThrough
+            )
+        })
+        .map_or(body.len(), |index| index + 1);
+    &body[..length]
 }
 
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
@@ -2622,9 +2660,19 @@ fn apply_loop_finally(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<LoopBreakFlow, CompileError> {
+    let mut audit_inputs = Vec::new();
+    audit_inputs.extend(flow.fallthrough.iter().cloned());
+    audit_inputs.extend(flow.exits.iter().cloned());
+    audit_inputs.extend(flow.continues.iter().cloned());
+    audit_inputs.extend(flow.terminals.iter().cloned());
+    let audit_entry = if audit_inputs.is_empty() {
+        flow.audit_exit.clone()
+    } else {
+        merge_exits(&audit_inputs)
+    };
     let audit_exit = validate_branch(
         finally_body,
-        &flow.audit_exit,
+        &audit_entry,
         properties,
         profile,
         current_class,

@@ -185,6 +185,12 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function ordered_write(): int { $values = [1]; if (PHP_OS_FAMILY === 'Windows') { return ($values = [[1]]) ? ($values[0][false] = 2) : 0; } return 0; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $writer = ($values = [[1]]) ? function () use ($values): void { $values[0][false] = 2; } : null; }",
         "<?php count($values = [[]]); if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; foreach ([] as $item) { $values = [1]; } $values[0][false] = 2;",
+        "<?php function return_branch_keeps_fallthrough_shape(int $argc): void { $values = [[1]]; if ($argc > 1) { $values = [1]; return; } $values[0][false] = 2; }",
+        "<?php function return_try_keeps_fallthrough_shape(int $argc): void { $values = [[1]]; try { if ($argc > 1) { $values = [1]; return; } } finally {} $values[0][false] = 2; }",
+        "<?php $values = [[1]]; if (($flag = 1) ?? ($values = [1])) { $values[0][false] = 2; }",
+        "<?php $values = [1]; if (($flag = null) ?? ($values = [[1]])) { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; try { throw new Exception(); $values = [1]; } catch (Exception $error) { $values[0][false] = 2; }",
     ] {
         let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -256,6 +262,9 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = [[]]; try { $values = ['ab']; throw new Exception(); } catch (Exception $error) { $values[0][false] = 'x'; }",
         "<?php $values = [[]]; foreach (($values = ['ab']) as $item) {} $values[0][false] = 'x';",
         "<?php count($values = ['ab']); $values[0][false] = 'x';",
+        "<?php $values = [1]; foreach ([] as $item) { $values = [[1]]; } $values[0][false] = 2;",
+        "<?php try { $values = [1]; throw new Exception(); } catch (Exception $error) { $values[0][false] = 2; }",
+        "<?php $values = [1]; while (true) { try { break; $values = [[1]]; } finally { $values[0][false] = 2; } }",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
