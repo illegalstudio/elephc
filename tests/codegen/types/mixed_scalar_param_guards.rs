@@ -1738,3 +1738,28 @@ echo "next\n";
     assert_eq!(output.stdout, "DivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nTypeError: g(): Argument #1 ($s) must be of type string, null given\nTypeError: h(): Argument #1 ($s) must be of type string, null given\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A call through a callable alias (`$f = 'take'`) has no checker record for the positional
+/// prefix before a spread, so the prefix is checked from its values: `$f(box(null), ...$rows[$i])`
+/// and `$f(box(null), ...$list)` threw nothing and bound `null` as `""`.
+#[test]
+fn test_callable_alias_spread_prefix_is_checked() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function take(string $s, int $n) { echo "take [", $s, "] ", $n, "\n"; }
+$rows = [[5], [6]];
+$i = 0;
+$list = [7];
+$f = 'take';
+try { $f(box(null), ...$rows[$i]); } catch (Throwable $e) { show($e); }
+try { $f(box(null), ...$list); } catch (Throwable $e) { show($e); }
+$f(box("ok"), ...$rows[1]);
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "TypeError: take(): Argument #1 ($s) must be of type string, null given\nTypeError: take(): Argument #1 ($s) must be of type string, null given\ntake [ok] 6\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

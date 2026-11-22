@@ -18,6 +18,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     builtin_name: Option<&str>,
     capture_values: bool,
     capture_output: Option<&(usize, PhpType)>,
+    unrecorded_sources: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
     // Keep generic source planning intact. Only by-value indexed tails can be
     // materialized into one array without losing references or named keys.
@@ -46,9 +47,11 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     // PHP checks parameter types at the callee, after every argument (the spread source
     // included) was evaluated: the prefix stays boxed and is checked once the spread is read.
+    // A call through a callable alias (`$f = 'take'; $f($v, ...$rows)`) has no checker record
+    // for its prefix, so the prefix is then checked from its values.
     let previous_deferral = ctx.scalar_guard_deferral;
     if !capture_values {
-        ctx.scalar_guard_deferral = Some((ctx.expression_depth, false));
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, unrecorded_sources));
     }
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
@@ -77,7 +80,11 @@ pub(super) fn lower_positional_spread_args_with_signature(
     if !capture_values && spread_idx > 0 {
         let sources = args[..spread_idx]
             .iter()
-            .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))
+            .map(|arg| if unrecorded_sources {
+                super::scalar_param_guards::GuardSource::Unrecorded
+            } else {
+                super::scalar_param_guards::GuardSource::Recorded(arg.span)
+            })
             .collect::<Vec<_>>();
         operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true);
         // A deferred check converts without rooting its result (a `Stringable`'s string), but

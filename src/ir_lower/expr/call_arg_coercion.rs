@@ -2227,7 +2227,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         return coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(
-        ctx, sig, args, None, capture_values, capture_output_index.as_ref(),
+        ctx, sig, args, None, capture_values, capture_output_index.as_ref(), unrecorded_sources,
     ) {
         return operands;
     }
@@ -2252,7 +2252,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 }
             }).collect();
         }
-        return lower_runtime_spread_args(ctx, sig, args);
+        return lower_runtime_spread_args(ctx, sig, args, unrecorded_sources);
     }
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let fixed_arg_count = if sig.variadic.is_some() {
@@ -2676,6 +2676,7 @@ fn lower_runtime_spread_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    unrecorded_sources: bool,
 ) -> Vec<crate::ir::ValueId> {
     let mut operands = lower_args(ctx, args);
     let prefix_len = args
@@ -2697,9 +2698,14 @@ fn lower_runtime_spread_args(
             root_evaluated_call_argument(ctx, lowered, Span::dummy()).value
         })
         .collect::<Vec<_>>();
+    // A call through a callable alias has no checker record: check the prefix from its values.
     let sources = args[..prefix_len]
         .iter()
-        .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))
+        .map(|arg| if unrecorded_sources {
+            super::scalar_param_guards::GuardSource::Unrecorded
+        } else {
+            super::scalar_param_guards::GuardSource::Recorded(arg.span)
+        })
         .collect::<Vec<_>>();
     let mut operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false);
     operands.extend(rest);
