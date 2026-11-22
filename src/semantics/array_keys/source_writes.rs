@@ -1049,6 +1049,7 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
         if self.expression_values.contains_key(&expression_id(expr)) {
             return;
         }
+        forget_call_mutated_facts(expr, self.locals);
         let value = match &expr.kind {
             ExprKind::Assignment {
                 target,
@@ -1087,6 +1088,36 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
             ),
         };
         self.expression_values.insert(expression_id(expr), value);
+    }
+}
+
+/// Forgets tracked local shapes that one completed call may replace through an argument.
+fn forget_call_mutated_facts(expr: &Expr, locals: &mut LocalFacts) {
+    if !matches!(
+        &expr.kind,
+        ExprKind::FunctionCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::NullsafeMethodCall { .. }
+            | ExprKind::NullsafeDynamicMethodCall { .. }
+            | ExprKind::NewObject { .. }
+            | ExprKind::NewGeneric { .. }
+            | ExprKind::NewScopedObject { .. }
+            | ExprKind::NewDynamic { .. }
+            | ExprKind::NewDynamicObject { .. }
+    ) {
+        return;
+    }
+    let mutated: Vec<_> = locals
+        .values
+        .keys()
+        .filter(|name| crate::ir_lower::expr_writes_local(expr, name))
+        .cloned()
+        .collect();
+    for name in mutated {
+        locals.set(&name, ValueFact::Unknown);
     }
 }
 
@@ -1582,6 +1613,12 @@ fn validate_stmt(
         validate_expression_writes(stmt, locals, properties, profile, current_class)?;
     }
     match &stmt.kind {
+        StmtKind::Echo(expr) | StmtKind::ExprStmt(expr) | StmtKind::Throw(expr) => {
+            apply_expression_facts(expr, locals, properties, profile, current_class);
+        }
+        StmtKind::Return(Some(expr)) => {
+            apply_expression_facts(expr, locals, properties, profile, current_class);
+        }
         StmtKind::Assign { name, value } => {
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
@@ -2095,7 +2132,13 @@ fn validate_stmt(
                 current_class,
             )?];
             for catch in catches {
-                let mut catch_facts = entry.clone();
+                let mut catch_facts = catch_entry_facts(
+                    &entry,
+                    try_body,
+                    properties,
+                    profile,
+                    current_class,
+                );
                 if let Some(variable) = &catch.variable {
                     catch_facts.set(variable, ValueFact::Unknown);
                 }
@@ -2146,6 +2189,37 @@ fn validate_branch(
     let mut exit = entry.clone();
     validate_block(body, &mut exit, properties, profile, current_class)?;
     Ok(exit)
+}
+
+/// Starts a catch with unknown facts for locals the try body may have changed before throwing.
+fn catch_entry_facts(
+    entry: &LocalFacts,
+    try_body: &[Stmt],
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> LocalFacts {
+    let mut catch_entry = entry.clone();
+    let changed: Vec<_> = catch_entry
+        .values
+        .keys()
+        .filter(|name| {
+            crate::ir_lower::body_writes_local(try_body, name)
+                && !body_writes_only_static_fact(
+                    try_body,
+                    name,
+                    &entry.get(name),
+                    properties,
+                    profile,
+                    current_class,
+                )
+        })
+        .cloned()
+        .collect();
+    for name in changed {
+        catch_entry.set(&name, ValueFact::Unknown);
+    }
+    catch_entry
 }
 
 /// Validates switch direct entries and fallthrough paths without merging them before each body.
@@ -2385,7 +2459,13 @@ fn collect_loop_break_flow(
                     current_class,
                 )?];
                 for catch in catches {
-                    let mut catch_entry = locals.clone();
+                    let mut catch_entry = catch_entry_facts(
+                        &locals,
+                        try_body,
+                        properties,
+                        profile,
+                        current_class,
+                    );
                     if let Some(variable) = &catch.variable {
                         catch_entry.set(variable, ValueFact::Unknown);
                     }
