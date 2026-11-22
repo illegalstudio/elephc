@@ -1054,11 +1054,15 @@ enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
 }
 
 /// A literal array decides a condition only when building it is clean: an array key is PHP's
-/// fatal "Illegal offset type", and a fractional float or `null` key raises a deprecation, so
-/// such an array is not dropped as a known-true condition and the case value does not fold.
+/// fatal "Illegal offset type", a fractional float or `null` key raises a deprecation and a float
+/// outside the `i64` range a warning, so such an array is not dropped as a known-true condition
+/// and the case value does not fold.
 #[test]
 fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
-    for key in ["[]", "[1]", "1.5", "null"] {
+    for key in [
+        "[]", "[1]", "1.5", "null", "9223372036854775808.0", "-9223372036854777856.0", "1e300",
+        "INF",
+    ] {
         expect_error(
             &format!("<?php\nenum E: int {{ case A = [{key} => 1] ? 7 : 8; }}\n"),
             "Enum int backing values must be integer literals",
