@@ -24,14 +24,14 @@ fn source(exact: bool) -> (String, String) {
                 source.push_str(&format!("placeWrite({static_parent}, {false_parent}, {key}, 0);\n"));
                 expected.push_str("K|R|");
                 let strict_rejected = exact && invalid;
-                if false_parent && !strict_rejected {
+                if false_parent {
                     expected.push_str("F|array:0|");
                 }
                 if legacy_invalid || strict_rejected {
                     expected.push_str("T|");
                     if strict_rejected {
                         expected.push_str(if false_parent {
-                            "boolean:-1|"
+                            "array:0|"
                         } else if static_parent {
                             "NULL:-1|"
                         } else {
@@ -60,9 +60,9 @@ fn source(exact: bool) -> (String, String) {
             let rejected = exact && key == "true";
             expected.push_str("K|R|");
             if rejected {
-                expected.push_str("T|boolean:-1|");
+                expected.push_str("F|array:0|T|absent|");
                 if mutation == 6 {
-                    expected.push_str("boolean:-1|");
+                    expected.push_str("array:0|");
                 }
             } else {
                 expected.push_str("F|array:0|ok|absent|");

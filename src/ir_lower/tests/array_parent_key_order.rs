@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Key and RHS effects run once before the selected parent's materialization.
-//! - Exact-key rejection leaves null and false parents unchanged.
+//! - Exact-key rejection leaves null unchanged after converting false with PHP warning priority.
 //! - Callback writes remain visible when an in-flight receiver becomes detached.
 
 use crate::{codegen_support::platform::Target, source::SourceMode};
@@ -27,7 +27,7 @@ fn source(exact: bool) -> (String, String) {
             source.push_str(&format!("parentKeyWrite({key}, {false_parent}, 0);\n"));
             expected.push_str("K|R|");
             if exact && invalid {
-                expected.push_str(if false_parent { "T|boolean:-1|" } else { "T|NULL:-1|" });
+                expected.push_str(if false_parent { "F:array:0|T|array:0|" } else { "T|NULL:-1|" });
             } else {
                 if false_parent { expected.push_str("F:array:0|"); }
                 if legacy_invalid { expected.push_str("T|array:0|"); }
@@ -40,7 +40,7 @@ fn source(exact: bool) -> (String, String) {
             source.push_str(&format!("parentKeyWrite({key}, {false_parent}, 3);\n"));
             expected.push_str("K|R|");
             if exact && invalid {
-                expected.push_str(if false_parent { "T|boolean:-1|" } else { "T|NULL:-1|" });
+                expected.push_str(if false_parent { "F:array:0|T|array:0|" } else { "T|NULL:-1|" });
             } else {
                 if false_parent { expected.push_str("F:array:0|"); }
                 expected.push_str(&format!("ok|array:1|integer:{}:9|", if invalid { 1 } else { 0 }));
@@ -51,7 +51,7 @@ fn source(exact: bool) -> (String, String) {
         for (key, invalid) in [("0", false), ("true", true)] {
             source.push_str(&format!("parentKeyWrite({key}, true, {mutation});\n"));
             expected.push_str("K|R|");
-            if exact && invalid { expected.push_str("T|boolean:-1|"); }
+            if exact && invalid { expected.push_str("F:array:0|T|array:1|string:h:7|"); }
             else { expected.push_str("F:array:0|ok|array:1|string:h:7|"); }
         }
     }

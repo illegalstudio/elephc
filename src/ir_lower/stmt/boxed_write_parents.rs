@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Existing false-parent helpers preserve warning order and chained callback exceptions.
-//! - Strict key-kind guards run after false conversion so callback exceptions keep PHP priority.
+//! - Strict key-kind guards run after false conversion but before null materialization, so callback
+//!   exceptions keep PHP priority without changing a rejected null parent.
 //! - Non-boolean parents keep the normal string, ArrayAccess and array dispatch.
 
 use super::*;
@@ -62,8 +63,8 @@ fn store(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    super::static_false_parent::normalize_null_for_write(ctx, parent, span);
     crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
+    super::static_false_parent::normalize_null_for_write(ctx, parent, span);
     crate::ir_lower::array_key_guards::reject_invalid_kind(ctx, parent, key, span);
     super::string_offset_writes::lower_boxed_set(ctx, parent, key, value, span, key_already_diagnosed);
 }
