@@ -737,6 +737,8 @@ pub(super) fn lower_planned_guarded_static_new(
     let candidates = dynamic_new_planned_candidate_classes(ctx, args, false)
         .into_iter()
         .filter(|candidate| class_extends_class(ctx, candidate, fallback))
+        // An inaccessible constructor keeps the generic dispatch, which refuses the call.
+        .filter(|candidate| super::dynamic_constructors::dynamic_new_constructor_is_accessible(ctx, candidate))
         .collect::<Vec<_>>();
     let constructor_key = php_symbol_key("__construct");
     let guarded = candidates.iter().any(|candidate| {

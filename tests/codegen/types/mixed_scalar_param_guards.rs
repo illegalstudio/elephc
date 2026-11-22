@@ -2246,3 +2246,33 @@ echo $n, "\n";
     assert_eq!(output.stdout, "96363\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A constructor the calling scope cannot reach keeps the dynamic-new refusal, which PHP
+/// raises before checking any argument (review of the per-class branch): `new $class($v)` from
+/// global scope on a private or protected constructor throws `Error`, while the declaring
+/// class, a subclass calling a protected one and `new static()` still check the argument.
+#[test]
+fn test_dynamic_construction_keeps_the_constructor_visibility_refusal() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class P { private function __construct(string $s) { echo "P($s)\n"; } static function inside(mixed $v) { $c = "P"; return new $c($v); } }
+class Q { protected function __construct(string $s) { echo static::class, " Q($s)\n"; } static function make(mixed $v) { return new static($v); } }
+class R extends Q { static function viaParent(mixed $v) { $c = "Q"; return new $c($v); } }
+function make(string $c, mixed $v) { return new $c($v); }
+function t(callable $f) { try { $f(); } catch (Throwable $e) { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+t(fn() => make("P", box("a")));
+t(fn() => make("P", box(null)));
+t(fn() => make("Q", box("b")));
+t(fn() => P::inside(box("c")));
+t(fn() => P::inside(box(null)));
+t(fn() => Q::make(box("d")));
+t(fn() => R::make(box(null)));
+t(fn() => R::viaParent(box("e")));
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Call to private P::__construct() from global scope\nError: Call to private P::__construct() from global scope\nError: Call to protected Q::__construct() from global scope\nP(c)\nTypeError: P::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 3\nQ Q(d)\nTypeError: Q::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nQ Q(e)\n"
+    );
+}
