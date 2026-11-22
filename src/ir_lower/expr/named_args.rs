@@ -117,19 +117,27 @@ pub(super) fn lower_named_args_with_signature_options(
     {
         return lower_args(ctx, args);
     }
-    // PHP binds the supplied parameters before it evaluates an omitted default, so a refused
-    // argument throws its `TypeError` before a throwing default (`int $n = 1 % 0`) runs.
+    // PHP fills an omitted parameter that precedes a supplied one before the callee checks any
+    // parameter, and evaluates the trailing omitted ones after the checks. A refused argument
+    // therefore throws its `TypeError` before a throwing trailing default (`int $n = 1 % 0`)
+    // runs, but after a throwing default declared before the last supplied parameter.
     let throwing_default = !capture_values && plan.regular_args.iter().any(|arg| matches!(arg,
         crate::types::call_args::PlannedRegularArg::Default(default)
             if !super::call_arg_coercion::default_is_inert(default)));
+    let mut leading_defaults = vec![None; plan.regular_args.len()];
     if throwing_default {
-        check_supplied_scalar_params_before_defaults(ctx, sig, &plan, &mut source_values);
+        check_supplied_scalar_params_before_defaults(
+            ctx, sig, &plan, &mut source_values, &mut leading_defaults,
+        );
     }
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
     for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values[*source_index]);
+            }
+            crate::types::call_args::PlannedRegularArg::Default(_) if leading_defaults[param_index].is_some() => {
+                operands.push(leading_defaults[param_index].expect("leading default lowered"));
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
                 operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
@@ -163,17 +171,22 @@ pub(super) fn lower_named_args_with_signature_options(
 }
 
 /// Runs the runtime scalar-parameter checks of the supplied named arguments before an omitted
-/// default that can throw is evaluated.
+/// trailing default that can throw is evaluated.
 ///
 /// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
-/// releases them through the unwind chain. An `int`/`float` check leaves the converted scalar
-/// in place and a `string` is converted right after its check, in parameter order as PHP binds
-/// them; a `bool` operand stays boxed and the call's ordinary coercion converts it.
+/// releases them through the unwind chain. PHP fills the omitted parameters declared before the
+/// last supplied one before it checks any parameter (`f(b: $null)` for
+/// `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`), so those defaults are lowered
+/// (and rooted) into `leading_defaults` ahead of the checks. An `int`/`float` check leaves the
+/// converted scalar in place and a `string` is converted right after its check, in parameter
+/// order as PHP binds them; a `bool` operand stays boxed and the call's ordinary coercion
+/// converts it.
 fn check_supplied_scalar_params_before_defaults(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
     source_values: &mut [crate::ir::ValueId],
+    leading_defaults: &mut [Option<crate::ir::ValueId>],
 ) {
     use super::scalar_param_guards::GuardSource;
     let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
@@ -198,6 +211,17 @@ fn check_supplied_scalar_params_before_defaults(
         let lowered = lowered_value_from_id(ctx, source_values[source_index]);
         source_values[source_index] =
             super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+    }
+    let last_supplied = supplied.last().map_or(0, |(param_index, _)| *param_index);
+    for (param_index, arg) in plan.regular_args.iter().enumerate().take(last_supplied) {
+        let crate::types::call_args::PlannedRegularArg::Default(default) = arg else { continue };
+        let value = lower_arg_with_signature(ctx, sig, param_index, default);
+        leading_defaults[param_index] = Some(if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+            value
+        } else {
+            let lowered = lowered_value_from_id(ctx, value);
+            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value
+        });
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     for (param_index, source_index) in supplied {

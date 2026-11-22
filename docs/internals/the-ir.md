@@ -1289,7 +1289,10 @@ pieces must stay in agreement:
    `call_arg_coercion::coerce_operands_to_params_guarded` runs the checks during
    operand normalization, after the last argument. When an omitted default can
    throw, `named_args::check_supplied_scalar_params_before_defaults` runs the
-   checks of the supplied named arguments before the defaults. Both raise the
+   checks of the supplied named arguments before the trailing defaults; an
+   omitted parameter declared before the last supplied one is filled first, as
+   PHP fills it before the callee checks anything (`f(b: $null)` for
+   `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`). Both raise the
    pending by-reference property checks of earlier parameters first
    (`emit_property_type_guards_before`), and an accepted `Stringable` is
    converted before the next parameter is checked. The call's owned operands

@@ -1707,3 +1707,34 @@ echo run(json_decode('["alpha", "be"]', true)), "\n";
     assert_eq!(guarded_allocs - guarded_frees, cast_allocs - cast_frees, "{}", guarded.stderr);
     assert_eq!(guarded_allocs, cast_allocs, "guarded: {}\ncast: {}", guarded.stderr, cast.stderr);
 }
+
+/// PHP fills an omitted parameter declared before the last supplied named argument before it
+/// checks any parameter, and the trailing omitted ones after the checks: `f(b: box(null))` for
+/// `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`, as does `g(s: box(null), b: 'y')`
+/// with the throwing default between them, while `h(s: box(null))` with only a trailing one
+/// throws the `TypeError`; a positional prefix and a literal string-keyed spread bind the same
+/// way. The supplied values stay released when the leading default throws.
+#[test]
+fn test_named_leading_throwing_default_runs_before_the_supplied_checks() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function f(int $a = 1 % 0, string $b = 'x') { echo "f body\n"; }
+function g(string $s, int $a = 1 % 0, string $b = 'x', int $c = 2 % 0) { echo "g body\n"; }
+function h(string $s, int $a = 1 % 0) { echo "h body\n"; }
+try { f(b: box(null)); } catch (Throwable $e) { show($e); }
+try { g(s: box(null), b: 'y'); } catch (Throwable $e) { show($e); }
+try { g(s: str_repeat('o', 3), b: box(null)); } catch (Throwable $e) { show($e); }
+try { g(s: box(null)); } catch (Throwable $e) { show($e); }
+try { h(s: box(null)); } catch (Throwable $e) { show($e); }
+try { g(box(null), b: 'y'); } catch (Throwable $e) { show($e); }
+try { f(...['b' => box(null)]); } catch (Throwable $e) { show($e); }
+try { g(box(null), ...['b' => 'y']); } catch (Throwable $e) { show($e); }
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "DivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nTypeError: g(): Argument #1 ($s) must be of type string, null given\nTypeError: h(): Argument #1 ($s) must be of type string, null given\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nDivisionByZeroError: Modulo by zero\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
