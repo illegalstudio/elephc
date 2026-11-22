@@ -1078,6 +1078,25 @@ fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
     );
 }
 
+/// After an int key of `PHP_INT_MAX` PHP has no next key, so an append throws "Cannot add
+/// element to the array as the next element is already occupied": such an array is not a
+/// known-true condition and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_overflowing_the_next_key_undecided() {
+    for array in [
+        "[PHP_INT_MAX => 1, 2]",
+        "[9223372036854775807 => 1, 2]",
+        "['9223372036854775807' => 1, 2]",
+        "[9223372036854775806 => 1, 2, 3]",
+        "[9223372036854775807 => 1, 1 => 'k', 2]",
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = {array} ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+}
+
 /// A backed-case value is checked for PHP's forbidden constant-expression forms before folding
 /// prunes a branch: a class or user constant does not decide a branch at compile time, so a
 /// variable or call in the branch it skips is still rejected, with PHP's messages.

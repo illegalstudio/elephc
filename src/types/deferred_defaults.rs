@@ -175,7 +175,41 @@ pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
             ArrayEntry::Keyed(key, value) =>
                 clean_literal_key(key) && literal_truthiness(value).is_some(),
             _ => false,
-        }) => Some(!items.is_empty()),
+        }) && appends_fit(items) => Some(!items.is_empty()),
+        _ => None,
+    }
+}
+
+/// Whether every unkeyed entry of a mixed literal gets a free next int key. After an int key of
+/// `PHP_INT_MAX` PHP has no next key, so a later append throws "Cannot add element to the array
+/// as the next element is already occupied" and the array stays undecided.
+fn appends_fit(items: &[ArrayEntry]) -> bool {
+    // PHP 8.3+ starts appending right after the largest int key, negative ones included.
+    let mut next: Option<i128> = None;
+    for item in items {
+        let slot = match item {
+            ArrayEntry::Value(_) => next.unwrap_or(0),
+            ArrayEntry::Keyed(key, _) => match literal_int_key(key) {
+                Some(key) => i128::from(key),
+                None => continue,
+            },
+            _ => return false,
+        };
+        if slot > i128::from(i64::MAX) { return false; }
+        next = Some(next.map_or(slot + 1, |next| next.max(slot + 1)));
+    }
+    true
+}
+
+/// The int key a clean literal key normalizes to, or `None` for a string key.
+fn literal_int_key(key: &Expr) -> Option<i64> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        // `clean_literal_key` already limited floats to integral in-range values.
+        ExprKind::FloatLiteral(value) => Some(*value as i64),
+        ExprKind::StringLiteral(value) if crate::types::is_php_integer_array_key(value) =>
+            value.parse().ok(),
         _ => None,
     }
 }
