@@ -215,13 +215,13 @@ fn check_supplied_scalar_params_before_defaults(
     let last_supplied = supplied.last().map_or(0, |(param_index, _)| *param_index);
     for (param_index, arg) in plan.regular_args.iter().enumerate().take(last_supplied) {
         let crate::types::call_args::PlannedRegularArg::Default(default) = arg else { continue };
+        // A default is a fresh value even for a by-reference parameter (no caller place to
+        // keep), so it is rooted like the supplied values: a refused check or a throwing
+        // trailing default would otherwise leak `array &$a = []`.
         let value = lower_arg_with_signature(ctx, sig, param_index, default);
-        leading_defaults[param_index] = Some(if sig.ref_params.get(param_index).copied().unwrap_or(false) {
-            value
-        } else {
-            let lowered = lowered_value_from_id(ctx, value);
-            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value
-        });
+        let lowered = lowered_value_from_id(ctx, value);
+        leading_defaults[param_index] =
+            Some(super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value);
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     for (param_index, source_index) in supplied {

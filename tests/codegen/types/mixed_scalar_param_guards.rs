@@ -1763,3 +1763,31 @@ echo "next\n";
     assert_eq!(output.stdout, "TypeError: take(): Argument #1 ($s) must be of type string, null given\nTypeError: take(): Argument #1 ($s) must be of type string, null given\ntake [ok] 6\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A leading omitted by-reference parameter's default (`array &$a = []`) is a fresh value the
+/// call owns: it stays rooted while the supplied named arguments are checked and a trailing
+/// default runs, so a refused check or the throwing default releases it, and an accepted call
+/// still binds it by reference (`--heap-debug` leak summary clean).
+#[test]
+fn test_named_leading_by_reference_default_is_released_on_refusal() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function f(array &$a = [], string $b = 'x', int $d = 1 % 0) { echo "f body\n"; }
+function g(array &$a = [1, 2], string $b = 'x', int $d = 1 % 0) { echo "g body\n"; }
+function k(array &$a = [3, 4], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; echo "k ", implode(",", $a), " ", $d, "\n"; }
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    try { f(b: box(null)); } catch (TypeError $e) { $n++; }
+    try { g(b: box(null)); } catch (TypeError $e) { $n++; }
+    try { g(b: box("s")); } catch (DivisionByZeroError $e) { $n += 10; }
+    try { k(b: box(null)); } catch (TypeError $e) { $n += 100; }
+    k(b: box(str_repeat("z", 3)));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "k 3,4,zzz 8\nk 3,4,zzz 8\nk 3,4,zzz 8\n336\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
