@@ -18,8 +18,8 @@ use crate::types::{InterfaceInfo, PhpType, PropertyHookContract};
 use super::super::Checker;
 use super::super::InterfaceDeclInfo;
 use super::validation::{
-    build_method_sig, declaration_is_source, late_static_return_compatible,
-    method_parameter_widening, validate_signature_compatibility, ParameterWidening,
+    appends_optional_parameters, build_method_sig, declaration_is_source,
+    late_static_return_compatible, method_parameter_widening, validate_signature_compatibility, ParameterWidening,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -139,8 +139,14 @@ pub(crate) fn build_interface_info_recursive(
                                 || declaration_is_source(checker, parent_name),
                                 |owner| declaration_is_source(checker, owner),
                             ),
-                    ParameterWidening::Exact,
+                    // Like PHP, an earlier parent's declaration may append optional parameters
+                    // to a later parent's (`K extends J, I` where `J` widens `I::f`); the wider
+                    // declaration is kept below. The reverse order stays rejected, as in PHP.
+                    method_parameter_widening(method_name, false),
                 )?;
+                if appends_optional_parameters(existing_sig, parent_sig) {
+                    continue;
+                }
                 if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
                     methods.insert(method_name.clone(), parent_sig.clone());
                     late_static_method_returns.insert(method_name.clone(), return_type.clone());

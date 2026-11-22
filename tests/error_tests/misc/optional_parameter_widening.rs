@@ -74,6 +74,20 @@ fn test_error_widening_interface_shapes_stay_strict() {
     );
 }
 
+/// PHP checks a later interface parent against the earlier one, so the narrower parent may not
+/// come first (`K extends I, J` where `J` widens `I::f`), nor may a parent drop a parameter.
+#[test]
+fn test_error_widening_combined_interface_parent_order() {
+    expect_error(
+        "<?php interface I { public function f(); } interface J extends I { public function f($x = 1); } interface K extends I, J {}",
+        "Cannot change parameter count when combining interface parent method: K::f",
+    );
+    expect_error(
+        "<?php interface I { public function f(); } interface J { public function f($x); } interface K extends J, I {}",
+        "Cannot change parameter count when combining interface parent method: K::f",
+    );
+}
+
 /// A narrow caller fills its own omitted defaults before the adapter forwards them, so a
 /// widened body using `func_num_args()` behind an optional inherited prefix would count those
 /// defaults as passed; it keeps the exact-shape `func_args` diagnostic instead.

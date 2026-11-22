@@ -238,3 +238,49 @@ echo viaA(new A()), " ", viaA(new B()), " ", viaI(new B()), "\n";
     );
     assert_eq!(out, "Ap1 Bdq15 Bd\n");
 }
+
+/// A child interface that widens an inherited method combines with the narrower ancestor
+/// again, directly and through a diamond (`K extends J, I`, `M extends J, L` with `L extends I`):
+/// the wider declaration wins and every interface in the family still dispatches.
+#[test]
+fn test_combined_interface_parents_keep_the_widened_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { public function f(); }
+interface J extends I { public function f($x = 1); }
+interface L extends I {}
+interface K extends J, I {}
+interface M extends J, L {}
+class C implements K { public function f($x = 1) { return "c$x"; } }
+class D implements M { public function f($x = 2) { return "d$x"; } }
+function viaI(I $i) { return $i->f(); }
+function viaJ(J $j) { return $j->f(3); }
+function viaK(K $k) { return $k->f() . $k->f(x: 4); }
+function viaL(L $l) { return $l->f(); }
+function viaM(M $m) { return $m->f(5); }
+echo viaI(new C()), viaJ(new C()), viaK(new C()), " ";
+echo viaI(new D()), viaJ(new D()), viaL(new D()), viaM(new D()), "\n";
+"#,
+    );
+    assert_eq!(out, "c1c3c1c4 d2d3d2d5\n");
+}
+
+/// The widened declaration also survives a later parent whose method returns `static`, so a
+/// call through the combined interface may still pass the appended argument.
+#[test]
+fn test_combined_interface_parents_keep_the_widened_late_static_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { public function f(): static; }
+interface J extends I { public function f($x = 1): static; }
+interface K extends J, I {}
+class C implements K { public int $v = 0; public function f($x = 1): static { $this->v += $x; return $this; } }
+function viaI(I $i): void { $i->f(); }
+function viaK(K $k): K { return $k->f(4); }
+$c = new C();
+viaI($c);
+echo viaK($c)->v, "\n";
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
