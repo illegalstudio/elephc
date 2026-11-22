@@ -2435,6 +2435,13 @@ fn validate_control_flow(
             }
             if *value_by_ref {
                 iteration.rebind(value_var, iteration_value);
+                if let ExprKind::Variable(source_name) = &array.kind {
+                    let exact_current = matches!(
+                        iteration.get(source_name),
+                        ValueFact::Array(ref source) if source.entries.len() == 1
+                    );
+                    iteration.bind_foreach_reference(value_var, source_name, exact_current);
+                }
             } else {
                 iteration.assign(value_var, iteration_value);
             }

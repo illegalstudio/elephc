@@ -305,6 +305,23 @@ fn strict_array_key_source_validation_tracks_lingering_foreach_reference_writes(
         .unwrap_or_else(|error| panic!("{source}: {error:?}"));
 }
 
+/// Active foreach references update the source before later body and terminal-path writes.
+#[test]
+fn strict_array_key_source_validation_tracks_active_foreach_reference_writes() {
+    let source = "<?php $values = [[1]]; foreach ($values as &$item) { $item = 1; $values[0][false] = 2; }";
+    crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+
+    for terminal in ["return;", "throw new Exception();"] {
+        let source = format!(
+            "<?php $values = [1]; try {{ foreach ($values as &$item) {{ $item = [[1]]; {terminal} }} }} finally {{ $values[0][false] = 2; }}"
+        );
+        let error = crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+            .expect_err("terminal foreach reference writes must reach finally");
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Long left-associated boolean chains keep source validation linear.
 #[test]
 fn strict_array_key_source_validation_handles_long_boolean_chains() {
