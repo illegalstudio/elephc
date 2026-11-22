@@ -2368,6 +2368,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
+            let terminals = coalesce_flow_facts(terminals);
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -2523,6 +2524,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
+            let terminals = coalesce_flow_facts(terminals);
             let repeated_back_edge = repeated_flow.back_edge();
             let repeated_reaches_condition = repeated_back_edge.is_some();
             let repeated_condition = validate_condition_flow(
@@ -2658,6 +2660,7 @@ fn validate_control_flow(
             if repeated_body_reachable {
                 terminals.extend(repeated_flow.terminals.clone());
             }
+            let terminals = coalesce_flow_facts(terminals);
             let mut normal_exits = Vec::new();
             if first_condition.false_reachable {
                 normal_exits.push(first_condition.when_false);
@@ -3259,6 +3262,15 @@ fn merge_optional_exits(
 ) -> Option<LocalFacts> {
     let exits: Vec<_> = exits.into_iter().flatten().collect();
     (!exits.is_empty()).then(|| merge_exits(&exits))
+}
+
+/// Collapses indistinguishable control-flow paths before an enclosing loop can clone them.
+fn coalesce_flow_facts(facts: Vec<LocalFacts>) -> Vec<LocalFacts> {
+    if facts.is_empty() {
+        Vec::new()
+    } else {
+        vec![merge_exits(&facts)]
+    }
 }
 
 /// Merges normal loop exits with exact break snapshots and degrades only unmodeled writes.

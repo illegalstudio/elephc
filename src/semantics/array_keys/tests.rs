@@ -345,6 +345,27 @@ fn strict_array_key_source_validation_handles_deep_loops() {
         .expect("fact-changing nested-loop validation remains bounded");
 }
 
+/// Nested loop refinement coalesces identical terminal snapshots at every depth.
+#[test]
+fn strict_array_key_source_validation_coalesces_nested_loop_terminals() {
+    for (open, close) in [
+        ("while ($argc > 1) { ", " }"),
+        ("do { ", " } while ($argc > 1);"),
+        ("for (; $argc > 1;) { ", " }"),
+    ] {
+        let mut source = String::from("<?php ");
+        for _ in 0..24 {
+            source.push_str(open);
+        }
+        source.push_str("if ($argc > 2) { return; }");
+        for _ in 0..24 {
+            source.push_str(close);
+        }
+        crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+            .expect("nested terminal snapshots remain bounded");
+    }
+}
+
 /// Deeply nested finally blocks reuse each control-flow traversal instead of replaying the AST.
 #[test]
 fn strict_array_key_source_validation_handles_deeply_nested_finally() {
