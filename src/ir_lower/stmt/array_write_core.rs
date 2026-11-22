@@ -590,7 +590,7 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index, true);
         (index, lower_operand(ctx, value, false))
     };
-    let index = prepare_boxed_write_key(ctx, array, index, span, &mut roots);
+    let index = prepare_boxed_write_key(ctx, index, span, &mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
@@ -622,7 +622,7 @@ pub(super) fn lower_boxed_array_set_values(
     };
     let index = ctx.with_independent_write_receiver(|ctx| root(ctx, index));
     let value = root(ctx, value);
-    let index = prepare_boxed_write_key(ctx, array, index, span, &mut roots);
+    let index = prepare_boxed_write_key(ctx, index, span, &mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
@@ -632,19 +632,19 @@ pub(super) fn lower_boxed_array_set_values(
     }
 }
 
-/// Preserves unsupported PHP key kinds only while the receiver can still select array storage.
+/// Preserves exact object keys until runtime receiver dispatch selects array or ArrayAccess.
 ///
-/// A known object dispatches to its `offsetSet` signature, whose ordinary call coercion boxes a
-/// mixed parameter. Pre-boxing an object key here would create a second owner outside that call's
-/// argument ledger, which can retire a WeakMap key before the compound update finishes.
+/// An ArrayAccess receiver dispatches to its `offsetSet` signature, whose ordinary call coercion
+/// boxes a mixed parameter. A runtime array receiver rejects the same raw object through the
+/// prepared key guard. Pre-boxing the key here would create a second owner outside the call
+/// ledger, which can retire a WeakMap key before the compound update finishes.
 fn prepare_boxed_write_key(
     ctx: &mut LoweringContext<'_, '_>,
-    receiver: LoweredValue,
     key: LoweredValue,
     span: Span,
     roots: &mut Vec<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
-    if matches!(ctx.builder.value_php_type(receiver.value).codegen_repr(), PhpType::Object(_)) {
+    if matches!(ctx.builder.value_php_type(key.value).codegen_repr(), PhpType::Object(_)) {
         return key;
     }
     crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, key, span)
