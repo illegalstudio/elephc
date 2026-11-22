@@ -45,6 +45,9 @@ mod application;
 /// which keeps the stack 16-byte aligned across the runtime helper calls.
 const RESET_FRAME_SIZE: usize = 16;
 
+/// Releases detached eval output handlers at a web request boundary.
+const DISCARD_EVAL_OUTPUT: &str = "__rt_web_discard_eval_output";
+
 /// Monotonic per-routine label counter so the reset's internal skip labels never
 /// collide with each other across the many static slots it touches.
 struct LabelGen {
@@ -94,6 +97,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // The remaining transient owners point into the request heap. Clear them before the static
     // and global cleanup below can run user destructors: a destructor that echoes, throws, or
     // performs an HTTP call must never observe a previous request's buffer or callback state.
+    if module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(emitter, DISCARD_EVAL_OUTPUT);
+    }
     emit_output_buffer_reset(emitter);
     emit_print_r_capture_reset(emitter);
     emit_transient_pointer_reset(emitter);
@@ -183,6 +189,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // clears keep the state they create from surviving into the arena reset. Ordering
     // matters: the fd-keyed tables are cleared only after `__rt_resource_inventory_reset`
     // and all later cleanup has finished consuming them.
+    if module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(emitter, DISCARD_EVAL_OUTPUT);
+    }
     emit_output_buffer_reset(emitter);
     emit_print_r_capture_reset(emitter);
     emit_transient_pointer_reset(emitter);
@@ -192,6 +201,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         let entry = emitter.target.extern_symbol("__elephc_reference_sources_reset_v1");
         abi::emit_call_label(emitter, &entry);
         abi::emit_branch_if_int_result_nonzero(emitter, "__rt_reference_sources_failure");
+    }
+    if module.required_runtime_features.phar_archive {
+        elephc_memoir::buffers::io_scratch::emit_clear_phar_url(emitter, false);
     }
     emit_heap_arena_reset(emitter);
     if module.web_application {
@@ -203,6 +215,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+    if module.required_runtime_features.eval_bridge {
+        elephc_memoir::buffers::output::emit_discard_eval_handlers(emitter, DISCARD_EVAL_OUTPUT);
+    }
     if module.web_application {
         application::emit(emitter, module, data);
     }

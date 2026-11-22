@@ -169,13 +169,13 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     io_scratch::PHAR_OUTPUT.emit_address(emitter, "x12");
     emitter.instruction("add x13, x12, x10");                                   // entry anchor = buffer base + template length
     // -- runtime-built fopen("phar://...","w") stores the full URL for the bridge --
-    abi::emit_symbol_address(emitter, "x14", "_phar_write_url_len");
+    abi::emit_symbol_address(emitter, "x14", io_scratch::PHAR_URL_LENGTH.symbol);
     emitter.instruction("ldr x15, [x14]");                                      // load full phar:// URL length for dynamic write streams
     emitter.instruction("cbz x15, __rt_phar_write_finalize_entry_bridge");      // zero URL length means literal archive/entry slots are active
     abi::emit_symbol_address(emitter, "x14", "_elephc_phar_put_url_fn");
     emitter.instruction("ldr x14, [x14]");                                      // load the optional native PHAR URL writer bridge pointer
     emitter.instruction("cbz x14, __rt_phar_write_finalize_url_fail");       // dynamic phar:// writes require the URL bridge
-    abi::emit_symbol_address(emitter, "x0", "_phar_write_url_ptr");
+    abi::emit_symbol_address(emitter, "x0", io_scratch::PHAR_URL_POINTER.symbol);
     emitter.instruction("ldr x0, [x0]");                                        // bridge arg 0 = full phar:// URL pointer
     emitter.instruction("mov x1, x15");                                         // bridge arg 1 = full phar:// URL length
     emitter.instruction("mov x2, x13");                                         // bridge arg 2 = buffered entry payload pointer
@@ -448,7 +448,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     io_scratch::PHAR_OUTPUT.emit_address(emitter, "rcx");                // buffer base
     emitter.instruction("add rcx, r10");                                        // entry anchor = base + template length
     // -- runtime-built fopen("phar://...","w") stores the full URL for the bridge --
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_phar_write_url_len", 0);     // load full phar:// URL length for dynamic write streams
+    abi::emit_load_symbol_to_reg(emitter, "rax", io_scratch::PHAR_URL_LENGTH.symbol, 0);     // load full phar:// URL length for dynamic write streams
     emitter.instruction("test rax, rax");                                       // is this a dynamic URL write stream?
     emitter.instruction("jz __rt_phar_write_finalize_entry_bridge_x86");        // zero URL length means literal archive/entry slots are active
     abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_put_url_fn", 0); // load the optional native PHAR URL writer bridge pointer
@@ -457,7 +457,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, rcx");                                         // bridge arg 2 = buffered entry payload pointer
     emitter.instruction("mov r9, r11");                                         // bridge arg 3 = buffered entry payload length
     emitter.instruction("mov rsi, rax");                                        // bridge arg 1 = full phar:// URL length
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_phar_write_url_ptr", 0);     // bridge arg 0 = full phar:// URL pointer
+    abi::emit_load_symbol_to_reg(emitter, "rdi", io_scratch::PHAR_URL_POINTER.symbol, 0);     // bridge arg 0 = full phar:// URL pointer
     emitter.instruction("mov rdx, r8");                                         // bridge arg 2 = buffered entry payload pointer
     emitter.instruction("mov rcx, r9");                                         // bridge arg 3 = buffered entry payload length
     emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR URL bridge

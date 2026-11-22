@@ -51,10 +51,10 @@ mod tests {
         let mut context = ElephcEvalContext::new();
         context.bind_local_reference_types(cell, &[EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)]);
         assert_eq!(context.local_reference_types(cell), vec![EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)]);
-        crate::ffi::array_references::retire_array_reference_cell(address);
+        elephc_memoir::cell_retirement::retire(address);
         assert!(context.local_reference_types(cell).is_empty());
         context.bind_local_reference_types(cell, &[EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)]);
         assert_eq!(context.local_reference_types(cell), vec![EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)]);
-        crate::ffi::array_references::retire_array_reference_cell(address);
+        elephc_memoir::cell_retirement::retire(address);
     }
 }

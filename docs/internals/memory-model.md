@@ -25,12 +25,12 @@ external record publication, contained foreign-owner release and conditional
 helper-owner retirement.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. The compiler enables Memoir's `codegen` feature to emit the
-assembly `__rt_*` helpers. Magician enables `runtime` for its generation-checked
-eval buffer registry. The registry's Rust code is linked through the existing
-Magician archive when the program needs the bridge. Its thread-local slots and
-libc allocations are independent of the emitted buffer table and heap. EIR
-ownership analysis and optimization remain in the compiler, together with PHP
-type/reference validation, resource identity policy,
+assembly `__rt_*` helpers. Magician enables `runtime` for the eval buffer registry,
+cell retirement observers, owned object edges and output handlers. The Rust code
+is linked through the Magician archive when a program needs the bridge. Eval
+buffer slots and their libc allocations are independent of the emitted buffer
+table and heap. EIR ownership analysis and optimization remain in the compiler,
+together with PHP type/reference validation, resource identity policy,
 class-specific layout inputs, PHP formatting and output routing, zval pack/unpack,
 platform mapping flags, semantic runtime data, helper ordering and linking. The
 compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval
@@ -68,12 +68,18 @@ It follows an existing persistent wrapper before replacing its child owner.
 Transferred temporary ownership and initialization metadata are cleared before
 the displaced value can run a destructor. The compiler retains static-property
 type validation, layout selection and EIR ownership decisions.
-External records receive caller-owned record, visitor and borrowed data registers;
-Memoir initializes every field before linking the record into the supplied chain.
-The compiler retains versioned C ABI wrappers, visitor adaptation and external
-cleanup ownership. Foreign release receives optional staging-owner transfer and
-exception boxing/unboxing hooks. It contains destructor throws below Rust, updates
-the caller's owned nullable exception accumulator and returns the new-throw status.
+Extended activations, validation pins and pending argument pins use three
+distinct layouts shared by the Rust storage and Memoir's emitted instructions.
+Memoir initializes an external activation before linking it to the supplied
+chain, and visits its actual pointer fields while the owning frame is stable.
+The compiler retains versioned C ABI wrappers and selects which slots to visit.
+Foreign release receives optional staging-owner transfer and exception
+boxing/unboxing hooks. It contains destructor throws below Rust, updates the
+caller's owned nullable exception accumulator and returns the new-throw status.
+An eval output buffer retains both its callable and the context needed to run
+it after the opening frame returns. Buffer close detaches both leases before
+cleanup. Web request discard snapshots and retires remaining eval registrations
+before reusing request storage.
 Conditional helper-owner retirement receives typed mode/payload offsets and an
 ownership flag bit, preserving the pending exception. The compiler still creates
 and propagates PHP assignment-refusal errors.
@@ -475,7 +481,7 @@ reference counting: nested records and padding are bytes, while pointer fields r
 addresses. Typed pointer sources use the null guard and require caller-managed liveness.
 Resolved packed stores remain call-clobbering for register allocation, unlike scalar stores.
 
-Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
+Buffers created inside `eval()` do not use `_buffer_registry`. Magician uses Memoir's thread-local registry (`crates/elephc-memoir/src/eval_buffers.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
 
 ### Fiber stacks and scheduler state
 

@@ -1546,8 +1546,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_phar_write_path_len", 8, target));
     out.push_str(&comm_directive("_phar_write_entry_ptr", 8, target));
     out.push_str(&comm_directive("_phar_write_entry_len", 8, target));
-    out.push_str(&comm_directive("_phar_write_url_ptr", 8, target));
-    out.push_str(&comm_directive("_phar_write_url_len", 8, target));
+    io_scratch::PHAR_URL_POINTER.append(&mut out, &target);
+    io_scratch::PHAR_URL_LENGTH.append(&mut out, &target);
     // _stream_open_opened_path_scratch: 16-byte scratch backing the 5th
     // `?string &$opened_path` parameter of stream_open. The runtime passes
     // its address so wrappers that follow the PHP-faithful signature can

@@ -575,3 +575,92 @@ pub fn emit_persist_result_and_release_cell(emitter: &mut impl Emitter) {
         emitter.emit_call_label("__rt_decref_any");
     });
 }
+
+/// Emits a request-boundary discard that releases every detached eval handler.
+///
+/// A private snapshot of the active IDs allows their destructors to reenter output handling.
+/// The request owns native byte storage independently, so this only retires Rust-backed owners.
+pub fn emit_discard_eval_handlers(emitter: &mut impl Emitter, entry: &str) {
+    const FRAME: usize = 560;
+    const COUNT: usize = 24;
+    const IDS: usize = COUNT + MAX_LEVELS as usize * 8;
+    let batch = format!("{entry}_batch");
+    let scan = format!("{entry}_scan");
+    let next = format!("{entry}_next");
+    let release = format!("{entry}_release");
+    let finish = format!("{entry}_finish");
+    let done = format!("{entry}_done");
+    let arm = emitter.arch() == Arch::AArch64;
+    let result = emitter.int_result_reg();
+    let (stubs, envs, trampoline, ids, index, count, word) = if arm {
+        ("x11", "x12", "x13", "x14", "x9", "x15", "x16")
+    } else {
+        ("r9", "r10", "r11", "r8", "rsi", "rcx", "rdx")
+    };
+    let cleanup = crate::cleanup::Scope { arm: FRAME - 32, x86: 16 };
+    emitter.label_global(entry);
+    emitter.emit_frame_prologue(FRAME);
+    cleanup.begin(emitter);
+    emitter.label(&batch);
+    emitter.emit_load_symbol_to_reg(result, "_ob_level", 0);
+    emitter.emit_branch_if_int_result_zero(&finish);
+    emitter.emit_store_zero_to_symbol("_ob_level", 0);
+    emitter.emit_store_zero_to_symbol("_ob_in_handler", 0);
+    emitter.emit_store_zero_to_symbol("_ob_flushing", 0);
+    emitter.emit_symbol_address(stubs, "_ob_handler_stubs");
+    emitter.emit_symbol_address(envs, "_ob_handler_envs");
+    emitter.emit_symbol_address(trampoline, "__rt_ob_eval_trampoline");
+    emitter.emit_frame_slot_address(ids, IDS);
+    emitter.emit_load_int_immediate(index, 0);
+    emitter.emit_load_int_immediate(count, 0);
+    emitter.label(&scan);
+    if arm {
+        emitter.instruction(&format!("ldr {word}, [{stubs}, {index}, lsl #3]")); // inspect the detached slot's dispatch stub
+        emitter.instruction(&format!("cmp {word}, {trampoline}"));             // only eval stubs carry a Rust registry owner
+        emitter.instruction(&format!("b.ne {next}"));                          // skip non-eval storage
+        emitter.instruction(&format!("ldr {word}, [{envs}, {index}, lsl #3]"));  // copy its monotonic registry id
+        emitter.instruction(&format!("str {word}, [{ids}, {count}, lsl #3]"));  // snapshot the identity before any destructor runs
+        emitter.instruction(&format!("add {count}, {count}, #1"));              // append the handler owner
+    } else {
+        emitter.instruction(&format!("cmp QWORD PTR [{stubs} + {index} * 8], {trampoline}")); // recognize an eval registry owner
+        emitter.instruction(&format!("jne {next}"));                           // skip non-eval storage
+        emitter.instruction(&format!("mov {word}, QWORD PTR [{envs} + {index} * 8]")); // copy its monotonic registry id
+        emitter.instruction(&format!("mov QWORD PTR [{ids} + {count} * 8], {word}")); // snapshot the identity before any destructor runs
+        emitter.instruction(&format!("inc {count}"));                          // append the handler owner
+    }
+    emitter.label(&next);
+    if arm {
+        emitter.instruction(&format!("add {index}, {index}, #1"));              // scan the next abandoned buffer
+        emitter.instruction(&format!("cmp {index}, {result}"));                // compare against the detached depth
+        emitter.instruction(&format!("b.lo {scan}"));                          // snapshot the full abandoned stack
+    } else {
+        emitter.instruction(&format!("inc {index}"));                          // scan the next abandoned buffer
+        emitter.instruction(&format!("cmp {index}, {result}"));                // compare against the detached depth
+        emitter.instruction(&format!("jb {scan}"));                            // snapshot the full abandoned stack
+    }
+    emitter.store_at_offset(count, COUNT);
+    emitter.label(&release);
+    emitter.load_at_offset(result, COUNT);
+    emitter.emit_branch_if_int_result_zero(&batch);
+    emitter.emit_frame_slot_address(ids, IDS);
+    if arm {
+        emitter.instruction("sub x0, x0, #1");                                // release from the top of the detached stack
+    } else {
+        emitter.instruction("dec rax");                                       // release from the top of the detached stack
+    }
+    emitter.store_at_offset(result, COUNT);
+    if arm {
+        emitter.instruction(&format!("ldr x0, [{ids}, x0, lsl #3]"));            // retrieve the exact Rust handler id
+    } else {
+        emitter.instruction(&format!("mov rax, QWORD PTR [{ids} + rax * 8]"));   // retrieve the exact Rust handler id
+    }
+    cleanup.call(emitter, "__rt_ob_release_eval_handler", false);
+    emitter.emit_jump(&release);
+    emitter.label(&finish);
+    cleanup.finish(emitter);
+    emitter.emit_frame_restore(FRAME);
+    emitter.emit_branch_if_int_result_zero(&done);
+    emitter.emit_jump("__rt_throw_current");
+    emitter.label(&done);
+    emitter.emit_return();
+}

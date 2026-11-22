@@ -16,6 +16,10 @@ pub const HTTP_REDIRECT: StaticStorage = StaticStorage { symbol: "_http_redirect
 pub const FTP_RESPONSE: StaticStorage = StaticStorage { symbol: "_ftp_resp_buf", bytes: 4_096 };
 pub const FTP_COMMAND: StaticStorage = StaticStorage { symbol: "_ftp_cmd_scratch", bytes: 64 };
 pub const PHAR_OUTPUT: StaticStorage = StaticStorage { symbol: "_phar_write_out", bytes: 1_048_576 };
+/// Owned runtime-built URL for the legacy single-stream fallback.
+pub const PHAR_URL_POINTER: StaticStorage = StaticStorage { symbol: "_phar_write_url_ptr", bytes: 8 };
+/// The fallback's URL length doubles as the dynamic-stream marker.
+pub const PHAR_URL_LENGTH: StaticStorage = StaticStorage { symbol: "_phar_write_url_len", bytes: 8 };
 pub const OPENED_PATH: StaticStorage = StaticStorage { symbol: "_stream_open_opened_path_scratch", bytes: 16 };
 pub const WRAPPER_DRAIN: StaticStorage = StaticStorage { symbol: "_user_wrapper_drain_buf", bytes: 1_048_576 };
 pub const PROTOCOLS: StaticStorage = StaticStorage { symbol: "_protoent_buf", bytes: 32_768 };
@@ -36,9 +40,9 @@ pub fn emit_replace_phar_url(emitter: &mut impl crate::Emitter) {
         crate::Arch::AArch64 => ("x1", "x2", "x0"),
         crate::Arch::X86_64 => ("rax", "rdx", "r10"),
     };
-    emitter.emit_load_symbol_to_reg(previous, "_phar_write_url_ptr", 0);
-    emitter.emit_store_reg_to_symbol(pointer, "_phar_write_url_ptr", 0);
-    emitter.emit_store_reg_to_symbol(length, "_phar_write_url_len", 0);
+    emitter.emit_load_symbol_to_reg(previous, PHAR_URL_POINTER.symbol, 0);
+    emitter.emit_store_reg_to_symbol(pointer, PHAR_URL_POINTER.symbol, 0);
+    emitter.emit_store_reg_to_symbol(length, PHAR_URL_LENGTH.symbol, 0);
     emitter.emit_reg_move(emitter.int_result_reg(), previous);
     emitter.emit_call_label("__rt_heap_free_safe");
 }
@@ -56,9 +60,9 @@ pub fn emit_clear_phar_url(emitter: &mut impl crate::Emitter, leaf: bool) {
         }
     }
     let result = emitter.int_result_reg();
-    emitter.emit_load_symbol_to_reg(result, "_phar_write_url_ptr", 0);
+    emitter.emit_load_symbol_to_reg(result, PHAR_URL_POINTER.symbol, 0);
     let scratch = emitter.secondary_scratch_reg();
-    for symbol in ["_phar_write_url_ptr", "_phar_write_url_len"] {
+    for symbol in [PHAR_URL_POINTER.symbol, PHAR_URL_LENGTH.symbol] {
         emitter.emit_symbol_address(scratch, symbol);
         emitter.emit_store_zero_to_address(scratch, 0);
     }

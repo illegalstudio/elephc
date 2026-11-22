@@ -101,12 +101,18 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     cleanup.call(emitter, "__rt_heap_free_safe", false);
     emit_cstr_buffer_reset(emitter);
     emit_print_r_capture_reset(emitter);
+    if module.required_runtime_features.eval_bridge {
+        cleanup.call(emitter, super::DISCARD_EVAL_OUTPUT, false);
+    }
     emit_output_buffer_reset(emitter);
     // Collector callbacks need the real owner graph after every request root is detached.
     cleanup.finish(emitter);
     cleanup.call(emitter, "__rt_gc_collect_cycles_explicit", false);
     cleanup.call(emitter, "__rt_gc_proofs_refresh_pending", false);
     cleanup.call(emitter, "__rt_web_inventory_prune", false);
+    if module.required_runtime_features.eval_bridge {
+        cleanup.call(emitter, super::DISCARD_EVAL_OUTPUT, false);
+    }
     cleanup.finish(emitter);
     let done = "__rt_web_application_request_clean";
     abi::emit_branch_if_int_result_zero(emitter, done);

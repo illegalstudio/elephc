@@ -11,6 +11,7 @@
 use super::super::*;
 use super::support::*;
 use crate::runtime_hooks::owner_frames::RuntimeOwners;
+use elephc_memoir::owner_layout::ValidationPin;
 
 /// Native entry replaces exact source leases once and retires every root despite cleanup throws.
 #[test]
@@ -32,7 +33,7 @@ fn native_argument_evaluation_owners_transfer_and_cleanup_exact_leases() {
                 values: Vec::new(), named_keys: Vec::new(),
                 ref_slots: vec![BoundNativeFunctionRefSlot::ManagedMixed {
                     original: reference, cell: 0,
-                    pin: Box::new(std::cell::UnsafeCell::new([0; 4])),
+                    pin: Box::new(std::cell::UnsafeCell::new(ValidationPin::default())),
                 }],
             };
             bound.evaluation_owners.push(bound.evaluation_owners[0].clone());
@@ -552,7 +553,7 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
                 },
                 BoundNativeFunctionRefSlot::ManagedMixed {
                     original: caller, cell: managed.as_ptr() as u64,
-                    pin: Box::new(std::cell::UnsafeCell::new([0; 4])),
+                    pin: Box::new(std::cell::UnsafeCell::new(ValidationPin::default())),
                 },
             ],
         };
