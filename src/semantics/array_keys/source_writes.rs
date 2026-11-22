@@ -372,6 +372,27 @@ fn source_literal_truthiness(expr: &Expr) -> Option<bool> {
         ExprKind::ArrayLiteralAssoc(entries) => Some(!entries.is_empty()),
         ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
         ExprKind::Assignment { value, .. } => source_literal_truthiness(value),
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::And) =>
+        {
+            match source_literal_truthiness(left) {
+                Some(false) => Some(false),
+                Some(true) => source_literal_truthiness(right),
+                None if source_literal_truthiness(right) == Some(false) => Some(false),
+                None => None,
+            }
+        }
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::Or) =>
+        {
+            match source_literal_truthiness(left) {
+                Some(true) => Some(true),
+                Some(false) => source_literal_truthiness(right),
+                None if source_literal_truthiness(right) == Some(true) => Some(true),
+                None => None,
+            }
+        }
+        ExprKind::Not(inner) => source_literal_truthiness(inner).map(|truthy| !truthy),
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -406,6 +427,15 @@ fn source_literal_nullness(expr: &Expr) -> Option<bool> {
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::ArrayLiteralMixed(_) => Some(false),
         ExprKind::Assignment { value, .. } => source_literal_nullness(value),
+        ExprKind::BinaryOp { op, .. }
+            if matches!(
+                op,
+                crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or
+            ) =>
+        {
+            Some(false)
+        }
+        ExprKind::Not(_) => Some(false),
         ExprKind::Ternary {
             condition,
             then_expr,
