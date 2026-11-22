@@ -156,8 +156,9 @@ var_dump(setlocale(LC_CTYPE, "0"));
 }
 
 /// Verifies `declare(strict_types=1)` rejects scalar locale arguments, including the extra
-/// variadic candidates, calls through a captured `setlocale(...)` and `call_user_func()` /
-/// `call_user_func_array()` callbacks, against the `array|string|null` contract (issue #2404).
+/// variadic candidates, literal argument unpacks, calls through a captured `setlocale(...)`
+/// and `call_user_func()` / `call_user_func_array()` callbacks, against the
+/// `array|string|null` contract (issue #2404).
 #[test]
 fn test_setlocale_strict_rejects_scalar_locale_arguments() {
     for source in [
@@ -173,6 +174,10 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); call_user_func_array('setlocale', [LC_ALL, 0]);",
         "<?php declare(strict_types=1); call_user_func_array(setlocale(...), [LC_ALL, 0]);",
         "<?php declare(strict_types=1); $f = setlocale(...); call_user_func_array($f, [LC_ALL, 0]);",
+        "<?php declare(strict_types=1); setlocale(LC_ALL, ...[0]);",
+        "<?php declare(strict_types=1); setlocale(...[LC_ALL, 0]);",
+        "<?php declare(strict_types=1); $f = setlocale(...); $f(LC_ALL, ...[0]);",
+        "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, ...[0]);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$locales"), "{source}: {error}");
@@ -182,6 +187,8 @@ fn test_setlocale_strict_rejects_scalar_locale_arguments() {
         "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", \"C\", false);",
         "<?php declare(strict_types=1); $f = setlocale(...); $f(LC_ALL, \"C\", 0);",
         "<?php declare(strict_types=1); call_user_func('setlocale', LC_ALL, \"C\", 0);",
+        "<?php declare(strict_types=1); setlocale(LC_ALL, \"C\", ...[0]);",
+        "<?php declare(strict_types=1); $f = setlocale(...); ($f)(LC_ALL, \"C\", ...[0]);",
     ] {
         let error = compile_expect_type_error(source);
         assert!(error.contains("$rest"), "{source}: {error}");
@@ -201,8 +208,9 @@ var_dump(setlocale(LC_ALL, "xx_XX", null));
 var_dump(setlocale(LC_ALL, "0"));
 $f = setlocale(...);
 var_dump($f(LC_ALL, "xx_XX", ["C"]));
+var_dump(setlocale(LC_ALL, ...["xx_XX", ["C"]]));
 "#, &[("LC_ALL", OsStr::new("C"))]);
-    assert_eq!(out, "string(1) \"C\"\n".repeat(5));
+    assert_eq!(out, "string(1) \"C\"\n".repeat(6));
 }
 
 /// Verifies compiled PCRE character classes follow `setlocale(LC_CTYPE)` (issue #2380).

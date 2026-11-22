@@ -22,7 +22,7 @@
 
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{CallableTarget, Expr, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, TypeExpr};
 use crate::span::Span;
 use crate::types::param_binding::{
     classify_param_binding, strict_param_binding_rejection, ParamBinding,
@@ -285,6 +285,69 @@ impl Checker {
                 expected, actual, span, context, &detail,
             )),
             None => Ok(()),
+        }
+    }
+
+    /// Applies `declare(strict_types=1)` to the elements of fully static positional unpacks.
+    ///
+    /// The planned-argument loops keep `...[0]` as one spread node and skip it, so without this
+    /// pass a literal unpack bypassed the strict check that the same value passed directly gets.
+    /// Only literal indexed arrays are flattened (`expand_planned_positional_spreads`); dynamic
+    /// unpacks keep their runtime binding. Each element is checked against the parameter it
+    /// binds, or against the declared variadic element type past the regular parameters.
+    ///
+    /// # Errors
+    /// Returns the strict binding mismatch for the first rejected element.
+    pub(crate) fn require_strict_types_static_spread_bindings(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        if !self.strict_types || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            return Ok(());
+        }
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(args) else {
+            return Ok(());
+        };
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let variadic_index = crate::types::signatures::variadic_param_index(sig);
+        let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
+        for (position, arg) in expanded.iter().enumerate() {
+            let (index, expected, context) = if position < regular_param_count {
+                let (name, ty) = &sig.params[position];
+                (position, ty.clone(), format!("{} parameter ${}", callee_desc, name))
+            } else if let (Some(index), Some(elem_ty)) = (variadic_index, variadic_elem_ty.as_ref()) {
+                let name = &sig.params[index].0;
+                (index, elem_ty.clone(), format!("{} variadic parameter ${}", callee_desc, name))
+            } else {
+                break;
+            };
+            if !sig.declared_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let actual = self.infer_type(arg, caller_env)?;
+            self.require_strict_types_param_binding(&expected, &actual, arg.span, &context)?;
+            // The scalar rule above only judges scalar-to-scalar pairs. A scalar element
+            // unpacked into a declared type with no compatible member (`int` into
+            // `array|string|null`) is a TypeError too. Callable slots keep their own string
+            // binding rules and are left to the planned binding.
+            let scalar_actual =
+                matches!(actual, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+            if scalar_actual && !Self::type_has_callable_member(&expected) {
+                self.require_compatible_arg_type(&expected, &actual, arg.span, &context)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether `ty` is `callable` or a union with a `callable` member.
+    fn type_has_callable_member(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Union(members) => members.iter().any(Self::type_has_callable_member),
+            other => other.codegen_repr() == PhpType::Callable,
         }
     }
 

@@ -1062,6 +1062,9 @@ impl Checker {
         descriptor_invocation: bool,
         allow_property_ref_places: bool,
     ) -> Result<PhpType, CompileError> {
+        // Before planning: the plan rewrites a literal unpack into spread-element projections
+        // that the binding loop below leaves to runtime.
+        self.require_strict_types_static_spread_bindings(sig, args, span, caller_env, callee_desc)?;
         let plan = if descriptor_invocation {
             self.plan_descriptor_call_args(sig, args, span, callee_desc)?
         } else {
