@@ -20,6 +20,7 @@ use super::classes::{
     collect_attribute_args, collect_attribute_names, resolve_lexical_class_value,
     validate_method_shape,
 };
+use super::const_expr_forms::validate_constant_expression;
 use super::enum_backing::{fold_backing_value, FoldedBacking};
 use super::validation::build_method_sig;
 
@@ -216,6 +217,9 @@ pub(crate) fn build_enum_info(
         }
 
         let mut deprecated_mt_rand_php = false;
+        if let (Some(_), Some(expr)) = (&resolved_backing, &case.value) {
+            validate_constant_expression(expr)?;
+        }
         let value = match (&resolved_backing, &case.value) {
             (None, None) => None,
             (None, Some(_)) => {

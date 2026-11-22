@@ -157,7 +157,7 @@ pub(crate) fn right_side_evaluates(op: &BinOp, left: &Expr) -> bool {
 }
 
 /// Resolves PHP truthiness only for side-effect-free literal branch selectors.
-fn literal_truthiness(value: &Expr) -> Option<bool> {
+pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
     match &value.kind {
         ExprKind::BoolLiteral(value) => Some(*value),
         ExprKind::Null => Some(false),
