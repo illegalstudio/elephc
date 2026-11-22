@@ -1726,7 +1726,7 @@ fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
 /// failure mode named. PHP throws `TypeError` when the call runs.
 #[test]
 fn test_error_int_parameter_rejects_non_numeric_string_constant() {
-    expect_error(
+    expect_error_strict(
         "<?php function ti(int $i) { return $i; } echo ti(\"abc\");",
         "PHP throws `TypeError` for the non-numeric string \"abc\" at an `int` parameter",
     );
@@ -1736,7 +1736,7 @@ fn test_error_int_parameter_rejects_non_numeric_string_constant() {
 /// `42`, but parameter binding throws `TypeError` because the string is not fully numeric.
 #[test]
 fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
-    expect_error(
+    expect_error_strict(
         "<?php function ti(int $i) { return $i; } echo ti(\"42abc\");",
         "PHP throws `TypeError` for the non-numeric string \"42abc\" at an `int` parameter",
     );
@@ -1745,7 +1745,7 @@ fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
 /// Verifies a non-numeric string constant at a `float` parameter is rejected the same way.
 #[test]
 fn test_error_float_parameter_rejects_non_numeric_string_constant() {
-    expect_error(
+    expect_error_strict(
         "<?php function tf(float $f) { return $f; } echo tf(\"abc\");",
         "PHP throws `TypeError` for the non-numeric string \"abc\" at a `float` parameter",
     );
