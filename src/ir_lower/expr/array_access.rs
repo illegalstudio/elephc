@@ -743,7 +743,21 @@ fn lower_array_access_from_values_with_receiver_pins(
             // here: string keys would become integer zero, while checked integer loop counters
             // use I64 and therefore still take the ordinary coercion path below.
             let index_is_mixed = matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed));
-            if index_is_mixed {
+            // A boxed key born of checked integer arithmetic (`$j - 1`, `$i + $k`) holds only an
+            // int or a float, never a string or null, so the typed read keeps the element inline:
+            // the generic mixed-key read boxes every element it returns. The typed read
+            // materializes the boxed key itself (float conversion included).
+            let key_is_checked_numeric = index_is_mixed
+                && ctx.builder.value_defining_instruction(index_value.value).is_some_and(|producer| {
+                    matches!(producer.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+                });
+            if key_is_checked_numeric {
+                if warn_on_missing {
+                    Op::ArrayGet
+                } else {
+                    Op::ArrayGetSilent
+                }
+            } else if index_is_mixed {
                 if warn_on_missing {
                     Op::ArrayGetMixedKey
                 } else {

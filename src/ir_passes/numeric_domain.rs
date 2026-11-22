@@ -22,6 +22,15 @@ pub(crate) fn mixed(inst: &crate::ir::Instruction) -> bool {
         Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)))
 }
 
+/// Recognizes php `/` over boxed operands: the helper only reads both tags and payloads and
+/// answers a fresh cell (or a zero-divisor throw), so it observes a numeric cell without
+/// retaining it. Unlike [`mixed`], its result is not an `int|float` producer the proof may
+/// follow (a zero divisor never yields a value), so it is an observation only.
+pub(crate) fn division(inst: &crate::ir::Instruction) -> bool {
+    inst.op == Op::MixedNumericBinop
+        && matches!(inst.immediate, Some(Immediate::MixedNumericOp(MixedNumericOp::Div)))
+}
+
 /// Recognizes a `min()`/`max()` selection, which copies one operand's tag and payload.
 ///
 /// With only numeric operands the winner is an integer or a float, so the result stays inside

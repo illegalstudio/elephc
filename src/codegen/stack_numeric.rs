@@ -595,11 +595,14 @@ impl Proof<'_> {
                 }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
+                // `/` reads both tags and payloads and answers a fresh cell, like `+`.
+                let division = domain::division(inst) && self.numeric_inputs(&inst.operands);
                 if !scalar_observation(inst)
                     && !output_observation(inst)
                     && !tag_or_payload_copy(inst)
                     && !arithmetic
                     && !comparison
+                    && !division
                     && !key_observation(inst, value)
                 {
                     return false;
