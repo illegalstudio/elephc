@@ -123,6 +123,14 @@ fn conditionally_require_key(ctx: &mut LoweringContext<'_, '_>, condition: Lower
 pub(super) fn reject_invalid_kind(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, key: LoweredValue, span: Span,
 ) {
+    reject_invalid_kind_for_operation(ctx, parent, key, span, false);
+}
+
+/// Rejects array/object keys with the operation-specific PHP diagnostic.
+fn reject_invalid_kind_for_operation(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, key: LoweredValue, span: Span,
+    removal: bool,
+) {
     if !matches!(ctx.builder.value_php_type(key.value).codegen_repr(),
         PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
         | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
@@ -141,7 +149,11 @@ pub(super) fn reject_invalid_kind(
         else_target: accepted, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(error);
-    super::stmt::raise_invalid_array_key_type_error(ctx, key, span);
+    if removal {
+        super::stmt::raise_invalid_array_unset_key_type_error(ctx, key, span);
+    } else {
+        super::stmt::raise_invalid_array_key_type_error(ctx, key, span);
+    }
     ctx.builder.position_at_end(accepted);
     ctx.restore_initialized_slots(initialized);
 }
@@ -155,7 +167,7 @@ pub(super) fn for_removal(
     let borrowed = super::ownership::borrow_value(ctx, receiver, Some(span));
     let mut pending = [receiver];
     let (_, pins) = super::expr::lower_with_pending_owners(ctx, &mut pending, span, |ctx| {
-        reject_invalid_kind(ctx, borrowed, key, span);
+        reject_invalid_kind_for_operation(ctx, borrowed, key, span, true);
         for_receiver(ctx, borrowed, key, span);
     });
     super::expr::unpin_in_flight_owners(ctx, pins, span);

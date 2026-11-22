@@ -135,6 +135,20 @@ fn complete_and_rethrow(
 pub(in crate::ir_lower) fn raise_invalid_key_type_error(
     ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
 ) {
+    raise_invalid_key_type_error_for_operation(ctx, key, span, "access");
+}
+
+/// Builds PHP's unset-specific array/object key TypeError.
+pub(in crate::ir_lower) fn raise_invalid_unset_key_type_error(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) {
+    raise_invalid_key_type_error_for_operation(ctx, key, span, "unset");
+}
+
+/// Builds one invalid-key diagnostic while preserving its owned key through message creation.
+fn raise_invalid_key_type_error_for_operation(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span, operation: &str,
+) {
     let ty = ctx.builder.value_php_type(key.value);
     let name = ctx.declare_synthetic_php_local(ty.clone());
     let held = crate::ir_lower::ownership::acquire_if_refcounted(ctx, key, Some(span));
@@ -154,7 +168,9 @@ pub(in crate::ir_lower) fn raise_invalid_key_type_error(
     }, span);
     let message = Expr::new(ExprKind::BinaryOp {
         left: Box::new(Expr::new(ExprKind::BinaryOp {
-            left: Box::new(Expr::new(ExprKind::StringLiteral("Cannot access offset of type ".into()), span)),
+            left: Box::new(Expr::new(ExprKind::StringLiteral(
+                format!("Cannot {operation} offset of type "),
+            ), span)),
             op: crate::parser::ast::BinOp::Concat, right: Box::new(kind),
         }, span)),
         op: crate::parser::ast::BinOp::Concat,
