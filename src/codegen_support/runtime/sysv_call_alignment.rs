@@ -43,9 +43,9 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The two entries that DO reach code outside
-/// the hand-written runtime (`__rt_usort`, `__rt_fiber_entry`)
-/// are called out individually below and are the ones worth fixing first.
+/// `__rt_mixed_free_deep`'s resource ladder. The one entry that DOES reach code outside
+/// the hand-written runtime (`__rt_usort`) is called out individually below and is the one
+/// worth fixing first.
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
@@ -104,21 +104,26 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    // -- The two that reach code this runtime did not write. FIX THESE FIRST.
+    // -- The one that reaches code this runtime did not write. FIX THIS FIRST.
     (
         "__rt_usort",
         "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
          It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
          tolerant) rather than `movaps`, which is luck, not design",
     ),
-    (
-        "__rt_fiber_entry",
-        "REACHES LIBC: `call setjmp` on a misaligned stack, plus `call r13` into the fiber's \
-         PHP body. glibc's x86_64 setjmp is integer-only so it survives. Deliberately NOT \
-         fixed here: this is coroutine entry, the frame is load-bearing for \
-         __rt_fiber_switch's stack hand-off, and it needs fiber-focused tests in hand first",
-    ),
 ];
+
+/// Helpers that are never `call`ed: they are entered by a `ret` that pops a synthetic resume
+/// address, so their entry `rsp` is 16-byte ALIGNED instead of the usual `8 mod 16`. The
+/// walk starts these at residue 0. Each entry names the hand-off that establishes it, and
+/// [`synthetic_ret_entries_land_on_an_aligned_stack`] re-derives the residue from the
+/// emitted assembly so the claim cannot drift from the code.
+const ENTERED_ON_ALIGNED_STACK: &[(&str, &str)] = &[(
+    "__rt_fiber_entry",
+    "__rt_fiber_construct saves `stack_top - 56` as the fresh fiber's saved_sp with the \
+     trampoline address in its top qword; __rt_fiber_switch pops six registers and `ret`s \
+     into it, leaving rsp == stack_top, which __rt_fiber_alloc_stack aligned down to 16",
+)];
 
 /// Helpers this audit cannot model, each with the construct that defeats it. These are NOT
 /// assertions of correctness — they are honest holes, and naming them is what keeps the
@@ -242,8 +247,9 @@ fn resolve_local(body: &[(usize, String)], from: usize, target: &str) -> Option<
 /// Walks ONE control-flow path set, starting at `start`, tracking `rsp`'s offset from that
 /// entry point. Returns the construct that defeated it, if any.
 ///
-/// At entry `rsp % 16 == 8` (the caller's `call` pushed a return address onto an aligned
-/// stack), so a `call` is correct exactly when the offset is `8 mod 16`. A path ends at
+/// `entry_residue` is `rsp % 16` at `start`: 8 for an ordinary helper (the caller's `call`
+/// pushed a return address onto an aligned stack), 0 for one in [`ENTERED_ON_ALIGNED_STACK`].
+/// A `call` is correct exactly when `entry_residue + offset` is `0 mod 16`. A path ends at
 /// `ret`, at a branch that leaves the helper (a tail call), or at an unmodellable construct.
 /// Reaching one instruction with two different offsets means the walk lost track, and the
 /// helper is reported as unanalyzable rather than silently half-checked.
@@ -253,6 +259,7 @@ fn walk(
     body: &[(usize, String)],
     labels: &HashMap<&str, usize>,
     start: usize,
+    entry_residue: i64,
     seen: &mut HashMap<usize, i64>,
     misaligned: &mut Vec<(usize, String, i64)>,
 ) -> Option<String> {
@@ -289,7 +296,7 @@ fn walk(
             "leave" => work.push((index + 1, 0)),
             "ret" | "hlt" | "ud2" | "iret" => {}
             "call" => {
-                if offset.rem_euclid(16) != 8 {
+                if (entry_residue + offset).rem_euclid(16) != 0 {
                     misaligned.push((*line, operands.to_string(), offset));
                 }
                 work.push((index + 1, offset));
@@ -308,8 +315,8 @@ fn walk(
                         work.push((index + 1, offset));
                     }
                     ("and", Some(-16)) => {
-                        // Entry rsp is 8 modulo 16, so alignment has an exact relative delta.
-                        work.push((index + 1, offset - (8 + offset).rem_euclid(16)));
+                        // Entry rsp has a known residue, so alignment has an exact relative delta.
+                        work.push((index + 1, offset - (entry_residue + offset).rem_euclid(16)));
                     }
                     ("mov", _) if rest == "rbp" => work.push((index + 1, -8)),
                     ("lea", _)
@@ -429,14 +436,26 @@ fn analyze(function: &Function) -> Analysis {
     let mut visited: HashMap<usize, i64> = HashMap::new();
     let mut misaligned: Vec<(usize, String, i64)> = Vec::new();
     let mut entry = labels.get(function.name.as_str()).copied();
+    // Only the exported entry can be a synthetic `ret` target; secondary entries are `call`ed.
+    let mut entry_residue = if ENTERED_ON_ALIGNED_STACK
+        .iter()
+        .any(|(name, _)| *name == function.name)
+    {
+        0
+    } else {
+        8
+    };
 
     loop {
         let Some(start) = entry else { break };
         let mut seen: HashMap<usize, i64> = HashMap::new();
-        if let Some(reason) = walk(&function.body, &labels, start, &mut seen, &mut misaligned) {
+        if let Some(reason) =
+            walk(&function.body, &labels, start, entry_residue, &mut seen, &mut misaligned)
+        {
             return Analysis { unanalyzable: Some(reason), misaligned: Vec::new() };
         }
         visited.extend(seen);
+        entry_residue = 8;
         entry = function
             .body
             .iter()
@@ -539,6 +558,101 @@ fn unproven_dynamic_stack_adjustments_remain_unanalyzable() {
     }
 }
 
+/// The entry residue decides which frames are correct: the same prologue is aligned when
+/// entered by a synthetic `ret` and misaligned when entered by `call`, and vice versa.
+#[test]
+fn entry_residue_selects_the_correct_call_boundary() {
+    for (prologue, aligned_residue) in [
+        (&["push rbp", "mov rbp, rsp", "sub rsp, 8"][..], 0),
+        (&["push rbp", "mov rbp, rsp"][..], 8),
+    ] {
+        let mut body = vec!["fixture:"];
+        body.extend(prologue);
+        body.extend(["call callee", "ud2"]);
+        let body: Vec<(usize, String)> =
+            body.into_iter().map(str::to_string).enumerate().collect();
+        let labels: HashMap<&str, usize> = HashMap::from([("fixture", 0)]);
+        for residue in [0, 8] {
+            let mut misaligned = Vec::new();
+            let reason = walk(&body, &labels, 0, residue, &mut HashMap::new(), &mut misaligned);
+            assert!(reason.is_none(), "{prologue:?}/{residue}: {reason:?}");
+            assert_eq!(misaligned.is_empty(), residue == aligned_residue, "{prologue:?}/{residue}");
+        }
+    }
+}
+
+/// ENTERED_ON_ALIGNED_STACK IS DERIVED, NOT ASSUMED. Re-reads the emitted fiber hand-off and
+/// checks that the first `ret` into `__rt_fiber_entry` leaves rsp exactly at the 16-aligned
+/// stack top, and that nothing in the runtime `call`s the trampoline instead.
+#[test]
+fn synthetic_ret_entries_land_on_an_aligned_stack() {
+    let asm = runtime_asm(RuntimeFeatures::all());
+    let functions = functions_of(&asm);
+    let body_of = |name: &str| -> Vec<String> {
+        functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("the all-features runtime must emit {name}"))
+            .body
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect()
+    };
+
+    for (name, _) in ENTERED_ON_ALIGNED_STACK {
+        assert_eq!(*name, "__rt_fiber_entry", "derive the entry residue for {name} here");
+        assert!(
+            !ALLOWED_MISALIGNED_CALLS.iter().any(|(listed, _)| listed == name),
+            "{name} is audited with its real entry residue; it must not also be allowlisted"
+        );
+        assert!(
+            !asm.lines().any(|line| {
+                let text = line.split('#').next().unwrap_or_default().trim();
+                text == format!("call {name}") || text == format!("jmp {name}")
+            }),
+            "{name} is entered by a synthetic `ret`; a direct call or jump breaks residue 0"
+        );
+    }
+
+    // stack_top is aligned down to 16 by the allocator.
+    assert!(body_of("__rt_fiber_alloc_stack").iter().any(|text| text == "and rdx, -16"));
+
+    // The constructor carves `frame` bytes below stack_top and stores the trampoline at `slot`.
+    let construct = body_of("__rt_fiber_construct");
+    let frame: i64 = construct
+        .iter()
+        .find_map(|text| text.strip_prefix("lea r10, [rdx - ")?.strip_suffix(']')?.parse().ok())
+        .expect("__rt_fiber_construct must carve the initial frame below stack_top");
+    let store = construct
+        .iter()
+        .position(|text| text.starts_with("mov QWORD PTR [r10 + ") && text.ends_with("], r11"))
+        .expect("__rt_fiber_construct must store the trampoline into the initial frame");
+    assert!(construct[store - 1].contains("__rt_fiber_entry"), "{}", construct[store - 1]);
+    let slot: i64 = construct[store]
+        .trim_start_matches("mov QWORD PTR [r10 + ")
+        .trim_end_matches("], r11")
+        .parse()
+        .expect("the trampoline slot offset is a literal");
+
+    // The switch's restore path pops `pops` registers from saved_sp, then `ret`s.
+    let switch = body_of("__rt_fiber_switch");
+    let restore = switch
+        .iter()
+        .position(|text| text == "__rt_fiber_switch_restore:")
+        .expect("__rt_fiber_switch must have a restore path");
+    let ret = restore
+        + switch[restore..]
+            .iter()
+            .position(|text| text == "ret")
+            .expect("the restore path ends in ret");
+    assert!(switch[restore + 1..ret].iter().all(|text| text.starts_with("pop ")));
+    let pops = (ret - restore - 1) as i64;
+
+    assert_eq!(slot, 8 * pops, "the ret must pop exactly the trampoline slot");
+    let entry_rsp_from_top = -frame + 8 * pops + 8;
+    assert_eq!(entry_rsp_from_top, 0, "__rt_fiber_entry must start at the aligned stack top");
+}
+
 /// Renders the `linux-x86_64` runtime for one feature set.
 fn runtime_asm(features: RuntimeFeatures) -> String {
     crate::codegen_support::generate_runtime_with_features(
@@ -584,9 +698,14 @@ fn every_x86_64_runtime_call_site_is_sysv_aligned() {
         .filter(|(name, _)| !allowed.contains(&name.as_str()))
         .map(|(name, calls)| {
             let (line, target, offset) = &calls[0];
+            let needed = if ENTERED_ON_ALIGNED_STACK.iter().any(|(listed, _)| listed == name) {
+                0
+            } else {
+                8
+            };
             format!(
                 "{name} calls {target} at line {line} with rsp {offset} bytes past its entry \
-                 ({} mod 16, needs 8)",
+                 ({} mod 16, needs {needed})",
                 offset.rem_euclid(16)
             )
         })
