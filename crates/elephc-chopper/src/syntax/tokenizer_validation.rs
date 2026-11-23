@@ -478,7 +478,8 @@ fn earlier_error<T: SourceToken>(
 /// `__halt_compiler();` ends tokenization, so a `}` after it is not a brace token. A real `}`
 /// token before the halt means this opener already closed and the parser error is an earlier
 /// block. A `}` inside a string is not a token, so it does not close the block. An argument
-/// inside `__halt_compiler(…)` stays authoritative across a newline in that same block.
+/// inside `__halt_compiler(…)`, and a cast token written where `(` should be, stay
+/// authoritative across a newline in that same block.
 fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
     tokens: &[T],
     precheck: &ValidationError,
@@ -513,17 +514,29 @@ fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
     depth > 0
 }
 
-/// Returns whether `error` is the token inside a malformed `__halt_compiler(…)`.
+/// Returns whether `error` belongs to a malformed `__halt_compiler` call.
 ///
 /// The parser can report the enclosing `Unclosed '{'` first, including across a newline.
-/// This diagnostic still belongs to that halt call.
+/// An argument after `(` expects `)`. A cast such as `(array)` is one token, so that
+/// diagnostic expects `(` and has no parenthesis to look behind. A heredoc argument is
+/// reported on its body line, which is not the start of the heredoc token.
 fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
-    if !error.message.ends_with("expecting \")\"") {
-        return false;
+    if let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) {
+        if error.message.ends_with("expecting \")\"") && halt_parenthesized_argument(tokens, index)
+        {
+            return true;
+        }
+        if error.message.ends_with("expecting \"(\"") {
+            return previous_significant_index(tokens, index).is_some_and(|halt| {
+                tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+            });
+        }
     }
-    let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) else {
-        return false;
-    };
+    heredoc_halt_argument(tokens, error)
+}
+
+/// Returns whether `index` is the first significant token inside `__halt_compiler(`.
+fn halt_parenthesized_argument<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     let Some(open) = previous_significant_index(tokens, index) else {
         return false;
     };
@@ -532,6 +545,24 @@ fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationErro
     }
     previous_significant_index(tokens, open).is_some_and(|halt| {
         tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+    })
+}
+
+/// Returns whether `error` is the body-line diagnostic of a halt heredoc argument.
+///
+/// The reported offset is the byte after the header newline, so it can sit on the following
+/// token. The heredoc token itself is still the argument of `__halt_compiler(`.
+fn heredoc_halt_argument<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if !error.message.starts_with("syntax error, unexpected heredoc start ")
+        || !error.message.ends_with("expecting \")\"")
+    {
+        return false;
+    }
+    tokens.iter().enumerate().any(|(index, token)| {
+        token.id() == tok::T_START_HEREDOC
+            && token.pos() < error.pos
+            && error.pos <= token.pos() + token.len()
+            && halt_parenthesized_argument(tokens, index)
     })
 }
 

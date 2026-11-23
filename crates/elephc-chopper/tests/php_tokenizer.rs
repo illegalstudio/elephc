@@ -931,6 +931,33 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php __halt_compiler(1);",
         "<?php function f() { for ($i = 0; __halt_compiler(1); ) {} }",
         "<?php switch ($a) { __halt_compiler(1); }",
+        "<?php function f($x) { switch ($x) { case 1: break; } if ($x) { __halt_compiler(); } }",
+        "<?php switch (1) {} if (1) { __halt_compiler(); }",
+        "<?php function f() { switch (1) {} { __halt_compiler(); } }",
+        "<?php class A {} if (1) { __halt_compiler(); }",
+        "<?php interface I {} { __halt_compiler(); }",
+        "<?php enum E {} while (1) { __halt_compiler(); }",
+        "<?php class A {} if (1) {} else { __halt_compiler(); }",
+        "<?php __halt_compiler((int));",
+        "<?php function f() { __halt_compiler((int)); }",
+        "<?php __halt_compiler(array);",
+        "<?php function f() { __halt_compiler(array); }",
+        "<?php\nfunction f() {\n__halt_compiler(array);\n}",
+        "<?php\nnamespace N {\n__halt_compiler(array);\n}",
+        "<?php if (1): __halt_compiler(array); endif;",
+        "<?php switch ($a) { case 1: __halt_compiler(array); }",
+        "<?php function f() { for ($i = 0; __halt_compiler(array); ) {} }",
+        "<?php switch ($a) { __halt_compiler(array); }",
+        "<?php function f() { __halt_compiler; }",
+        "<?php echo ; function f() { __halt_compiler(array); }",
+        "<?php function f() { foo(__halt_compiler(array)); }",
+        "<?php __halt_compiler(<<<EOT\nx\nEOT\n);",
+        "<?php function f() { __halt_compiler(<<<EOT\nx\nEOT\n); }",
+        "<?php class A { function __construct(private(set) $$a) {} }",
+        "<?php class A { function __construct(public(set) $$a) {} }",
+        "<?php class A { function __construct(protected(set) $$a) {} }",
+        "<?php class A { function __construct(final $$a) {} }",
+        "<?php class A { function __construct(public final $$a) {} }",
         "<?php function f() { C::{__halt_compiler()}; }",
         "<?php function f() { $o->{__halt_compiler()}; }",
         "<?php function f() { $o?->{__halt_compiler()}; }",
@@ -1878,6 +1905,13 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "<?php function f() { __halt_compiler( ); }",
         "<?php function f() { __halt_compiler(/*c*/); }",
         "<?php function f() { switch ($a) { case 1: echo 1; } __halt_compiler(); }",
+        "<?php function f($x) { switch ($x) { case 1: break; } if ($x) { __halt_compiler(); } }",
+        "<?php switch (1) {} if (1) { __halt_compiler(); }",
+        "<?php function f() { switch (1) {} { __halt_compiler(); } }",
+        "<?php class A {} if (1) { __halt_compiler(); }",
+        "<?php interface I {} { __halt_compiler(); }",
+        "<?php enum E {} while (1) { __halt_compiler(); }",
+        "<?php class A {} if (1) {} else { __halt_compiler(); }",
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
         assert_eq!(error.message, compile, "{source}");
@@ -2226,6 +2260,58 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "syntax error, unexpected double-quote mark, expecting \")\"",
         ),
         (
+            "<?php __halt_compiler((int));",
+            "syntax error, unexpected token \"(int)\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler((int)); }",
+            "syntax error, unexpected token \"(int)\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(array);",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(array); }",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php\nfunction f() {\n__halt_compiler(array);\n}",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php\nnamespace N {\n__halt_compiler(array);\n}",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php if (1): __halt_compiler(array); endif;",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php switch ($a) { case 1: __halt_compiler(array); }",
+            "syntax error, unexpected token \"(array)\", expecting \"(\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler; }",
+            "syntax error, unexpected token \";\", expecting \"(\"",
+        ),
+        (
+            "<?php echo ; function f() { __halt_compiler(array); }",
+            "syntax error, unexpected token \";\"",
+        ),
+        (
+            "<?php function f() { foo(__halt_compiler(array)); }",
+            "syntax error, unexpected token \"__halt_compiler\"",
+        ),
+        (
+            "<?php __halt_compiler(<<<EOT\nx\nEOT\n);",
+            "syntax error, unexpected heredoc start \"<<<EOT\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(<<<EOT\nx\nEOT\n); }",
+            "syntax error, unexpected heredoc start \"<<<EOT\", expecting \")\"",
+        ),
+        (
             "<?php if (1): __halt_compiler(1); endif;",
             "syntax error, unexpected integer \"1\", expecting \")\"",
         ),
@@ -2246,7 +2332,15 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "syntax error, unexpected token \"__halt_compiler\", expecting \";\"",
         ),
         (
+            "<?php function f() { for ($i = 0; __halt_compiler(array); ) {} }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \";\"",
+        ),
+        (
             "<?php switch ($a) { __halt_compiler(1); }",
+            "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
+        ),
+        (
+            "<?php switch ($a) { __halt_compiler(array); }",
             "syntax error, unexpected token \"__halt_compiler\", expecting \"case\" or \"default\" or \"}\"",
         ),
     ] {
@@ -2266,6 +2360,11 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "<?php class A { protected(set) readonly int $$a; }",
         "<?php class A { public final int $$a; }",
         "<?php abstract class A { public abstract int $$a { get; } }",
+        "<?php class A { function __construct(private(set) $$a) {} }",
+        "<?php class A { function __construct(public(set) $$a) {} }",
+        "<?php class A { function __construct(protected(set) $$a) {} }",
+        "<?php class A { function __construct(final $$a) {} }",
+        "<?php class A { function __construct(public final $$a) {} }",
     ] {
         let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
         assert_eq!(
@@ -2274,6 +2373,23 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "{source}"
         );
     }
+    let heredoc = tokenize(b"<?php __halt_compiler(<<<EOT\nx\nEOT\n);", TOKEN_PARSE)
+        .expect_err("a heredoc argument is reported on its body line");
+    assert_eq!(
+        heredoc.message,
+        "syntax error, unexpected heredoc start \"<<<EOT\", expecting \")\""
+    );
+    assert_eq!(heredoc.line, 2);
+    let heredoc_in_function = tokenize(
+        b"<?php function f() { __halt_compiler(<<<EOT\nx\nEOT\n); }",
+        TOKEN_PARSE,
+    )
+    .expect_err("a heredoc argument inside a function is reported on its body line");
+    assert_eq!(
+        heredoc_in_function.message,
+        "syntax error, unexpected heredoc start \"<<<EOT\", expecting \")\""
+    );
+    assert_eq!(heredoc_in_function.line, 2);
     for source in [
         "<?php function &f($a = &$b) {}",
         "<?php $f = fn &($a = &$b) => 1;",

@@ -1580,7 +1580,8 @@ fn backward_delimiter(id: i64, depth: &mut i32) -> Option<BackwardDelimiter> {
 /// and a computed member stop at their own header, so an enclosing function does not win.
 /// Parentheses, nested braces and interpolation braces in that header are skipped, and
 /// `Foo::class` is not a class declaration. `{` after `=>` is not a statement block either:
-/// PHP reports that brace before the halt.
+/// PHP reports that brace before the halt. A `}` at depth zero closes an earlier sibling
+/// statement, so this brace does not inherit that sibling's class or switch.
 fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     if let Some(previous) = previous_significant_index(tokens, open) {
         let id = tokens[previous].id();
@@ -1604,6 +1605,10 @@ fn halt_brace_kind<T: SourceToken>(tokens: &[T], open: usize) -> HaltScope {
     let mut cursor = open;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
         let id = tokens[previous].id();
+        // Crossing that sibling would label this block as the earlier class or switch.
+        if depth == 0 && id == i64::from(b'}') {
+            return HaltScope::Statement;
+        }
         if let Some(delimiter) = backward_delimiter(id, &mut depth) {
             match delimiter {
                 BackwardDelimiter::Nested => {
@@ -2152,7 +2157,7 @@ fn match_operand_complete<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 ///
 /// Inline HTML and other tokens before the first label belong to `switch_case_html_error`
 /// or the parser. A halt after a label is the outermost-scope `CompileError` when the call
-/// is `()`. An argument is the scanner's parse error at that argument.
+/// is `()`. An argument, including a cast token in place of `(`, is a parse error there.
 fn switch_halt_error<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
@@ -2182,25 +2187,54 @@ fn switch_halt_error<T: SourceToken>(
     })
 }
 
-/// Returns the parse error for a token inside `__halt_compiler(…)`.
+/// Returns the parse error for a malformed `__halt_compiler` argument.
 ///
-/// `()` with whitespace or a comment is still an empty call and returns none. `1`, `$a`
-/// or another token is reported at that token, with PHP's noun, so a scope diagnostic
-/// does not replace it.
+/// `()` with whitespace or a comment is still an empty call and returns none. A token
+/// after `(` is reported there. `(array)` is one cast token, so it is reported at that
+/// token with `expecting "("`. A heredoc argument is reported on its first body line.
 fn halt_argument_error<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
     halt: usize,
 ) -> Option<ValidationError> {
-    let open = next_significant_index(tokens, halt)?;
-    if tokens[open].id() != i64::from(b'(') {
-        return None;
+    let next = next_significant_index(tokens, halt)?;
+    if tokens[next].id() != i64::from(b'(') {
+        return Some(token_noun_error(source, tokens, next, "\"(\""));
     }
-    let inner = next_significant_index(tokens, open)?;
+    let inner = next_significant_index(tokens, next)?;
     if tokens[inner].id() == i64::from(b')') {
         return None;
     }
+    if tokens[inner].id() == tok::T_START_HEREDOC {
+        return Some(halt_heredoc_argument_error(source, &tokens[inner]));
+    }
     Some(token_noun_error(source, tokens, inner, "\")\""))
+}
+
+/// Builds the halt-argument diagnostic for a heredoc or nowdoc start.
+///
+/// PHP names both `heredoc start` here and reports the first body line. The position matches
+/// the scanner, so the two diagnostics tie and the body line survives an open `{`.
+fn halt_heredoc_argument_error<T: SourceToken>(source: &[u8], token: &T) -> ValidationError {
+    let text = &source[token.pos()..token.pos() + token.len()];
+    let header = text
+        .split(|byte| *byte == b'\n' || *byte == b'\r')
+        .next()
+        .unwrap_or(text);
+    let mut error_pos = token.pos() + header.len();
+    if text.get(header.len()) == Some(&b'\r') && text.get(header.len() + 1) == Some(&b'\n') {
+        error_pos += 2;
+    } else if text.get(header.len()).is_some() {
+        error_pos += 1;
+    }
+    ValidationError {
+        message: format!(
+            "syntax error, unexpected heredoc start \"{}\", expecting \")\"",
+            String::from_utf8_lossy(header)
+        ),
+        pos: error_pos.min(token.pos() + token.len()),
+        lexical: false,
+    }
 }
 
 /// Returns whether this switch already opened a `case` or `default` before the halt.
@@ -2309,9 +2343,10 @@ fn scoped_constant_name<T: SourceToken>(tokens: &[T], index: usize) -> bool {
 
 /// Builds the parse or compile diagnostic for one `__halt_compiler` token.
 ///
-/// `None` means this halt is not a precheck error. That is the outermost scope, a `{` after
-/// `=>`, and a halt call whose parentheses contain an argument: the scanner reports that
-/// argument. PHP reports the brace for an arrow block, and a later halt must not replace it.
+/// `None` means this halt is not a precheck error. That is the outermost scope and a `{`
+/// after `=>`. A malformed argument, including a cast token in place of `(`, is a parse
+/// error from `halt_argument_error`. PHP reports the brace for an arrow block, and a later
+/// halt must not replace it.
 /// A class body, match arm list, computed member and a switch with no `case` yet stay parse
 /// errors even when a function around them is still open. The expectation text is PHP's for
 /// that container.

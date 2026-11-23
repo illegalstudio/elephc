@@ -209,7 +209,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         };
         if text(close) != b")" {
             self.errors.push(LexError {
-                pos: close.pos,
+                pos: diagnostic_pos(self.source, close),
                 message: unexpected_expecting(self.source, close, "\")\"") ,
             });
             return;
@@ -1448,6 +1448,14 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
         format!("syntax error, unexpected namespace-relative name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
     } else if text == b"\"" {
         format!("syntax error, unexpected double-quote mark, expecting {expected}")
+    } else if token.id == id("T_START_HEREDOC") {
+        let header = text.split(|byte| *byte == b'\n' || *byte == b'\r').next().unwrap_or(text);
+        format!(
+            "syntax error, unexpected heredoc start \"{}\", expecting {expected}",
+            String::from_utf8_lossy(header)
+        )
+    } else if is_cast_token(token.id) {
+        format!("syntax error, unexpected token \"{}\", expecting {expected}", String::from_utf8_lossy(text))
     } else if let Some(keyword) = super::keyword_diagnostic_spelling(token.id, text) {
         format!("syntax error, unexpected token \"{keyword}\", expecting {expected}")
     } else if text.len() <= 3 {
@@ -1458,6 +1466,42 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
             super::token_name(token.id).unwrap_or("UNKNOWN")
         )
     }
+}
+
+/// Returns the byte PHP names for a halt-argument token.
+///
+/// A heredoc start is reported on the first body line, after the header newline. Every other
+/// token keeps its own start.
+fn diagnostic_pos(source: &[u8], token: &Token) -> usize {
+    if token.id != id("T_START_HEREDOC") {
+        return token.pos;
+    }
+    let text = &source[token.pos..token.pos + token.len];
+    let header = text.split(|byte| *byte == b'\n' || *byte == b'\r').next().unwrap_or(text);
+    let mut error_pos = token.pos + header.len();
+    if text.get(header.len()) == Some(&b'\r') && text.get(header.len() + 1) == Some(&b'\n') {
+        error_pos += 2;
+    } else if text.get(header.len()).is_some() {
+        error_pos += 1;
+    }
+    error_pos.min(token.pos + token.len)
+}
+
+/// Returns whether `token_id` is one of PHP's cast tokens.
+///
+/// The source text is already `(int)` or `(array)`. The catalog name must not replace it.
+fn is_cast_token(token_id: i64) -> bool {
+    [
+        id("T_ARRAY_CAST"),
+        id("T_BOOL_CAST"),
+        id("T_DOUBLE_CAST"),
+        id("T_INT_CAST"),
+        id("T_OBJECT_CAST"),
+        id("T_STRING_CAST"),
+        id("T_UNSET_CAST"),
+        id("T_VOID_CAST"),
+    ]
+    .contains(&token_id)
 }
 
 /// Returns Zend's noun and the visible body of one quoted-string token.

@@ -1014,9 +1014,10 @@ pub(crate) fn paren_is_declaration_parameters<T: SourceToken>(tokens: &[T], open
 /// Returns whether a `$` opens a declaration name slot instead of a variable variable.
 ///
 /// PHP only allows variable variables in expressions: `static $$a;`, `function f($$a)`,
-/// `public $$a;`, `catch (E $$e)` and `use ($$a)` are syntax errors, so their `$` must stay in
-/// the view and let the parser reject it. A parameter DEFAULT (`function f($x = $$a)`) is an
-/// expression again.
+/// `public $$a;`, `final $$a`, `private(set) $$a`, `catch (E $$e)` and `use ($$a)` are syntax
+/// errors, so their `$` must stay in the view and let the parser reject it. A parameter
+/// DEFAULT (`function f($x = $$a)`) is an expression again. `abstract` and `var` stay off this
+/// fast path: PHP reports the modifier itself, not the `$`.
 pub(crate) fn dollar_starts_declaration<T: SourceToken>(
     tokens: &[T],
     index: usize,
@@ -1030,6 +1031,10 @@ pub(crate) fn dollar_starts_declaration<T: SourceToken>(
             || id == tok::T_PROTECTED
             || id == tok::T_PRIVATE
             || id == tok::T_READONLY
+            || id == tok::T_FINAL
+            || id == tok::T_PUBLIC_SET
+            || id == tok::T_PROTECTED_SET
+            || id == tok::T_PRIVATE_SET
     ) {
         return true;
     }
