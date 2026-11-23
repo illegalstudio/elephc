@@ -884,6 +884,18 @@ pub(crate) fn token_noun_error<T: SourceToken>(
                     pos,
                     lexical: false,
                 }
+            } else if let Some(cast) = crate::scanner::cast_diagnostic_text(token.id()) {
+                ValidationError {
+                    message: format!("syntax error, unexpected token \"{cast}\", expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
+            } else if token.id() == tok::T_CLOSE_TAG {
+                ValidationError {
+                    message: format!("syntax error, unexpected token \";\", expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
             } else if let Some(keyword) = crate::scanner::keyword_diagnostic_spelling(token.id(), text) {
                 ValidationError {
                     message: format!("syntax error, unexpected token \"{keyword}\", expecting {expecting}"),

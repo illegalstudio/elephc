@@ -20,7 +20,7 @@ mod numbers;
 mod operators;
 mod strings;
 pub use keywords::is_label_start as identifier_start;
-pub(crate) use keywords::keyword_diagnostic_spelling;
+pub(crate) use keywords::{cast_diagnostic_text, heredoc_start_header, keyword_diagnostic_spelling};
 pub use lex::{LexError, LexWarning};
 pub use lexeme::{compiler_trivia_len, digits_len, identifier_len};
 pub(crate) use lex::{scan_compiler, CompilerLexeme, CompilerOutput};

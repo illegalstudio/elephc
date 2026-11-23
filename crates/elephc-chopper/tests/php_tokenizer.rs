@@ -953,6 +953,22 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php function f() { foo(__halt_compiler(array)); }",
         "<?php __halt_compiler(<<<EOT\nx\nEOT\n);",
         "<?php function f() { __halt_compiler(<<<EOT\nx\nEOT\n); }",
+        "<?php __halt_compiler((integer));",
+        "<?php function f() { __halt_compiler(( Array )); }",
+        "<?php function f() { __halt_compiler (boolean); }",
+        "<?php __halt_compiler((double));",
+        "<?php __halt_compiler(binary);",
+        "<?php __halt_compiler(<<<'EOT'\nx\nEOT\n);",
+        "<?php function f() { __halt_compiler(<<<'EOT'\nx\nEOT\n); }",
+        "<?php __halt_compiler(<<<\"EOT\"\nx\nEOT\n);",
+        "<?php __halt_compiler(<<<EOT\r\nx\r\nEOT\r\n);",
+        "<?php __halt_compiler(<<<'EOT'\r\nx\r\nEOT\r\n);",
+        "<?php function f() { __halt_compiler <<<EOT\nx\nEOT;\n }",
+        "<?php __halt_compiler <<<EOT\nx\nEOT;\n",
+        "<?php function f() { __halt_compiler ?>x",
+        "<?php function f() { __halt_compiler( ?>x",
+        "<?php __halt_compiler ?>x",
+        "<?php __halt_compiler( ?>x",
         "<?php class A { function __construct(private(set) $$a) {} }",
         "<?php class A { function __construct(public(set) $$a) {} }",
         "<?php class A { function __construct(protected(set) $$a) {} }",
@@ -2268,6 +2284,42 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "syntax error, unexpected token \"(int)\", expecting \")\"",
         ),
         (
+            "<?php __halt_compiler((integer));",
+            "syntax error, unexpected token \"(int)\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(( Array )); }",
+            "syntax error, unexpected token \"(array)\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler (boolean); }",
+            "syntax error, unexpected token \"(bool)\", expecting \"(\"",
+        ),
+        (
+            "<?php __halt_compiler((double));",
+            "syntax error, unexpected token \"(float)\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(binary);",
+            "syntax error, unexpected token \"(string)\", expecting \"(\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler ?>x",
+            "syntax error, unexpected token \";\", expecting \"(\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler( ?>x",
+            "syntax error, unexpected token \";\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler ?>x",
+            "syntax error, unexpected token \";\", expecting \"(\"",
+        ),
+        (
+            "<?php __halt_compiler( ?>x",
+            "syntax error, unexpected token \";\", expecting \")\"",
+        ),
+        (
             "<?php __halt_compiler(array);",
             "syntax error, unexpected token \"(array)\", expecting \"(\"",
         ),
@@ -2390,6 +2442,48 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
         "syntax error, unexpected heredoc start \"<<<EOT\", expecting \")\""
     );
     assert_eq!(heredoc_in_function.line, 2);
+    for (source, message, line) in [
+        (
+            "<?php __halt_compiler(<<<'EOT'\nx\nEOT\n);",
+            "syntax error, unexpected heredoc start \"<<<'EOT\", expecting \")\"",
+            2,
+        ),
+        (
+            "<?php function f() { __halt_compiler(<<<'EOT'\nx\nEOT\n); }",
+            "syntax error, unexpected heredoc start \"<<<'EOT\", expecting \")\"",
+            2,
+        ),
+        (
+            "<?php __halt_compiler(<<<\"EOT\"\nx\nEOT\n);",
+            "syntax error, unexpected heredoc start \"<<<\"EOT\", expecting \")\"",
+            2,
+        ),
+        (
+            "<?php __halt_compiler(<<<EOT\r\nx\r\nEOT\r\n);",
+            "syntax error, unexpected heredoc start \"<<<EOT\r\", expecting \")\"",
+            2,
+        ),
+        (
+            "<?php __halt_compiler(<<<'EOT'\r\nx\r\nEOT\r\n);",
+            "syntax error, unexpected heredoc start \"<<<'EOT'\r\", expecting \")\"",
+            2,
+        ),
+        (
+            "<?php function f() { __halt_compiler <<<EOT\nx\nEOT;\n }",
+            "syntax error, unexpected heredoc start \"<<<EOT\", expecting \"(\"",
+            2,
+        ),
+        (
+            "<?php __halt_compiler <<<EOT\nx\nEOT;\n",
+            "syntax error, unexpected heredoc start \"<<<EOT\", expecting \"(\"",
+            2,
+        ),
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert_eq!(error.message, message, "{source:?}");
+        assert_eq!(error.line, line, "{source:?}");
+        assert!(!error.is_compile_error(), "{source:?}");
+    }
     for source in [
         "<?php function &f($a = &$b) {}",
         "<?php $f = fn &($a = &$b) => 1;",

@@ -519,17 +519,20 @@ fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
 /// The parser can report the enclosing `Unclosed '{'` first, including across a newline.
 /// An argument after `(` expects `)`. A cast such as `(array)` is one token, so that
 /// diagnostic expects `(` and has no parenthesis to look behind. A heredoc argument is
-/// reported on its body line, which is not the start of the heredoc token.
+/// reported on its body line. When the header newline ends the start token, that byte is
+/// the next token, so a miss there still checks the heredoc span.
 fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
     if let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) {
         if error.message.ends_with("expecting \")\"") && halt_parenthesized_argument(tokens, index)
         {
             return true;
         }
-        if error.message.ends_with("expecting \"(\"") {
-            return previous_significant_index(tokens, index).is_some_and(|halt| {
+        if error.message.ends_with("expecting \"(\"")
+            && previous_significant_index(tokens, index).is_some_and(|halt| {
                 tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
-            });
+            })
+        {
+            return true;
         }
     }
     heredoc_halt_argument(tokens, error)
@@ -551,18 +554,30 @@ fn halt_parenthesized_argument<T: SourceToken>(tokens: &[T], index: usize) -> bo
 /// Returns whether `error` is the body-line diagnostic of a halt heredoc argument.
 ///
 /// The reported offset is the byte after the header newline, so it can sit on the following
-/// token. The heredoc token itself is still the argument of `__halt_compiler(`.
+/// token. Inside `__halt_compiler(` the expectation is `)`. A heredoc written where `(` should
+/// be expects `(`, and the previous significant token is the halt itself.
 fn heredoc_halt_argument<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
-    if !error.message.starts_with("syntax error, unexpected heredoc start ")
-        || !error.message.ends_with("expecting \")\"")
-    {
+    if !error.message.starts_with("syntax error, unexpected heredoc start ") {
+        return false;
+    }
+    let inside = error.message.ends_with("expecting \")\"");
+    let opens = error.message.ends_with("expecting \"(\"");
+    if !inside && !opens {
         return false;
     }
     tokens.iter().enumerate().any(|(index, token)| {
-        token.id() == tok::T_START_HEREDOC
-            && token.pos() < error.pos
-            && error.pos <= token.pos() + token.len()
-            && halt_parenthesized_argument(tokens, index)
+        if token.id() != tok::T_START_HEREDOC
+            || token.pos() >= error.pos
+            || error.pos > token.pos() + token.len()
+        {
+            return false;
+        }
+        if inside {
+            return halt_parenthesized_argument(tokens, index);
+        }
+        previous_significant_index(tokens, index).is_some_and(|halt| {
+            tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+        })
     })
 }
 

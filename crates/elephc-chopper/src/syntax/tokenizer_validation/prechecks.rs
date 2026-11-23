@@ -2199,6 +2199,9 @@ fn halt_argument_error<T: SourceToken>(
 ) -> Option<ValidationError> {
     let next = next_significant_index(tokens, halt)?;
     if tokens[next].id() != i64::from(b'(') {
+        if tokens[next].id() == tok::T_START_HEREDOC {
+            return Some(halt_heredoc_argument_error(source, &tokens[next], "\"(\""));
+        }
         return Some(token_noun_error(source, tokens, next, "\"(\""));
     }
     let inner = next_significant_index(tokens, next)?;
@@ -2206,31 +2209,38 @@ fn halt_argument_error<T: SourceToken>(
         return None;
     }
     if tokens[inner].id() == tok::T_START_HEREDOC {
-        return Some(halt_heredoc_argument_error(source, &tokens[inner]));
+        return Some(halt_heredoc_argument_error(source, &tokens[inner], "\")\""));
     }
     Some(token_noun_error(source, tokens, inner, "\")\""))
 }
 
 /// Builds the halt-argument diagnostic for a heredoc or nowdoc start.
 ///
-/// PHP names both `heredoc start` here and reports the first body line. The position matches
-/// the scanner, so the two diagnostics tie and the body line survives an open `{`.
-fn halt_heredoc_argument_error<T: SourceToken>(source: &[u8], token: &T) -> ValidationError {
+/// PHP names both `heredoc start`. The header keeps a carriage return and drops one trailing
+/// quote. The position is still the first body line, so it ties with the scanner inside an
+/// open `{`.
+fn halt_heredoc_argument_error<T: SourceToken>(
+    source: &[u8],
+    token: &T,
+    expecting: &str,
+) -> ValidationError {
     let text = &source[token.pos()..token.pos() + token.len()];
-    let header = text
+    let displayed = crate::scanner::heredoc_start_header(text);
+    let line_header = text
         .split(|byte| *byte == b'\n' || *byte == b'\r')
         .next()
         .unwrap_or(text);
-    let mut error_pos = token.pos() + header.len();
-    if text.get(header.len()) == Some(&b'\r') && text.get(header.len() + 1) == Some(&b'\n') {
+    let mut error_pos = token.pos() + line_header.len();
+    if text.get(line_header.len()) == Some(&b'\r') && text.get(line_header.len() + 1) == Some(&b'\n')
+    {
         error_pos += 2;
-    } else if text.get(header.len()).is_some() {
+    } else if text.get(line_header.len()).is_some() {
         error_pos += 1;
     }
     ValidationError {
         message: format!(
-            "syntax error, unexpected heredoc start \"{}\", expecting \")\"",
-            String::from_utf8_lossy(header)
+            "syntax error, unexpected heredoc start \"{}\", expecting {expecting}",
+            String::from_utf8_lossy(displayed)
         ),
         pos: error_pos.min(token.pos() + token.len()),
         lexical: false,

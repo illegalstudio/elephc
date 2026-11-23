@@ -195,7 +195,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         };
         if text(open) != b"(" {
             self.errors.push(LexError {
-                pos: open.pos,
+                pos: diagnostic_pos(self.source, open),
                 message: unexpected_expecting(self.source, open, "\"(\""),
             });
             return;
@@ -1449,13 +1449,15 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
     } else if text == b"\"" {
         format!("syntax error, unexpected double-quote mark, expecting {expected}")
     } else if token.id == id("T_START_HEREDOC") {
-        let header = text.split(|byte| *byte == b'\n' || *byte == b'\r').next().unwrap_or(text);
+        let header = super::heredoc_start_header(text);
         format!(
             "syntax error, unexpected heredoc start \"{}\", expecting {expected}",
             String::from_utf8_lossy(header)
         )
-    } else if is_cast_token(token.id) {
-        format!("syntax error, unexpected token \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if let Some(cast) = super::cast_diagnostic_text(token.id) {
+        format!("syntax error, unexpected token \"{cast}\", expecting {expected}")
+    } else if token.id == id("T_CLOSE_TAG") {
+        format!("syntax error, unexpected token \";\", expecting {expected}")
     } else if let Some(keyword) = super::keyword_diagnostic_spelling(token.id, text) {
         format!("syntax error, unexpected token \"{keyword}\", expecting {expected}")
     } else if text.len() <= 3 {
@@ -1485,23 +1487,6 @@ fn diagnostic_pos(source: &[u8], token: &Token) -> usize {
         error_pos += 1;
     }
     error_pos.min(token.pos + token.len)
-}
-
-/// Returns whether `token_id` is one of PHP's cast tokens.
-///
-/// The source text is already `(int)` or `(array)`. The catalog name must not replace it.
-fn is_cast_token(token_id: i64) -> bool {
-    [
-        id("T_ARRAY_CAST"),
-        id("T_BOOL_CAST"),
-        id("T_DOUBLE_CAST"),
-        id("T_INT_CAST"),
-        id("T_OBJECT_CAST"),
-        id("T_STRING_CAST"),
-        id("T_UNSET_CAST"),
-        id("T_VOID_CAST"),
-    ]
-    .contains(&token_id)
 }
 
 /// Returns Zend's noun and the visible body of one quoted-string token.
