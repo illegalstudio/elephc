@@ -21,7 +21,7 @@ use super::super::super::Checker;
 use super::super::validation::{
     declaration_is_source, declared_return_type_compatible,
     is_pdo_exception_get_code_contract, late_static_return_compatible,
-    validate_signature_compatibility,
+    method_parameter_widening, validate_signature_compatibility, ParameterWidening,
 };
 use super::state::ClassBuildState;
 
@@ -317,7 +317,11 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
-        checker.enums.contains_key(&class.name),
+        if checker.enums.contains_key(&class.name) {
+            ParameterWidening::CallShape
+        } else {
+            ParameterWidening::Exact
+        },
     )?;
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
@@ -581,7 +585,11 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
-        checker.enums.contains_key(&class.name),
+        if checker.enums.contains_key(&class.name) {
+            ParameterWidening::CallShape
+        } else {
+            method_parameter_widening(method_name, false)
+        },
     )?;
     if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
         return Err(CompileError::new(

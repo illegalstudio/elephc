@@ -825,7 +825,19 @@ Rules:
 - `new readonly class { ... }` is supported.
 
 ## Override rules
-Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.
+An override, an interface implementation, or an interface redeclaring a parent interface's method keeps every inherited parameter position: same pass-by-reference positions, same default layout, same variadic shape. As in PHP, an instance method may append trailing optional parameters:
+
+```php
+<?php
+interface PsrContainer { public function get(string $id); }
+class Container implements PsrContainer {
+    public function get(string $id, int $invalidBehavior = 1) { return "$id:$invalidBehavior"; }
+}
+function fetch(PsrContainer $c) { return $c->get("svc"); }
+echo fetch(new Container()); // svc:1
+```
+
+An interface extending both the widening interface and the narrower one keeps the wider declaration when the widening parent is listed first (`interface K extends J, I`); PHP rejects the reverse order, and so does elephc. A call through the narrower parent or interface gets the override's defaults, and `func_num_args()` counts only the arguments the caller passed. Not yet supported: a widened override that calls `func_num_args()`/`func_get_args()` when an inherited parameter is optional and the parent method or interface does not count its own arguments, appending optional parameters to a static method, appending a variadic parameter, making an inherited required parameter optional, and calling a widened method on a `mixed`/untyped receiver whose candidate classes disagree on the parameter count (the call reports a member call on `null`).
 
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
