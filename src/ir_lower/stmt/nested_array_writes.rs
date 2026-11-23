@@ -888,6 +888,7 @@ fn lower_nested_array_assign_selected(
             parent,
             key,
             value,
+            index,
             span,
             key_already_diagnosed,
         );

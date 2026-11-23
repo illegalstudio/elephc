@@ -76,12 +76,14 @@ fn false_parent_completion_omits_impossible_key_errors() {
             $owner['name'] = 2;
         }
         function putKnownNestedKeys(mixed $owner): void { $owner['branch'][0] = 3; }
+        function putNonNumericOffset(mixed $owner): void { $owner['branch']['word'] = 3; }
         function putOriginalKey(mixed $owner, mixed $key): void { $owner[$key] = 1; }
         function putOriginalNestedKey(mixed $owner, mixed $key): void { $owner['branch'][$key] = 3; }
         $owner = $argc > 2 ? false : [];
         $key = $argc > 2 ? 1 : [];
         putKnownKeys($owner, $argc);
         putKnownNestedKeys($owner);
+        putNonNumericOffset($owner);
         putOriginalKey($owner, $key);
         putOriginalNestedKey($owner, $key);";
     let module = super::semantic_sources::lower_capturing_arguments(
@@ -90,6 +92,7 @@ fn false_parent_completion_omits_impossible_key_errors() {
     for (name, key_error, scalar_key_error) in [
         ("putKnownKeys", false, false),
         ("putKnownNestedKeys", false, false),
+        ("putNonNumericOffset", false, false),
         ("putOriginalKey", true, false),
         ("putOriginalNestedKey", true, true),
     ] {
@@ -98,6 +101,11 @@ fn false_parent_completion_omits_impossible_key_errors() {
         assert_eq!(function.blocks.iter().any(|block| block.name == "nested.false.invalid.key"), key_error, "{name}");
         assert_eq!(function.blocks.iter().any(|block| block.name == "nested.write.false.pending.type.error"), scalar_key_error, "{name}");
     }
+    let nested = module.functions.iter().find(|function| function.name == "putNonNumericOffset").unwrap();
+    assert!(nested.blocks.iter().any(|block| block.name == "nested.write.string.error"));
+    assert!(!nested.blocks.iter().any(|block| block.name == "nested.write.string"));
+    let numeric = module.functions.iter().find(|function| function.name == "putKnownNestedKeys").unwrap();
+    assert!(numeric.blocks.iter().any(|block| block.name == "nested.write.string"));
 }
 
 /// Opaque runtime eval completes captured writes and preserves callback Throwable identities.

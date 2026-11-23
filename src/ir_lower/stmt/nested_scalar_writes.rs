@@ -14,23 +14,25 @@ use crate::ir::RuntimeFnId;
 /// Selects a string offset write or the existing array/object setter using the runtime parent.
 pub(super) fn lower_nested_set(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
-    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
+    key: LoweredValue, value: LoweredValue, index: &Expr, span: Span, key_already_diagnosed: bool,
 ) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         emit_set(ctx, parent, key, value, span, key_already_diagnosed);
         return;
     }
-    let string = predicate(ctx, parent, crate::ir::PhpTypePredicate::String, span);
-    let string_write = ctx.builder.create_named_block("nested.write.string", Vec::new());
-    let array_write = ctx.builder.create_named_block("nested.write.container", Vec::new());
     let done = ctx.builder.create_named_block("nested.write.done", Vec::new());
     let initialized = ctx.initialized_slots_snapshot();
-    branch(ctx, string, string_write, array_write);
-    ctx.builder.position_at_end(string_write);
-    lower_string_write(ctx, parent, key, value, span);
-    ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
-    ctx.builder.position_at_end(array_write);
-    ctx.restore_initialized_slots(initialized.clone());
+    if !super::nested_write_guards::literal_rejects_string_offset(index) {
+        let string = predicate(ctx, parent, crate::ir::PhpTypePredicate::String, span);
+        let string_write = ctx.builder.create_named_block("nested.write.string", Vec::new());
+        let array_write = ctx.builder.create_named_block("nested.write.container", Vec::new());
+        branch(ctx, string, string_write, array_write);
+        ctx.builder.position_at_end(string_write);
+        lower_string_write(ctx, parent, key, value, span);
+        branch_to(ctx, done);
+        ctx.builder.position_at_end(array_write);
+        ctx.restore_initialized_slots(initialized.clone());
+    }
     let boolean = predicate(ctx, parent, crate::ir::PhpTypePredicate::Bool, span);
     let truth = ctx.emit_value(Op::IsTruthy, vec![parent.value], None, PhpType::Bool,
         Op::IsTruthy.default_effects(), Some(span));
