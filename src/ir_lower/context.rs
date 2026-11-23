@@ -3533,7 +3533,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_mutated_local_impl(name, value, php_type, span, true, false, false)
     }
 
-    /// Stores a mutation result whose previous boxed local owner was released beforehand.
+    /// Stores a mutation result whose caller or backend owns retirement of the previous box.
     pub(crate) fn store_prepared_mutated_local(
         &mut self,
         name: &str,
@@ -3585,8 +3585,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
         }
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
+        let retire_box_in_store = !is_ref_bound && previous_kind == LocalKind::PhpLocal
+            && self.builder.value_defining_instruction(value.value).is_some_and(|producer| {
+                producer.op == Op::HashToMixed
+                    && producer.immediate == Some(Immediate::LocalSlot(slot))
+            });
         if release_previous
             && !is_ref_bound
+            && !retire_box_in_store
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(value_type, PhpType::Mixed | PhpType::Union(_))
         {
@@ -3599,6 +3605,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             (false, LocalKind::StaticLocal) => {
                 self.store_slot_with_op(slot, value, Op::StoreStaticLocal, span);
+            }
+            _ if retire_box_in_store => {
+                self.store_slot_with_op(slot, value, Op::StoreLocalRetiringBox, span);
             }
             _ => {
                 self.store_slot_with_op(slot, value, Op::StoreLocal, span);
@@ -5677,7 +5686,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             op.default_effects(),
             span,
         );
-        if op == Op::StoreLocal && self.builder.local_kind(slot) == LocalKind::PhpLocal {
+        if matches!(op, Op::StoreLocal | Op::StoreLocalRetiringBox)
+            && self.builder.local_kind(slot) == LocalKind::PhpLocal {
             self.assigned_php_local_slots.insert(slot);
         }
         self.mark_slot_initialized(slot);

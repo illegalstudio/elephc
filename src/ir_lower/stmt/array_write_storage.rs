@@ -389,10 +389,15 @@ pub(in crate::ir_lower) fn prepare_hash_local_write(
     } else {
         array_value
     };
+    let storeback = ctx.builder.value_defining_instruction(array_value.value)
+        .and_then(|inst| match (inst.op, &inst.immediate) {
+            (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(Immediate::LocalSlot(*slot)),
+            _ => None,
+        });
     let converted = ctx.emit_value(
         Op::HashToMixed,
         vec![array_value.value],
-        None,
+        storeback,
         updated_ty.clone(),
         Op::HashToMixed.default_effects(),
         Some(span),

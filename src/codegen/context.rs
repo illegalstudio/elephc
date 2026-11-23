@@ -1127,7 +1127,12 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire, false)
+    }
+
+    /// Publishes the new local before retiring a box retained across a consuming conversion.
+    pub(super) fn store_local_retiring_box(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire, true)
     }
 
     /// Republishes a container a mutating runtime helper may have relocated.
@@ -1140,7 +1145,7 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep, false)
     }
 
     /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
@@ -1200,9 +1205,10 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
         previous: RefCellStorePrevious,
+        retire_raw_box: bool,
     ) -> Result<()> {
         match self.local_slot_representation(slot) {
-            LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
+            LocalSlotRepresentation::Raw => self.store_value_to_raw_local_retiring_box(slot, value, retire_raw_box),
             LocalSlotRepresentation::RefCell => {
                 self.store_value_to_ref_cell_local(slot, value, previous)
             }
@@ -1226,7 +1232,7 @@ impl<'a> FunctionContext<'a> {
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
                 }
-                self.store_value_to_raw_local(slot, value)?;
+                self.store_value_to_raw_local_retiring_box(slot, value, retire_raw_box)?;
                 self.emit_branch(&done);
                 self.emitter.label(&ref_cell);
                 self.store_value_to_ref_cell_local(slot, value, previous)?;
@@ -1234,6 +1240,26 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Retires the previous box only for a slot whose final raw representation requires one.
+    fn store_value_to_raw_local_retiring_box(
+        &mut self, slot: LocalSlotId, value: ValueId, retire_box: bool,
+    ) -> Result<()> {
+        if !retire_box || self.local_php_type(slot)?.codegen_repr() != PhpType::Mixed {
+            return self.store_value_to_raw_local(slot, value);
+        }
+        // The original box survives the array mutation. Its replacement must be visible
+        // before the discarded payload can run a destructor.
+        let offset = self.local_offset(slot)?;
+        let previous = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, previous, offset);
+        abi::emit_push_reg(self.emitter, previous);
+        self.store_value_to_raw_local(slot, value)?;
+        let result = abi::int_result_reg(self.emitter);
+        abi::emit_pop_reg(self.emitter, result);
+        abi::emit_call_label(self.emitter, "__rt_decref_mixed");
+        Ok(())
     }
 
     /// Releases a boxed source-local owner before a consuming container mutation.

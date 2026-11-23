@@ -857,7 +857,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | StoreLocalRetiringBox | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | LoadStaticLocalRefCell | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -948,6 +948,13 @@ fn validate_instruction_immediate(
         }
         HashGetForWrite | HashSet | ArraySetMixedKey => {
             if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        HashToMixed => {
+            if matches!(inst.immediate, None | Some(Imm::LocalSlot(_))) {
                 Ok(())
             } else {
                 Err(ValidationError::UnexpectedImmediate(inst_id))
@@ -1338,7 +1345,7 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
+        StoreLocal | StoreLocalRetiringBox | StoreGlobal | StoreStaticLocal | InitStaticLocal
         | ExternGlobalStore | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn

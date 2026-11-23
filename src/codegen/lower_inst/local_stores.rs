@@ -38,7 +38,11 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal
         && inst.span.is_some_and(|span| span.line > 0)
         && value_is_acquire_of_str_concat(ctx, value)?;
-    ctx.store_value_to_local(slot, value)?;
+    if inst.op == Op::StoreLocalRetiringBox {
+        ctx.store_local_retiring_box(slot, value)?;
+    } else {
+        ctx.store_value_to_local(slot, value)?;
+    }
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
     }

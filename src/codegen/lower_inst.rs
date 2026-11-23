@@ -232,7 +232,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::LocalPlace => local_loads::lower_local_place(ctx, &inst),
-        Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::StoreLocal | Op::StoreLocalRetiringBox => lower_store_local(ctx, &inst),
         Op::SetLocalBindingState => super::local_binding_state::lower(ctx, &inst),
         Op::GetNativeBindingState | Op::GetEvalBindingState => super::local_binding_state::lower_get(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),

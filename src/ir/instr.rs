@@ -1106,6 +1106,8 @@ pub enum Op {
     LocalPlace,
     LoadLocal,
     StoreLocal,
+    /// Publishes a consuming hash writeback, retiring the old box when the slot uses Mixed.
+    StoreLocalRetiringBox,
     /// Writes a PHP local's initialized/unbound state without changing its physical value.
     /// Operand is Bool; the immediate identifies the source binding's local slot.
     SetLocalBindingState,
@@ -1264,6 +1266,8 @@ pub enum Op {
     /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
     /// `?ptr<T>` words: boxed Mixed slots (from a runtime bridge) become null or address words.
     ArrayToPointerWords,
+    /// Widens hash values to Mixed. A local-slot immediate identifies a storeback that
+    /// must retire the source box when the final frame stores the hash inside Mixed.
     HashToMixed,
     MixedCastBool,
     MixedCastInt,
@@ -1753,7 +1757,7 @@ impl Op {
             }
             // A refcounted cell publishes replacement storage and can run the previous payload's
             // destructor immediately, so the store has the full user-code effect boundary.
-            StoreRefCell => E::all(),
+            StoreRefCell | StoreLocalRetiringBox => E::all(),
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -2144,6 +2148,7 @@ impl Op {
             LocalPlace => "local_place",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
+            StoreLocalRetiringBox => "store_local_retiring_box",
             SetLocalBindingState => "set_local_binding_state",
             GetNativeBindingState => "get_native_binding_state",
             GetEvalBindingState => "get_eval_binding_state",
