@@ -394,17 +394,18 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         ExprKind::ArrayLiteral(vec![receiver, method]),
         Span::dummy(),
     );
-    let mut call_args = Vec::with_capacity(args.len() + 1);
-    call_args.push(callback);
-    call_args.extend(args.iter().cloned());
-    let call = Expr::new(
-        ExprKind::FunctionCall {
-            name: Name::unqualified("call_user_func"),
-            args: call_args,
-        },
-        expr.span,
+    // This is a direct dynamic method call, not `call_user_func`: by-reference arguments
+    // must keep their caller cells instead of taking the call_user_func by-value path.
+    let sig = super::descriptor_invoke::callable_descriptor_signature_for_expr(ctx, &callback);
+    let callback = lower_expr(ctx, &callback);
+    let result = super::descriptor_invoke::lower_call_user_func_descriptor_invoke_from_value(
+        ctx,
+        callback,
+        args,
+        sig.as_ref(),
+        expr,
+        false,
     );
-    let result = lower_expr(ctx, &call);
     if let Some(slot) = method_slot { retire_owned_call_operand(ctx, slot, expr.span); }
     retire_owned_call_operand(ctx, receiver_slot, expr.span);
     result

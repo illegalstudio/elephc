@@ -21,8 +21,11 @@ function nativeCanonicalEvalSnapshot(int &$target, string $code): void {
 }
 if ($argc < 0) { $target = 1; nativeCanonicalEvalSnapshot($target, ''); unset($target); }
 "#;
+    // Opaque eval injects the full builtin surface, including the filter prelude, so this
+    // fixture needs more headroom than the non-eval native reference tests. The heap-debug
+    // report below still fails the test on any leaked allocation.
     let (user, runtime, requirements) = without_ir_opt(||
-        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true));
+        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 1_048_576, true));
     let mut asm = String::new();
     instruction(&mut asm, "sub sp, sp, #32", "sub rsp, 32");
     instruction(&mut asm, "mov x0, #0", "xor eax, eax");

@@ -1138,6 +1138,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             usage.introspects = true;
             for value in runtime.exprs() { scan_expr(value, usage); }
         },
+        ExprKind::Reference(inner) => scan_expr(inner, usage),
         ExprKind::IncludeValue { path, .. } => {
             // Like the include statement: a runtime include inside a fragment loads code this
             // walk cannot read.

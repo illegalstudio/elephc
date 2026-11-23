@@ -22,6 +22,12 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_setlocale_wrong_args,
+    "<?php setlocale(LC_ALL);",
+    "expects at least 2 arguments"
+);
+
+expect_builtin_arity_error!(
     test_error_eval_wrong_args,
     "<?php eval();",
     "eval() takes exactly 1 argument"

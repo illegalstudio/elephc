@@ -293,12 +293,13 @@ function mutateDynamicIterable(iterable $input, int $flag): void {
 /// Mixed-backed nested writes clear their source slot before every consuming fetch.
 #[test]
 fn mixed_nested_writes_retire_source_slots_on_all_targets() {
-    use crate::ir::{Immediate, Op, RuntimeCallTarget, ValueDef};
+    use crate::ir::{Immediate, LocalKind, Op, RuntimeCallTarget, ValueDef};
     use crate::types::PhpType;
 
     let source = r#"<?php
+function mixedNestedItems(): mixed { return [10, 20, 30]; }
 function branchingKey(int $condition): void {
-    $items = [10, 20, 30];
+    $items = mixedNestedItems();
     $copy = $items;
     try { $items[$condition ? "1" : "0"]["x"] = 1; }
     catch (Throwable $error) {}
@@ -307,7 +308,7 @@ function republishedKey(int $condition): void {
     $items = [[0], [0]];
     $items["seed"] = [0];
     $copy = $items;
-    $items[($items = [[0], [0]]) ? ($condition ? 1 : 0) : 0][0] = 1;
+    $items[($items = mixedNestedItems()) ? ($condition ? 1 : 0) : 0][0] = 1;
 }
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -320,7 +321,7 @@ function republishedKey(int $condition): void {
                 .unwrap_or_else(|| panic!("{name}: missing {function_name}"));
             let mut witnessed = false;
             for block in &function.blocks {
-                for (fetch_index, fetch_id) in block.instructions.iter().copied().enumerate() {
+                for fetch_id in block.instructions.iter().copied() {
                     let fetch = function.instruction(fetch_id).unwrap();
                     if !matches!(fetch.immediate,
                         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite
@@ -328,27 +329,39 @@ function republishedKey(int $condition): void {
                     {
                         continue;
                     }
-                    let Some(receiver) = fetch.operands.first().copied() else { continue; };
-                    let Some(receiver_value) = function.value(receiver) else { continue; };
-                    let ValueDef::Instruction { inst: load_id, .. } = receiver_value.def else {
-                        continue;
+                    // The receiver may be a transparent `borrow` of the Mixed source load; follow
+                    // those projections to the load that owns the frame slot.
+                    let Some(mut receiver) = fetch.operands.first().copied() else { continue; };
+                    let load = loop {
+                        let Some(receiver_value) = function.value(receiver) else { break None; };
+                        let ValueDef::Instruction { inst: load_id, .. } = receiver_value.def else {
+                            break None;
+                        };
+                        let Some(inst) = function.instruction(load_id) else { break None; };
+                        match inst.op {
+                            Op::Borrow | Op::Acquire => {
+                                let Some(next) = inst.operands.first().copied() else { break None; };
+                                receiver = next;
+                            }
+                            Op::LoadLocal => break Some(inst),
+                            _ => break None,
+                        }
                     };
-                    let Some(load_index) = block.instructions.iter().position(|id| *id == load_id)
-                    else {
-                        continue;
-                    };
-                    let load = function.instruction(load_id).unwrap();
-                    if load.op != Op::LoadLocal {
-                        continue;
-                    }
+                    let Some(load) = load else { continue; };
                     let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
-                    if !matches!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
-                        PhpType::Mixed | PhpType::Union(_))
+                    let local = &function.locals[slot.as_raw() as usize];
+                    // Compiler temporaries have their own cleanup schedule; this regression is
+                    // about the PHP source slot the nested write consumes.
+                    if local.kind != LocalKind::PhpLocal
+                        || !matches!(local.php_type.codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_))
                     {
                         continue;
                     }
-                    assert!(block.instructions[load_index + 1..fetch_index].iter().any(|id| {
-                        let inst = function.instruction(*id).unwrap();
+                    // The retirement may sit in a predecessor block (a ternary arm republishes
+                    // the receiver before the nested store block), so compare emission order.
+                    let fetch_position = fetch_id.as_raw() as usize;
+                    assert!(function.instructions[..fetch_position].iter().any(|inst| {
                         inst.op == Op::ReleaseLocalSlot
                             && inst.immediate == Some(Immediate::LocalSlot(slot))
                     }), "{name}: {function_name} must clear the Mixed source slot before fetch");

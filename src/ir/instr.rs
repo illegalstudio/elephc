@@ -1044,6 +1044,12 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Loads the raw managed-cell pointer stored in a hidden ref-cell owner slot.
+    ///
+    /// Operand: none. Immediate: the owner `LocalSlot`. The result is a one-word `Pointer`;
+    /// unlike `LoadRefCell` it neither dereferences the cell nor interprets the slot with the
+    /// cell payload's type, which would box a `string` owner as a Mixed cell.
+    LoadLocalRefCellPtr,
     /// Copies the current value of a reference into an independent owning Mixed snapshot.
     /// The local's physical payload ABI stays unchanged, including for raw native parameters.
     LoadRefCellValue,
@@ -1232,6 +1238,13 @@ pub enum Op {
     ArrayElemAddr,
     ArraySet,
     HashSet,
+    /// Writes an associative entry with binding-replacing semantics.
+    ///
+    /// Unlike `HashSet`, an existing tag-11 reference entry is detached and replaced instead
+    /// of writing through its cell. Array literals use this so a duplicate key replaces an
+    /// earlier `&$name` entry exactly like PHP, including when the replacement is itself a
+    /// reference.
+    HashSetValue,
     /// Writes one signature-unknown callable-descriptor argument WITHOUT PHP's numeric-string
     /// key normalization.
     ///
@@ -1636,6 +1649,7 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            LoadLocalRefCellPtr => E::READS_LOCAL,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
@@ -1806,7 +1820,7 @@ impl Op {
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             // Marker writes can refuse an incompatible reference payload with a catchable Error.
             // Retiring the rejected or replaced value can also invoke arbitrary PHP destructors.
-            ArraySet | HashSet | DescriptorArgSet | ArraySetMixedKey => E::all(),
+            ArraySet | HashSet | HashSetValue | DescriptorArgSet | ArraySetMixedKey => E::all(),
             ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1984,6 +1998,7 @@ impl Op {
                 | Op::Call
                 | Op::ArraySet
                 | Op::HashSet
+                | Op::HashSetValue
                 | Op::DescriptorArgSet
                 | Op::ArraySetMixedKey
                 | Op::ClosureBind
@@ -2021,6 +2036,7 @@ impl Op {
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
+            LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
             LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
@@ -2140,6 +2156,7 @@ impl Op {
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashSetValue => "hash_set_value",
             DescriptorArgSet => "descriptor_arg_set",
             DescriptorArgKeyExists => "descriptor_arg_key_exists",
             ThrowNamedParameterOverwrite => "throw_named_parameter_overwrite",

@@ -466,6 +466,7 @@ pub(super) fn collect_arrow_expr_captures(
         ExprKind::Runtime(runtime) => {
             for value in runtime.exprs() { collect_arrow_expr_captures(value, bound, seen, captures); }
         },
+        ExprKind::Reference(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)

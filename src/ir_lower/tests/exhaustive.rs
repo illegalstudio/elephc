@@ -631,8 +631,13 @@ fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
         .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
     for op in ["hash_set", "hash_spread", "runtime_call"] {
         assert!(
-            text.lines()
-                .any(|line| line.trim().starts_with(&format!("{op} {hash} "))),
+            text.lines().any(|line| {
+                let line = line.trim();
+                line.starts_with(&format!("{op} {hash} "))
+                    // Associative literals use the reference-detaching value writer.
+                    || (op == "hash_set"
+                        && line.starts_with(&format!("hash_set_value {hash} ")))
+            }),
             "{op} does not write into the literal's own hash {hash}: {text}"
         );
     }

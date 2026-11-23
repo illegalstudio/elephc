@@ -46,10 +46,28 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
-                // backend answers for any boxed status, so the checker keeps the clearer word.
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
+                // PHP declares `string|int` and applies its weak scalar coercions to bool,
+                // float and null. A boxed or nullable scalar value dispatches on its runtime
+                // tag; static unsupported values keep a clear frontend diagnostic.
+                let supported = matches!(
+                    ty,
+                    PhpType::Int
+                        | PhpType::Str
+                        | PhpType::Bool
+                        | PhpType::False
+                        | PhpType::Float
+                        | PhpType::Void
+                        | PhpType::Mixed
+                        | PhpType::Object(_)
+                        | PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                ) || (matches!(ty, PhpType::Union(_))
+                    && matches!(
+                        ty.codegen_repr(),
+                        PhpType::Mixed | PhpType::TaggedScalar
+                    ));
+                if !supported {
+                    return Err(CompileError::new(span, "exit() argument must be string or integer"));
                 }
             }
             Ok(PhpType::Void)

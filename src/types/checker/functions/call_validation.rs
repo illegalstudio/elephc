@@ -457,6 +457,9 @@ impl Checker {
         }
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
+            // `call_user_func_array('f', [&$x])` expands the literal entry into a direct
+            // by-reference argument; the marker's inner expression is the caller's place.
+            ExprKind::Reference(inner) => self.is_by_ref_argument_lvalue(inner, env),
             ExprKind::ArrayAccess { array, .. } => {
                 self.is_addressable_ref_array_receiver(array, env)
             }
@@ -927,6 +930,7 @@ impl Checker {
             false,
             false,
             false,
+            false,
         )
     }
 
@@ -961,6 +965,7 @@ impl Checker {
             coercive,
             false,
             true,
+            false,
         )
     }
 
@@ -989,6 +994,7 @@ impl Checker {
             coercive,
             true,
             true,
+            false,
         )
     }
 
@@ -1040,6 +1046,34 @@ impl Checker {
             false,
             true,
             false,
+            false,
+        )
+    }
+
+    /// Validates a `call_user_func*` callback call, which passes every argument by value.
+    ///
+    /// The callback signature may declare by-reference parameters, but PHP's helpers never bind
+    /// caller storage: each one receives a temporary copy and the engine warns. Skipping the
+    /// lvalue and boxed-storage rules here mirrors that runtime contract.
+    pub(crate) fn check_known_callable_call_by_value(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            true,
+            false,
+            true,
+            false,
+            true,
         )
     }
 
@@ -1061,6 +1095,7 @@ impl Checker {
         coercive_param_binding: bool,
         descriptor_invocation: bool,
         allow_property_ref_places: bool,
+        by_value_reference_params: bool,
     ) -> Result<PhpType, CompileError> {
         // Before planning: the plan rewrites a literal unpack into spread-element projections
         // that the binding loop below leaves to runtime.
@@ -1084,12 +1119,13 @@ impl Checker {
             .count();
         let has_spread = source_has_spread;
         let regular_param_count = call_args::regular_param_count(sig);
-        let spread_projects_into_reference = descriptor_projections
-            .iter()
-            .enumerate()
-            .any(|(index, projected)| {
-                *projected && sig.ref_params.get(index).copied().unwrap_or(false)
-            });
+        let spread_projects_into_reference = !by_value_reference_params
+            && descriptor_projections
+                .iter()
+                .enumerate()
+                .any(|(index, projected)| {
+                    *projected && sig.ref_params.get(index).copied().unwrap_or(false)
+                });
         // The variadic collector is represented as the signature's final param
         // with no default expression, but it never contributes to minimum arity.
         let required = call_args::required_param_count(sig);
@@ -1155,14 +1191,30 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false);
-            let actual_ty = if descriptor_projected {
+            let supplied_reference_for_inference = !by_value_reference_params
+                && param_idx < regular_param_count
+                && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && !defaults.get(param_idx).copied().unwrap_or(false);
+            let inferred = if descriptor_projected {
                 // Descriptor unpack reads a runtime-keyed Mixed cell. Its binder owns the tag
                 // check against the selected parameter after deciding which slot this key fills.
-                PhpType::Mixed
+                Ok(PhpType::Mixed)
             } else if descriptor_invocation {
-                self.infer_descriptor_call_arg_type(arg, caller_env)?
+                self.infer_descriptor_call_arg_type(arg, caller_env)
             } else {
-                self.infer_type(arg, caller_env)?
+                self.infer_type(arg, caller_env)
+            };
+            // PHP creates an undefined variable when it is passed to a by-reference parameter.
+            // The reference writes a fresh value, so there is no undefined read to diagnose.
+            let actual_ty = match inferred {
+                Ok(ty) => ty,
+                Err(error)
+                    if supplied_reference_for_inference
+                        && error.message.starts_with("Undefined variable: $") =>
+                {
+                    PhpType::Mixed
+                }
+                Err(error) => return Err(error),
             };
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
@@ -1171,7 +1223,8 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                let supplied_reference = !by_value_reference_params
+                    && sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
                 if supplied_reference && !self.internal_callback_binding {
                     if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. })

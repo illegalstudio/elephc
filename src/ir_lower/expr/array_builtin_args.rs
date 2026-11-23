@@ -830,6 +830,7 @@ fn lower_builtin_args_preserving_values(
             elephc_builtin_contract::RuntimeBuiltinId::MbEreg
                 | elephc_builtin_contract::RuntimeBuiltinId::MbEregi
                 | elephc_builtin_contract::RuntimeBuiltinId::MbParseStr
+                | elephc_builtin_contract::RuntimeBuiltinId::ParseStr
                 | elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables))
         .and_then(|id| elephc_builtin_contract::lookup_id(id.builtin_id()))
         .and_then(|contract| contract.params.iter().position(|param| param.by_ref));

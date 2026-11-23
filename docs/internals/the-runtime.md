@@ -1528,7 +1528,12 @@ bracket pairs with nesting, the first unescaped closer) and maps the modifiers
 `i`, `m`, `s`, `u`, `U` to pcre2posix `REG_*` bits and `x`, `A`, `D`, `n`, `J`,
 `r` to the shim's private compile bits; `S`, `X`, space, LF and CR are ignored.
 Any pattern PHP rejects before compiling sets bit 30, which every helper tests
-right after the strip to return its failure value. `__rt_pcre_to_posix` keeps its
+right after the strip to return its failure value. `preg_match()` and the filter
+bridge compile the stripped body through the length-aware entry point, so embedded
+NUL bytes in a pattern match PHP; its subject is executed with `REG_STARTEND`, so
+embedded NUL bytes in the subject are searched too. The other `preg_*` helpers
+still pass a null-terminated pattern through `__rt_pcre_to_posix`.
+`__rt_pcre_to_posix` keeps its
 historic symbol name for compatibility but only materializes a null-terminated
 pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
 whole regex family is emitted only when the program's `RuntimeFeatures` request

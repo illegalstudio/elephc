@@ -161,6 +161,20 @@ writer, which makes the same run-time switch. An untyped property's storage is c
 write in its class, so any integer key there other than a literal `0` selects hash storage for
 that property, and later `$h->items[] = $v` appends continue from PHP's next integer key.
 
+Assigning to an offset of a variable that does not exist yet creates an empty array before the
+write, exactly as PHP does, and emits no `Undefined variable` diagnostic:
+
+```php
+<?php
+$map["name"] = "Alice";   // $map becomes ["name" => "Alice"]
+$list[] = 1;              // $list becomes [1]
+foreach ([1, 2, 3] as $value) { $totals[] = $value * 2; }
+```
+
+The implicit container is published after the key and right-hand side expressions run, so an
+exception in either leaves the variable undefined. A loop body reads the container already
+created by its previous iteration instead of resetting it.
+
 Keys follow PHP's array-key normalization. Integer keys remain integers, booleans and floats normalize to integer keys, `null` normalizes to the empty-string key, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php
@@ -345,32 +359,81 @@ echo $b[0];   // 9
 
 The same applies to function parameters and mutating built-ins (`array_push()`, `sort()`, `shuffle()`, etc.).
 
-### Reference elements in array literals are not supported
+### Reference elements in array literals
 
 PHP lets an array literal hold a *reference* to a variable, so writing through the
-array writes through to that variable:
+array writes through to that variable, and vice versa:
 
 ```php
 <?php
 $first = 1;
-$r = [&$first];   // not supported by elephc
+$r = [&$first];
 $r[0] = 9;
-echo $first;      // PHP: 9
+echo $first;      // 9
+$first = 12;
+echo $r[0];       // 12
 ```
 
-elephc rejects this at compile time:
+elephc stores such an entry as a managed reference cell inside an associative
+hash, so the same code works for bare elements (`[&$a]`), keyed elements
+(`['k' => &$a]`), the legacy `array(&$a)` spelling, and element reference
+assignments (`$data['k'] = &$value`). A filtered value written through the
+reference is visible through the aliased variable as well.
+
+Assigning a reference to an element that already holds one rebinds that entry
+instead of writing through its old cell. `$a = [&$y]; $a[0] = &$x;` leaves `$y`
+unchanged, makes `$a[0]` alias `$x`, and keeps the element's key position.
+
+`var_dump()` prints PHP's `&` marker while the reference cell is shared:
 
 ```text
-error[3:12]: Reference elements in array literals (`[&$x]`) are not supported:
-an array element cannot alias a variable's storage.
+array(1) {
+  [0]=>
+  &int(1)
+}
 ```
 
-The same applies to keyed elements (`['k' => &$a]`) and the legacy
-`array(&$a)` spelling. elephc's arrays store plain values, and its only
-reference form points *into* array storage (`$b =& $a[0]`), never out of it —
-an element aliasing a local variable would be a pointer to a stack slot the
-array can outlive. Assign the value and copy back afterwards, or alias an
-existing element with `$b =& $a[0]`.
+After `unset($first)` the cell has a single owner and the marker disappears,
+matching PHP.
+
+Current limits: a reference element must name a variable. Referencing another
+container place (`[&$items[0]]`, `[&$object->prop]`), `$GLOBALS`, and a bare reference after a
+spread (`[...$items, &$value]`) are rejected with a compile-time diagnostic.
+Writing a reference into a property (`$object->value = &$value`, declared or not) is
+rejected: that shape would need to replace the property's storage with the source cell,
+and the current writer can only do that for a plain local array element
+(`$array[$key] = &$value`). The same rejection covers static properties, property array
+elements, nested elements and temporary array bases. Alias the property with
+`$value =& $object->property` instead.
+Appending a reference (`$array[] = &$value`, including nested appends) is also
+rejected: the writer would have to allocate the new key and bind its cell before
+the source read. Alias an existing element with `$b =& $a[0]` when that is the
+storage you need.
+
+Reference elements also constrain later array operations:
+
+- `array_shift()`, `array_unshift()`, `array_reverse()`, `array_merge()`,
+  `sort()`, `rsort()` and `shuffle()` preserve reference-cell identity. The
+  user-comparator sorts (`usort()`, `uasort()`, `uksort()`) and `array_splice()`
+  refuse a concrete reference-promoted hash with a named unsupported-feature
+  error instead of detaching the cells. When the same hash is reached through a
+  boxed `array &$a` receiver, `array_splice()` currently returns an empty array
+  and leaves the storage unchanged. `array_values()` and the slicing helpers
+  return detached snapshots rather than PHP's references. Perform the reorder
+  before creating references, or rebuild into a fresh array.
+- `call_user_func_array()` applies the callback parameter's own passing mode to
+  each argument: a by-value parameter receives a copy of the current value, and a
+  by-reference parameter writes through to the referenced variable, matching PHP.
+- A nested bind (`$a[0][1] = &$value`) requires the parent element to already
+  hold an array; auto-vivifying an unknown parent is not supported. The bind may
+  also make `var_dump()` show the intermediate container with a `&` marker where
+  PHP shows an ordinary array. The aliasing itself is correct.
+- `unset($a[0][1])` after a nested reference bind is not supported; unset the
+  alias or rebuild the array.
+- `unset()` (or a `null` assignment) of a variable followed by a reference
+  write (`unset($a); $a['k'] = &$value;`) re-creates the container like PHP and
+  keeps the alias live; the killed slot is replaced instead of widening its
+  unset null into boxed storage.
 
 ## Multi-dimensional arrays
 ```php
@@ -462,7 +525,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. A `mixed` haystack (for example a `json_decode()` result) is searched at run time; a non-array payload raises a `TypeError`. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
-| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
+| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError`. A reference element is extracted as a detached snapshot of its current value, unlike PHP, which keeps the reference |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
 | `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. A `mixed` or declared `array` source is sliced by its runtime storage (a hash keeps its string keys and renumbers integer keys) and returns the boxed `array` type; a direct call then needs `$preserve_keys` to be `false`, while a callable (`array_slice(...)`, also through `call_user_func_array()` with a runtime argument array) applies the flag at run time. |
@@ -504,15 +567,15 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
 | `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
 | `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
-| `sort()` | `sort($arr): bool` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`); a hash-backed array whose values are `float` is still refused |
-| `rsort()` | `rsort($arr): bool` | Sort descending. Same element types as `sort()` |
+| `sort()` | `sort($arr): bool` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`); a hash-backed array whose values are `float` is still refused. Reference cells survive the reorder and the keys are renumbered from zero |
+| `rsort()` | `rsort($arr): bool` | Sort descending. Same element types and reference-cell behavior as `sort()` |
 | `asort()` | `asort($arr): bool` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): bool` | Sort by value desc, maintain keys |
 | `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
 | `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
 | `natsort()` | `natsort($arr): bool` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): bool` | Case-insensitive natural sort |
-| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place) |
+| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place). Hash-backed arrays are supported and keep their reference cells; keys are renumbered from zero |
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
 | `array_rand()` | `array_rand(array $array, int $num = 1): int\|string\|array` | Pick one random key, or an array of keys when `$num > 1`; consumes the seeded Mt19937 state |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
@@ -565,7 +628,10 @@ completion; their results can be used as boolean expressions.
 ### Mixed-valued associative arrays
 
 `array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` also support
-associative arrays whose values use boxed `mixed` storage. Reverse honors
+associative arrays whose values use boxed `mixed` storage. Hash-backed value sorts use a
+stable merge schedule with the shared PHP `<=>` comparator; PHP leaves the relative order of
+`NAN` comparisons unspecified, so the position of a `NAN` can differ from a particular PHP
+build even though every ordered scalar keeps PHP's ordering. Reverse honors
 `$preserve_keys`; shift and unshift renumber numeric keys while preserving string
 keys. `rsort()` sorts supported scalar values in descending order and renumbers
 the keys. Mutations preserve copy-on-write snapshots and retain removed values

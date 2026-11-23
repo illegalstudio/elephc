@@ -137,6 +137,7 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
 fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_has_dynamic_instanceof),
+        ExprKind::Reference(inner) => expr_has_dynamic_instanceof(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

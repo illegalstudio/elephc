@@ -1932,6 +1932,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -2030,6 +2044,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -11739,6 +11767,140 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "__elephc_parse_str",
+    "description": "Parses URL-encoded input byte-for-byte for the parse_str() prelude; returns one plus the exceeded max_input_vars, or zero.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": true,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_parse_str` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/parse_str.rs"
+    },
+    "module": "mbstring",
+    "name": "__elephc_parse_str",
+    "semantics": {
+      "argument_lowering": "preserve_values",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_parse_str"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "__elephc_parse_str"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": true
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_parse_str",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "kind",
           "optional": false,
           "type": "int"
@@ -18253,6 +18415,153 @@
     "since": null,
     "slug": "acos",
     "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "addcslashes",
+    "description": "Returns a string with backslashes before characters listed in a character set, including ranges.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.addcslashes` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/addcslashes.rs"
+    },
+    "module": "standard",
+    "name": "addcslashes",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "addcslashes"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "addcslashes"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "addcslashes"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "addcslashes",
+    "sub_area": "String"
   },
   {
     "aot": {
@@ -46081,7 +46390,7 @@
           "default": 0,
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -46108,7 +46417,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -46143,7 +46452,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "return_type": "void",
@@ -47820,7 +48129,7 @@
           "default": 0,
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -47847,7 +48156,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -47882,7 +48191,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "return_type": "void",
@@ -51422,6 +51731,767 @@
     "since": null,
     "slug": "filetype",
     "sub_area": "Filesystem"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "input_type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_has_var",
+    "description": "Checks whether a request input of the given type contains the named variable.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_has_var.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "input_type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/input.rs",
+      "codegen_function": "filter_has_var",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_has_var",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "input_type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_has_var",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_id",
+    "description": "Returns the filter id for the given filter name, or false when the name is unknown.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_id.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/surface.rs",
+      "codegen_function": "filter_id",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_id",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "name",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "int|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_id",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "FILTER_DEFAULT"
+          },
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_input",
+    "description": "Returns the filtered request input for the named variable, or null when it is absent.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_input.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "516",
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/input.rs",
+      "codegen_function": "filter_input",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_input",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "var_name",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "FILTER_DEFAULT",
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_input",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "FILTER_DEFAULT"
+          },
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": true,
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_input_array",
+    "description": "Returns filtered request inputs, keyed by the variable names in the options definition.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_input_array.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "516",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/input.rs",
+      "codegen_function": "filter_input_array",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_input_array",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "FILTER_DEFAULT",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "array|false|null",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_input_array",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_list",
+    "description": "Returns the list of all supported filter names.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_list.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/surface.rs",
+      "codegen_function": "filter_list",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_list",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_list",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "FILTER_DEFAULT"
+          },
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_var",
+    "description": "Filters a variable with the given filter and returns the filtered value.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_var.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "516",
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/public.rs",
+      "codegen_function": "filter_var",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_var",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "FILTER_DEFAULT",
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_var",
+    "sub_area": "Filter"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "FILTER_DEFAULT"
+          },
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": true,
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Filter",
+    "canonical_name": "filter_var_array",
+    "description": "Filters several values from one array using a definition of filters and flags.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filter",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filter/filter_var_array.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "516",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/filter_prelude/input.rs",
+      "codegen_function": "filter_var_array",
+      "notes": [
+        "Implemented by the compiler-injected filter prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_filter.rs"
+    },
+    "module": "filter",
+    "name": "filter_var_array",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "FILTER_DEFAULT",
+          "name": "options",
+          "optional": true,
+          "type": "array|int"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "add_empty",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "array|false|null",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "filter_var_array",
+    "sub_area": "Filter"
   },
   {
     "aot": {
@@ -116814,6 +117884,81 @@
     },
     "since": null,
     "slug": "ord",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "parse_str",
+    "description": "Parses a URL-encoded query string into variables.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/parse_str_prelude.rs",
+      "codegen_function": "parse_str",
+      "notes": [
+        "Implemented by the compiler-injected parse_str prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "parse_str",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "parse_str",
     "sub_area": "String"
   },
   {

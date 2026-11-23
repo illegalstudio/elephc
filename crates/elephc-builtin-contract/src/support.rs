@@ -162,7 +162,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     if matches!(
         contract.kind,
         BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
-    ) && !matches!(contract.area, Area::Curl | Area::Xml | Area::Tidy)
+    ) && !matches!(contract.area, Area::Curl | Area::Xml | Area::Tidy | Area::Filter)
         && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
@@ -379,10 +379,11 @@ mod tests {
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
         // The seven additional ctype contracts join the eval registry, the locale
-        // prelude exposes setlocale/nl_langinfo through forwarding eval homes, and
-        // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes.
-        // Seven ext/posix bindings run through the PCNTL interpreter adapter.
-        assert_eq!(eval_registry, 802 + curl_surface);
+        // prelude exposes setlocale/nl_langinfo through forwarding eval homes,
+        // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes,
+        // the filter surface adds its seven forwarding homes, and seven ext/posix bindings
+        // run through the PCNTL interpreter adapter.
+        assert_eq!(eval_registry, 810 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -407,12 +408,13 @@ mod tests {
         // the internal nl_langinfo helper join the internal eval inventory, as does the
         // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
         // two line-aware diagnostic helpers, the internal memory limit setter, the
-        // three compiled-pattern helpers the `preg_grep()` prelude calls, and the
-        // internal unserialize property store and PHAR validity probe.
-        assert_eq!(eval_internal, 150);
-        // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
+        // three compiled-pattern helpers the `preg_grep()` prelude calls, the internal
+        // `parse_str()` query parser, and the internal unserialize property store and
+        // PHAR validity probe.
+        assert_eq!(eval_internal, 151);
+        // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        assert_eq!(eval_pending, 382);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -427,14 +429,14 @@ mod tests {
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
         // with two line-aware tokenizer helpers, two PCRE error readers,
         // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
-        // compiled-pattern helpers, and the internal unserialize property store and
-        // PHAR validity probe.
-        // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
-        assert_eq!(aot_registry, 856);
+        // compiled-pattern helpers, the internal `parse_str()` query parser, the internal
+        // unserialize property store and PHAR validity probe, and the seven ext/posix bridge
+        // builtins as ordinary PCNTL registry operations.
+        assert_eq!(aot_registry, 858);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
-        // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
-        // The two PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 477 + curl_surface);
+        // `preg_grep` and the filter surface), and name-resolver rewrites remain outside
+        // the ordinary AOT registry. The two PHP-visible locale functions are prelude-provided.
+        assert_eq!(aot_external, 485 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -485,19 +487,19 @@ mod tests {
         // Heap usage queries keep a TypeError adapter for non-scalar flags.
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
+        // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, locale, and filter
         // forwarding homes, plus the `preg_grep` / `preg_last_error*` eval homes.
         // The seven ext/posix bridge builtins are served by the PCNTL adapter.
-        assert_eq!(interpreter_adapter, 707 + curl_surface);
+        assert_eq!(interpreter_adapter, 715 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
-        // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
+        // `__elephc_call_strict_types` reader, the tokenizer prelude's two line-aware
         // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
-        // three internal compiled-pattern helpers, and the internal unserialize
-        // property store and PHAR validity probe.
-        assert_eq!(unsupported, 531);
+        // three internal compiled-pattern helpers, the internal `parse_str()` parser, and
+        // the internal unserialize property store and PHAR validity probe.
+        assert_eq!(unsupported, 533);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

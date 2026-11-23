@@ -233,7 +233,9 @@ function keyed(bool $flag): array {
 "#;
     for target_name in TARGETS {
         with_function(source, target_name, "keyed", |function| {
-            let sets: Vec<_> = function.instructions.iter().filter(|i| i.op == Op::HashSet).collect();
+            let sets: Vec<_> = function.instructions.iter()
+                .filter(|i| matches!(i.op, Op::HashSet | Op::HashSetValue))
+                .collect();
             assert!(!sets.is_empty(), "{target_name}: fixture must build the keyed literal");
             for set in sets {
                 assert_eq!(function.value(set.operands[2]).unwrap().php_type, PhpType::Int,

@@ -18,6 +18,9 @@
 #define ELEPHC_PCRE2_NO_AUTO_CAPTURE 0x20000
 #define ELEPHC_PCRE2_DUPNAMES 0x40000
 #define ELEPHC_PCRE2_CASELESS_RESTRICT 0x80000
+/* Private /r bit on the filter bridge's raw-PCRE2-option ABI. It is not a POSIX cflag and
+ * never reaches preg->re_cflags. */
+#define ELEPHC_PCRE2_FILTER_CASELESS_RESTRICT 0x08000000
 #define ELEPHC_PCRE2_PRIVATE_COMPILE_FLAGS (ELEPHC_PCRE2_EXTENDED | ELEPHC_PCRE2_ANCHORED \
     | ELEPHC_PCRE2_DOLLAR_ENDONLY | ELEPHC_PCRE2_NO_AUTO_CAPTURE | ELEPHC_PCRE2_DUPNAMES \
     | ELEPHC_PCRE2_CASELESS_RESTRICT)
@@ -100,7 +103,8 @@ static pcre2_code *elephc_pcre2_compile_locale(
  * /n PCRE2_NO_AUTO_CAPTURE, /J PCRE2_DUPNAMES and /r PCRE2_EXTRA_CASELESS_RESTRICT.
  * An option group inserted before the pattern would hide (*UTF), (*ANYCRLF), (*CRLF),
  * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. */
-static int elephc_pcre2_compile_php(regex_t *preg, const char *pattern, int cflags)
+static int elephc_pcre2_compile_php_bounded(
+    regex_t *preg, const uint8_t *pattern, PCRE2_SIZE length, int cflags)
 {
     uint32_t options = 0;
     uint32_t extra_options = 0;
@@ -131,8 +135,8 @@ static int elephc_pcre2_compile_php(regex_t *preg, const char *pattern, int cfla
     preg->re_cflags = cflags & ~ELEPHC_PCRE2_PRIVATE_COMPILE_FLAGS;
     preg->re_pcre2_code = NULL;
     preg->re_match_data = NULL;
-    code = elephc_pcre2_compile_locale((const uint8_t *)pattern,
-        PCRE2_ZERO_TERMINATED, options, extra_options, &errorcode, &erroffset);
+    code = elephc_pcre2_compile_locale(pattern, length,
+        options, extra_options, &errorcode, &erroffset);
     preg->re_erroffset = erroffset;
     if (code == NULL) {
         (void)errorcode;
@@ -153,6 +157,14 @@ static int elephc_pcre2_compile_php(regex_t *preg, const char *pattern, int cfla
     }
     preg->re_erroffset = (size_t)(-1);
     return 0;
+}
+
+/* C-string compatibility entry point for the preg helpers that still pass a NUL-terminated
+ * pattern. New code that owns an explicit length uses elephc_pcre2_compile_php_bounded. */
+static int elephc_pcre2_compile_php(regex_t *preg, const char *pattern, int cflags)
+{
+    return elephc_pcre2_compile_php_bounded(
+        preg, (const uint8_t *)pattern, PCRE2_ZERO_TERMINATED, cflags);
 }
 
 typedef struct elephc_pcre2_v1_handle {
@@ -184,6 +196,57 @@ int32_t elephc_pcre2_v1_compile(
         return (int32_t)REG_ESPACE;
     }
     result = elephc_pcre2_compile_php(&handle->regex, pattern_z, (int)cflags);
+    if (result != 0) {
+        free(handle);
+        return (int32_t)result;
+    }
+    if (handle->regex.re_nsub == SIZE_MAX) {
+        pcre2_regfree(&handle->regex);
+        free(handle);
+        return (int32_t)REG_ESPACE;
+    }
+    handle->slot_count = handle->regex.re_nsub + 1;
+#if SIZE_MAX > UINT64_MAX
+    if (handle->slot_count > UINT64_MAX) {
+        pcre2_regfree(&handle->regex);
+        free(handle);
+        return (int32_t)REG_ESPACE;
+    }
+#endif
+    *match_slot_count_out = (uint64_t)handle->slot_count;
+    *handle_out = handle;
+    return 0;
+}
+
+/* Compiles one pattern body with an authoritative byte length. Embedded NUL bytes are part
+ * of the pattern, so this path never falls back to strlen. */
+int32_t elephc_pcre2_v1_compile_len(
+    void **handle_out,
+    const uint8_t *pattern,
+    uint64_t length,
+    uint32_t cflags,
+    uint64_t *match_slot_count_out
+) {
+    elephc_pcre2_v1_handle *handle;
+    int result;
+
+    if (handle_out != NULL) {
+        *handle_out = NULL;
+    }
+    if (match_slot_count_out != NULL) {
+        *match_slot_count_out = 0;
+    }
+    if (handle_out == NULL || match_slot_count_out == NULL
+        || (pattern == NULL && length != 0) || length > PTRDIFF_MAX || cflags > INT_MAX) {
+        return (int32_t)REG_BADPAT;
+    }
+
+    handle = (elephc_pcre2_v1_handle *)calloc(1, sizeof(*handle));
+    if (handle == NULL) {
+        return (int32_t)REG_ESPACE;
+    }
+    result = elephc_pcre2_compile_php_bounded(&handle->regex,
+        pattern == NULL ? (const uint8_t *)"" : pattern, (PCRE2_SIZE)length, (int)cflags);
     if (result != 0) {
         free(handle);
         return (int32_t)result;
@@ -363,6 +426,48 @@ int32_t elephc_pcre2_v1_mime_match(void *handle, const uint8_t *subject, uint64_
 /* Releases a native MIME handle through the same allocator that compiled it. */
 void elephc_pcre2_v1_mime_free(void *handle) {
     pcre2_code_free((pcre2_code *)handle);
+}
+
+/* Compiles one PHP regexp body for the filter bridge's diagnostics. Returns zero on success,
+ * a positive diagnostic length in `message`, or a negative PCRE2 error on an ABI failure.
+ * The compile uses the same locale character tables as matching, so a pattern PCRE2 accepts
+ * here cannot fail during the later match because of different ctype tables. */
+int32_t elephc_pcre2_v1_php_compile_check(
+    const uint8_t *pattern,
+    uint64_t length,
+    uint32_t options,
+    uint8_t *message,
+    uint64_t capacity,
+    uint64_t *offset_out
+) {
+    int errorcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    uint32_t extra_options = 0;
+    pcre2_code *code;
+
+    if (message == NULL || capacity > PTRDIFF_MAX || (pattern == NULL && length != 0)
+        || length > PTRDIFF_MAX) {
+        return PCRE2_ERROR_BADDATA;
+    }
+    if (offset_out != NULL) {
+        *offset_out = 0;
+    }
+    if ((options & ELEPHC_PCRE2_FILTER_CASELESS_RESTRICT) != 0) {
+        options &= ~ELEPHC_PCRE2_FILTER_CASELESS_RESTRICT;
+#ifdef PCRE2_EXTRA_CASELESS_RESTRICT
+        extra_options = PCRE2_EXTRA_CASELESS_RESTRICT;
+#endif
+    }
+    code = elephc_pcre2_compile_locale(pattern == NULL ? (const uint8_t *)"" : pattern,
+        (PCRE2_SIZE)length, options, extra_options, &errorcode, &erroffset);
+    if (code != NULL) {
+        pcre2_code_free(code);
+        return 0;
+    }
+    if (offset_out != NULL) {
+        *offset_out = (uint64_t)erroffset;
+    }
+    return (int32_t)pcre2_get_error_message(errorcode, message, (PCRE2_SIZE)capacity);
 }
 
 /* Copies a NUL-terminated PCRE2 diagnostic and returns its length excluding NUL.

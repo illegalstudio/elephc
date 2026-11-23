@@ -74,10 +74,11 @@ impl Checker {
             let default = super::super::schema::normalize_lexical_callable_default(default, owner, parent)?;
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
-                    let declared_ty = self.resolve_declared_param_type_hint(
+                    let declared_ty = self.resolve_declared_param_storage_hint(
                         type_ann,
                         span,
                         &format!("Closure parameter ${}", name),
+                        *is_ref,
                     )?;
                     // A synthesized lexical-scope Error has no value to compare with
                     // the declared type. Actual value defaults keep normal validation.

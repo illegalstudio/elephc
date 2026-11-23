@@ -2094,6 +2094,60 @@ fn packed_argument_param_storage(
     crate::types::packed_argument_hash_storage(param_ty, &ctx.builder.value_php_type(operand))
 }
 
+/// Returns the whole-variable name of a plain by-reference array output whose current
+/// storage `zend_try_array_init()` must replace before the call.
+///
+/// Only an unset variable or a concrete non-array value needs the seed; an initialized array
+/// keeps its own storage, and a `mixed`/union local keeps the callee's runtime array check.
+pub(super) fn by_ref_array_output_seed_target<'a>(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &'a Expr,
+) -> Option<&'a str> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let (_, param_ty) = sig.params.get(index)?;
+    if !param_ty.is_php_array()
+        || crate::types::is_written_reference_array_param(
+            &sig.ref_params,
+            &sig.param_type_exprs,
+            index,
+        )
+    {
+        return None;
+    }
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    let ExprKind::Variable(name) = &place.kind else {
+        return None;
+    };
+    let slot_initialized = ctx
+        .local_slots
+        .get(name)
+        .is_some_and(|slot| ctx.slot_is_initialized(*slot));
+    // `zend_try_array_init()` replaces a `mixed` or union value too. Gate that broader seed
+    // on `parse_str()` so a userland `array &$a` parameter keeps its runtime TypeError for a
+    // non-array value. `call_description` is the canonical callee during argument lowering.
+    let parse_str = ctx
+        .call_description
+        .as_deref()
+        .is_some_and(|callee| callee.trim_start_matches('\\').eq_ignore_ascii_case("parse_str"));
+    let storage = ctx.local_type(name).codegen_repr();
+    let concrete_non_array = if parse_str {
+        !matches!(storage, PhpType::Array(_) | PhpType::AssocArray { .. })
+    } else {
+        !matches!(
+            storage,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        )
+    };
+    (!slot_initialized || concrete_non_array).then_some(name.as_str())
+}
+
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.
 pub(super) fn lower_by_ref_array_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2108,6 +2162,24 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
+    // php-src's `parse_str()` runs its by-reference result through `zend_try_array_init`,
+    // replacing an unset, null, or other value with a fresh array before parsing (the
+    // parameter has no type in arginfo). The documented `array` hint on the prelude would
+    // reject a null cell at entry, so seed the caller's slot with the empty array PHP's
+    // parser creates. Initialized arrays keep their own storage.
+    if let Some(name) = by_ref_array_output_seed_target(ctx, sig, index, arg) {
+        let name = name.to_string();
+        let empty_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let empty = ctx.emit_value(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(Immediate::Capacity(0)),
+            empty_ty.clone(),
+            Op::ArrayNew.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_call_argument_local(&name, empty, empty_ty, Some(arg.span));
+    }
     if param_ty.is_php_array()
         && matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
     {

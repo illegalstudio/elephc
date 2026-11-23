@@ -429,18 +429,42 @@ pub(super) fn lower_mixed_array_literal(
             }
             ArrayEntry::Keyed(key, value) => {
                 let span = key.span;
+                let reference_source = match &value.kind {
+                    ExprKind::Reference(inner) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                let value_expr = reference_source.unwrap_or(value);
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
-                let value_span = value.span;
-                let value = lower_expr(ctx, value);
+                let value_span = value_expr.span;
+                let value = if reference_source.is_some() {
+                    // A reference bind creates an undefined variable silently in PHP.
+                    ctx.begin_quiet_undefined_reads(value_expr);
+                    let value = crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
+                        ctx, value_expr,
+                    )
+                    .unwrap_or_else(|| lower_expr(ctx, value_expr));
+                    ctx.end_quiet_undefined_reads();
+                    value
+                } else {
+                    crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
+                        ctx, value_expr,
+                    )
+                    .unwrap_or_else(|| lower_expr(ctx, value_expr))
+                };
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
                 ctx.emit_void(
-                    Op::HashSet,
+                    Op::HashSetValue,
                     vec![hash.value, key.value, value.value],
                     None,
-                    Op::HashSet.default_effects(),
+                    Op::HashSetValue.default_effects(),
                     Some(span),
                 );
+                if let Some(source) = reference_source {
+                    crate::ir_lower::expr::assoc_array_literals::bind_reference_literal_entry(
+                        ctx, hash.value, key.value, source, value_span,
+                    );
+                }
                 if let Some(owner) = key_owner {
                     retire_owned_call_operand(ctx, owner, span);
                 }
@@ -1033,6 +1057,9 @@ fn array_literal_element_type_for_ir_unboxed(
         return storage;
     }
     match &item.kind {
+        // A reference entry's payload is a boxed Mixed cell owned by the managed reference, so
+        // the hash storage stays dynamic regardless of the aliased place's declared type.
+        ExprKind::Reference(_) => PhpType::Mixed,
         ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::Cast {
             target: CastType::Array,
@@ -1109,6 +1136,11 @@ fn array_literal_element_type_for_ir_unboxed(
                 .map(ir_array_storage_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
+        // A call through a runtime callable (`$f()`, `($arr[0])()`) has no syntactic return
+        // type: `infer_expr_type_syntactic` answers `Int` for it, which would stamp the
+        // literal with an integer element and cast away (or release) the returned string or
+        // array. Keep the boxed runtime result.
+        ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }

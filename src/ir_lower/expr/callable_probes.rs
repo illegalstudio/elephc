@@ -133,6 +133,14 @@ pub(super) fn lower_static_call_user_func(
                 return None;
             }
             if let Some(callback_args) = static_call_user_func_array_args(arg_array) {
+                // `call_user_func_array` binds every value entry to a by-value temporary and
+                // warns for a by-reference parameter. A direct call would alias the caller's
+                // storage and drop the warning, so leave those signatures to the descriptor
+                // invoker, which owns the by-value contract.
+                let signature = callable_descriptor_signature_for_expr(ctx, callback_arg);
+                if signature.as_ref().is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
+                    return None;
+                }
                 if callback_args.iter().any(|arg| is_native_selection_reference_argument(ctx, arg)) {
                     return lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr);
                 }

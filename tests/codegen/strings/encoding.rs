@@ -81,6 +81,128 @@ fn test_addslashes() {
     assert_eq!(out, r#"He said \"hi\" and it\'s ok"#);
 }
 
+/// PHP escapes the NUL byte as the two-character `\0` sequence.
+#[test]
+fn test_addslashes_escapes_nul_byte() {
+    let out = compile_and_run(r#"<?php echo bin2hex(addslashes("a\0b"));"#);
+    assert_eq!(out, "615c3062");
+}
+
+/// Expands PHP's ascending character ranges and escapes printable members with a backslash.
+#[test]
+fn test_addcslashes_expands_ranges() {
+    let out = compile_and_run(r#"<?php echo addcslashes("foo[ ]", "A..z");"#);
+    assert_eq!(out, r"\f\o\o\[ \]");
+}
+
+/// Uses PHP's short C escapes for control characters and octal for other non-printables.
+#[test]
+fn test_addcslashes_uses_short_and_octal_escapes() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(addcslashes("a\nb\0c", "\n\0"));"#,
+    );
+    assert_eq!(out, "615c6e625c30303063");
+}
+
+/// Rejects a descending range, escapes its literal bytes, and reports one warning per range.
+#[test]
+fn test_addcslashes_descending_range_warns_and_keeps_literals() {
+    let output = compile_and_run_capture(r#"<?php echo addcslashes("azAZ", "z..A y..B");"#);
+    assert_eq!(output.stdout, r"a\z\AZ");
+    assert_eq!(
+        output.stderr.matches("Invalid '..'-range").count(),
+        2,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Starts a `..` range at the first dot for php-src's three-dot `H...o` shape.
+#[test]
+fn test_addcslashes_three_dot_range_starts_at_the_first_dot() {
+    let out = compile_and_run(
+        r#"<?php echo addcslashes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "H...o");"#,
+    );
+    assert_eq!(
+        out,
+        r"\A\B\C\D\E\F\G\H\I\J\K\L\M\N\O\P\Q\R\S\T\U\V\W\X\Y\Z\a\b\c\d\e\f\g\h\i\j\k\l\m\n\opqrstuvwxyz"
+    );
+}
+
+/// Emits php-src's four `Invalid '..'-range` diagnostics in character-list order.
+/// A first-class `addcslashes()` callable emits its runtime helper without a direct call.
+#[test]
+fn test_addcslashes_first_class_callable_emits_runtime_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$escape = addcslashes(...);
+echo $escape("a\nb", "\n");
+"#,
+    );
+    assert_eq!(out, "a\\nb");
+}
+
+#[test]
+fn test_addcslashes_range_diagnostics_match_php() {
+    let output = compile_and_run_capture(
+        r#"<?php
+echo addcslashes("abc", ".."), "|";
+echo addcslashes("abc", "a.."), "|";
+echo addcslashes("abc", "a..b..c"), "|";
+echo addcslashes("abc", "H..o..e"), "|";
+"#,
+    );
+    assert_eq!(output.stdout, r"abc|\abc|\a\b\c|\a\b\c|");
+    let left = output
+        .stderr
+        .find("no character to the left of '..'")
+        .expect("missing left-range diagnostic");
+    let right = output
+        .stderr
+        .find("no character to the right of '..'")
+        .expect("missing right-range diagnostic");
+    let plain = output
+        .stderr
+        .find("Invalid '..'-range in ")
+        .expect("missing plain range diagnostic");
+    let increment = output
+        .stderr
+        .find("'..'-range needs to be incrementing")
+        .expect("missing incrementing-range diagnostic");
+    assert!(left < right && right < plain && plain < increment, "stderr: {:?}", output.stderr);
+    assert_eq!(output.stderr.matches("Warning: addcslashes()").count(), 4);
+}
+
+/// A discarded addcslashes result still runs: its descending-range warning is observable
+/// output, so dead-code elimination must not remove the call.
+#[test]
+fn test_addcslashes_warning_is_not_dead_code() {
+    let output = compile_and_run_capture(r#"<?php addcslashes("azAZ", "z..A"); echo "done";"#);
+    assert_eq!(output.stdout, "done");
+    assert_eq!(
+        output.stderr.matches("Invalid '..'-range").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Reserves the four-bytes-per-byte worst case, including the heap fallback above scratch.
+#[test]
+fn test_addcslashes_large_input_uses_the_reserved_capacity() {
+    let out = compile_and_run(
+        r#"<?php echo strlen(addcslashes(str_repeat("a", 20000), "a"));"#,
+    );
+    assert_eq!(out, "40000");
+}
+
+/// Leaves the input unchanged when the character list is empty.
+#[test]
+fn test_addcslashes_empty_character_list_is_identity() {
+    let out = compile_and_run(r#"<?php echo addcslashes("abc", "");"#);
+    assert_eq!(out, "abc");
+}
+
 /// Verifies `stripslashes()` removes backslash escaping from \" and \' sequences.
 #[test]
 fn test_stripslashes() {

@@ -219,3 +219,46 @@ eval('echo "e";');
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// A first offset write whose value rebinds the destination keeps the assigned array entries
+/// and releases the discarded auto-vivified container.
+#[test]
+fn test_first_array_write_receiver_reassignment_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $a[0] = count($a = [10, 20]);
+    echo $a[0], "|", $a[1], "|";
+}
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2|20|2|20|2|20|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A killed binding rebound to a packed array by the value expression releases the stale
+/// auto-vivified hash and keeps the assignment leak-free.
+#[test]
+fn test_killed_binding_reassignment_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $a = null;
+    $a[0] = count($a = [10, 20]);
+    echo $a[0], "|", $a[1], "|";
+}
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2|20|2|20|2|20|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

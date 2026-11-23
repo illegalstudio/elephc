@@ -81,6 +81,8 @@ static GLOBAL_CONSTANT_DEPRECATIONS: &[(&str, ConstantDeprecation)] = &[
     global("CURLOPT_BINARYTRANSFER", "Constant CURLOPT_BINARYTRANSFER is deprecated since 8.4, as it had no effect since 5.1.2", PhpVersion::Php84),
     global("DATE_RFC7231", "Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT", PhpVersion::Php85),
     global("E_STRICT", "Constant E_STRICT is deprecated since 8.4, the error level was removed", PhpVersion::Php84),
+    global("FILTER_SANITIZE_STRING", "Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead", PhpVersion::Php81),
+    global("FILTER_SANITIZE_STRIPPED", "Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead", PhpVersion::Php81),
     global("MT_RAND_PHP", "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937", PhpVersion::Php83),
     global("MYSQLI_DATA_TRUNCATED", "Constant MYSQLI_DATA_TRUNCATED is deprecated since 8.1, as it was unused", PhpVersion::Php81),
     global("MYSQLI_IS_MARIADB", "Constant MYSQLI_IS_MARIADB is deprecated since 8.2, as it is always false", PhpVersion::Php82),

@@ -496,6 +496,12 @@ pub(crate) fn compile_and_run_files_expect_failure(
     // resolution and before name resolution, so a multi-file fixture can construct
     // `Random\Engine\*` exactly like a normally compiled program.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::filter_prelude::inject_if_used_with_ini_for_sapi(
+        resolved,
+        &[],
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -610,6 +616,12 @@ fn compile_and_run_files_with_defines_per_argv(
     // resolution and before name resolution, so a multi-file fixture can construct
     // `Random\Engine\*` exactly like a normally compiled program.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::filter_prelude::inject_if_used_with_ini_for_sapi(
+        resolved,
+        &[],
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =

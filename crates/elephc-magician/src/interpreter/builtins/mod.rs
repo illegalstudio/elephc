@@ -21,6 +21,7 @@ mod core;
 #[cfg(feature = "curl")]
 mod curl;
 mod fileinfo;
+mod filter;
 mod filesystem;
 mod formatting;
 mod gmp;
@@ -51,6 +52,7 @@ pub(super) use core::*;
 #[cfg(feature = "curl")]
 pub(super) use curl::*;
 pub(super) use fileinfo::*;
+pub(super) use filter::*;
 pub(super) use filesystem::*;
 pub(super) use formatting::*;
 pub(super) use gmp::*;

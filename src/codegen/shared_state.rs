@@ -27,6 +27,7 @@ use crate::types::{FunctionSig, PhpType};
 pub(crate) struct GeneratedRuntimeFeatures {
     pub(crate) handler_state: bool,
     pub(crate) object_clone: bool,
+    pub(crate) addcslashes: bool,
 }
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
@@ -195,6 +196,9 @@ impl SharedCodegenState {
         &mut self,
         key: &crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
     ) -> String {
+        // A selector expands the module's runtime-callable inventory, which can include the
+        // `addcslashes()` builtin wrapper even when no direct EIR call names it.
+        self.generated_runtime_features.addcslashes = true;
         if let Some((_, label)) = self.callable_selectors.iter().find(|(existing, _)| existing == key) {
             return label.clone();
         }
@@ -228,6 +232,8 @@ impl SharedCodegenState {
                     };
                     self.generated_runtime_features.object_clone |=
                         target == Some(RuntimeFnId::CloneWith);
+                    self.generated_runtime_features.addcslashes |=
+                        target == Some(RuntimeFnId::Addcslashes);
                 }
                 Op::CoreBuiltin => {
                     let operation = match inst.immediate {

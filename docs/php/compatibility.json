@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 202,
+      "have": 204,
       "total": 329
     },
     "constants": {
-      "have": 1617,
+      "have": 1673,
       "total": 3181
     },
     "functions": {
-      "have": 1121,
+      "have": 1130,
       "total": 2169
     }
   },
@@ -787,20 +787,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": {
-        "eval": 0,
-        "have": 0,
+        "eval": 56,
+        "have": 56,
         "total": 56
       },
-      "docs": null,
+      "docs": "docs/php/filter.md#functions",
       "extension": "filter",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 7,
+        "have": 7,
         "total": 7
       },
       "name": "filter",
@@ -1510,8 +1510,8 @@
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 353,
-        "have": 392,
+        "eval": 354,
+        "have": 394,
         "total": 545
       },
       "name": "standard",
