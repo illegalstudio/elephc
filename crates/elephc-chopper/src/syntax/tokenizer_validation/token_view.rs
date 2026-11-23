@@ -163,9 +163,6 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
             return Some(Projected::Token(token, false));
         }
         tok::T_STRING => {
-            if neutralized_name(text) {
-                return None;
-            }
             return Some(Projected::Token(Token::Identifier(text.to_owned()), false));
         }
         tok::T_LNUMBER => {
@@ -177,8 +174,14 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
                 .ok()
                 .map(|value| Projected::Token(Token::IntLiteral(value), false));
         }
-        tok::T_DNUMBER
-        | tok::T_CONSTANT_ENCAPSED_STRING
+        tok::T_DNUMBER => {
+            return text
+                .replace('_', "")
+                .parse::<f64>()
+                .ok()
+                .map(|value| Projected::Token(Token::FloatLiteral(value), false));
+        }
+        tok::T_CONSTANT_ENCAPSED_STRING
         | tok::T_START_HEREDOC
         | tok::T_END_HEREDOC
         | tok::T_ENCAPSED_AND_WHITESPACE
@@ -337,8 +340,7 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
         }
         !matches!(
             id,
-            tok::T_DNUMBER
-                | tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
                 | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
                 | tok::T_GOTO
                 | tok::T_ELLIPSIS
@@ -381,15 +383,6 @@ fn next_significant_is_brace<T: SourceToken>(tokens: &[T], index: usize) -> bool
     tokens
         .get(next)
         .is_some_and(|token| token.id() == i64::from(b'{'))
-}
-
-/// Returns whether a T_STRING spelling is neutralized by the text parser view.
-fn neutralized_name(text: &str) -> bool {
-    [
-        "enum", "self", "parent", "true", "false", "null", "packed", "extern", "ifdef",
-    ]
-    .iter()
-    .any(|name| text.eq_ignore_ascii_case(name))
 }
 
 /// Returns whether `text` is a PHP label-shaped word.

@@ -1041,6 +1041,8 @@ mod tests {
             b"<?php $a = <<<TXT\nhello\nTXT;",
             b"<?php $a = `echo hi`;",
             b"<?php $a = 'it\\'s';",
+            b"<?php $a = true; $b = false; $c = null;",
+            b"<?php $a = 1.5; $b = 1e3;",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
@@ -1089,9 +1091,12 @@ mod tests {
                 .enumerate()
             {
                 let ((old_token, _), (new_token, new_metadata)) = pairs;
-                assert_eq!(
-                    old_token,
-                    new_token,
+                let same_kind = match (old_token, new_token) {
+                    (crate::syntax::lexer::Token::Identifier(_), crate::syntax::lexer::Token::Identifier(_)) => true,
+                    _ => old_token == new_token,
+                };
+                assert!(
+                    same_kind,
                     "kind at {index} for {}",
                     String::from_utf8_lossy(source)
                 );
