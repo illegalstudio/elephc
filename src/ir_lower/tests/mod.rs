@@ -197,8 +197,15 @@ fn with_erased_write_helpers<'m>(
     module: &'m crate::ir::Module, function: &'m crate::ir::Function,
 ) -> Vec<&'m crate::ir::Function> {
     let mut bodies = vec![function];
-    bodies.extend(module.functions.iter()
-        .filter(|candidate| candidate.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX)));
+    let called = function.instructions.iter()
+        .filter(|inst| is_erased_write_call(module, inst))
+        .filter_map(|inst| match inst.immediate {
+            Some(crate::ir::Immediate::Data(id)) => Some(module.data.function_names[id.as_raw() as usize].as_str()),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    bodies.extend(module.functions.iter().filter(|candidate| called.contains(candidate.name.as_str())));
+    assert_eq!(bodies.len(), called.len() + 1, "{} calls an erased-write helper that has no body", function.name);
     bodies
 }
 
