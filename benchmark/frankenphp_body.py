@@ -200,7 +200,7 @@ def main() -> None:
                     instrument((run_dir / "main.php").read_text())
                 )
                 commands = {}
-                common.run_process([str(compiler), "timed.php"], run_dir, args.timeout)
+                common.run_process([*common.compile_command(compiler), "timed.php"], run_dir, args.timeout)
                 commands["elephc"] = [str(run_dir / "timed")]
                 commands["php"] = [php, "-d", "opcache.enable_cli=0",
                                    "-d", "opcache.jit=0",
