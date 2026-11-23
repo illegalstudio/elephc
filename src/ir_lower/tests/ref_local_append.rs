@@ -225,6 +225,7 @@ touchUnknown($items); echo count($items);
         );
         let mut boxed = 0;
         let mut native = 0;
+        let mut hash_writebacks = 0;
         for function in module.functions.iter()
             .chain(module.class_methods.iter())
             .chain(module.closures.iter())
@@ -270,14 +271,29 @@ touchUnknown($items); echo count($items);
                 assert!(pop < release, "{target}: detach the unwind pin before releasing its string");
             }
             for block in &function.blocks {
-                for id in &block.instructions {
+                for (index, id) in block.instructions.iter().enumerate() {
                     let append = function.instruction(*id).unwrap();
                     if !matches!(append.op, Op::ArrayPush | Op::HashAppend | Op::MixedArrayAppend) { continue; }
                     let value = function.value(append.operands[0]).unwrap();
                     let crate::ir::ValueDef::Instruction { inst, .. } = value.def else { continue; };
-                    let load = function.instruction(inst).unwrap();
-                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+                    let producer = function.instruction(inst).unwrap();
+                    let Some(Immediate::LocalSlot(slot)) = producer.immediate else { continue; };
                     if function.locals[slot.as_raw() as usize].php_type.codegen_repr() != PhpType::Mixed { continue; }
+                    if producer.op == Op::HashToMixed {
+                        assert_eq!(append.op, Op::HashAppend, "{target}: widened hash uses native append");
+                        assert_eq!(value.ownership, crate::ir::Ownership::Owned,
+                            "{target}: widening must produce an independent hash");
+                        assert!(block.instructions[index + 1..].iter().any(|id| {
+                            let store = function.instruction(*id).unwrap();
+                            store.op == Op::StoreLocalRetiringBox
+                                && store.immediate == Some(Immediate::LocalSlot(slot))
+                                && store.operands == [append.operands[0]]
+                        }), "{target}: the mutated hash replaces and retires the old box");
+                        hash_writebacks += 1;
+                        continue;
+                    }
+                    assert!(matches!(producer.op, Op::LoadLocal | Op::LoadRefCell),
+                        "{target}: direct append must load its receiver");
                     if append.op == Op::ArrayPush {
                         assert!(matches!(value.php_type.codegen_repr(), PhpType::Array(_)),
                             "{target}: native consumers retain an indexed-array view");
@@ -293,6 +309,7 @@ touchUnknown($items); echo count($items);
         }
         assert!(boxed > 0 && native > 0 && boxed + native >= 6,
             "{target}: cover boxed and native views in methods, functions, closures and main: {boxed}/{native}");
+        assert!(hash_writebacks > 0, "{target}: cover a widened hash stored in a boxed local");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
