@@ -8,7 +8,33 @@
 //! - Array keys have an independent owner; string offsets and object dimensions are controls.
 
 use super::*;
-use crate::{codegen_support::platform::Target, parser::ast::Program, source::SourceMode};
+use crate::{
+    codegen_support::platform::Target, parser::ast::Program, php_version::PhpVersion,
+    source::SourceMode,
+};
+
+/// Restores the thread-local compile profile after a version-sensitive source-validation test.
+struct CompileProfileGuard {
+    version: PhpVersion,
+    web: bool,
+}
+
+impl Drop for CompileProfileGuard {
+    /// Restores the profile that was active before the test selected an older PHP version.
+    fn drop(&mut self) {
+        crate::codegen_support::set_compile_profile(self.version, self.web);
+    }
+}
+
+/// Selects one PHP version for source validation and returns its restoration guard.
+fn select_php_version(version: PhpVersion) -> CompileProfileGuard {
+    let guard = CompileProfileGuard {
+        version: crate::codegen_support::compile_php_version(),
+        web: crate::codegen_support::compile_is_web_sapi(),
+    };
+    crate::codegen_support::set_compile_profile(version, false);
+    guard
+}
 
 /// Selects only the key guarantee, leaving all other strict families disabled.
 fn profile() -> SemanticProfile {
@@ -103,6 +129,20 @@ fn strict_array_key_source_validation_tracks_negative_append_keys() {
     let source = "<?php $values = [-2 => []]; $values[] = 'ab'; $values[-1][false] = 'x';";
     crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
         .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+}
+
+/// Spread-free literals use the selected PHP version's negative implicit-key rule before folding.
+#[test]
+fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
+    let _profile = select_php_version(PhpVersion::Php82);
+    let accepted = "<?php $values = [-2 => [], 'ab']; $values[0][false] = 'x';";
+    crate::semantics::validate_source(&parse(accepted, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+    let rejected = "<?php $values = [-2 => [], 'ab']; $values[-1][false] = 'x';";
+    let error = crate::semantics::validate_source(&parse(rejected, SourceMode::Php), profile())
+        .expect_err("PHP 8.2 leaves the missing -1 slot as an array write parent");
+    assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
 }
 
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.

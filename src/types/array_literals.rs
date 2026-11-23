@@ -27,25 +27,38 @@ pub(crate) struct LiteralArrayEntryPlan<'a> {
 pub(crate) fn plan_literal_array_entries(
     expr: &ExprKind, php_version: crate::php_version::PhpVersion, profile: SemanticProfile,
 ) -> Option<Vec<LiteralArrayEntryPlan<'_>>> {
-    let mut max_int: Option<i64> = None;
     let entries = match expr {
         ExprKind::ArrayLiteral(values) => values.iter().map(|value| (None, value)).collect::<Vec<_>>(),
         ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().map(|(key, value)| (Some(key), value)).collect(),
-        ExprKind::ArrayLiteralMixed(entries) => {
-            let mut planned = Vec::with_capacity(entries.len());
-            for entry in entries {
-                match entry {
-                    ArrayEntry::Spread(_)
-                    | ArrayEntry::Reference(_)
-                    | ArrayEntry::KeyReference(_, _) => return None,
-                    ArrayEntry::Keyed(key, value) => planned.push((Some(key), value)),
-                    ArrayEntry::Value(value) => planned.push((None, value)),
-                }
-            }
-            planned
-        }
+        ExprKind::ArrayLiteralMixed(entries) =>
+            return plan_mixed_literal_array_entries(entries, php_version, profile),
         _ => return None,
     };
+    plan_literal_entry_sequence(entries, php_version, profile)
+}
+
+/// Plans one spread-free mixed literal for consumers that already hold its entry slice.
+pub(crate) fn plan_mixed_literal_array_entries(
+    entries: &[ArrayEntry], php_version: crate::php_version::PhpVersion, profile: SemanticProfile,
+) -> Option<Vec<LiteralArrayEntryPlan<'_>>> {
+    let mut planned = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry {
+            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) =>
+                return None,
+            ArrayEntry::Keyed(key, value) => planned.push((Some(key), value)),
+            ArrayEntry::Value(value) => planned.push((None, value)),
+        }
+    }
+    plan_literal_entry_sequence(planned, php_version, profile)
+}
+
+/// Assigns versioned implicit keys to one already classified literal entry sequence.
+fn plan_literal_entry_sequence<'a>(
+    entries: Vec<(Option<&'a Expr>, &'a Expr)>, php_version: crate::php_version::PhpVersion,
+    profile: SemanticProfile,
+) -> Option<Vec<LiteralArrayEntryPlan<'a>>> {
+    let mut max_int: Option<i64> = None;
     let mut result = Vec::with_capacity(entries.len());
     for (key_expr, value) in entries {
         let key = match key_expr {

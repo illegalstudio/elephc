@@ -1295,6 +1295,11 @@ impl ExpressionFactUpdater<'_> {
 
     /// Builds a mixed literal from ordered snapshots of keyed, implicit, and spread entries.
     fn evaluated_mixed_array_fact(&self, entries: &[ArrayEntry]) -> ValueFact {
+        if let Some(array) = planned_mixed_array_fact(entries, self.profile, |value| {
+            self.expression_value(value)
+        }) {
+            return ValueFact::Array(array);
+        }
         let mut array = ArrayFact::empty();
         for entry in entries {
             let success = match entry {
@@ -4580,6 +4585,11 @@ fn inferred_mixed_array_fact(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> ValueFact {
+    if let Some(array) = planned_mixed_array_fact(entries, profile, |value| {
+        infer_expr(value, locals, properties, profile, current_class)
+    }) {
+        return ValueFact::Array(array);
+    }
     let mut array = ArrayFact::empty();
     for entry in entries {
         let success = match entry {
@@ -4620,6 +4630,28 @@ fn inferred_mixed_array_fact(
         }
     }
     ValueFact::Array(array)
+}
+
+/// Builds a mixed literal fact from the same versioned keys that constant folding will emit.
+fn planned_mixed_array_fact(
+    entries: &[ArrayEntry], profile: SemanticProfile, mut value_fact: impl FnMut(&Expr) -> ValueFact,
+) -> Option<ArrayFact> {
+    let planned = crate::types::plan_mixed_literal_array_entries(
+        entries,
+        crate::codegen_support::compile_php_version(),
+        profile,
+    )?;
+    let mut array = ArrayFact::empty();
+    for entry in planned {
+        let key = match entry.key {
+            StringKey::Integer(value) => ArrayKeyFact::Integer(value),
+            StringKey::String(value) => {
+                ArrayKeyFact::String(String::from_utf8_lossy(value).into_owned())
+            }
+        };
+        array.insert(key, value_fact(entry.value));
+    }
+    Some(array)
 }
 
 /// Converts one static key through the shared literal-array key classifier.

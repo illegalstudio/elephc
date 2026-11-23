@@ -77,7 +77,10 @@ mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
-pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_array_key, plan_literal_array_entries};
+pub(crate) use array_literals::{
+    fold_spreadless_mixed_array_literal, php_float_array_key, plan_literal_array_entries,
+    plan_mixed_literal_array_entries,
+};
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,
