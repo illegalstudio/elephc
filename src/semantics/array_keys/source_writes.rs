@@ -587,6 +587,39 @@ fn statically_selected_source_expr(expr: &Expr) -> Option<&Expr> {
     }
 }
 
+/// Selects nested lazy and match keys without inspecting an unselected match result.
+fn statically_selected_array_key_expr(
+    expr: &Expr,
+    profile: SemanticProfile,
+) -> Option<Expr> {
+    match &expr.kind {
+        ExprKind::Assignment { value, .. } => {
+            statically_selected_array_key_expr(value, profile)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match source_literal_truthiness(condition)? {
+            true => statically_selected_array_key_expr(then_expr, profile),
+            false => statically_selected_array_key_expr(else_expr, profile),
+        },
+        ExprKind::ShortTernary { value, default } => match source_literal_truthiness(value)? {
+            true => statically_selected_array_key_expr(value, profile),
+            false => statically_selected_array_key_expr(default, profile),
+        },
+        ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
+            true => statically_selected_array_key_expr(default, profile),
+            false => statically_selected_array_key_expr(value, profile),
+        },
+        ExprKind::Match { .. } => {
+            let selected = crate::optimize::select_match_array_key_for_source(expr, profile)?;
+            statically_selected_array_key_expr(&selected, profile)
+        }
+        _ => Some(expr.clone()),
+    }
+}
+
 /// Proves whether an indexed literal contributes an element after expanding its spreads.
 fn source_indexed_array_nonempty(values: &[Expr]) -> Option<bool> {
     let mut unknown_spread = false;
@@ -4667,8 +4700,8 @@ fn planned_mixed_array_fact(
 /// Under exact keys, string `"0"` deliberately remains distinct from integer `0`; an integer
 /// lookup is then a known missing slot whose nested write still receives array-key validation.
 fn source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
-    let selected = statically_selected_source_expr(expr)?;
-    literal_array_key_fact(selected, profile)
+    let selected = statically_selected_array_key_expr(expr, profile)?;
+    literal_array_key_fact(&selected, profile)
 }
 
 /// Converts one literal key into the exact source fact shared by both planning paths.

@@ -274,7 +274,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
-            if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
+            if let Some(folded) = try_fold_scalar_builtin(&name, &args, span) {
                 return fold_expr(Expr { kind: folded, span, source_profile, producer_binding });
             }
             if name
@@ -606,9 +606,9 @@ fn fold_callable_target(target: CallableTarget) -> CallableTarget {
 /// rules, so a literal argument takes exactly the result the runtime cast would produce. A user
 /// function shadowing the global name, a namespaced call, or an explicit base argument keeps the
 /// call for runtime evaluation.
-fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
+fn try_fold_scalar_builtin(name: &Name, args: &[Expr], span: Span) -> Option<ExprKind> {
     let canonical = crate::names::php_symbol_key(name.as_canonical().trim_start_matches('\\'));
-    if active_fold_user_function_exists(&canonical) {
+    if active_fold_user_function_exists(&canonical) || active_source_fold_user_call(span) {
         return None;
     }
     if let Some(folded) = try_fold_explicit_encoding_literal(&canonical, args) {

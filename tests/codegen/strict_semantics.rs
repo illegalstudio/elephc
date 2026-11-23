@@ -60,10 +60,13 @@ function intval($value) { return 9; }
 $values = [(true ? -2 : intval(9)) => [], 'ab'];
 $values[-1][false] = 'x';
 echo $values[-1];
+$literal = [(true ? -2 : \intval(9)) => [], 'ab'];
+$literal[0][false] = 'x';
+echo ':', $literal[0];
 "#;
     assert_eq!(
         StrictFixture::new(source).run(&["--php-version", "8.2", "--strict-array-keys"]),
-        "xb"
+        "xb:xb"
     );
 }
 
@@ -110,6 +113,24 @@ if (PHP_OS_FAMILY === 'Windows') {
         &["--php-version", "8.2", "--strict-array-keys"],
         "strict-array-keys",
     );
+
+    for nested_match in [
+        r#"<?php
+$values = [(match (1) { 1 => (true ? -2 : $unused), default => 0 }) => [], 'ab'];
+$values[0][false] = 'x';
+"#,
+        r#"<?php
+$values = [(true ? (match (1) { 1 => -2, default => $unused }) : 0) => [], 'ab'];
+$values[2][false] = 'x';
+"#,
+    ] {
+        StrictFixture::new(nested_match)
+            .assert_error(&["--strict-array-keys"], "strict-array-keys");
+        StrictFixture::new(nested_match).assert_error(
+            &["--php-version", "8.2", "--strict-array-keys"],
+            "strict-array-keys",
+        );
+    }
 }
 
 /// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.

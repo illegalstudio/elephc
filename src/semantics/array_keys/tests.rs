@@ -139,6 +139,7 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
         "-2",
         "true ? -2 : 9",
         "true ? -2 : intval(9)",
+        "true ? (match (1) { 1 => -2, default => $unused }) : 0",
         "false ?: -2",
         "null ?? -2",
     ] {
@@ -165,6 +166,7 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
         "true ? -2 : $unused",
         "true ? -2 : intval($argc)",
         "true ? -2 : foo()",
+        "match (1) { 1 => (true ? -2 : $unused), default => 0 }",
     ] {
         let accepted = format!(
             "<?php $values = [({key}) => [], 'ab']; $values[-1][false] = 'x';"
@@ -183,6 +185,10 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     let shadowed = "<?php namespace App; function intval($value) { return 9; } $values = [(true ? -2 : intval(9)) => [], 'ab']; $values[-1][false] = 'x';";
     crate::semantics::validate_source(&parse(shadowed, SourceMode::Php), profile())
         .unwrap_or_else(|error| panic!("{shadowed}: {error:?}"));
+
+    let global = "<?php namespace App; function intval($value) { return 9; } $values = [(true ? -2 : \\intval(9)) => [], 'ab']; $values[0][false] = 'x';";
+    crate::semantics::validate_source(&parse(global, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{global}: {error:?}"));
 
     let strict = "<?php $values = [+\"-2\" => [], 'ab']; $values[0][false] = 'x';";
     let error = crate::semantics::validate_source(

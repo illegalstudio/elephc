@@ -8,10 +8,11 @@
 //! Key details:
 //! - Passes must preserve PHP-visible side effects and run after magic constants and type checking have produced canonical AST metadata.
 
-use crate::names::{php_symbol_key, Name};
+use crate::ast_visit::AstVisitor;
+use crate::names::{canonical_name_for_decl, php_symbol_key, Name};
 use crate::parser::ast::{
     ArrayEntry, BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
-    ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+    ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr, UseKind,
 };
 use crate::span::Span;
 use crate::codegen_support::platform::Target;
@@ -53,66 +54,121 @@ pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
 pub use output::with_hosted_output;
 
-/// Reports whether pre-resolution source validation can safely fold one array-key expression.
-fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
-    match &expr.kind {
+/// Rebuilds one key with statically selected matches before source-only constant folding.
+fn prepare_source_array_key_for_fold(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let kind = match &expr.kind {
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
-        | ExprKind::Null => true,
-        ExprKind::UnaryPlus(inner)
-        | ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::Cast { expr: inner, .. } => source_array_key_is_fold_safe(inner),
-        ExprKind::BinaryOp { left, right, .. } => {
-            source_array_key_is_fold_safe(left) && source_array_key_is_fold_safe(right)
+        | ExprKind::Null => return Some(expr.clone()),
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
         }
+        ExprKind::Negate(inner) => {
+            ExprKind::Negate(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::Not(inner) => {
+            ExprKind::Not(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::BitNot(inner) => {
+            ExprKind::BitNot(Box::new(prepare_source_array_key_for_fold(inner, profile)?))
+        }
+        ExprKind::Cast { target, expr: inner } => ExprKind::Cast {
+            target: target.clone(),
+            expr: Box::new(prepare_source_array_key_for_fold(inner, profile)?),
+        },
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(prepare_source_array_key_for_fold(left, profile)?),
+            op: op.clone(),
+            right: Box::new(prepare_source_array_key_for_fold(right, profile)?),
+        },
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-        } => {
-            source_array_key_is_fold_safe(condition)
-                && source_array_key_is_fold_safe(then_expr)
-                && source_array_key_is_fold_safe(else_expr)
-        }
-        ExprKind::ShortTernary { value, default }
-        | ExprKind::NullCoalesce { value, default } => {
-            source_array_key_is_fold_safe(value) && source_array_key_is_fold_safe(default)
-        }
+        } => ExprKind::Ternary {
+            condition: Box::new(prepare_source_array_key_for_fold(condition, profile)?),
+            then_expr: Box::new(prepare_source_array_key_for_fold(then_expr, profile)?),
+            else_expr: Box::new(prepare_source_array_key_for_fold(else_expr, profile)?),
+        },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(prepare_source_array_key_for_fold(value, profile)?),
+            default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
+        },
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: Box::new(prepare_source_array_key_for_fold(value, profile)?),
+            default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
+        },
         ExprKind::FunctionCall { name, args } => {
             let canonical = php_symbol_key(name.as_canonical().trim_start_matches('\\'));
-            matches!(canonical.as_str(), "intval" | "floatval" | "strval")
-                && args.len() == 1
-                && source_array_key_is_fold_safe(&args[0])
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            source_array_key_is_fold_safe(array) && source_array_key_is_fold_safe(index)
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().all(source_array_key_is_fold_safe),
-        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
-            source_array_key_is_fold_safe(key) && source_array_key_is_fold_safe(value)
-        }),
-        ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
-            ArrayEntry::Keyed(key, value) => {
-                source_array_key_is_fold_safe(key) && source_array_key_is_fold_safe(value)
+            if !matches!(canonical.as_str(), "intval" | "floatval" | "strval")
+                || args.len() != 1
+            {
+                return None;
             }
-            ArrayEntry::Value(value) => source_array_key_is_fold_safe(value),
-            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => {
-                false
+            ExprKind::FunctionCall {
+                name: name.clone(),
+                args: vec![prepare_source_array_key_for_fold(&args[0], profile)?],
             }
-        }),
+        }
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(prepare_source_array_key_for_fold(array, profile)?),
+            index: Box::new(prepare_source_array_key_for_fold(index, profile)?),
+        },
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| prepare_source_array_key_for_fold(item, profile))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .iter()
+                .map(|(key, value)| {
+                    Some((
+                        prepare_source_array_key_for_fold(key, profile)?,
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| match entry {
+                    ArrayEntry::Keyed(key, value) => Some(ArrayEntry::Keyed(
+                        prepare_source_array_key_for_fold(key, profile)?,
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    )),
+                    ArrayEntry::Value(value) => Some(ArrayEntry::Value(
+                        prepare_source_array_key_for_fold(value, profile)?,
+                    )),
+                    ArrayEntry::Spread(_)
+                    | ArrayEntry::Reference(_)
+                    | ArrayEntry::KeyReference(_, _) => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        ),
         ExprKind::ClassConstant {
             receiver: crate::parser::ast::StaticReceiver::Named(name),
-        } => name.is_fully_qualified(),
-        _ => false,
-    }
+        } if name.is_fully_qualified() => return Some(expr.clone()),
+        ExprKind::Match { .. } => {
+            let selected = select_match_array_key_for_source(expr, profile)?;
+            return prepare_source_array_key_for_fold(&selected, profile);
+        }
+        _ => return None,
+    };
+    let mut prepared = expr.clone();
+    prepared.kind = kind;
+    Some(prepared)
 }
 
 /// Selects a statically matched arm without folding unresolved or unselected result expressions.
-fn fold_match_array_key_for_source(
+pub(crate) fn select_match_array_key_for_source(
     expr: &Expr,
     profile: elephc_semantics::SemanticProfile,
 ) -> Option<Expr> {
@@ -124,49 +180,39 @@ fn fold_match_array_key_for_source(
     else {
         return None;
     };
-    if !source_array_key_is_fold_safe(subject)
-        || !arms
-            .iter()
-            .all(|(patterns, _)| patterns.iter().all(source_array_key_is_fold_safe))
-    {
-        return None;
-    }
     let _profile = scoped_semantic_profile(profile);
-    let subject = fold::expr::fold_expr((**subject).clone());
+    let subject = fold::expr::fold_expr(prepare_source_array_key_for_fold(subject, profile)?);
     let arms = arms
         .iter()
         .map(|(patterns, value)| {
-            (
+            Some((
                 patterns
                     .iter()
-                    .cloned()
-                    .map(fold::expr::fold_expr)
-                    .collect(),
+                    .map(|pattern| {
+                        prepare_source_array_key_for_fold(pattern, profile)
+                            .map(fold::expr::fold_expr)
+                    })
+                    .collect::<Option<Vec<_>>>()?,
                 value.clone(),
-            )
+            ))
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
     let kind = try_prune_match_expr(subject, arms, default.clone());
     if matches!(kind, ExprKind::Match { .. }) {
         return None;
     }
     let mut selected = expr.clone();
     selected.kind = kind;
-    fold_array_key_for_source(&selected, profile)
+    Some(selected)
 }
 
 /// Folds one source expression only when pre-resolution folding and literal planning are safe.
 pub(crate) fn fold_array_key_for_source(
     expr: &Expr, profile: elephc_semantics::SemanticProfile,
 ) -> Option<Expr> {
-    if matches!(expr.kind, ExprKind::Match { .. }) {
-        return fold_match_array_key_for_source(expr, profile);
-    }
-    if !source_array_key_is_fold_safe(expr) {
-        return None;
-    }
+    let prepared = prepare_source_array_key_for_fold(expr, profile)?;
     let _profile = scoped_semantic_profile(profile);
-    let folded = fold::expr::fold_expr(expr.clone());
+    let folded = fold::expr::fold_expr(prepared);
     crate::types::literal_array_key(&folded, profile)?;
     Some(folded)
 }
@@ -183,18 +229,25 @@ thread_local! {
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    static ACTIVE_SOURCE_FOLD_USER_CALLS: RefCell<Option<HashSet<Span>>> = const { RefCell::new(None) };
     static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
     static ACTIVE_DEPRECATION_READING_CONSTANTS: RefCell<Option<Rc<HashSet<String>>>> = const { RefCell::new(None) };
 }
 
 /// Restores the enclosing user-function inventory after a source-only fold preview.
-struct SourceFoldUserFunctionsGuard(Option<HashSet<String>>);
+struct SourceFoldUserFunctionsGuard {
+    functions: Option<HashSet<String>>,
+    calls: Option<HashSet<Span>>,
+}
 
 impl Drop for SourceFoldUserFunctionsGuard {
     /// Restores the outer fold context after normal return or unwinding.
     fn drop(&mut self) {
         ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
-            slot.replace(self.0.take());
+            slot.replace(self.functions.take());
+        });
+        ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| {
+            slot.replace(self.calls.take());
         });
     }
 }
@@ -342,14 +395,30 @@ pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool 
     })
 }
 
+/// Reports whether source namespace resolution binds this call site to a user function.
+pub(in crate::optimize) fn active_source_fold_user_call(span: Span) -> bool {
+    ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|calls| calls.contains(&span))
+    })
+}
+
 /// Installs top-level declarations so source-only fold previews respect builtin shadowing.
 pub(crate) fn with_source_fold_user_functions<R>(
     program: &Program,
     action: impl FnOnce() -> R,
 ) -> R {
     let functions = collect_top_level_user_functions(program);
-    let previous = ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| slot.replace(Some(functions)));
-    let _guard = SourceFoldUserFunctionsGuard(previous);
+    let calls = collect_source_fold_user_calls(program, &functions);
+    let previous_functions =
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| slot.replace(Some(functions)));
+    let previous_calls =
+        ACTIVE_SOURCE_FOLD_USER_CALLS.with(|slot| slot.replace(Some(calls)));
+    let _guard = SourceFoldUserFunctionsGuard {
+        functions: previous_functions,
+        calls: previous_calls,
+    };
     action()
 }
 
@@ -374,28 +443,148 @@ pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
 /// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
 fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
     let mut functions = HashSet::new();
-    collect_top_level_user_functions_from_block(program, &mut functions);
+    collect_top_level_user_functions_from_block(program, None, &mut functions);
     functions
 }
 
 /// Walks declaration-transparent compiler wrappers without treating conditional PHP blocks as eager.
 fn collect_top_level_user_functions_from_block(
     program: &[Stmt],
+    current_namespace: Option<&str>,
     functions: &mut HashSet<String>,
 ) {
+    let mut namespace = current_namespace.map(str::to_owned);
     for stmt in program {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
-                functions.insert(php_symbol_key(name));
+            StmtKind::NamespaceDecl { name } => {
+                namespace = source_namespace_name(name);
             }
-            StmtKind::Synthetic(body)
-            | StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. } => {
-                collect_top_level_user_functions_from_block(body, functions);
+            StmtKind::NamespaceBlock { name, body } => {
+                let block_namespace = source_namespace_name(name);
+                collect_top_level_user_functions_from_block(
+                    body,
+                    block_namespace.as_deref(),
+                    functions,
+                );
+            }
+            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+                let canonical = canonical_name_for_decl(namespace.as_deref(), name);
+                functions.insert(php_symbol_key(&canonical));
+            }
+            StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_top_level_user_functions_from_block(
+                    body,
+                    namespace.as_deref(),
+                    functions,
+                );
             }
             _ => {}
         }
     }
+}
+
+/// Returns the canonical namespace represented by one source namespace marker.
+fn source_namespace_name(name: &Option<Name>) -> Option<String> {
+    name.as_ref()
+        .map(Name::as_canonical)
+        .filter(|name| !name.is_empty())
+}
+
+/// Namespace state used to identify pre-resolution scalar-builtin call shadowing by span.
+struct SourceFoldCallCollector<'a> {
+    declarations: &'a HashSet<String>,
+    namespace: Option<String>,
+    function_imports: HashMap<String, String>,
+    namespace_blocks: Vec<(Option<String>, HashMap<String, String>)>,
+    user_calls: HashSet<Span>,
+}
+
+impl SourceFoldCallCollector<'_> {
+    /// Reports whether the current namespace and imports bind this call to user code.
+    fn call_is_user_function(&self, name: &Name) -> bool {
+        let canonical = php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+        if name.is_fully_qualified() {
+            return self.declarations.contains(&canonical);
+        }
+        if !name.is_unqualified() {
+            return false;
+        }
+        if let Some(imported) = self.function_imports.get(&canonical) {
+            let imported = php_symbol_key(imported.trim_start_matches('\\'));
+            return imported != canonical || self.declarations.contains(&imported);
+        }
+        let local = canonical_name_for_decl(self.namespace.as_deref(), name.as_str());
+        self.declarations.contains(&php_symbol_key(&local))
+            || self.declarations.contains(&canonical)
+    }
+}
+
+impl AstVisitor for SourceFoldCallCollector<'_> {
+    /// Tracks namespace switches, namespace blocks and function imports in source order.
+    fn statement(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => {
+                self.namespace = source_namespace_name(name);
+                self.function_imports.clear();
+            }
+            StmtKind::NamespaceBlock { name, .. } => {
+                self.namespace_blocks.push((
+                    self.namespace.take(),
+                    std::mem::take(&mut self.function_imports),
+                ));
+                self.namespace = source_namespace_name(name);
+            }
+            StmtKind::UseDecl { imports } => {
+                for item in imports {
+                    if item.kind == UseKind::Function {
+                        self.function_imports.insert(
+                            php_symbol_key(&item.alias),
+                            item.name.as_canonical(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Restores the namespace that enclosed a braced namespace block.
+    fn statement_end(&mut self, stmt: &Stmt) {
+        if matches!(stmt.kind, StmtKind::NamespaceBlock { .. }) {
+            let (namespace, imports) = self
+                .namespace_blocks
+                .pop()
+                .expect("namespace visitor stack remains balanced");
+            self.namespace = namespace;
+            self.function_imports = imports;
+        }
+    }
+
+    /// Records only calls whose written binding resolves to a user declaration.
+    fn expression(&mut self, expr: &Expr) {
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return;
+        };
+        if self.call_is_user_function(name) {
+            self.user_calls.insert(expr.span);
+        }
+    }
+}
+
+/// Collects exact call sites whose pre-resolution name binds to a user function.
+fn collect_source_fold_user_calls(
+    program: &Program,
+    declarations: &HashSet<String>,
+) -> HashSet<Span> {
+    let mut collector = SourceFoldCallCollector {
+        declarations,
+        namespace: None,
+        function_imports: HashMap::new(),
+        namespace_blocks: Vec::new(),
+        user_calls: HashSet::new(),
+    };
+    crate::ast_visit::walk_program(program, &mut collector);
+    collector.user_calls
 }
 
 /// Propagates scalar constants across statements and control flow.
