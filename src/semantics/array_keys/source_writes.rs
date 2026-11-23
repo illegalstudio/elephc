@@ -342,11 +342,13 @@ pub(crate) fn validate_source_writes(
     program: &Program,
     profile: SemanticProfile,
 ) -> Result<(), CompileError> {
-    let mut properties = PropertyFacts::default();
-    collect_properties(program, &mut properties);
-    validate_nested_closures(program, &properties, profile)?;
-    let mut locals = LocalFacts::default();
-    validate_block(program, &mut locals, &properties, profile, None)
+    crate::optimize::with_source_fold_user_functions(program, || {
+        let mut properties = PropertyFacts::default();
+        collect_properties(program, &mut properties);
+        validate_nested_closures(program, &properties, profile)?;
+        let mut locals = LocalFacts::default();
+        validate_block(program, &mut locals, &properties, profile, None)
+    })
 }
 
 /// Audits closures in every expression position before the statement flow walk begins.
@@ -563,39 +565,23 @@ fn source_literal_nullness(expr: &Expr) -> Option<bool> {
 
 /// Selects the expression PHP returns from a statically decided lazy value.
 fn statically_selected_source_expr(expr: &Expr) -> Option<&Expr> {
-    statically_selected_source_expr_with_assignments(expr, true)
-}
-
-/// Selects a lazy key branch without treating an evaluated assignment as key identity.
-fn statically_selected_lazy_key_expr(expr: &Expr) -> Option<&Expr> {
-    statically_selected_source_expr_with_assignments(expr, false)
-}
-
-/// Selects one executed lazy branch under the requested assignment-proof policy.
-fn statically_selected_source_expr_with_assignments(
-    expr: &Expr,
-    allow_assignments: bool,
-) -> Option<&Expr> {
     match &expr.kind {
-        ExprKind::Assignment { value, .. } if allow_assignments => {
-            statically_selected_source_expr_with_assignments(value, allow_assignments)
-        }
-        ExprKind::Assignment { .. } => None,
+        ExprKind::Assignment { value, .. } => statically_selected_source_expr(value),
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => match source_literal_truthiness(condition)? {
-            true => statically_selected_source_expr_with_assignments(then_expr, allow_assignments),
-            false => statically_selected_source_expr_with_assignments(else_expr, allow_assignments),
+            true => statically_selected_source_expr(then_expr),
+            false => statically_selected_source_expr(else_expr),
         },
         ExprKind::ShortTernary { value, default } => match source_literal_truthiness(value)? {
-            true => statically_selected_source_expr_with_assignments(value, allow_assignments),
-            false => statically_selected_source_expr_with_assignments(default, allow_assignments),
+            true => statically_selected_source_expr(value),
+            false => statically_selected_source_expr(default),
         },
         ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
-            true => statically_selected_source_expr_with_assignments(default, allow_assignments),
-            false => statically_selected_source_expr_with_assignments(value, allow_assignments),
+            true => statically_selected_source_expr(default),
+            false => statically_selected_source_expr(value),
         },
         _ => Some(expr),
     }
@@ -4664,10 +4650,8 @@ fn planned_mixed_array_fact(
                 value,
             ),
             ArrayEntry::Keyed(key, value) => {
-                let key = match crate::optimize::fold_array_key_for_source(key, profile) {
-                    Some(folded) => literal_array_key_fact(&folded, profile)?,
-                    None => lazy_source_array_key(key, profile)?,
-                };
+                let folded = crate::optimize::fold_array_key_for_source(key, profile)?;
+                let key = literal_array_key_fact(&folded, profile)?;
                 (key, value)
             }
             ArrayEntry::Spread(_)
@@ -4684,12 +4668,6 @@ fn planned_mixed_array_fact(
 /// lookup is then a known missing slot whose nested write still receives array-key validation.
 fn source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
     let selected = statically_selected_source_expr(expr)?;
-    literal_array_key_fact(selected, profile)
-}
-
-/// Selects a lazy key without treating an evaluated assignment as a compile-time key proof.
-fn lazy_source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
-    let selected = statically_selected_lazy_key_expr(expr)?;
     literal_array_key_fact(selected, profile)
 }
 

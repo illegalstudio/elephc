@@ -161,6 +161,29 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     crate::semantics::validate_source(&parse(runtime, SourceMode::Php), profile())
         .unwrap_or_else(|error| panic!("{runtime}: {error:?}"));
 
+    for key in [
+        "true ? -2 : $unused",
+        "true ? -2 : intval($argc)",
+        "true ? -2 : foo()",
+    ] {
+        let accepted = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[-1][false] = 'x';"
+        );
+        crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+        let rejected = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[0][false] = 'x';"
+        );
+        let error = crate::semantics::validate_source(&parse(&rejected, SourceMode::Php), profile())
+            .expect_err("unfolded lazy keys must retain the emitted runtime append cursor");
+        assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+    }
+
+    let shadowed = "<?php namespace App; function intval($value) { return 9; } $values = [(true ? -2 : intval(9)) => [], 'ab']; $values[-1][false] = 'x';";
+    crate::semantics::validate_source(&parse(shadowed, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{shadowed}: {error:?}"));
+
     let strict = "<?php $values = [+\"-2\" => [], 'ab']; $values[0][false] = 'x';";
     let error = crate::semantics::validate_source(
         &parse(strict, SourceMode::Php),
@@ -198,6 +221,7 @@ fn strict_array_key_source_validation_folds_safe_target_guard_keys() {
     for (key, expected) in [
         (r#"\Vendor\Thing::class"#, r#"'Vendor\Thing'"#),
         ("match (1) { 1 => -2 }", "-2"),
+        ("match (1) { 1 => -2, default => $unused }", "-2"),
         ("[-2][0]", "-2"),
         ("[-2 => -2, 9][-2]", "-2"),
     ] {

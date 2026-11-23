@@ -82,19 +82,11 @@ fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
         | ExprKind::NullCoalesce { value, default } => {
             source_array_key_is_fold_safe(value) && source_array_key_is_fold_safe(default)
         }
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            source_array_key_is_fold_safe(subject)
-                && arms.iter().all(|(patterns, value)| {
-                    patterns.iter().all(source_array_key_is_fold_safe)
-                        && source_array_key_is_fold_safe(value)
-                })
-                && default
-                    .as_deref()
-                    .is_none_or(source_array_key_is_fold_safe)
+        ExprKind::FunctionCall { name, args } => {
+            let canonical = php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+            matches!(canonical.as_str(), "intval" | "floatval" | "strval")
+                && args.len() == 1
+                && source_array_key_is_fold_safe(&args[0])
         }
         ExprKind::ArrayAccess { array, index } => {
             source_array_key_is_fold_safe(array) && source_array_key_is_fold_safe(index)
@@ -119,10 +111,57 @@ fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
     }
 }
 
+/// Selects a statically matched arm without folding unresolved or unselected result expressions.
+fn fold_match_array_key_for_source(
+    expr: &Expr,
+    profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let ExprKind::Match {
+        subject,
+        arms,
+        default,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if !source_array_key_is_fold_safe(subject)
+        || !arms
+            .iter()
+            .all(|(patterns, _)| patterns.iter().all(source_array_key_is_fold_safe))
+    {
+        return None;
+    }
+    let _profile = scoped_semantic_profile(profile);
+    let subject = fold::expr::fold_expr((**subject).clone());
+    let arms = arms
+        .iter()
+        .map(|(patterns, value)| {
+            (
+                patterns
+                    .iter()
+                    .cloned()
+                    .map(fold::expr::fold_expr)
+                    .collect(),
+                value.clone(),
+            )
+        })
+        .collect();
+    let kind = try_prune_match_expr(subject, arms, default.clone());
+    if matches!(kind, ExprKind::Match { .. }) {
+        return None;
+    }
+    let mut selected = expr.clone();
+    selected.kind = kind;
+    fold_array_key_for_source(&selected, profile)
+}
+
 /// Folds one source expression only when pre-resolution folding and literal planning are safe.
 pub(crate) fn fold_array_key_for_source(
     expr: &Expr, profile: elephc_semantics::SemanticProfile,
 ) -> Option<Expr> {
+    if matches!(expr.kind, ExprKind::Match { .. }) {
+        return fold_match_array_key_for_source(expr, profile);
+    }
     if !source_array_key_is_fold_safe(expr) {
         return None;
     }
@@ -146,6 +185,18 @@ thread_local! {
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
     static ACTIVE_DEPRECATION_READING_CONSTANTS: RefCell<Option<Rc<HashSet<String>>>> = const { RefCell::new(None) };
+}
+
+/// Restores the enclosing user-function inventory after a source-only fold preview.
+struct SourceFoldUserFunctionsGuard(Option<HashSet<String>>);
+
+impl Drop for SourceFoldUserFunctionsGuard {
+    /// Restores the outer fold context after normal return or unwinding.
+    fn drop(&mut self) {
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
 }
 
 /// Reports whether a user class constant named `name` may read a deprecated constant when it is
@@ -289,6 +340,17 @@ pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool 
             .as_ref()
             .is_some_and(|functions| functions.contains(&key))
     })
+}
+
+/// Installs top-level declarations so source-only fold previews respect builtin shadowing.
+pub(crate) fn with_source_fold_user_functions<R>(
+    program: &Program,
+    action: impl FnOnce() -> R,
+) -> R {
+    let functions = collect_top_level_user_functions(program);
+    let previous = ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| slot.replace(Some(functions)));
+    let _guard = SourceFoldUserFunctionsGuard(previous);
+    action()
 }
 
 /// Returns whether constant folding is currently evaluating a target-dependent guard condition.

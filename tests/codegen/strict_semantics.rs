@@ -51,6 +51,22 @@ echo $values[0];
     );
 }
 
+/// An unfolded lazy key keeps the runtime append cursor even under PHP 8.2 selection.
+#[test]
+fn test_strict_array_keys_php82_dynamic_lazy_key_uses_runtime_cursor() {
+    let source = r#"<?php
+namespace App;
+function intval($value) { return 9; }
+$values = [(true ? -2 : intval(9)) => [], 'ab'];
+$values[-1][false] = 'x';
+echo $values[-1];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--php-version", "8.2", "--strict-array-keys"]),
+        "xb"
+    );
+}
+
 /// Defers magic constants and imported class names until their canonical resolution passes.
 #[test]
 fn test_strict_array_keys_defers_unresolved_literal_keys() {
@@ -80,6 +96,17 @@ if (PHP_OS_FAMILY === 'Windows') {
 }
 "#;
     StrictFixture::new(source).assert_error(
+        &["--php-version", "8.2", "--strict-array-keys"],
+        "strict-array-keys",
+    );
+
+    let dynamic_match = r#"<?php
+if (PHP_OS_FAMILY === 'Windows') {
+    $values = [-2 => 'ab', (match (1) { 1 => -2, default => $unused }) => [], 'tail'];
+    $values[-2][false] = 'x';
+}
+"#;
+    StrictFixture::new(dynamic_match).assert_error(
         &["--php-version", "8.2", "--strict-array-keys"],
         "strict-array-keys",
     );
