@@ -128,6 +128,8 @@ struct Request {
     op: Option<BinOp>,
     property: String,
     scope: Option<String>,
+    /// Whether the caller's class id travels as a trailing operand (a program that can run eval).
+    runtime_scope: bool,
     mode: crate::source::SourceMode,
     strict_types: bool,
 }
@@ -195,7 +197,7 @@ fn helper_scope(ctx: &LoweringContext<'_, '_>, property: &str) -> Option<String>
         }
         let built = Rc::new(crate::codegen::named_helper_scope_groups_in(
             ctx.classes,
-            ctx.program_loads_code_at_run_time(),
+            false,
             property,
             true,
         ));
@@ -242,12 +244,15 @@ pub(super) fn call(
     property: &str, key: Option<LoweredValue>, value: Option<LoweredValue>, span: Span,
 ) {
     let scope = helper_scope(ctx, property);
+    // With eval linked the helper is still shared by scope group: the eval bridge needs the real
+    // scope, which travels as one more operand and is resolved by the property scope gate.
+    let runtime_scope = ctx.program_loads_code_at_run_time();
     let key_repr = key.map(|key| Repr::of(ctx, key));
     let value_repr = value.map(|value| Repr::of(ctx, value));
     let mode = crate::source::current_parse_mode();
     let strict_types = ctx.php_strict_types;
     let name = format!(
-        "{PREFIX}{}{}{}@{}@{}@{:?}@{}",
+        "{PREFIX}{}{}{}{}@{}@{}@{:?}@{}",
         match &form {
             Form::Index { diagnosed: false } => "set".to_string(),
             Form::Index { diagnosed: true } => "setd".to_string(),
@@ -258,6 +263,7 @@ pub(super) fn call(
         },
         key_repr.map_or("", Repr::tag),
         value_repr.map_or("", Repr::tag),
+        if runtime_scope { "r" } else { "" },
         scope.as_deref().unwrap_or(""),
         u8::from(strict_types),
         mode,
@@ -271,6 +277,7 @@ pub(super) fn call(
             op: op.cloned(),
             property: property.to_string(),
             scope,
+            runtime_scope,
             mode,
             strict_types,
         });
@@ -304,6 +311,14 @@ pub(super) fn call(
     lend(ctx, receiver, Repr::Mixed);
     if let (Some(key), Some(repr)) = (key, key_repr) { lend(ctx, key, repr); }
     if let (Some(value), Some(repr)) = (value, value_repr) { lend(ctx, value, repr); }
+    if runtime_scope {
+        // The caller's class id plus one; zero names the helper's own lexical scope.
+        let id = ctx.current_class.as_deref().map(|class| class.trim_start_matches('\\'))
+            .and_then(|class| ctx.classes.get(class)).map_or(0, |info| info.class_id as i64 + 1);
+        let id = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(id)), PhpType::Int,
+            Op::ConstI64.default_effects(), Some(span));
+        operands.push(id.value);
+    }
     let owned: Vec<_> = boxes.iter().map(|boxed| boxed.value).collect();
     let pins = super::expr::pin_in_flight_owners(ctx, &owned, span);
     ctx.emit_void(Op::Call, operands, Some(Immediate::Data(callee)), Op::Call.default_effects(), Some(span));
@@ -321,6 +336,7 @@ fn signature(request: &Request) -> FunctionSig {
         params.push((if *form == (Form::Index { diagnosed: true }) { DIAGNOSED_KEY } else { KEY }, repr));
     }
     if let Some(repr) = request.value { params.push((VALUE, repr)); }
+    if request.runtime_scope { params.push((crate::names::CLOSURE_SCOPE_LOCAL, Repr::Int)); }
     let count = params.len();
     FunctionSig {
         param_type_exprs: params.iter().map(|(_, repr)| Some(repr.type_expr())).collect(),

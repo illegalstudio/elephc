@@ -189,6 +189,7 @@ mod simplexml_target_corpora;
 mod instance_dimension_incdec;
 mod native_property_child_probes;
 mod shared_property_reads;
+mod erased_write_helpers;
 
 /// The bodies that hold the lowering of the property writes `function` makes through a receiver that
 /// lost its class: the function itself and the shared helpers those writes call

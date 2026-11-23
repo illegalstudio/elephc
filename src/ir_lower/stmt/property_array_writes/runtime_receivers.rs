@@ -203,6 +203,42 @@ fn dispatch(
     }).collect();
     classes.sort_by(|a, b| a.0.cmp(&b.0));
     if classes.is_empty() { return false; }
+    // A class that inherits the slot, with the same type and the same refusals, is written by the
+    // very code of the class that declares it (a descendant's layout extends its parent's), so one
+    // arm serves the whole group: Symfony has a factory class per service, all inheriting the
+    // container's `privates`, and an arm per class made the helper 200 000 instructions.
+    let mut groups: Vec<(String, Option<SlotGuard>, bool, Vec<String>)> = Vec::new();
+    let mut by_key: crate::fast_hash::FastMap<String, usize> = Default::default();
+    for (class, null_error, writable) in classes {
+        let info = &ctx.classes[&class];
+        let key = if include_dynamic && (dynamic_slot(info, &class, property)
+            || magic_append::is_candidate(ctx, &class, info, property)) {
+            None
+        } else {
+            let declaring = info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class.clone());
+            let shape = object_type_property_type(ctx, &PhpType::Object(class.clone()), property);
+            let guard = match &null_error {
+                None => "-".to_string(),
+                Some(guard) => format!("{}:{}:{}", guard.nullable, guard.object_only, match &guard.action {
+                    SlotAction::Reject { exception, message } => format!("R{exception}:{message}"),
+                    SlotAction::InitializeArray => "I".to_string(),
+                }),
+            };
+            Some(format!("{declaring}|{shape:?}|{guard}|{writable}"))
+        };
+        match key.as_ref().and_then(|key| by_key.get(key)).copied() {
+            Some(at) => groups[at].3.push(class),
+            None => {
+                if let Some(key) = key { by_key.insert(key, groups.len()); }
+                groups.push((class.clone(), null_error, writable, vec![class]));
+            }
+        }
+    }
+    // The class that declares the slot represents its group.
+    for group in &mut groups {
+        let declaring = ctx.classes[&group.0].property_declaring_classes.get(property).cloned();
+        if let Some(declaring) = declaring.filter(|declaring| group.3.contains(declaring)) { group.0 = declaring; }
+    }
 
     // A program that loads no code at run time knows every class: an object's exact class is its
     // class id, one load, where `get_class()` builds a string and each arm compares one. An
@@ -242,28 +278,66 @@ fn dispatch(
         None
     };
     let mut merged = initial.clone();
-    for (class, null_error, writable) in classes {
+    for (class, null_error, writable, members) in groups {
         let matched = ctx.builder.create_named_block("property.array.declared", vec![]);
         let next = ctx.builder.create_named_block("property.array.next_class", vec![]);
-        let condition = if let Some(class_id) = class_id {
-            let wanted = ctx.classes.get(class.trim_start_matches('\\')).map_or(0, |info| info.class_id);
-            let wanted = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(wanted as i64)),
-                PhpType::Int, Op::ConstI64.default_effects(), Some(span));
-            ctx.emit_value(Op::ICmp, vec![class_id.value, wanted.value],
-                Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)), PhpType::Bool,
-                Op::ICmp.default_effects(), Some(span))
-        } else {
-            let current = ctx.load_local(&name, Some(span));
-            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
-            let data = ctx.intern_string(class.trim_start_matches('\\'));
-            let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
-                Op::ConstStr.default_effects(), Some(span));
-            ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
-                PhpType::Bool, Op::StrictEq.default_effects(), Some(span))
-        };
         let before = ctx.initialized_slots_snapshot();
-        ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
-            then_target: matched, then_args: vec![], else_target: next, else_args: vec![] });
+        // The tests of the members, in order: a run of consecutive class ids is two comparisons.
+        enum Test { Id(i64, i64), Name(String) }
+        let mut tests = Vec::new();
+        if class_id.is_some() {
+            let mut ids: Vec<i64> = members.iter().map(|member| ctx.classes[member].class_id as i64).collect();
+            ids.sort_unstable();
+            for id in ids {
+                match tests.last_mut() {
+                    Some(Test::Id(_, last)) if *last + 1 == id => *last = id,
+                    _ => tests.push(Test::Id(id, id)),
+                }
+            }
+        } else {
+            tests.extend(members.iter().map(|member| Test::Name(member.trim_start_matches('\\').to_string())));
+        }
+        let count = tests.len();
+        for (at, test) in tests.into_iter().enumerate() {
+            let miss = if at + 1 == count { next } else {
+                ctx.builder.create_named_block("property.array.member", vec![])
+            };
+            let compare = |ctx: &mut LoweringContext<'_, '_>, id: crate::ir::ValueId, bound: i64,
+                predicate, then_target, else_target| {
+                let bound = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(bound)),
+                    PhpType::Int, Op::ConstI64.default_effects(), Some(span));
+                let hit = ctx.emit_value(Op::ICmp, vec![id, bound.value],
+                    Some(Immediate::CmpPredicate(predicate)), PhpType::Bool,
+                    Op::ICmp.default_effects(), Some(span));
+                ctx.builder.terminate(Terminator::CondBr { cond: hit.value,
+                    then_target, then_args: vec![], else_target, else_args: vec![] });
+            };
+            match test {
+                Test::Id(first, last) => {
+                    let id = class_id.expect("class ids select the arms").value;
+                    if first == last {
+                        compare(ctx, id, first, crate::ir::CmpPredicate::Eq, matched, miss);
+                    } else {
+                        let upper = ctx.builder.create_named_block("property.array.member_upper", vec![]);
+                        compare(ctx, id, first, crate::ir::CmpPredicate::Sge, upper, miss);
+                        ctx.builder.position_at_end(upper);
+                        compare(ctx, id, last, crate::ir::CmpPredicate::Sle, matched, miss);
+                    }
+                }
+                Test::Name(member) => {
+                    let current = ctx.load_local(&name, Some(span));
+                    ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+                    let data = ctx.intern_string(&member);
+                    let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+                        Op::ConstStr.default_effects(), Some(span));
+                    let hit = ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
+                        PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+                    ctx.builder.terminate(Terminator::CondBr { cond: hit.value,
+                        then_target: matched, then_args: vec![], else_target: miss, else_args: vec![] });
+                }
+            }
+            if miss != next { ctx.builder.position_at_end(miss); }
+        }
         ctx.builder.position_at_end(matched);
         let concrete = PhpType::Object(class);
         let receiver = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
