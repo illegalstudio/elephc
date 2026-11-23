@@ -325,7 +325,7 @@ impl Store {
     /// Each day file is read once and then only for what was appended since:
     /// the monitor page asks on every refresh and event-stream heartbeat, under
     /// the history's lock, and parsing a full day of windows each time held
-    /// every other request up behind it (review G6). The latest `t` is kept,
+    /// every other request up behind it. The latest `t` is kept,
     /// not the last line's: several collectors and script runs append to one
     /// file, so its lines are not strictly ordered.
     pub(crate) fn newest_ms(&self) -> Option<u64> {

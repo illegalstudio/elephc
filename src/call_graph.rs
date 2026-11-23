@@ -3373,7 +3373,7 @@ mod tests {
     /// A name in an attribute goes through `escAttr`, which escapes quotes:
     /// `esc` leaves them, and a capture shared with `--baseline` could carry a
     /// function named `x" onmouseover="…` that breaks out of a `title` built
-    /// with it (review G13). No attribute of the page is built with `esc`.
+    /// with it. No attribute of the page is built with `esc`.
     fn names_in_attributes_escape_their_quotes() {
         let html = render_html(&sample_graph(), "demo");
         for attribute in ["title", "data-v", "href", "alt", "value"] {

@@ -117,8 +117,7 @@ impl TraceBook {
     /// failed or not, or one of its route's `FAILED_PER_ROUTE` most recent
     /// failures. Anything the newcomer pushes out of its route's set is
     /// dropped. A slow failure ranks among the slowest too: newer, faster
-    /// failures must not push out the slowest request the route served (review
-    /// G5).
+    /// failures must not push out the slowest request the route served.
     pub(crate) fn offer(&mut self, route: String, status: Option<u16>, duration_ns: u64, graph: CallGraph, t_ms: u64) -> bool {
         // An id the store can keep: it names the capture's time, so its day.
         let id = super::captures::next_capture_id(t_ms);

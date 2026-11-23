@@ -357,8 +357,8 @@ fn row_names() -> Vec<String> {
 
 /// A scanner's paths cannot fill the route table under `--apm`: a request
 /// answered "not found" is counted under one `<not found>` row and interns
-/// nothing, and an endpoint first seen afterwards still gets its own row
-/// (review R3). A route is interned once its request is answered.
+/// nothing, and an endpoint first seen afterwards still gets its own row.
+/// A route is interned once its request is answered.
 #[test]
 fn not_found_traffic_does_not_spend_the_route_table() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -418,8 +418,8 @@ fn a_known_route_answering_not_found_keeps_its_row() {
 
 /// An isolated handler child runs a new route's request and its web worker
 /// records it by name: the child settles the work it held as pending on the
-/// row the worker counts the request under, not on the untagged row (review
-/// G1). A "not found" answer settles on `<not found>`, as its recording does.
+/// row the worker counts the request under, not on the untagged row.
+/// A "not found" answer settles on `<not found>`, as its recording does.
 #[test]
 fn an_isolated_handlers_pending_work_settles_on_its_requests_row() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -449,7 +449,7 @@ fn an_isolated_handlers_pending_work_settles_on_its_requests_row() {
 }
 
 /// Two endpoints whose labels share their first 63 bytes stay two rows: the
-/// stored name keeps a prefix and appends a hash of the whole label (R6).
+/// stored name keeps a prefix and appends a hash of the whole label.
 #[test]
 fn long_routes_that_share_a_prefix_stay_apart() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -478,7 +478,7 @@ fn long_routes_that_share_a_prefix_stay_apart() {
 }
 
 /// A request a worker was serving when it died is counted as a server error
-/// when the master reaps it; an answered one is not counted twice (review R1).
+/// when the master reaps it; an answered one is not counted twice.
 #[test]
 fn a_request_cut_short_by_its_worker_dying_counts_as_a_failure() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -646,7 +646,7 @@ fn a_dead_web_workers_requests_are_each_counted() {
 }
 
 /// In a combined build the exact profiler owns the event slots: a sampled
-/// window alone does not make the bridges time their calls; --apm does (R12).
+/// window alone does not make the bridges time their calls; --apm does.
 #[test]
 fn the_event_window_answers_for_the_runtime_that_receives_events() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
