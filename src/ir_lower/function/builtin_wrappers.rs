@@ -169,6 +169,7 @@ pub(in crate::ir_lower) fn lower_synthetic_body_in_scope(
         &Default::default(), // synthesized bodies have no checked integer read sites
         &Default::default(),
         &Default::default(), // doc-narrowed call sites
+        &Default::default(), // doc-inlined call sites
         &Default::default(),
         &Default::default(),
         &Default::default(),

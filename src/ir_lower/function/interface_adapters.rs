@@ -118,6 +118,7 @@ fn lower_interface_adapter(
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments
         &Default::default(), // synthesized calls have no PHPDoc-narrowed results
+        &Default::default(), // synthesized calls have no PHPDoc-inlined results
         &Default::default(), // loop storage types
         &Default::default(), // string increment/decrement locals
         &Default::default(), // pointer-word locals

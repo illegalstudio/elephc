@@ -115,12 +115,58 @@ pub(super) fn lower_method_call(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if op == Op::MethodCall {
+        if let Some(value) = lower_doc_inline_call(ctx, args, expr) {
+            return value;
+        }
+    }
     let call = lower_method_call_native(ctx, object, method, args, op, expr);
     if op == Op::MethodCall {
         crate::ir_lower::gradual_coercions::narrow_doc_call_result(ctx, call, expr)
     } else {
         call
     }
+}
+
+/// Lowers a call the checker proved is its own argument (`Checker::doc_inline_sites`).
+///
+/// The node stays a call in the tree, so every context treats it as the value it is; only its
+/// lowering changes: the argument is evaluated where the call was and its scalar value, a
+/// snapshot by nature, is the result. No call, box or conversion remains.
+pub(super) fn lower_doc_inline_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if ctx.doc_inline_sites.is_empty() || args.len() != 1 {
+        return None;
+    }
+    let target = ctx
+        .doc_inline_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .cloned()?;
+    let value = lower_expr(ctx, &args[0]);
+    let source = ctx.builder.value_php_type(value.value).codegen_repr();
+    let value = if source == target.codegen_repr() {
+        value
+    } else {
+        // A slot widened to a boxed `mixed` still holds exactly this scalar.
+        crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+            ctx,
+            value,
+            &target,
+            Some(expr.span),
+        )
+    };
+    // The value gets a slot of its own: a context that binds a reference or reads the variable
+    // later (a by-reference parameter, `$x + $x++`) meets this temporary, never the variable,
+    // exactly as it meets a call's result. A string literal is a fresh constant already.
+    if !matches!(target, PhpType::Int | PhpType::Float) {
+        return Some(value);
+    }
+    let temp = ctx.declare_hidden_temp(target.clone());
+    ctx.store_local(&temp, value, target, Some(expr.span));
+    Some(ctx.load_local(&temp, Some(expr.span)))
 }
 
 /// Lowers an object method call with the result its signature gives.

@@ -734,6 +734,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Call site -> the type the PHPDoc reading of the called method gives its result (see
     /// `Checker::doc_return_sites`); the lowered call narrows its native result to it.
     pub doc_return_sites: &'m HashMap<(String, Span), PhpType>,
+    /// Call site -> the scalar type of a PHPDoc method template call that is provably its own
+    /// argument (`Checker::doc_inline_sites`); the lowered call yields the argument itself.
+    pub doc_inline_sites: &'m HashMap<(String, Span), PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
@@ -1013,6 +1016,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
         doc_return_sites: &'m HashMap<(String, Span), PhpType>,
+        doc_inline_sites: &'m HashMap<(String, Span), PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         pointer_word_locals: &'m HashSet<(String, String)>,
@@ -1099,6 +1103,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             first_class_builtin_call_types,
             generic_call_sites,
             doc_return_sites,
+            doc_inline_sites,
             loop_storage_types,
             string_incdec_locals,
             pointer_word_locals,

@@ -290,8 +290,8 @@ pub(crate) struct Checker {
     /// `generic_call_sites`.
     pub doc_return_sites: HashMap<(String, Span), PhpType>,
     /// Call site -> the type of a call that is provably its own argument (a PHPDoc method
-    /// template whose body is `return $param;`); `generics::doc_inline` replaces it by the
-    /// argument once the check is over.
+    /// template whose body is `return $param;`); lowering yields the argument's own scalar value
+    /// where the call stood.
     pub doc_inline_sites: HashMap<(String, Span), PhpType>,
     /// Whether any method carries a PHPDoc twin, so a call only looks one up when one exists.
     pub doc_overlays_present: bool,

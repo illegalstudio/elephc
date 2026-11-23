@@ -317,13 +317,20 @@ impl Checker {
                 if matches!(ty, PhpType::Void | PhpType::Never) {
                     return Ok(DocNarrowing::None);
                 }
-                if receiver_is_pure {
+                // Only a scalar is snapshotted by the value itself. A string is when it is a
+                // literal; any other string, array or object keeps the call.
+                let scalar = matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+                if !scalar {
+                    return Ok(DocNarrowing::None);
+                }
+                let literal_or_number = ty != PhpType::Str
+                    || matches!(arg.kind, crate::parser::ast::ExprKind::StringLiteral(_));
+                if receiver_is_pure && literal_or_number && ty != PhpType::Bool {
                     return Ok(DocNarrowing::Inline(ty));
                 }
-                // The receiver has an effect of its own (`(new C)->id(7)`), so the call stays;
-                // its boxed result holds exactly the argument, which a scalar reads back as is.
-                let scalar = matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
-                if scalar && native.codegen_repr() == PhpType::Mixed {
+                // The call stays (its receiver has an effect, or the string has an owner): its
+                // boxed result holds exactly the argument, which a scalar reads back as is.
+                if native.codegen_repr() == PhpType::Mixed {
                     Ok(DocNarrowing::Retype(ty))
                 } else {
                     Ok(DocNarrowing::None)

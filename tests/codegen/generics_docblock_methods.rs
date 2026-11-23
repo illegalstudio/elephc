@@ -1975,3 +1975,161 @@ echo get_class($g->accept(new Other()));
     assert!(!warnings.contains("__elephc_doc_template"), "{warnings}");
     assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Other");
 }
+
+/// An identity call of a PHPDoc method template is a value like any call's result in every context:
+/// by-reference parameters (function, method, closure, dynamic callee, `call_user_func`), spreads,
+/// loops, generators, arrow functions, evaluation order against `$x++` and `($x = ...)`, array
+/// operands, ternary and `match` arms, copy-on-write, destructors, private and static methods, an
+/// uninitialized typed property, and a receiver reassigned by an argument. `php -n` prints the
+/// expected output below.
+#[test]
+fn test_docblock_method_identity_call_is_a_value_contexts() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class D { public function __destruct() { echo "[D]"; } }
+class P { public $p = 0; public ?int $t; }
+class Reg {
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function same($x) { return $x; }
+}
+function byref(&$v) { $v = $v + 100; return $v; }
+function byval($v) { return $v + 1; }
+function twice($a, $b) { return "$a,$b"; }
+function &refret(array &$a) { return $a; }
+function gen(Reg $r, int $n) { yield $r->same($n); yield $r->same($n) + 1; }
+function run(Reg $r) {
+    // 1. by-ref contexts
+    $x = 5;
+    echo @byref($r->same($x)), "|$x\n";
+    $m = new class { public function bump(&$v) { $v++; return $v; } };
+    $y = 7;
+    echo @$m->bump($r->same($y)), "|$y\n";
+    $c = function (&$v) { $v = 0; return 1; };
+    $z = 9;
+    echo @$c($r->same($z)), "|$z\n";
+    $arr = [3, 1, 2];
+    $s = 4;
+    echo @call_user_func('byval', $r->same($s)), "|$s\n";
+    $f = 'byref';
+    $w = 11;
+    echo @$f($r->same($w)), "|$w\n";
+    echo twice(...[$r->same($x), 2]), "\n";
+    // 2. loops and generators
+    $i = 3;
+    foreach ([1, 2] as $k => $v) { echo $r->same($i) + $v, ","; $i++; }
+    echo "\n";
+    foreach (gen($r, 4) as $g) { echo $g, ","; }
+    echo "\n";
+    $af = fn($q) => $r->same($q) * 2;
+    echo $af(21), "\n";
+    // 3. writes and probes through the result
+    $e = $r->same(5);
+    $e++;
+    echo $e, "\n";
+    echo isset($r->same(1)['k']) ? "set" : "unset", "\n";
+    // 4. evaluation order and snapshot
+    $a = 1;
+    echo $r->same($a) + $a++, "\n";
+    $a = 1;
+    echo $r->same($a) . ($a = 7), "\n";
+    $a = 1;
+    echo json_encode([$r->same($a), $a = 2]), "\n";
+    $a = 1;
+    echo twice($r->same($a), $a = 2), "\n";
+    $a = 1;
+    echo ($a > 0 ? $r->same($a) : 0) + ($a = 5), "\n";
+    echo match (true) { $a > 100 => 0, default => $r->same($a) }, "\n";
+    // 5. undefined / destructors / cow
+    echo $r->same($undef ?? 'dflt'), "\n";
+    echo $r->same(@$nothere) === null ? "null" : "other", "\n";
+    $b = $r->same(10);
+    $b += 1;
+    echo $b, "\n";
+    $r->same(new D);
+    echo "after1\n";
+    echo "x" . $r->same(new D) instanceof D ? "T" : "F", "\n";
+    echo "after2\n";
+    // 6. receiver tricks
+    echo $r->same($r = 3), "\n";
+}
+run(new Reg());
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(output.stdout, "105|5\n8|7\n1|9\n5|4\n111|11\n5,2\n4,6,\n4,5,\n42\n6\nunset\n2\n17\n[1,2]\n1,2\n6\n5\ndflt\nnull\n11\n[D]after1\n[D]T\nafter2\n3\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// An identity call of a PHPDoc method template is a value like any call's result in every context:
+/// by-reference parameters (function, method, closure, dynamic callee, `call_user_func`), spreads,
+/// loops, generators, arrow functions, evaluation order against `$x++` and `($x = ...)`, array
+/// operands, ternary and `match` arms, copy-on-write, destructors, private and static methods, an
+/// uninitialized typed property, and a receiver reassigned by an argument. `php -n` prints the
+/// expected output below.
+#[test]
+fn test_docblock_method_identity_call_is_a_value_contexts_more() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $t; public int $u = 4; public static function make(int $n) { return $n; } }
+class Reg {
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function same($x) { return $x; }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    private function hid($x) { return $x; }
+    public function viaPrivate(int $n) { return $this->hid($n) + 1; }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public static function st($x) { return $x; }
+}
+function bump(&$v) { $v++; return $v; }
+function getr(Reg &$r) { $r = new Reg(); return 4; }
+function run(Reg $r, P $p) {
+    $a = [3, 1, 2];
+    $n = 2;
+    echo $r->same($n), @bump($r->same($n)), $n, "\n";
+    echo Reg::st($n) + 1, "\n";
+    echo $r->viaPrivate(5), "\n";
+    $v = 1.5;
+    echo $r->same($v) * 2, "|", @bump($r->same($v)), "|", $v, "\n";
+    echo $r->same($p->u) + 1, "\n";
+    try { echo $r->same($p->t), "\n"; } catch (\Error $e) { echo get_class($e), ":", $e->getMessage(), "\n"; }
+    $k = 1;
+    echo $r->same($k) + $r->same($k++) + $k, "\n";
+    $k = 1;
+    echo $r->same($k++) . $r->same($k), "\n";
+    $arr = [10, 20];
+    $i = 0;
+    echo $arr[$r->same($i)], $arr[$r->same($i++) + 1], $i, "\n";
+    $q = $r->same($i);
+    $i = 99;
+    echo $q, "\n";
+    $s = $r->same(7);
+    $s++;
+    echo $s, "\n";
+    $rr = new Reg();
+    echo $rr->same(getr($rr)), "\n";
+    try { echo P::make($r->same(5)), "\n"; } catch (\Error $e) { echo "E\n"; }
+    $cl = function () use (&$n) { return $n; };
+    $n = 40;
+    echo $r->same($cl()), "\n";
+    foreach ([1, 2, 3] as $z) { echo $r->same($z) * $r->same($z); }
+    echo "\n";
+}
+run(new Reg(), new P());
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(output.stdout, "232\n3\n6\n3|2.5|1.5\n5\nError:Typed property P::$t must not be accessed before initialization\n4\n12\n10201\n1\n8\n4\n5\n40\n149\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
