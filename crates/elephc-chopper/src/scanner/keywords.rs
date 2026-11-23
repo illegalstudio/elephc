@@ -83,12 +83,13 @@ pub(crate) fn is_whitespace(byte: u8) -> bool {
 /// Returns whether a byte may start a PHP label.
 #[inline]
 pub fn is_label_start(byte: u8) -> bool {
-    byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'_') || byte >= 0x80
 }
 
 /// Returns whether a byte may continue a PHP label.
+#[inline]
 pub(crate) fn is_label(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') || byte >= 0x80
 }
 
 /// Returns the token ID for a complete identifier, or `None` for T_STRING.
