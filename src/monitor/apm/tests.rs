@@ -1890,6 +1890,12 @@ fn pushed_sources_are_recognised() {
         collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0000),
         collector::source_name("worker", "10.0.0.7", 1, 0x3333_4444_0000_0000),
     );
+    // Two instances sharing their high half, as a clock-seeded one started in the same few
+    // seconds does, stay apart too (#2499).
+    assert_ne!(
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0001),
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0002),
+    );
     for service in ["127.0.0.1:9411", "/tmp/shop.sock", "", "a@b pid x", "user@host"] {
         assert!(!collector::is_pushed_source(service), "{service}");
     }

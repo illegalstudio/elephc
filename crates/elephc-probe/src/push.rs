@@ -227,17 +227,35 @@ fn instance() -> u64 {
     static INSTANCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *INSTANCE.get_or_init(|| {
         crate::endpoint::os_random::<8>().map_or_else(
-            // No randomness: the clock and the pid still differ between
-            // containers started apart.
             || {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |elapsed| elapsed.as_nanos() as u64);
-                now ^ u64::from(std::process::id()).rotate_left(32)
+                // A stack address: address-space randomization places it apart even in two
+                // processes of one image.
+                let place = 0u8;
+                fallback_instance(now, std::process::id(), std::ptr::addr_of!(place) as usize as u64)
             },
             u64::from_be_bytes,
         )
     })
+}
+
+/// The instance number of a process that cannot draw randomness: its start time, pid and a
+/// stack address, mixed so that every bit of the result depends on every bit of each. Two
+/// containers running one build as pid 1 and started in the same few seconds differ only in
+/// the low bits of the clock; unmixed, the high half a collector labels a source with was the
+/// same for both, and their counters were merged as one source's (#2499).
+fn fallback_instance(now_ns: u64, pid: u32, address: u64) -> u64 {
+    splitmix64(splitmix64(now_ns ^ u64::from(pid).rotate_left(32)) ^ address)
+}
+
+/// SplitMix64's finalizer: a bijection on `u64` that spreads each input bit over the output.
+fn splitmix64(value: u64) -> u64 {
+    let mut z = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Snapshots this process delivered to a collector, across reconnections.
@@ -750,6 +768,23 @@ mod tests {
         assert_eq!(resolve("127.0.0.1:9", Duration::ZERO).unwrap(), vec!["127.0.0.1:9".parse().unwrap()]);
         let named = resolve("localhost:9", Duration::from_secs(5)).unwrap();
         assert!(named.iter().all(|address| address.port() == 9 && address.ip().is_loopback()), "{named:?}");
+    }
+
+    /// Without randomness, two processes started as pid 1 a few nanoseconds apart still get
+    /// instance numbers whose high halves differ, which a collector labels a source with
+    /// (#2499: the unmixed fallback shared them for about four seconds).
+    #[test]
+    fn fallback_instances_differ_in_both_halves() {
+        let start = 1_800_000_000_000_000_000u64;
+        let mut highs = std::collections::HashSet::new();
+        let mut lows = std::collections::HashSet::new();
+        for offset in 0..64 {
+            let instance = fallback_instance(start + offset, 1, 0x7ffd_0000_1000);
+            highs.insert(instance >> 32);
+            lows.insert(instance as u32);
+        }
+        assert_eq!((highs.len(), lows.len()), (64, 64));
+        assert_ne!(fallback_instance(start, 1, 0x7ffd_0000_1000), fallback_instance(start, 1, 0x7ffd_0000_2000));
     }
 
     /// A stray client is told apart at its first bytes.
