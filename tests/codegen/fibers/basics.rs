@@ -505,3 +505,27 @@ $f->start();
         "session\ngo!\nbool(true)\nagain v\nNULL\nbool(true)\ncaught boom\nbool(true)\n"
     );
 }
+
+/// Every state predicate answers on a Fiber held in a `mixed` slot, next to a user class that
+/// declares a method of the same name.
+#[test]
+fn test_fiber_state_predicates_on_a_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Job { public function isRunning(): string { return "job"; } }
+$h = [new Fiber(function (): void { Fiber::suspend(1); }), new Job()];
+$f = $h[0];
+$j = $h[1];
+var_dump($f->isStarted());
+$f->start();
+var_dump($f->isStarted(), $f->isSuspended(), $f->isRunning(), $f->isTerminated());
+echo $j->isRunning(), "\n";
+$f->resume();
+var_dump($f->isTerminated());
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\njob\nbool(true)\n"
+    );
+}

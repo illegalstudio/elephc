@@ -1079,3 +1079,22 @@ echo "end\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `isset($mixed[$key])` on a `mixed` local asks `offsetExists` only: a missing key must not reach
+/// `offsetGet`, which throws on a `WeakMap`.
+#[test]
+fn test_isset_on_a_mixed_array_access_receiver_asks_offset_exists() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function has(mixed $m, object $k): bool { return isset($m[$k]); }
+$a = new Exception('a');
+$b = new Exception('b');
+$m = new WeakMap();
+$m[$a] = 1;
+var_dump(has($m, $a), has($m, $b));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -2494,3 +2494,17 @@ compoundNamedFailure(null); compoundDynamicFailure(null, 'value');
         assert!(!out.stderr.contains("Warning:"), "xml={xml}: {}", out.stderr);
     }
 }
+
+/// A rejected readonly `??=` and plain write through a temporary receiver leak no exception argument.
+#[test]
+fn test_readonly_coalesce_rejection_on_a_call_receiver_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box { public readonly int $value; }
+function receiver(): Box { return new Box(); }
+try { receiver()->value ??= 9; echo 'bad'; } catch (Error $error) { echo 'E'; }
+try { receiver()->value = 9; echo 'bad'; } catch (Error $error) { echo 'E'; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "EE");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

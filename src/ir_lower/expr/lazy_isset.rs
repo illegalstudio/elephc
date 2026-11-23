@@ -210,6 +210,14 @@ pub(super) fn lower_lazy_isset_operand(
                 if let Some(value) = native_xml_empty::lower(ctx, "isset", arg, arg) {
                     return Some(value);
                 }
+                // A bare `object` receiver has no boxed form for that probe; it keeps the
+                // ordinary lowering.
+                if !matches!(
+                    array_cast_source::array_cast_source_type_for_ir(ctx, array).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    return None;
+                }
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }

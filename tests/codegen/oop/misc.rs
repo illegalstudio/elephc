@@ -555,3 +555,26 @@ fn test_interface_named_enum_declares() {
     );
     assert_eq!(out, "i");
 }
+
+/// A bare-`object` receiver reaches an `ArrayAccess` object property through `offsetSet` for keyed
+/// writes, while an array property of the same receiver still takes the array write.
+#[test]
+fn test_generic_object_array_access_property_write_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+final class SlotBag {
+    public object $slots;
+    public array $list = [];
+    public function __construct() { $this->slots = new ArrayObject(); }
+}
+function fill(object $bag): string {
+    $bag->slots['a'] = 'x';
+    $bag->slots['b'] = 'y';
+    $bag->list['k'] = 'v';
+    return $bag->slots->count() . count($bag->list) . $bag->slots['b'];
+}
+echo fill(new SlotBag());
+"#,
+    );
+    assert_eq!(out, "21y");
+}
