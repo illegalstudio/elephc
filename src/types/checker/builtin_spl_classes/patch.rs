@@ -12,11 +12,24 @@
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
-use super::common::null_expr;
+use super::common::{null_expr, plain_array_type};
 use super::super::Checker;
 
 /// Patches builtin SPL storage signatures in the compiler metadata registry.
 pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
+    // SplFixedArray::fromArray() exposes PHP's layout-neutral `array` declaration while its
+    // native helper receives the compiler's stable Mixed-element array ABI. Keep those two
+    // contracts in the fields designed for them instead of weakening the physical parameter.
+    if let Some(class_info) = checker.classes.get_mut("SplFixedArray") {
+        if let Some(sig) = class_info.static_methods.get_mut(&php_symbol_key("fromArray")) {
+            if let Some(param_type_expr) = sig.param_type_exprs.first_mut() {
+                *param_type_expr = Some(plain_array_type());
+            }
+            if let Some((_, param_type)) = sig.params.first_mut() {
+                *param_type = PhpType::Array(Box::new(PhpType::Mixed));
+            }
+        }
+    }
     let return_type = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(PhpType::Mixed),

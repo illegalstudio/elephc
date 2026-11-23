@@ -521,6 +521,10 @@ pub(super) fn check_types_impl(
     let failed_body_errors = checker.recheck_failed_function_bodies(&initial_top_level_errors);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
+    // The final top-level walk is allowed to specialize ordinary method array parameters. Restore
+    // builtin physical ABI contracts after that last mutation so EIR and eval bridge generation
+    // consume the stable storage shape rather than whichever call site happened to run last.
+    patch_builtin_spl_storage_signatures(&mut checker);
     for (initial_errors, final_errors) in initial_top_level_errors
         .into_iter()
         .zip(final_top_level_errors.into_iter())

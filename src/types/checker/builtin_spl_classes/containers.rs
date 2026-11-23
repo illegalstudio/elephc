@@ -248,7 +248,7 @@ fn spl_fixed_array_methods() -> Vec<ClassMethod> {
             "fromArray",
             true,
             vec![
-                param("array", plain_array_type()),
+                param("array", array_type()),
                 param_default("preserveKeys", TypeExpr::Bool, bool_expr(true)),
             ],
             Some(named_type("SplFixedArray")),

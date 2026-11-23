@@ -12,6 +12,32 @@
 
 use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
+/// The fixed-array factory keeps PHP-visible array metadata separate from its native array ABI.
+#[test]
+fn fixed_array_factory_separates_public_and_physical_array_contracts() {
+    let module = super::lower_source(
+        r#"<?php
+$code = $argc > 0 ? '$factory = SplFixedArray::fromArray(...); $factory([1]);' : '';
+eval($code);
+$hash = SplFixedArray::fromArray([2 => 'a', 5 => 'b']);
+$factory = SplFixedArray::fromArray(...);
+$packed = $factory([1, 2]);
+"#,
+    );
+    let signature = module.class_infos["SplFixedArray"]
+        .static_methods
+        .get("fromarray")
+        .expect("fixed-array factory signature");
+    assert_eq!(
+        signature.params[0].1,
+        crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed))
+    );
+    assert!(matches!(
+        signature.param_type_exprs[0],
+        Some(crate::parser::ast::TypeExpr::Named(ref name)) if name.as_str() == "array"
+    ));
+}
+
 /// Concrete object results keep their payload alive after the descriptor's result box retires.
 #[test]
 fn concrete_descriptor_object_results_emit_on_all_targets() {

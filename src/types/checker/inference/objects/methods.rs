@@ -733,6 +733,7 @@ impl Checker {
                         && !Self::method_array_param_keeps_generic_shape(
                             &impl_class_name,
                             &method_key,
+                            false,
                         )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -863,8 +864,15 @@ impl Checker {
             .cloned()
     }
 
-    /// Returns true for builtin method array params whose accepted shape must remain broad.
-    fn method_array_param_keeps_generic_shape(class_name: &str, method_key: &str) -> bool {
+    /// Returns true for builtin method array params whose physical shape must remain broad.
+    fn method_array_param_keeps_generic_shape(
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> bool {
+        if is_static {
+            return class_name == "SplFixedArray" && method_key == php_symbol_key("fromArray");
+        }
         matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
             && method_key == php_symbol_key("invokeArgs")
     }
@@ -1472,6 +1480,11 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && static_declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            class_name,
+                            &method_key,
+                            true,
+                        )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -1555,6 +1568,11 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && instance_declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            class_name,
+                            &method_key,
+                            false,
+                        )
                         && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
