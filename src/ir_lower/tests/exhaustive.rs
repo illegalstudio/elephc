@@ -473,8 +473,12 @@ fn include_source_without_catalog_is_a_lowering_error() {
     let path = std::path::PathBuf::from("/not-catalogued.php");
     let program = vec![stmt(StmtKind::IncludeOnceMark { source_path: path.clone() })];
     let result = crate::ir_lower::lower_program(&program, &dummy_check_result(), Target::detect_host(), false);
+    // Validation failures name their function since b02a22fe30 (main): the marker sits in
+    // `main`, so the error arrives as `ValidationInFunction` around the same `UnresolvedSource`.
     assert!(matches!(result, Err(crate::ir_lower::LoweringError::Validation(
-        crate::ir::ValidationError::UnresolvedSource(found))) if found == path));
+        crate::ir::ValidationError::UnresolvedSource(found))
+        | crate::ir_lower::LoweringError::ValidationInFunction {
+            error: crate::ir::ValidationError::UnresolvedSource(found), .. }) if found == path));
 }
 
 /// Verifies statement variants lower without panicking and produce valid EIR.
