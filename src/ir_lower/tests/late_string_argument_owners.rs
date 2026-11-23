@@ -32,8 +32,12 @@ echo $argument;
     let argument = call.operands[0];
     let lease = main.instructions.iter().find(|inst| inst.result == Some(argument)).unwrap();
     assert_eq!(lease.op, Op::Acquire, "{target}: a provisional load needs its own lease");
-    assert_eq!(lease.immediate, Some(Immediate::Bool(true)),
-        "{target}: pin the payload without consuming the source variable");
+    // Changed invariant (branch commit 7a0f5064d3, `returned_parameter_has_independent_owner`):
+    // the callee acquires a returned by-value `string` parameter, so the result cannot alias the
+    // argument and the call roots an ordinary independent lease (a plain `Acquire` released
+    // after the call) instead of an evaluation pin (`Acquire true`) with alias-aware retirement.
+    assert_eq!(lease.immediate, None,
+        "{target}: the independent lease takes its own reference without consuming the source variable");
     let slot = main.instructions.iter().find_map(|inst| match inst.immediate {
         Some(Immediate::LocalSlot(slot)) if inst.op == Op::StoreLocal && inst.operands == [argument] => Some(slot),
         _ => None,
@@ -41,9 +45,12 @@ echo $argument;
     let publish = main.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner
         && inst.immediate == Some(Immediate::LocalSlot(slot))).unwrap();
     assert!(publish < call_index, "{target}: publish before entering the throwing callee");
-    assert!(main.instructions[call_index + 1..].iter().any(|inst| inst.op == Op::UnsetLocal
+    assert!(main.instructions[call_index + 1..].iter().any(|inst| inst.op == Op::PopCallOperandOwner
         && inst.immediate == Some(Immediate::LocalSlot(slot))),
-        "{target}: successful calls detach the pin before alias-aware retirement");
+        "{target}: successful calls detach the record");
+    assert!(main.instructions[call_index + 1..].iter().any(|inst| inst.op == Op::ReleaseLocalSlot
+        && inst.immediate == Some(Immediate::LocalSlot(slot))),
+        "{target}: successful calls release the independent lease");
 }
 
 supported_target_cases!(late_string_argument_owners, verify_late_string_argument_owner);

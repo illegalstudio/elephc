@@ -27,8 +27,13 @@ class EvalOnlyUntypedMagicArguments {
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        // Changed invariant (branch commit 7a0f5064d3, `eir_signature_with_php_param_contracts`):
+        // every `__callStatic` body takes `$arguments` as `array<mixed>`, declared or not, because
+        // each route into it (typed site, `mixed` receiver, eval-only hook) passes a plain array
+        // and a body specialized to one element layout read the other's words as values. Only
+        // the instance `__call` keeps the boxed `Mixed` contract.
         for (class, expected) in [("EvalOnlyMagicArguments", PhpType::Array(Box::new(PhpType::Mixed))),
-            ("EvalOnlyUntypedMagicArguments", PhpType::Mixed)] {
+            ("EvalOnlyUntypedMagicArguments", PhpType::Array(Box::new(PhpType::Mixed)))] {
             for method in ["__call", "__callStatic"] {
                 let function = module.class_methods.iter().find(|function|
                     function.name == format!("{class}::{method}")).unwrap();
@@ -136,8 +141,11 @@ echo invokeJoinedCallable($argc);
             function
                 .instructions
                 .iter()
-                .any(|instruction| instruction.op == Op::CallableValueNew),
-            "{target}: the static callable-array target must materialize a descriptor",
+                // Branch invariant (commit 7a0f5064d3): a joined callable ARRAY is normalized into an
+                // array-kind descriptor at the call boundary (`NormalizeCallable`), not resolved to
+                // a `CallableValueNew` through the join as main's lowering did.
+                .any(|instruction| instruction.op == Op::NormalizeCallable),
+            "{target}: the static callable-array target must materialize an array-kind descriptor",
         );
     }
 }
@@ -305,8 +313,9 @@ echo invokeResolvedArray(), invokeResolvedLiteral();
                 function
                     .instructions
                     .iter()
-                    .any(|instruction| instruction.op == Op::CallableValueNew),
-                "{target}/{name}: the instance target must become a descriptor",
+                    // Branch invariant (commit 7a0f5064d3): see the joined-array case above.
+                    .any(|instruction| instruction.op == Op::NormalizeCallable),
+                "{target}/{name}: the instance target must become an array-kind descriptor",
             );
         }
     }

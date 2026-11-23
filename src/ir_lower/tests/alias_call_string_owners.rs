@@ -32,25 +32,39 @@ function callStringAlias(string $text, bool $fail): string {
                 if module.data.function_names[name.as_raw() as usize].eq_ignore_ascii_case("aliasStringInput"))
         }).expect("alias-returning call");
         let operand = call.operands[0];
-        assert!(function.instructions.iter().any(|inst| inst.result == Some(operand)
+        // Changed invariant (branch commit 7a0f5064d3, `returned_parameter_has_independent_owner`):
+        // a by-value `string` parameter returned by the callee is ACQUIRED by the callee
+        // (`acquire_borrowed_return_value`), so the result never aliases the argument and the
+        // caller no longer compares them at run time. The call consumes its own lease of the
+        // evaluation snapshot, parks it in an unwind-visible slot, and releases that slot after
+        // the call instead of `UnsetLocal` + `ReleaseUnlessAliases`.
+        let operand_def = function.instructions.iter().find(|inst| inst.result == Some(operand))
+            .expect("operand producer");
+        assert_eq!(operand_def.op, Op::Acquire, "{target}: call consumes its own lease");
+        let snapshot = operand_def.operands[0];
+        assert!(function.instructions.iter().any(|inst| inst.result == Some(snapshot)
             && inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))),
-            "{target}: call consumes the independent evaluation snapshot");
+            "{target}: the lease is taken from the independent evaluation snapshot");
         let store = function.instructions[..call_index].iter().rev().find(|inst| {
             inst.op == Op::StoreLocal && inst.operands == [operand]
-        }).expect("snapshot parking slot");
+        }).expect("lease parking slot");
         let Some(Immediate::LocalSlot(slot)) = store.immediate else { panic!("owner slot"); };
-        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::OwnedTemp);
+        // The lease root is an ordinary owned hidden temporary, no longer the evaluation pin's
+        // `OwnedTemp` parking slot.
+        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::HiddenTemp);
         assert!(function.instructions[..call_index].iter().rev().take_while(|inst| {
             inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot))
         }).any(|inst| inst.op == Op::PushCallOperandOwner
             && inst.immediate == Some(Immediate::LocalSlot(slot))),
-            "{target}: final snapshot must be published through invocation");
+            "{target}: the lease must be published through invocation");
         assert!(function.instructions[call_index + 1..].iter().any(|inst| {
-            inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
-        }), "{target}: normal return detaches the pin without consuming the string");
+            inst.op == Op::PopCallOperandOwner && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }), "{target}: normal return detaches the record");
         assert!(function.instructions[call_index + 1..].iter().any(|inst| {
-            inst.op == Op::ReleaseUnlessAliases && inst.operands.first() == Some(&operand)
-        }), "{target}: runtime alias comparison still decides the snapshot owner");
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }), "{target}: the independent lease is released after the call");
+        assert!(function.instructions.iter().all(|inst| inst.op != Op::ReleaseUnlessAliases),
+            "{target}: an independent result needs no runtime alias comparison");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

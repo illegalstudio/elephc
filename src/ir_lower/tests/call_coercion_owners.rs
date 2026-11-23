@@ -616,26 +616,21 @@ $callback();
                 detail,
             );
         }
+        // Changed invariant (branch commit 7a0f5064d3, `returned_parameter_has_independent_owner`):
+        // `preserveCallback` returns its by-value `callable` parameter through
+        // `acquire_borrowed_return_value`, so the result owns a reference of its own and the
+        // caller roots, detaches and releases the argument exactly as for a non-aliasing callee.
+        // Before, the pin was only detached (`PopCallOperandOwner` + `UnsetLocal`, no
+        // `ReleaseLocalSlot`) because the argument's owner was transferred to the alias result.
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
         let call_index = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-        let argument = alias.instructions[call_index].operands[0];
-        let roots = alias.instructions[..call_index].iter().filter_map(|inst| {
-            if inst.op != Op::StoreLocal || inst.operands != [argument] { return None; }
-            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
-            alias.instructions[..call_index].iter().any(|inst|
-                inst.op == Op::PushCallOperandOwner
-                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).then_some(slot)
-        }).collect::<Vec<_>>();
-        assert_eq!(roots.len(), 1, "{target}: the aliasing argument needs one unwind pin");
-        let slot = Some(crate::ir::Immediate::LocalSlot(roots[0]));
-        let after = &alias.instructions[call_index + 1..];
-        let pop = after.iter().position(|inst| inst.op == Op::PopCallOperandOwner && inst.immediate == slot).unwrap();
-        let unset = after.iter().position(|inst| inst.op == Op::UnsetLocal && inst.immediate == slot).unwrap();
-        assert!(pop < unset, "{target}: detach the pin before retiring its bookkeeping slot");
-        assert!(!after.iter().any(|inst| inst.op == Op::ReleaseLocalSlot && inst.immediate == slot),
-            "{target}: the pin must not consume the owner transferred to the alias result");
-        assert!(!after.iter().any(|inst| inst.op == Op::Release && inst.operands == [argument]),
-            "{target}: the returned argument keeps its existing owner");
+        assert_final_operand_root_spans_call(
+            alias,
+            call_index,
+            alias.instructions[call_index].operands[0],
+            target,
+            "callable argument returned (re-acquired) by the callee",
+        );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         // The descriptor record link is the out-of-line `__rt_call_operand_link_descriptor` helper.
         assert!(asm.contains("__rt_call_operand_link_descriptor") || asm.contains("__rt_call_operand_push_descriptor"), "{target}");

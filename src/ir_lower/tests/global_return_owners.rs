@@ -26,7 +26,10 @@ $copy = returnGlobalMixed(); $rowCopy = returnGlobalRows();
         );
         for name in ["returnGlobalMixed", "returnGlobalRows"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let global = function.instructions.iter().find(|inst| inst.op == Op::LoadGlobal)
+            // `global $x` binds the global's ref cell (branch commit 7a0f5064d3), so the return
+            // reads it through `LoadRefCell`; the owner invariants below are unchanged.
+            let global = function.instructions.iter()
+                .find(|inst| matches!(inst.op, Op::LoadGlobal | Op::LoadRefCell))
                 .expect("the return must read global storage").result.unwrap();
             if name == "returnGlobalMixed" {
                 assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedClone && inst.operands == [global]),

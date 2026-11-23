@@ -77,13 +77,23 @@ callNormalizedCast($argc + 5);
             inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
                 RuntimeCallTarget::Function(RuntimeFnId::Trim)))
         }).expect("trim view");
-        let copy = function.instructions.iter().find(|inst| {
-            inst.op == Op::StrPersist && inst.immediate == Some(Immediate::Bool(true))
-                && trim.operands.contains(&inst.result.unwrap())
-        }).expect("normalized cast owner borrowed by trim").result.unwrap();
-        assert!(function.instructions.iter().any(|inst| {
-            inst.op == Op::ReleaseUnlessAliases && inst.operands == [copy, call.result.unwrap()]
-        }), "{target}: the user call must settle the normalized cast's owner");
+        // Changed invariant (branch commit 7a0f5064d3): the `(string)` cast owns its converted
+        // string itself (no separate `StrPersist true` normalized copy), the trim view is
+        // persisted into an independent string, and the cast owner the trim borrowed is released
+        // right after that persist. The alias-capable user call then receives an independent
+        // string, so no `ReleaseUnlessAliases` is needed to settle the cast's owner.
+        let cast = trim.operands[0];
+        let view = trim.result.unwrap();
+        let persisted = function.instructions.iter().position(|inst| {
+            inst.op == Op::StrPersist && inst.operands == [view]
+        }).expect("trim view persisted into an independent string");
+        assert!(function.instructions[persisted + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [cast]
+        }), "{target}: the cast owner borrowed by trim is retired after the persist");
+        assert!(function.instructions.iter().all(|inst| {
+            inst.op != Op::ReleaseUnlessAliases || inst.operands.first() != Some(&cast)
+        }), "{target}: the cast owner is never settled by an alias comparison");
+        let _ = call;
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
