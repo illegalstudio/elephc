@@ -67,6 +67,7 @@ pub(super) fn apply(
         if overlay {
             let body = std::mem::take(&mut method.body);
             let mut adopted = method.clone();
+            let written_body = body.clone();
             method.body = body;
             adopt_method(
                 &mut adopted,
@@ -91,6 +92,8 @@ pub(super) fn apply(
                         )));
                     }
                 }
+                // The twin carries only what the written body proves about its result.
+                adopted.body = proven_body(method, &written_body, block, &adopted.type_params);
                 adopted.name.push_str(crate::generics::DOC_TWIN_SUFFIX);
                 adopted.attributes = Vec::new();
                 adopted.param_attributes = vec![Vec::new(); adopted.param_attributes.len()];
@@ -115,6 +118,75 @@ pub(super) fn apply(
             property.type_expr = Some(annotated.clone());
         }
     }
+}
+
+/// Returns the proof the body of `method` gives its PHPDoc twin, or an empty body.
+///
+/// Only a body that provably returns what the annotation says qualifies, whatever the annotation
+/// claims: `return $p;` where `$p` is the untyped parameter annotated `T` and the return is
+/// annotated `T`, or `return new $c(...);` where `$c` is the parameter annotated `class-string<T>`
+/// and the return is annotated `T`. A native return type must be one that changes nothing
+/// (none, `mixed`, or `object` for the second form). Anything else proves nothing.
+fn proven_body(
+    method: &ClassMethod,
+    body: &[crate::parser::ast::Stmt],
+    block: &DocBlock,
+    own: &[TypeParam],
+) -> Vec<crate::parser::ast::Stmt> {
+    use crate::parser::ast::{ExprKind, StmtKind};
+    let none = Vec::new();
+    let [stmt] = body else { return none };
+    let StmtKind::Return(Some(returned)) = &stmt.kind else { return none };
+    if method.by_ref_return || method.variadic.is_some() {
+        return none;
+    }
+    let is_template = |ty: &TypeExpr| {
+        matches!(ty, TypeExpr::Named(name) if own.iter().any(|param| param.name == name.as_str()))
+    };
+    let Some(annotated_return) = block.return_type.as_ref().filter(|ty| is_template(ty)) else {
+        return none;
+    };
+    let native_return = |allow_object: bool| match method.return_type.as_ref() {
+        None => true,
+        Some(TypeExpr::Named(name)) => {
+            let written = name.as_str().trim_start_matches('\\');
+            written.eq_ignore_ascii_case("mixed")
+                || (allow_object && written.eq_ignore_ascii_case("object"))
+        }
+        Some(_) => false,
+    };
+    let declared = |name: &str| method.params.iter().find(|(param, _, _, _)| param == name);
+    match &returned.kind {
+        ExprKind::Variable(name) => {
+            let Some((_, native, _, by_ref)) = declared(name) else { return none };
+            let untyped = match native {
+                None => true,
+                Some(TypeExpr::Named(hint)) => hint.as_str().eq_ignore_ascii_case("mixed"),
+                Some(_) => false,
+            };
+            if *by_ref || !untyped || !native_return(false) || block.params.get(name) != Some(annotated_return) {
+                return none;
+            }
+        }
+        ExprKind::NewDynamic { name_expr, .. } => {
+            let ExprKind::Variable(name) = &name_expr.kind else { return none };
+            let Some((_, native, _, by_ref)) = declared(name) else { return none };
+            let string_like = match native {
+                None => true,
+                Some(TypeExpr::Str) => true,
+                Some(TypeExpr::Named(hint)) => hint.as_str().eq_ignore_ascii_case("string"),
+                Some(_) => false,
+            };
+            let Some(template) = block.class_strings.get(name) else { return none };
+            if *by_ref || !string_like || !native_return(true)
+                || !matches!(annotated_return, TypeExpr::Named(t) if t.as_str() == template)
+            {
+                return none;
+            }
+        }
+        _ => return none,
+    }
+    vec![stmt.clone()]
 }
 
 /// Adopts one method's own `@template` declaration and the annotations naming its parameters

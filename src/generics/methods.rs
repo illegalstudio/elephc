@@ -26,6 +26,41 @@ use crate::span::Span;
 
 use super::{instantiated_name, Bindings};
 
+/// What the body of a PHPDoc method template PROVES about its result, whatever the annotation
+/// claims. The twin's body holds only the proof (see [`DocProof::from_twin_body`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DocProof {
+    /// Nothing: the call keeps the method's native result type and representation.
+    #[default]
+    None,
+    /// The body is `return $param;` and nothing else: the result is the argument, unchanged.
+    Identity { param: usize },
+    /// The body is `return new $param(...);` and nothing else: the result is an instance of
+    /// exactly the class the argument names.
+    NewClass { param: usize },
+}
+
+impl DocProof {
+    /// Reads the proof a twin's body carries.
+    pub fn from_twin_body(body: &[Stmt], param_names: &[String]) -> Self {
+        use crate::parser::ast::ExprKind;
+        let [Stmt { kind: StmtKind::Return(Some(expr)), .. }] = body else {
+            return DocProof::None;
+        };
+        let index = |name: &str| param_names.iter().position(|param| param == name);
+        match &expr.kind {
+            ExprKind::Variable(name) => index(name).map_or(DocProof::None, |param| DocProof::Identity { param }),
+            ExprKind::NewDynamic { name_expr, .. } => match &name_expr.kind {
+                ExprKind::Variable(name) => {
+                    index(name).map_or(DocProof::None, |param| DocProof::NewClass { param })
+                }
+                _ => DocProof::None,
+            },
+            _ => DocProof::None,
+        }
+    }
+}
+
 /// A method that declares type parameters of its own, lifted out of its class.
 #[derive(Debug, Clone)]
 pub struct MethodTemplate {
@@ -45,6 +80,8 @@ pub struct MethodTemplate {
     /// position like the fixed ones, and it lives in its own field rather than in `params`.
     pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
+    /// What the written method's body proves about its result (PHPDoc twins only).
+    pub proof: DocProof,
 }
 
 /// The name of the hidden twin that carries the PHPDoc reading of the method `written`.
@@ -129,6 +166,14 @@ fn collect_declared(
                     .collect(),
                 variadic_type: method.variadic_type.clone(),
                 return_type: method.return_type.clone(),
+                proof: if is_doc_twin(&method.name) {
+                    DocProof::from_twin_body(
+                        &method.body,
+                        &method.params.iter().map(|(name, _, _, _)| name.clone()).collect::<Vec<_>>(),
+                    )
+                } else {
+                    DocProof::None
+                },
             },
         );
     }

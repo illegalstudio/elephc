@@ -1457,6 +1457,43 @@ mod tests {
         assert_eq!(class_string_template("string"), None);
     }
 
+    /// A twin carries only what the written body PROVES about its result: `return $p;` (identity)
+    /// and `return new $c(...);` with `class-string<T>`. Every other body, and a native type that
+    /// would change the value, proves nothing.
+    #[test]
+    fn a_twin_carries_only_what_its_body_proves() {
+        use crate::generics::methods::DocProof;
+        let source = concat!(
+            "<?php\nclass Pr {\n",
+            "/**\n * @template T\n * @param T $x\n * @return T\n */\n",
+            "public function same($x) { return $x; }\n",
+            "/**\n * @template T\n * @param T $x\n * @return T\n */\n",
+            "public function typed(int $x) { return $x; }\n",
+            "/**\n * @template T\n * @param T $x\n * @return T\n */\n",
+            "public function narrowed($x): int { return $x; }\n",
+            "/**\n * @template T\n * @param T $x\n * @return T\n */\n",
+            "public function more($x) { echo 1; return $x; }\n",
+            "/**\n * @template T of object\n * @param class-string<T> $c\n * @return T\n */\n",
+            "public function make(string $c): object { return new $c(); }\n",
+            "/**\n * @template T of object\n * @param class-string<T> $c\n * @return T\n */\n",
+            "public function other(string $c) { return new Bar(); }\n}\n",
+        );
+        let program = program_of(source);
+        let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        let proof = |name: &str| {
+            let twin = twin_method(methods, name);
+            let names: Vec<String> = twin.params.iter().map(|param| param.0.clone()).collect();
+            DocProof::from_twin_body(&twin.body, &names)
+        };
+        assert_eq!(proof("same"), DocProof::Identity { param: 0 });
+        assert_eq!(proof("make"), DocProof::NewClass { param: 0 });
+        for name in ["typed", "narrowed", "more", "other"] {
+            assert_eq!(proof(name), DocProof::None, "{name}");
+        }
+    }
+
     /// A template takes over a native hint when every hinted position annotated directly with it
     /// carries that hint, and then records it with the hints as written; the hint alone decides
     /// whether a position accepts `null`.

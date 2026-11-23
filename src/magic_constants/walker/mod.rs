@@ -202,6 +202,13 @@ pub(crate) trait Pass {
         body
     }
 
+    /// Transforms a rebuilt expression after its children have been visited. Default returns it
+    /// unchanged; a pass that replaces whole call expressions (`crate::generics::doc_inline`)
+    /// does it here.
+    fn transform_expr(&self, expr: crate::parser::ast::Expr) -> crate::parser::ast::Expr {
+        expr
+    }
+
     /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that
     /// copies a body under a new source identity retags every expression here.
     fn transform_expr_span(&self, span: Span) -> Span {

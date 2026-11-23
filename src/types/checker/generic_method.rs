@@ -24,6 +24,16 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
+/// What a PHPDoc twin lets one call narrow to.
+enum DocNarrowing {
+    /// Nothing is proven: the call keeps its native result.
+    None,
+    /// The call is its argument (`doc_inline_sites`).
+    Inline(PhpType),
+    /// The native result is retyped to this class (`doc_return_sites`).
+    Retype(PhpType),
+}
+
 impl Checker {
     /// Finds a generic method template on `class_name`, or on the nearest ancestor declaring one.
     ///
@@ -146,45 +156,16 @@ impl Checker {
             .entry(site)
             .or_default()
             .insert(written_method.to_string());
-        // The call is renamed to the written method and not checked again, so the arguments are
-        // checked here against the method's own signature, and the call's type and narrowing are
-        // decided exactly as a plain call's are (from the arguments written, not inferred).
-        match &expr.kind {
+        // The call is renamed to the written method and not checked again, so its arguments are
+        // checked here against the method's own signature through the plain route, which also
+        // settles what the method's body proves about its result.
+        let result = match &expr.kind {
             crate::parser::ast::ExprKind::StaticMethodCall { receiver, .. } => {
-                self.infer_static_method_call_type(receiver, written_method, args, expr, env)?;
+                self.infer_static_method_call_type(receiver, written_method, args, expr, env)?
             }
-            _ => {
-                self.infer_method_call_on_class_type(class_name, written_method, args, expr, env)?;
-            }
-        }
-        let method_key = crate::names::php_symbol_key(written_method);
-        let native = self
-            .classes
-            .get(class_name.trim_start_matches('\\'))
-            .and_then(|info| {
-                info.methods
-                    .get(&method_key)
-                    .or_else(|| info.static_methods.get(&method_key))
-            })
-            .map(|sig| sig.return_type.clone())
-            .unwrap_or(PhpType::Mixed);
-        let site = (self.current_loop_storage_scope.clone(), expr.span);
-        self.doc_return_sites.remove(&site);
-        let Some(ty) = &template.return_type else {
-            return Ok(Some(native));
+            _ => self.infer_method_call_on_class_type(class_name, written_method, args, expr, env)?,
         };
-        let erased = generics::docblock_params_read_bare(&template.type_params, &bindings);
-        let substituted = generics::substitute_signature_type(ty, &bindings, &erased);
-        let Ok(precise) = self.resolve_type_expr(&substituted, expr.span) else {
-            return Ok(Some(native));
-        };
-        Ok(Some(match self.doc_narrowing(&native, &precise) {
-            Some(narrowed) => {
-                self.doc_return_sites.insert(site, narrowed.clone());
-                narrowed
-            }
-            None => native,
-        }))
+        Ok(Some(result))
     }
 
     /// Finds the PHPDoc twin of the method `method` a call on `class_name` runs, if it has one.
@@ -228,14 +209,18 @@ impl Checker {
         None
     }
 
-    /// Types the result of a call through the PHPDoc reading of the method it runs.
+    /// Types the result of a call through the PHPDoc twin of the method it runs, where the
+    /// method's own body PROVES it (`DocProof`), and only there.
     ///
-    /// `native` is what the written signature gives the call. When the method carries a PHPDoc
-    /// twin, its type parameters are bound from the argument types exactly as a native template's
-    /// are, and the substituted return type is the call's type; the call site is recorded so
-    /// lowering narrows the native result to it behind a run-time guard (php enforces no
-    /// annotation, so a wrong one must not misread storage). Nothing is instantiated and no
-    /// further check runs. An annotation that cannot be honoured leaves `native`.
+    /// php enforces no annotation, so what a docblock claims never changes a type, a value or a
+    /// representation. The twin binds `T` from the arguments (bounds still warn), and the result
+    /// is narrowed in exactly two proven shapes:
+    /// - `return $p;` (identity): the call IS its argument. The call site is recorded in
+    ///   `doc_inline_sites` and the AST pass `generics::doc_inline` replaces the call by the
+    ///   argument after the check, so no call, no boxing and no conversion remain.
+    /// - `return new $c(...);` with a `Foo::class` argument: the result is an instance of `Foo`.
+    ///   The site is recorded in `doc_return_sites` and lowering retypes the native result.
+    /// Anything else keeps `native`, and so does a call a subclass may answer differently.
     pub(crate) fn apply_doc_method_overlay(
         &mut self,
         class_name: &str,
@@ -251,21 +236,30 @@ impl Checker {
         }
         let site = (self.current_loop_storage_scope.clone(), expr.span);
         match self.doc_method_narrowing(class_name, method, is_static, args, expr, env, &native)? {
-            Some(narrowed) => {
-                self.doc_return_sites.insert(site, narrowed.clone());
-                Ok(narrowed)
+            DocNarrowing::Inline(ty) => {
+                self.doc_return_sites.remove(&site);
+                self.doc_inline_sites.insert(site, ty.clone());
+                Ok(ty)
             }
-            None => {
-                // A site an inner route of the same call already narrowed to `native` stays.
+            DocNarrowing::Retype(ty) => {
+                self.doc_inline_sites.remove(&site);
+                self.doc_return_sites.insert(site, ty.clone());
+                Ok(ty)
+            }
+            DocNarrowing::None => {
+                // A site an inner route of the same call already settled on `native` stays.
                 if self.doc_return_sites.get(&site) != Some(&native) {
                     self.doc_return_sites.remove(&site);
+                }
+                if self.doc_inline_sites.get(&site) != Some(&native) {
+                    self.doc_inline_sites.remove(&site);
                 }
                 Ok(native)
             }
         }
     }
 
-    /// The type one call narrows to through the PHPDoc twin of its method, if any.
+    /// What one call narrows to through the PHPDoc twin of its method.
     fn doc_method_narrowing(
         &mut self,
         class_name: &str,
@@ -275,59 +269,125 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
         native: &PhpType,
-    ) -> Result<Option<PhpType>, CompileError> {
+    ) -> Result<DocNarrowing, CompileError> {
         let Some(template) = self.doc_twin_template_for(class_name, method, is_static) else {
-            return Ok(None);
+            return Ok(DocNarrowing::None);
         };
-        let Some(return_type) = template.return_type.clone() else {
-            return Ok(None);
-        };
-        let Ok(mut bindings) = self.infer_method_bindings(&template, args, expr, env)? else {
-            return Ok(None);
-        };
-        if self.settle_native_hints(&template.type_params, &mut bindings, expr.span).is_err() {
-            return Ok(None);
+        // The bindings are only read for the bound diagnostics: the result type is the body's.
+        if let Ok(mut bindings) = self.infer_method_bindings(&template, args, expr, env)? {
+            if self.settle_native_hints(&template.type_params, &mut bindings, expr.span).is_ok() {
+                self.check_method_bounds(&template, &bindings, expr.span)?;
+            }
         }
-        self.check_method_bounds(&template, &bindings, expr.span)?;
-        let erased = generics::docblock_params_read_bare(&template.type_params, &bindings);
-        let substituted = generics::substitute_signature_type(&return_type, &bindings, &erased);
-        let Ok(precise) = self.resolve_type_expr(&substituted, expr.span) else {
-            return Ok(None);
+        let ordered = generics::arguments_in_declaration_order(&template.param_names, args);
+        let provably = |param: usize| -> Option<Expr> {
+            if args.iter().any(|arg| {
+                matches!(
+                    arg.kind,
+                    crate::parser::ast::ExprKind::Spread(_) | crate::parser::ast::ExprKind::NamedArg { .. }
+                )
+            }) {
+                return None;
+            }
+            ordered.get(param).cloned().flatten()
         };
-        Ok(self.doc_narrowing(native, &precise))
+        match template.proof {
+            generics::methods::DocProof::None => Ok(DocNarrowing::None),
+            generics::methods::DocProof::Identity { param } => {
+                // One parameter, one plain argument, a receiver that cannot be null and has no
+                // effect, and no subclass answering the call differently.
+                let Some(arg) = provably(param).filter(|_| template.param_names.len() == 1 && args.len() == 1)
+                else {
+                    return Ok(DocNarrowing::None);
+                };
+                let receiver_is_pure = match &expr.kind {
+                    crate::parser::ast::ExprKind::MethodCall { object, .. } => {
+                        matches!(
+                            object.kind,
+                            crate::parser::ast::ExprKind::This | crate::parser::ast::ExprKind::Variable(_)
+                        ) && matches!(self.infer_type(object, env)?, PhpType::Object(name) if !name.is_empty())
+                    }
+                    crate::parser::ast::ExprKind::StaticMethodCall { .. } => true,
+                    _ => false,
+                };
+                if !self.doc_single_impl(class_name, method, is_static) {
+                    return Ok(DocNarrowing::None);
+                }
+                let ty = self.infer_type(&arg, env)?;
+                if matches!(ty, PhpType::Void | PhpType::Never) {
+                    return Ok(DocNarrowing::None);
+                }
+                if receiver_is_pure {
+                    return Ok(DocNarrowing::Inline(ty));
+                }
+                // The receiver has an effect of its own (`(new C)->id(7)`), so the call stays;
+                // its boxed result holds exactly the argument, which a scalar reads back as is.
+                let scalar = matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+                if scalar && native.codegen_repr() == PhpType::Mixed {
+                    Ok(DocNarrowing::Retype(ty))
+                } else {
+                    Ok(DocNarrowing::None)
+                }
+            }
+            generics::methods::DocProof::NewClass { param } => {
+                let Some(arg) = provably(param) else {
+                    return Ok(DocNarrowing::None);
+                };
+                let declared = template.params.get(param).cloned().flatten();
+                let arg = self.class_string_argument(declared.as_ref(), arg);
+                let crate::parser::ast::ExprKind::ClassConstant {
+                    receiver: crate::parser::ast::StaticReceiver::Named(named),
+                } = &arg.kind
+                else {
+                    return Ok(DocNarrowing::None);
+                };
+                let wanted = named.as_str().trim_start_matches('\\');
+                let Some(class) = self.classes.keys().find(|name| name.eq_ignore_ascii_case(wanted)).cloned()
+                else {
+                    return Ok(DocNarrowing::None);
+                };
+                let precise = PhpType::Object(class.clone());
+                let representable = !crate::parser::ast::is_c_width_type_name(&class)
+                    && !self.extern_classes.contains_key(&class)
+                    && !self.packed_classes.contains_key(&class)
+                    && !class.eq_ignore_ascii_case("closure")
+                    && native.codegen_repr() == PhpType::Mixed;
+                if !representable || native == &precise || !self.doc_single_impl(class_name, method, is_static) {
+                    return Ok(DocNarrowing::None);
+                }
+                Ok(DocNarrowing::Retype(precise))
+            }
+        }
     }
 
-    /// Returns the type a call of a PHPDoc method template may be narrowed to, when `precise`
-    /// is one the native result can be guarded into.
-    ///
-    /// Only a scalar or one declared class: the native result is then a boxed `mixed` or an
-    /// object, and lowering converts or guards it. Everything else (containers, unions,
-    /// callables) has a storage the native body does not produce, so it keeps the native type.
-    fn doc_narrowing(&self, native: &PhpType, precise: &PhpType) -> Option<PhpType> {
-        if native == precise {
-            return None;
-        }
-        let eligible = match precise {
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => {
-                native.codegen_repr() == PhpType::Mixed
-            }
-            PhpType::Object(class) => {
-                let class = class.trim_start_matches('\\');
-                !class.eq_ignore_ascii_case("object")
-                    && !class.eq_ignore_ascii_case("closure")
-                    && !crate::parser::ast::is_c_width_type_name(class)
-                    && (self.classes.contains_key(class) || self.interfaces.contains_key(class))
-                    && !self.extern_classes.contains_key(class)
-                    && !self.packed_classes.contains_key(class)
-                    && match native {
-                        PhpType::Mixed => true,
-                        PhpType::Object(_) => self.type_accepts(native, precise),
-                        _ => false,
-                    }
-            }
-            _ => false,
+    /// Whether every class a receiver of `class_name` may be at run time resolves `method` to the
+    /// implementation `class_name` itself does: no subclass answers the call differently.
+    fn doc_single_impl(&self, class_name: &str, method: &str, is_static: bool) -> bool {
+        let key = crate::names::php_symbol_key(method);
+        let table = |info: &crate::types::ClassInfo| {
+            if is_static { info.static_method_impl_classes.get(&key).cloned() } else { info.method_impl_classes.get(&key).cloned() }
         };
-        eligible.then(|| precise.clone())
+        let class_name = class_name.trim_start_matches('\\');
+        let Some(base) = self.classes.get(class_name).and_then(table) else {
+            return false;
+        };
+        self.classes.iter().all(|(name, info)| {
+            let mut current = Some(name.as_str());
+            let mut remaining = self.classes.len() + 1;
+            let mut descends = false;
+            while let Some(candidate) = current {
+                if candidate == class_name {
+                    descends = true;
+                    break;
+                }
+                remaining -= 1;
+                if remaining == 0 {
+                    break;
+                }
+                current = self.classes.get(candidate).and_then(|class| class.parent.as_deref());
+            }
+            !descends || table(info).as_ref() == Some(&base)
+        })
     }
 
     /// Reads a class-name string handed to a `class-string<T>` parameter as the `Foo::class` it is.

@@ -22,6 +22,7 @@
 pub mod classes;
 mod constructors;
 mod erasure;
+mod doc_inline;
 mod function_variants;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
@@ -330,6 +331,8 @@ where
     // names types with no representation — `new Box<U>` — so leaving it in reaches lowering and
     // panics there. Every call the program makes has its own instantiated method by now.
     let program = methods::strip_templates(program);
+    // A PHPDoc method template whose body is `return $param;` is its argument at every proven call.
+    let program = doc_inline::inline(program, &mut check_result);
     record_written_class_names(&mut check_result);
     Ok((program, check_result))
 }
@@ -1638,22 +1641,18 @@ run(new Reg(), 1, "a", 1.5);
             .next()
             .expect("class Reg");
         assert_eq!(methods, ["get", "id", "first", "make"], "only the written methods remain");
-        let mut narrowed: Vec<String> = result
-            .doc_return_sites
-            .values()
-            .map(|ty| format!("{ty:?}"))
-            .collect();
-        narrowed.sort();
-        narrowed.dedup();
-        assert_eq!(
-            narrowed,
-            [
-                "Float".to_string(),
-                "Int".to_string(),
-                "Object(\"Bar\")".to_string(),
-                "Object(\"Foo\")".to_string(),
-                "Str".to_string(),
-            ]
-        );
+        // `return new $c();` called with `Foo::class` is a `Foo`, whatever the annotation says;
+        // `return $x;` is its argument (inlined after the check). `first` returns `$xs[0]`,
+        // which proves nothing, so its call keeps the native type.
+        let mut retyped: Vec<String> =
+            result.doc_return_sites.values().map(|ty| format!("{ty:?}")).collect();
+        retyped.sort();
+        retyped.dedup();
+        assert_eq!(retyped, ["Object(\"Bar\")".to_string(), "Object(\"Foo\")".to_string()]);
+        let mut inlined: Vec<String> =
+            result.doc_inline_sites.values().map(|ty| format!("{ty:?}")).collect();
+        inlined.sort();
+        inlined.dedup();
+        assert_eq!(inlined, ["Float".to_string(), "Int".to_string(), "Str".to_string()]);
     }
 }

@@ -1804,45 +1804,149 @@ echo $r->id('x'), "|", implode(",", get_class_methods($r)), "|",
     assert_eq!(out, "id|id|id|y|y|id\n");
 }
 
-/// An annotation php does not enforce never makes the program read storage as the wrong type:
-/// the call result is converted (a scalar) or guarded (a class) before it is typed by the
-/// annotation, and the heap stays clean. (php itself returns the body's value untouched; the
-/// converted or guarded value is the price of typing the call by the annotation.)
+/// php enforces no annotation: a method whose body returns something else than its docblock says
+/// returns it, untouched, to a typed use or not. `php -n` prints `bar`, `string(1) "7"`, `NULL`,
+/// `Bar` and `string(1) "7"` for this program, and so do we; nothing is converted or thrown.
 #[test]
-fn test_docblock_method_template_lies_do_not_misread_storage() {
+fn test_docblock_method_template_lies_follow_php() {
     let output = compile_and_run_with_heap_debug(
         r#"<?php
-class Foo { public function hi(): string { return "foo"; } }
-class Bar { public function hi(): string { return "bar"; } }
+class Foo { public function name(): string { return "foo"; } }
+class Bar { public function name(): string { return "bar"; } }
+class Reg {
+    /**
+     * @template T
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function get(string $c): object { return new Bar(); }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function id($v) { return is_int($v) ? "7" : $v; }
+}
 class Liar {
     /**
      * @template T of object
      * @param class-string<T> $c
      * @return T
      */
-    public function get(string $c) { return unserialize(serialize(new Bar())); }
+    public function pick(string $c) { return unserialize(serialize(new Bar())); }
     /**
      * @template T
      * @param T $x
      * @return T
      */
-    public function id($x) { return unserialize(serialize("7")); }
+    public function seven($x) { return unserialize(serialize("7")); }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function nothing($x) { return unserialize(serialize(null)); }
 }
-function run(Liar $l) {
-    echo (new Foo())->hi(), "\n";
-    var_dump($l->id(3) + 1);
-    try {
-        echo $l->get(Foo::class)->hi(), "\n";
-    } catch (\Throwable $e) {
-        echo get_class($e), "\n";
-    }
+function run(Reg $r, Liar $l) {
+    echo (new Foo())->name(), "\n";
+    echo $r->get(Foo::class)->name(), "\n";
+    var_dump($r->id(5));
+    echo get_class($l->pick(Foo::class)), "\n";
+    var_dump($l->seven(3));
+    var_dump($l->nothing("x"));
 }
-run(new Liar());
+run(new Reg(), new Liar());
 "#,
     );
     assert!(output.success, "program failed: {}", output.stderr);
-    assert_eq!(output.stdout, "foo\nint(8)\nTypeError\n");
+    assert_eq!(
+        output.stdout,
+        "foo\nbar\nstring(1) \"7\"\nBar\nstring(1) \"7\"\nNULL\n"
+    );
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The result of a PHPDoc method template call is an ordinary value in every use php gives it a
+/// rule for: a typed property store, a typed parameter, an array key, arithmetic, a loop. Proven
+/// calls (`return $x;`, `return new $c;`) keep their precise type; the rest keep the native one
+/// and php's own rules apply to what the body really returned. `php -n` prints the same.
+#[test]
+fn test_docblock_method_template_results_in_typed_uses() {
+    let source = r#"<?php
+class Foo { public int $n = 3; public function name(): string { return "foo"; } }
+class Bar { public function name(): string { return "bar"; } }
+class Holder { public int $v = 0; public ?Foo $f = null; }
+class Reg {
+    /**
+     * @template T
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function get(string $c): object { return new Bar(); }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function id($v) { return is_int($v) ? "7" : $v; }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function same($x) { return $x; }
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function make($c) { return new $c(); }
+}
+function takes(Foo $f): string { return $f->name(); }
+function takesInt(int $i): int { return $i + 1; }
+function run(Reg $r, int $i, string $s) {
+    $f = new Foo();
+    echo $f->name(), "
+";
+    echo $r->get(Foo::class)->name(), "
+";
+    var_dump($r->id(5));
+    var_dump($r->same($i) + 1);
+    var_dump(strlen($r->same($s)));
+    echo $r->make(Foo::class)->n, "
+";
+    $h = new Holder();
+    $h->v = $r->same(41);
+    $h->f = $r->make(Foo::class);
+    echo $h->v + 1, $h->f->name(), "
+";
+    $a = [];
+    $a[$r->same("k")] = $r->same(2.5);
+    var_dump($a);
+    echo intdiv($r->same(9), 2), "
+";
+    foreach ($r->same([1, 2]) as $x) { echo $x; }
+    echo "
+";
+    echo takes($r->make(Foo::class)), takesInt($r->same(4)), "
+";
+    try { echo takes($r->get(Foo::class)), "
+"; } catch (\TypeError $e) { echo "TE
+"; }
+}
+run(new Reg(), 6, "hello");
+"#;
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &[("main.php", source)],
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(
+        stdout,
+        "foo\nbar\nstring(1) \"7\"\nint(7)\nint(5)\n3\n42foo\narray(1) {\n  [\"k\"]=>\n  float(2.5)\n}\n4\n12\nfoo5\nTE\n",
+        "{stderr}"
+    );
+    assert!(generics_stats_line(&stderr).contains(" checks=1 "), "{stderr}");
 }
 
 /// A method's PHPDoc bound a call breaks is still only a warning, and it names the method as

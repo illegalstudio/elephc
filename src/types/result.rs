@@ -194,6 +194,8 @@ pub struct CheckResult {
     /// type parameters all come from PHPDoc stays as written; the checker binds them at each
     /// call). Lowering narrows the call's native result to it, guarded at run time.
     pub doc_return_sites: HashMap<(String, Span), PhpType>,
+    /// Call site -> the type of a PHPDoc method template call that is provably its own argument.
+    pub doc_inline_sites: HashMap<(String, Span), PhpType>,
     /// Every generic CLASS instantiation a `new` asked for, as (template key, type arguments).
     pub requested_class_instantiations: Vec<(String, crate::generics::Bindings)>,
     /// The generic METHOD instantiations this round asked for.

@@ -289,6 +289,10 @@ pub(crate) struct Checker {
     /// call to this type with a run-time guard (`ir_lower::gradual_coercions`). Keyed like
     /// `generic_call_sites`.
     pub doc_return_sites: HashMap<(String, Span), PhpType>,
+    /// Call site -> the type of a call that is provably its own argument (a PHPDoc method
+    /// template whose body is `return $param;`); `generics::doc_inline` replaces it by the
+    /// argument once the check is over.
+    pub doc_inline_sites: HashMap<(String, Span), PhpType>,
     /// Whether any method carries a PHPDoc twin, so a call only looks one up when one exists.
     pub doc_overlays_present: bool,
     /// The generic class templates, for inferring type arguments at `new Box(5)`.
@@ -2320,6 +2324,7 @@ fn check_types_on_compiler_stack(
         requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,
         doc_return_sites: checker.doc_return_sites,
+        doc_inline_sites: checker.doc_inline_sites,
         requested_class_instantiations: checker.requested_class_instantiations,
         requested_method_instantiations: checker.requested_method_instantiations,
         generic_method_sites: checker.generic_method_sites,

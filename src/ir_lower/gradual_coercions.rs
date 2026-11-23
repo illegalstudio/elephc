@@ -45,14 +45,13 @@ fn boundary_cast_effects() -> crate::ir::Effects {
     Op::Cast.default_effects() | crate::ir::Effects::MAY_THROW
 }
 
-/// Narrows the native result of a call to the type the checker read off the PHPDoc of the method
-/// it runs (`Checker::doc_return_sites`).
+/// Retypes the native result of a call to the type the method's own body PROVES it has
+/// (`Checker::doc_return_sites`): the class of `return new $c(...);` called with a `Foo::class`
+/// argument, or the scalar type of `return $p;` when the call cannot be inlined.
 ///
-/// The method is compiled once, with its written types: its result has the native
-/// representation (a boxed `mixed`, or an object of the declared class), and php enforces no
-/// annotation. The result is therefore boxed and converted (a scalar) or guarded (a class: a
-/// value of another class raises a `TypeError` instead of being read as one) before the call
-/// is typed by the annotation.
+/// Nothing is checked or converted, because nothing can differ: the value is an instance of
+/// exactly that class whatever the annotation says. The native result is a boxed `mixed`; the payload
+/// is taken out of the box.
 pub(super) fn narrow_doc_call_result(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -68,6 +67,7 @@ pub(super) fn narrow_doc_call_result(
     else {
         return value;
     };
+    let span = Some(expr.span);
     let source = ctx.builder.value_php_type(value.value).codegen_repr();
     if source == target.codegen_repr() || matches!(source, PhpType::Void | PhpType::Never) {
         return value;
@@ -75,21 +75,26 @@ pub(super) fn narrow_doc_call_result(
     let boxed = if source == PhpType::Mixed {
         value
     } else {
-        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
     };
-    // The guard can raise a `TypeError` (or a conversion warning a handler turns into one) before
-    // the box is released, so the box is guarded for the unwinding path while it is narrowed.
-    let owned = ctx.value_is_owning_temporary(boxed);
-    ctx.begin_argument_guard_scope();
-    if owned {
-        ctx.guard_call_argument(boxed, 0, expr.span);
+    if !matches!(target, PhpType::Object(_)) {
+        // A proven identity result: the box holds exactly this scalar, so the read-back converts
+        // nothing.
+        let narrowed = coerce_gradual_value_to_boundary(ctx, boxed, &target, span);
+        return narrowed;
     }
-    let narrowed = coerce_gradual_value_to_boundary(ctx, boxed, &target, Some(expr.span));
-    if owned {
-        ctx.unguard_call_argument(boxed.value, expr.span);
+    let unboxed = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![boxed.value],
+        None,
+        target.clone(),
+        Op::mixed_unbox_effects(&target),
+        span,
+    );
+    if ctx.value_is_owning_temporary(boxed) {
+        ownership::release_if_owned(ctx, boxed, span);
     }
-    ctx.end_argument_guard_scope();
-    narrowed
+    unboxed
 }
 
 /// Narrows a boxed gradual value into a concrete boundary representation when supported.

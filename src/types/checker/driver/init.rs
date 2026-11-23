@@ -82,6 +82,7 @@ impl Checker {
             requested_instantiations: Vec::new(),
             generic_call_sites: HashMap::default(),
             doc_return_sites: HashMap::default(),
+            doc_inline_sites: HashMap::default(),
             doc_overlays_present: false,
             requested_promotable_clones: Vec::new(),
             class_templates: Vec::new(),

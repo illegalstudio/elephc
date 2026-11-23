@@ -1129,13 +1129,16 @@ $identity = new Identity();
 echo $identity->copy(7) + 1, '|', strlen($identity->copy('seven'));   // 8|5
 ```
 
-Nothing is instantiated and no extra check runs: `copy(7)` is an `int` and `copy('seven')` a
-`string` at their call sites, with one `copy` underneath. The binding reads `T`, `array<T>`,
-`callable(T): U` and `class-string<T>` (bound by a `Foo::class` argument, so a factory typed
-`@param class-string<T> $class` / `@return T` returns a `Foo`), plus bounds and defaults. A call
-typed by the annotation narrows the method's native result to it behind a run-time guard (a scalar
-is converted, a class is checked), so an annotation that is wrong never makes the program read
-storage as the wrong type. A container result (`@return array<T>`) keeps the method's native type.
+Nothing is instantiated and no extra check runs. The annotation never changes a value, a type
+or a representation, because php does not enforce it: a call is typed by it only where the
+method's own body proves it. A body that is just `return $value;` returns its argument, so the
+call IS the argument (`copy(7)` is an `int`, `copy('seven')` a `string`, with no call left); a body
+that is just `return new $class(...);` over `@param class-string<T> $class` returns an instance of
+the class a `Foo::class` argument names. Any other body (`return $this->items[$class];`) keeps the
+method's native result type, and what php does with that value, a typed property store, a typed
+parameter, an array key, arithmetic, is what the program does. The binding reads `T`, `array<T>`,
+`callable(T): U` and `class-string<T>`, plus bounds and defaults; a bound a call breaks is a
+warning.
 This works with and without `--strict-php`, including static methods and methods declared in traits
 and enums. Method templates also support bounds, defaults and variadic annotations such as
 `@param T ...$values`. A doc comment binds to the declaration that follows it, including one on
