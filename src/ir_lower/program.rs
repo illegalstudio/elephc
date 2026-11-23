@@ -116,6 +116,27 @@ fn program_names_weak_map(program: &Program, check_result: &CheckResult) -> bool
     })
 }
 
+/// Under `ELEPHC_LOWER_TIMES`, prints the program's EIR size and its forty largest functions: a
+/// lowering that multiplies code shows up here before it exhausts memory in the passes below.
+fn report_function_sizes(module: &Module) {
+    if std::env::var_os("ELEPHC_LOWER_TIMES").is_none() {
+        return;
+    }
+    let mut sizes: Vec<(usize, &str)> = module
+        .functions
+        .iter()
+        .chain(&module.class_methods)
+        .chain(&module.closures)
+        .map(|function| (function.instructions.len(), function.name.as_str()))
+        .collect();
+    sizes.sort_unstable_by(|left, right| right.cmp(left));
+    let total: usize = sizes.iter().map(|(size, _)| size).sum();
+    eprintln!("[lower-size] {total} instructions in {} functions", sizes.len());
+    for (size, name) in sizes.iter().take(40) {
+        eprintln!("[lower-size] {size} {name}");
+    }
+}
+
 /// The lowering body, running on the stack [`lower`] established.
 fn lower_on_compiler_stack(
     program: &Program,
@@ -325,10 +346,12 @@ pub(super) fn validate_finished_module(module: Module, collect: bool) -> Result<
             });
         }
         crate::ir::validate_module_references(&module)?;
+        report_function_sizes(&module);
         return Ok(module);
     }
     validate_lowered_module(&module)
         .map_err(|error| super::validation_context::describe(&module, error))?;
+    report_function_sizes(&module);
     Ok(module)
 }
 
