@@ -30,10 +30,12 @@ fn lower_store_selected(
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
-    // The RHS is a storage candidate, not a receiver. Keep its owned SSA value visible so a
-    // consuming container write can adopt it when normal cleanup transfers the published slot;
-    // the scoped-owner query still forces a retain when that slot is released instead.
     let (value, value_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
+    // The outer record retains the RHS across every parent and leaf operation. Passing a
+    // borrowed view prevents a leaf with its own unwind guard from publishing that lease twice.
+    let value = if value_owner.is_some() {
+        crate::ir_lower::ownership::borrow_value(ctx, value, Some(span))
+    } else { value };
     if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
         lower_captured_store(ctx, target, value, span);
     }) {
