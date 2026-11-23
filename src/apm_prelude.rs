@@ -142,17 +142,38 @@ fn declarations() -> Program {
     })
 }
 
+/// A method an owner declares, as far as finding the body a call runs needs.
+struct OwnMethod {
+    /// The declared name.
+    name: String,
+    /// Whether it has a body: an abstract declaration runs none.
+    has_body: bool,
+    /// Whether it is private, which a subclass does not inherit.
+    private: bool,
+}
+
 /// What declares a method: a class, an enum or a trait, with what it inherits
-/// from (`Search::declaring_owner`).
+/// from (`Search::resolve`).
 struct Owner {
     /// The declared name, without a leading `\`.
     name: String,
     /// The class it extends, lowercased.
     parent: Option<String>,
-    /// The traits it uses, lowercased.
+    /// The traits it uses, lowercased, in the order written.
     traits: Vec<String>,
-    /// The methods it declares with a body, which a target can wrap.
-    methods: Vec<String>,
+    /// The `insteadof` and `as` adaptations of those uses.
+    adaptations: Vec<crate::parser::ast::TraitAdaptation>,
+    /// The methods it declares.
+    methods: Vec<OwnMethod>,
+}
+
+/// The body a call of a method runs: the class or trait declaring it, the
+/// name it is declared under there, and whether the caller's class sees it
+/// as private (a subclass of that class does not inherit it).
+struct Resolved {
+    owner: String,
+    method: String,
+    private: bool,
 }
 
 /// The `--apm-transaction` targets looked for in one program, and what the
@@ -169,55 +190,101 @@ struct Search<'a> {
     owners: std::collections::HashMap<String, Owner>,
 }
 
+/// A class, trait or method name as `Search` keys it: lowercased, without a
+/// leading `\`.
+fn owner_key(name: &str) -> String {
+    name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
 impl Search<'_> {
-    /// Records `name` (a class, enum or trait) with what it inherits from and
-    /// the methods it declares with a body.
+    /// Records `name` (a class, enum or trait) with what it inherits from, the
+    /// adaptations of its trait uses and the methods it declares.
     fn note_owner(&mut self, name: &str, parent: Option<&crate::names::Name>, uses: &[crate::parser::ast::TraitUse], methods: &[crate::parser::ast::ClassMethod]) {
         let name = name.trim_start_matches('\\').to_string();
         let owner = Owner {
-            parent: parent.map(|parent| parent.as_str().trim_start_matches('\\').to_ascii_lowercase()),
-            traits: uses
+            parent: parent.map(|parent| owner_key(parent.as_str())),
+            traits: uses.iter().flat_map(|used| &used.trait_names).map(|used| owner_key(used.as_str())).collect(),
+            adaptations: uses.iter().flat_map(|used| used.adaptations.iter().cloned()).collect(),
+            methods: methods
                 .iter()
-                .flat_map(|used| &used.trait_names)
-                .map(|used| used.as_str().trim_start_matches('\\').to_ascii_lowercase())
+                .map(|method| OwnMethod {
+                    name: method.name.clone(),
+                    has_body: method.has_body,
+                    private: matches!(method.visibility, crate::parser::ast::Visibility::Private),
+                })
                 .collect(),
-            methods: methods.iter().filter(|method| method.has_body).map(|method| method.name.clone()).collect(),
             name,
         };
-        self.owners.insert(owner.name.to_ascii_lowercase(), owner);
+        self.owners.insert(owner_key(&owner.name), owner);
     }
 
-    /// The class or trait that declares `method` for `class` when `class`
-    /// inherits it, its traits first and then its parents, as PHP resolves it.
-    fn declaring_owner(&self, class: &str, method: &str) -> Option<&str> {
-        let mut seen = std::collections::HashSet::new();
-        let start = class.trim_start_matches('\\').to_ascii_lowercase();
-        let mut pending = vec![start.clone()];
-        while let Some(key) = pending.pop() {
-            if !seen.insert(key.clone()) {
-                continue;
-            }
-            let Some(owner) = self.owners.get(&key) else {
-                continue;
-            };
-            if key != start && owner.methods.iter().any(|declared| same_name(declared, method)) {
-                return Some(&owner.name);
-            }
-            // Popped last-in first: the traits are searched before the parent.
-            pending.extend(owner.parent.iter().cloned());
-            pending.extend(owner.traits.iter().rev().cloned());
+    /// The body a call of `method` on `class` runs, as PHP resolves it: the
+    /// class's own declaration, then its traits (`insteadof` excluding one,
+    /// `as` renaming one), then its parent's, whose private methods a subclass
+    /// does not inherit. `None` when nothing known declares it with a body.
+    fn resolve(&self, class: &str, method: &str) -> Option<Resolved> {
+        self.resolve_in(&owner_key(class), method, &mut std::collections::HashSet::new())
+    }
+
+    /// [`Search::resolve`] from the owner keyed `key`, never visiting one
+    /// twice (`seen`), so a cyclic hierarchy ends.
+    fn resolve_in(&self, key: &str, method: &str, seen: &mut std::collections::HashSet<String>) -> Option<Resolved> {
+        use crate::parser::ast::TraitAdaptation;
+        if !seen.insert(key.to_string()) {
+            return None;
         }
-        None
+        let owner = self.owners.get(key)?;
+        if let Some(own) = owner.methods.iter().find(|own| same_name(&own.name, method)) {
+            // Declared here: its own body, or none when it is abstract.
+            return own.has_body.then(|| Resolved { owner: owner.name.clone(), method: own.name.clone(), private: own.private });
+        }
+        // An alias: `T::run as again`, or `run as again` naming no trait.
+        for adaptation in &owner.adaptations {
+            if let TraitAdaptation::Alias { trait_name, method: original, alias: Some(alias), visibility } = adaptation {
+                if !same_name(alias, method) {
+                    continue;
+                }
+                let traits: Vec<String> = match trait_name {
+                    Some(name) => vec![owner_key(name.as_str())],
+                    None => owner.traits.clone(),
+                };
+                for used in traits {
+                    if let Some(mut found) = self.resolve_in(&used, original, &mut seen.clone()) {
+                        if let Some(visibility) = visibility {
+                            found.private = matches!(visibility, crate::parser::ast::Visibility::Private);
+                        }
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        // The traits it uses, but not one an `insteadof` excludes for this method.
+        let excluded = |used: &str| {
+            owner.adaptations.iter().any(|adaptation| {
+                matches!(adaptation, TraitAdaptation::InsteadOf { method: chosen, instead_of, .. }
+                    if same_name(chosen, method) && instead_of.iter().any(|other| owner_key(other.as_str()) == used))
+            })
+        };
+        for used in owner.traits.iter().filter(|used| !excluded(used)) {
+            if let Some(found) = self.resolve_in(used, method, &mut seen.clone()) {
+                return Some(found);
+            }
+        }
+        // The parent's, unless private to it: a subclass does not inherit that.
+        let parent = owner.parent.as_deref()?;
+        self.resolve_in(parent, method, seen).filter(|found| !found.private)
     }
 
-    /// Why `target` matched nothing: an inherited method names the class or
-    /// trait to give instead; anything else is not declared.
+    /// Why `target` matched nothing: a method its class inherits, or takes
+    /// from a trait under another name, names the class or trait to give
+    /// instead; anything else is not declared.
     fn not_found(&self, target: &str) -> String {
         if let Some((class, method)) = target.split_once("::") {
-            if let Some(owner) = self.declaring_owner(class, method) {
+            if let Some(found) = self.resolve(class, method).filter(|found| owner_key(&found.owner) != owner_key(class)) {
+                let (owner, declared) = (&found.owner, &found.method);
                 return format!(
-                    "{class} inherits {method} from {owner}, whose body is the one that runs: name {owner}::{method} \
-                     (it then counts the calls on every class that inherits it)"
+                    "{class}::{method} runs the body of {owner}::{declared}: name {owner}::{declared} \
+                     (it then counts the calls on every class that inherits or uses it)"
                 );
             }
         }
@@ -619,29 +686,71 @@ mod tests {
         assert!(after.contains("TXN App\\\\Feed::count"), "{after}");
     }
 
+    /// The warnings for `targets` on `source`, by target: what `not_found`
+    /// says of each, after a walk that must find and wrap none of them.
+    fn not_found_warnings(source: &str, targets: &[&str]) -> Vec<String> {
+        let targets: Vec<String> = targets.iter().map(|target| target.to_string()).collect();
+        let mut program = resolved(source);
+        let mut search = Search { targets: &targets, found: vec![false; targets.len()], refused: None, owners: Default::default() };
+        assert!(!rewrite(&mut program, &mut search), "nothing is wrapped");
+        assert_eq!(search.found, vec![false; targets.len()]);
+        targets.iter().map(|target| search.not_found(target)).collect()
+    }
+
     /// A target naming a method through a class that inherits it, from a
     /// parent or a trait, is reported with the class or trait that declares
-    /// it, which is the name to give (#2398). A method nobody declares keeps
-    /// the plain warning.
+    /// it, which is the name to give (#2398). A method nobody declares with a
+    /// body keeps the plain warning.
     #[test]
     fn an_inherited_target_names_where_its_method_is_declared() {
         let source = "<?php namespace App;
             trait Retries { public function retry(): int { return 1; } }
             abstract class Base { use Retries; public function run(): int { return 1; } abstract public function name(): string; }
             class Child extends Base { public function name(): string { return 'c'; } }";
-        let targets: Vec<String> =
-            ["App\\Child::run", "App\\Child::retry", "App\\Child::missing", "App\\Base::name"].map(str::to_string).to_vec();
-        let mut program = resolved(source);
-        let mut search = Search { targets: &targets, found: vec![false; targets.len()], refused: None, owners: Default::default() };
-        assert!(!rewrite(&mut program, &mut search), "nothing is wrapped");
-        assert_eq!(search.found, vec![false; 4]);
-        let run = search.not_found(&targets[0]);
-        assert!(run.contains("App\\Child inherits run from App\\Base") && run.contains("name App\\Base::run"), "{run}");
-        let retry = search.not_found(&targets[1]);
-        assert!(retry.contains("inherits retry from App\\Retries") && retry.contains("App\\Retries::retry"), "{retry}");
-        for plain in [&targets[2], &targets[3]] {
-            assert!(search.not_found(plain).starts_with("no such method or function"), "{plain}");
+        let warnings =
+            not_found_warnings(source, &["App\\Child::run", "App\\Child::retry", "App\\Child::missing", "App\\Base::name"]);
+        assert!(warnings[0].contains("runs the body of App\\Base::run: name App\\Base::run"), "{}", warnings[0]);
+        assert!(warnings[1].contains("name App\\Retries::retry"), "{}", warnings[1]);
+        for plain in &warnings[2..] {
+            assert!(plain.starts_with("no such method or function"), "{plain}");
         }
+    }
+
+    /// The body named is the one PHP runs: a parent's private method, its own
+    /// or taken from a trait, is not inherited; `insteadof` picks the other
+    /// trait, at the class or at its parent; an alias names the trait's
+    /// method by its declared name; a private trait method used by the class
+    /// itself is still its own (review of #2534).
+    #[test]
+    fn an_inherited_target_follows_visibility_and_trait_adaptations() {
+        let source = "<?php
+            trait Hidden { private function hidden(): int { return 1; } }
+            trait A { public function run(): int { return 1; } }
+            trait B { public function run(): int { return 2; } }
+            class PrivateBase { use Hidden; private function secret(): int { return 1; } }
+            class PrivateChild extends PrivateBase {}
+            class Chooser { use A, B { B::run insteadof A; } }
+            class ChosenBase { use A, B { B::run insteadof A; } }
+            class ChosenChild extends ChosenBase {}
+            class Aliased { use A { run as again; } }
+            class UsesHidden { use Hidden; }";
+        let warnings = not_found_warnings(
+            source,
+            &[
+                "PrivateChild::secret",
+                "PrivateChild::hidden",
+                "Chooser::run",
+                "ChosenChild::run",
+                "Aliased::again",
+                "UsesHidden::hidden",
+            ],
+        );
+        assert!(warnings[0].starts_with("no such method"), "a private parent method: {}", warnings[0]);
+        assert!(warnings[1].starts_with("no such method"), "a parent's private trait method: {}", warnings[1]);
+        assert!(warnings[2].contains("name B::run"), "insteadof: {}", warnings[2]);
+        assert!(warnings[3].contains("name B::run"), "insteadof on the parent: {}", warnings[3]);
+        assert!(warnings[4].contains("runs the body of A::run: name A::run"), "an alias: {}", warnings[4]);
+        assert!(warnings[5].contains("name Hidden::hidden"), "a private trait method of the class: {}", warnings[5]);
     }
 
     /// The wrap's locals are compiler-generated, so `get_defined_vars()`,
