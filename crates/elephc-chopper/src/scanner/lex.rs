@@ -1421,7 +1421,8 @@ pub(crate) fn scan_compiler<C: CompilerOutput>(
 
 /// Formats a PHP parser diagnostic for one unexpected token and an expected literal.
 ///
-/// Numbers, variables and quoted strings use Zend's noun. A short punctuation token keeps
+/// Numbers, variables, quoted strings and namespaced names use Zend's noun. Keywords use
+/// their grammar spelling. A bare `"` is a double-quote mark. A short punctuation token keeps
 /// the `token` noun. `T_EXIT` is always spelled `exit`.
 fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String {
     let text = &source[token.pos..token.pos + token.len];
@@ -1439,6 +1440,16 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
     } else if token.id == id("T_CONSTANT_ENCAPSED_STRING") {
         let (noun, body) = quoted_string_noun(text);
         format!("syntax error, unexpected {noun} \"{}\", expecting {expected}", String::from_utf8_lossy(body))
+    } else if token.id == id("T_NAME_QUALIFIED") {
+        format!("syntax error, unexpected namespaced name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if token.id == id("T_NAME_FULLY_QUALIFIED") {
+        format!("syntax error, unexpected fully qualified name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if token.id == id("T_NAME_RELATIVE") {
+        format!("syntax error, unexpected namespace-relative name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
+    } else if text == b"\"" {
+        format!("syntax error, unexpected double-quote mark, expecting {expected}")
+    } else if let Some(keyword) = super::keyword_diagnostic_spelling(token.id, text) {
+        format!("syntax error, unexpected token \"{keyword}\", expecting {expected}")
     } else if text.len() <= 3 {
         format!("syntax error, unexpected token \"{}\", expecting {expected}", String::from_utf8_lossy(text))
     } else {

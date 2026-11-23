@@ -913,6 +913,17 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php function f() { __halt_compiler(1.5); }",
         "<?php function f() { __halt_compiler('a'); }",
         "<?php function f() { __halt_compiler(foo); }",
+        "<?php function f() { __halt_compiler(Foo\\Bar); }",
+        "<?php function f() { __halt_compiler(\\Foo); }",
+        "<?php function f() { __halt_compiler(namespace\\Foo); }",
+        "<?php function f() { __halt_compiler(echo); }",
+        "<?php function f() { __halt_compiler(static); }",
+        "<?php function f() { __halt_compiler(\"a$b\"); }",
+        "<?php __halt_compiler(Foo\\Bar);",
+        "<?php __halt_compiler(\\Foo);",
+        "<?php __halt_compiler(namespace\\Foo);",
+        "<?php __halt_compiler(echo);",
+        "<?php __halt_compiler(\"a$b\");",
         "<?php if (1): __halt_compiler(1); endif;",
         "<?php switch ($a) { case 1: __halt_compiler(1); }",
         "<?php namespace N { __halt_compiler(1); }",
@@ -936,6 +947,11 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php echo \"${__halt_compiler()}\";",
         "<?= __halt_compiler();",
         "<?php class A { public static ?int $$a; }",
+        "<?php class A { public private(set) int $$a; }",
+        "<?php class A { private(set) public int $$a; }",
+        "<?php class A { protected(set) readonly int $$a; }",
+        "<?php class A { public final int $$a; }",
+        "<?php abstract class A { public abstract int $$a { get; } }",
         "<?php class A { public $$a; }",
         "<?php class C { function match(...) {} }",
         "<?php class C { function &match(...) {} }",
@@ -2166,6 +2182,50 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
             "syntax error, unexpected identifier \"foo\", expecting \")\"",
         ),
         (
+            "<?php function f() { __halt_compiler(Foo\\Bar); }",
+            "syntax error, unexpected namespaced name \"Foo\\Bar\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(\\Foo); }",
+            "syntax error, unexpected fully qualified name \"\\Foo\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(namespace\\Foo); }",
+            "syntax error, unexpected namespace-relative name \"namespace\\Foo\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(echo); }",
+            "syntax error, unexpected token \"echo\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(static); }",
+            "syntax error, unexpected token \"static\", expecting \")\"",
+        ),
+        (
+            "<?php function f() { __halt_compiler(\"a$b\"); }",
+            "syntax error, unexpected double-quote mark, expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(Foo\\Bar);",
+            "syntax error, unexpected namespaced name \"Foo\\Bar\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(\\Foo);",
+            "syntax error, unexpected fully qualified name \"\\Foo\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(namespace\\Foo);",
+            "syntax error, unexpected namespace-relative name \"namespace\\Foo\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(echo);",
+            "syntax error, unexpected token \"echo\", expecting \")\"",
+        ),
+        (
+            "<?php __halt_compiler(\"a$b\");",
+            "syntax error, unexpected double-quote mark, expecting \")\"",
+        ),
+        (
             "<?php if (1): __halt_compiler(1); endif;",
             "syntax error, unexpected integer \"1\", expecting \")\"",
         ),
@@ -2200,6 +2260,20 @@ fn tokenizer_halt_compiler_scope_matches_php_diagnostics() {
     let typed = tokenize(b"<?php class A { public static ?int $$a; }", TOKEN_PARSE)
         .expect_err("a typed property cannot be a variable variable");
     assert_eq!(typed.message, "syntax error, unexpected token \"$\", expecting variable");
+    for source in [
+        "<?php class A { public private(set) int $$a; }",
+        "<?php class A { private(set) public int $$a; }",
+        "<?php class A { protected(set) readonly int $$a; }",
+        "<?php class A { public final int $$a; }",
+        "<?php abstract class A { public abstract int $$a { get; } }",
+    ] {
+        let error = tokenize(source.as_bytes(), TOKEN_PARSE).expect_err(source);
+        assert_eq!(
+            error.message,
+            "syntax error, unexpected token \"$\", expecting variable",
+            "{source}"
+        );
+    }
     for source in [
         "<?php function &f($a = &$b) {}",
         "<?php $f = fn &($a = &$b) => 1;",

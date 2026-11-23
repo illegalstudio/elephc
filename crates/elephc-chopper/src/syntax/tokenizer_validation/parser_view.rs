@@ -1091,6 +1091,12 @@ fn declaration_name_predecessor(id: i64) -> bool {
                 || id == tok::T_PRIVATE
                 || id == tok::T_READONLY
                 || id == tok::T_STATIC
+                || id == tok::T_FINAL
+                || id == tok::T_ABSTRACT
+                || id == tok::T_VAR
+                || id == tok::T_PUBLIC_SET
+                || id == tok::T_PROTECTED_SET
+                || id == tok::T_PRIVATE_SET
                 || id == i64::from(b'?')
                 || id == i64::from(b'|')
                 || id == i64::from(b'&')
@@ -1116,21 +1122,30 @@ fn is_property_type_token(id: i64) -> bool {
 }
 
 /// Returns whether a token is a property modifier that can introduce `$$name`.
+///
+/// Asymmetric visibility, `final`, `abstract` and `var` are modifiers too. They do not appear
+/// in an expression before `$$name`, so `static::$$a` and `instanceof static ? $$a` stay
+/// expressions.
 fn is_property_modifier(id: i64) -> bool {
     id == tok::T_PUBLIC
         || id == tok::T_PROTECTED
         || id == tok::T_PRIVATE
         || id == tok::T_STATIC
         || id == tok::T_READONLY
+        || id == tok::T_FINAL
+        || id == tok::T_ABSTRACT
+        || id == tok::T_VAR
+        || id == tok::T_PUBLIC_SET
+        || id == tok::T_PROTECTED_SET
+        || id == tok::T_PRIVATE_SET
 }
 
 /// Returns whether the token before a property modifier starts a declaration.
 ///
 /// `instanceof static` is an expression. `public static`, `{ static` and `#[Attr] public`
-/// are declarations. `final` and `var` count as the modifier that precedes `public`.
+/// are declarations. Another modifier, including `final`, `var` and `private(set)`, also
+/// starts the declaration.
 fn property_declaration_boundary(id: Option<i64>) -> bool {
-    const T_FINAL: i64 = elephc_builtin_contract::token_const_id("T_FINAL");
-    const T_VAR: i64 = elephc_builtin_contract::token_const_id("T_VAR");
     let Some(id) = id else {
         return true;
     };
@@ -1139,9 +1154,6 @@ fn property_declaration_boundary(id: Option<i64>) -> bool {
         || id == i64::from(b'}')
         || id == i64::from(b']')
         || id == tok::T_OPEN_TAG
-        || id == tok::T_ABSTRACT
-        || id == T_FINAL
-        || id == T_VAR
         || is_property_modifier(id)
 }
 
@@ -1149,8 +1161,8 @@ fn property_declaration_boundary(id: Option<i64>) -> bool {
 ///
 /// `static::$$a` stops at `::`. A modifier counts only when every token between it and `$`
 /// is a property type and the token before the modifier is a declaration boundary, so
-/// `$o instanceof static ? $$a` stays an expression. `static $$a` and `public static ?int $$a`
-/// still count as declarations.
+/// `$o instanceof static ? $$a` stays an expression. `static $$a`, `public static ?int $$a`
+/// and `public private(set) int $$a` still count as declarations.
 pub(crate) fn property_modifier_before<T: SourceToken>(tokens: &[T], index: usize) -> bool {
     // An operator, literal, variable or keyword immediately before the `$` proves this is an
     // expression. Rejecting it in O(1) keeps repeated `$$a` terms from walking the statement.
