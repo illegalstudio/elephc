@@ -202,7 +202,14 @@ pub(super) fn lower_lazy_isset_operand(
                     elephc_builtin_contract::ObjectDimension::Isset, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
-                return native_xml_empty::lower(ctx, "isset", arg, arg);
+                // Only a program with SimpleXML has a selection to answer here. Every other
+                // opaque receiver (`mixed $map` holding a `WeakMap` or any `ArrayAccess`) falls to
+                // the runtime-typed probe below, which asks `offsetExists`; returning the XML
+                // `None` sent it down the eager read, calling `offsetGet` and throwing for a
+                // missing key.
+                if let Some(value) = native_xml_empty::lower(ctx, "isset", arg, arg) {
+                    return Some(value);
+                }
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }
