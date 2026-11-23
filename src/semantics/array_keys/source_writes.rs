@@ -2039,8 +2039,13 @@ fn validate_stmt(
         | StmtKind::IncludeOnceGuard { body, .. } => {
             validate_block(body, locals, properties, profile, current_class)?;
         }
-        StmtKind::FunctionDecl { params, body, .. } => {
-            let mut function = parameter_facts(params);
+        StmtKind::FunctionDecl {
+            params,
+            variadic,
+            body,
+            ..
+        } => {
+            let mut function = parameter_facts(params, variadic.as_deref());
             validate_block(body, &mut function, properties, profile, None)?;
         }
         StmtKind::ClassDecl { name, methods, .. }
@@ -4067,14 +4072,21 @@ fn merge_exits(exits: &[LocalFacts]) -> LocalFacts {
     merged
 }
 
-/// Seeds function or method locals from their written parameter contracts.
-fn parameter_facts(params: &[(String, Option<TypeExpr>, Option<Expr>, bool)]) -> LocalFacts {
+/// Seeds callable locals from their written parameter contracts.
+fn parameter_facts(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>,
+) -> LocalFacts {
     let mut facts = LocalFacts::default();
     for (name, hint, _, _) in params {
         let fact = hint.as_ref().map_or(ValueFact::Unknown, |hint| {
             ValueFact::Known(crate::types::constant_binding::declared_type(hint))
         });
         facts.set(name, fact);
+    }
+    if let Some(name) = variadic {
+        // The tail is always an array. Its integer and named slots depend on the call.
+        facts.set(name, ValueFact::Known(PhpType::php_array()));
     }
     facts
 }
@@ -4087,7 +4099,7 @@ fn validate_methods(
     profile: SemanticProfile,
 ) -> Result<(), CompileError> {
     for method in methods {
-        let mut locals = parameter_facts(&method.params);
+        let mut locals = parameter_facts(&method.params, method.variadic.as_deref());
         if !method.is_static {
             locals.set("this", ValueFact::Known(PhpType::Object(class.to_owned())));
         }
@@ -4112,6 +4124,7 @@ fn validate_closure_value(
 ) -> Result<(), CompileError> {
     let ExprKind::Closure {
         params,
+        variadic,
         captures,
         capture_refs,
         body,
@@ -4120,7 +4133,7 @@ fn validate_closure_value(
     else {
         return Ok(());
     };
-    let mut locals = parameter_facts(params);
+    let mut locals = parameter_facts(params, variadic.as_deref());
     for name in captures {
         locals.set(
             name,

@@ -26,6 +26,32 @@ echo $values[$argc], ':', $argv[0][0];
         .assert_error(&["--strict-array-keys"], "strict-array-keys");
 }
 
+/// Preserves string-offset writes through variadic function, method and closure arguments.
+#[test]
+fn test_strict_array_keys_accepts_variadic_string_offsets() {
+    let source = r#"<?php
+function rewrite(string ...$items): string {
+    $items[0][false] = 'x';
+    return $items[0];
+}
+class VariadicWriter {
+    public static function rewrite(string ...$items): string {
+        $items[0][false] = 'y';
+        return $items[0];
+    }
+}
+$rewrite = function (string ...$items): string {
+    $items[0][false] = 'z';
+    return $items[0];
+};
+echo rewrite('ab'), ':', VariadicWriter::rewrite('ab'), ':', $rewrite('ab');
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "xb:yb:zb"
+    );
+}
+
 /// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
 #[test]
 fn test_strict_array_keys_interpolation_uses_integer_offsets() {

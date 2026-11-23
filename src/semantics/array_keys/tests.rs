@@ -137,6 +137,29 @@ fn strict_array_key_source_validation_literal_eval_inherits_process_arguments() 
     assert!(error.message.contains("strict-array-keys"));
 }
 
+/// Audits variadic array keys while deferring the type of a slot to its call.
+#[test]
+fn strict_array_key_source_validation_variadic_bindings() {
+    for declaration in [
+        "function rewrite(string ...$items) { WRITE }",
+        "class VariadicWriter { public function rewrite(string ...$items) { WRITE } }",
+        "$rewrite = function (string ...$items) { WRITE };",
+    ] {
+        for write in ["$items[0][false] = 'x';", "$items['label'][false] = 'x';"] {
+            let source = format!("<?php {}", declaration.replace("WRITE", write));
+            crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+        let source = format!(
+            "<?php {}",
+            declaration.replace("WRITE", "if (false) { $items[false] = 'x'; }"),
+        );
+        let error =
+            crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile()).unwrap_err();
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Negative maximum keys advance implicit appends by one instead of resetting to zero.
 #[test]
 fn strict_array_key_source_validation_tracks_negative_append_keys() {
