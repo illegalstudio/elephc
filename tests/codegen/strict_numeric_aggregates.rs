@@ -134,7 +134,7 @@ try { $sum([1, '2']); } catch (TypeError $error) { echo 'P'; }
 try { call_user_func('array_product', [2, '3']); } catch (TypeError $error) { echo 'C'; }
 discardDomainSum([1, '2']);
 $items = [$argc, 2];
-try { array_sum(array_map(fn($value) => '2', $items)); } catch (TypeError $error) { echo 'M'; }
+try { array_sum(array_map(fn($value): mixed => '2', $items)); } catch (TypeError $error) { echo 'M'; }
 try { array_reduce([1, '2'], fn($carry, $value) => $carry + $value, 0); } catch (TypeError $error) { echo 'R'; }
 echo ':', $result, '|';
 $maximum = $argc > 0 ? PHP_INT_MAX : 0;

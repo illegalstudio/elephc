@@ -19,6 +19,7 @@ function guardedComplement(mixed $value): mixed { return ~$value; }
 function guardedPost(mixed &$value): mixed { return $value++; }
 function guardedPre(mixed &$value): mixed { return --$value; }
 function unaryText(int $number): string { return 'abc' . $number; }
+function unaryArrayItem(int $number): mixed { return unaryText($number); }
 function discardUnary(mixed $value): void {
     try { $discardedNegation = -$value; } catch (TypeError $error) { echo 'D'; }
     try { $discardedComplement = ~$value; } catch (TypeError $error) { echo 'G'; }
@@ -35,7 +36,7 @@ try { guardedPost($text); } catch (TypeError $error) { echo 'R'; }
 echo ':', $text, '|';
 $cell = new UnaryDomainCell(); $cell->value = unaryText($argc);
 try { $cell->value++; } catch (TypeError $error) { echo 'P'; }
-$array = [unaryText($argc)]; $copy = $array;
+$array = [unaryArrayItem($argc)]; $copy = $array;
 try { $array[0]++; } catch (TypeError $error) { echo 'A'; }
 echo ':', $cell->value, ':', $array[0], ':', $copy[0], '|';
 discardUnary(unaryText($argc));
