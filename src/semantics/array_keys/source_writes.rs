@@ -337,16 +337,31 @@ struct PropertyFacts {
     parents: HashMap<String, String>,
 }
 
+/// Describes where the initial scope obtains its process argument bindings.
+pub(crate) enum SourceWriteScope {
+    Program,
+    LiteralEval,
+}
+
 /// Audits definite array writes before target-dependent folding can discard their branches.
 pub(crate) fn validate_source_writes(
     program: &Program,
     profile: SemanticProfile,
+    scope: SourceWriteScope,
 ) -> Result<(), CompileError> {
     crate::optimize::with_source_fold_user_functions(program, || {
         let mut properties = PropertyFacts::default();
         collect_properties(program, &mut properties);
         validate_nested_closures(program, &properties, profile)?;
         let mut locals = LocalFacts::default();
+        for (name, ty) in crate::superglobals::process_argument_types() {
+            // Eval inherits the caller's bindings, which may shadow either name.
+            let fact = match scope {
+                SourceWriteScope::Program => ValueFact::Known(ty),
+                SourceWriteScope::LiteralEval => ValueFact::Unknown,
+            };
+            locals.set(name, fact);
+        }
         validate_block(program, &mut locals, &properties, profile, None)
     })
 }

@@ -123,6 +123,20 @@ fn strict_array_key_source_validation_keeps_original_domains() {
     }
 }
 
+/// Audits explicit eval assignments while deferring the caller's process argument bindings.
+#[test]
+fn strict_array_key_source_validation_literal_eval_inherits_process_arguments() {
+    let inherited = r#"<?php function writeArgv(string $argv) {
+        eval('$argv[false] = "x";');
+    }"#;
+    crate::semantics::validate_source(&parse(inherited, SourceMode::Php), profile()).unwrap();
+
+    let assigned = r#"<?php eval('$argv = []; $argv[false] = "x";');"#;
+    let error =
+        crate::semantics::validate_source(&parse(assigned, SourceMode::Php), profile()).unwrap_err();
+    assert!(error.message.contains("strict-array-keys"));
+}
+
 /// Negative maximum keys advance implicit appends by one instead of resetting to zero.
 #[test]
 fn strict_array_key_source_validation_tracks_negative_append_keys() {

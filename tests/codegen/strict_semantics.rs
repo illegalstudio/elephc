@@ -9,6 +9,23 @@
 
 use crate::support::*;
 
+/// Keeps the process arguments visible before strict source validation folds the program.
+#[test]
+fn test_strict_array_keys_accepts_cli_argv_and_argc() {
+    let source = r#"<?php
+$values = [];
+$values[$argc] = 1;
+$argv[0][false] = 'x';
+echo $values[$argc], ':', $argv[0][0];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "1:x"
+    );
+    StrictFixture::new("<?php function auditLocal() { $values = []; $values[$argc] = 1; }")
+        .assert_error(&["--strict-array-keys"], "strict-array-keys");
+}
+
 /// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
 #[test]
 fn test_strict_array_keys_interpolation_uses_integer_offsets() {

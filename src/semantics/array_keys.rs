@@ -12,7 +12,7 @@ use elephc_semantics::{SemanticProfile, StrictFeature,
     conversions::{plan_conversion, ConversionPlan, ConversionSite, ValueKind}};
 
 mod source_writes;
-pub(crate) use source_writes::validate_source_writes;
+pub(crate) use source_writes::{validate_source_writes, SourceWriteScope};
 
 pub(crate) use elephc_semantics::array_keys::EXACT_KEY_MESSAGE;
 

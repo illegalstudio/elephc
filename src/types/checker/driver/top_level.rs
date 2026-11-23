@@ -8,8 +8,6 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::HashMap;
-
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
 use crate::span::Span;
@@ -229,9 +227,10 @@ impl Checker {
     /// `self.extern_globals` are inserted verbatim. The returned environment serves as the
     /// starting point for top-level type checking.
     fn seed_global_env(&self) -> TypeEnv {
-        let mut global_env: TypeEnv = HashMap::new();
-        global_env.insert("argc".to_string(), PhpType::Int);
-        global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+        let mut global_env: TypeEnv = crate::superglobals::process_argument_types()
+            .into_iter()
+            .map(|(name, ty)| (name.to_owned(), ty))
+            .collect();
         for name in crate::superglobals::SUPERGLOBALS {
             global_env.insert((*name).to_string(), crate::superglobals::superglobal_type());
         }

@@ -7,6 +7,7 @@
 //! Key details:
 //! - Literal eval is recursively audited; native eligibility is checked after lowering.
 
+use super::array_keys::{validate_source_writes, SourceWriteScope};
 use super::{SemanticProfile, StrictFeature};
 use crate::ast_visit::{walk_program, AstVisitor};
 use crate::errors::CompileError;
@@ -26,7 +27,7 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
         if profile.contains(StrictFeature::ArrayKeys) {
-            super::array_keys::validate_source_writes(program, profile)?;
+            validate_source_writes(program, profile, SourceWriteScope::Program)?;
         }
         let mut validator = SourceValidator::new(profile);
         walk_program(program, &mut validator);
@@ -251,7 +252,7 @@ impl AstVisitor for SourceValidator {
                 self.depth += 1;
                 match super::numeric_constants::validate(&program, self.profile).and_then(|()| {
                     if self.profile.contains(StrictFeature::ArrayKeys) {
-                        super::array_keys::validate_source_writes(&program, self.profile)
+                        validate_source_writes(&program, self.profile, SourceWriteScope::LiteralEval)
                     } else {
                         Ok(())
                     }

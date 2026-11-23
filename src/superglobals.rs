@@ -49,6 +49,14 @@ pub fn compiling_for_web() -> bool {
     COMPILING_FOR_WEB.with(std::cell::Cell::get)
 }
 
+/// Returns the argument bindings that the native process supplies to the program entry.
+pub(crate) fn process_argument_types() -> [(&'static str, PhpType); 2] {
+    [
+        ("argc", PhpType::Int),
+        ("argv", PhpType::Array(Box::new(PhpType::Str))),
+    ]
+}
+
 /// PHP request superglobals visible in every scope under `--web`.
 pub const SUPERGLOBALS: &[&str] =
     &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES", "_SESSION"];
