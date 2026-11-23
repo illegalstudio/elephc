@@ -110,10 +110,12 @@ impl TokenPresence {
     }
 }
 
-/// Runs the source-level prechecks in diagnostic priority order.
+/// Runs the source-level prechecks and keeps the earliest diagnostic.
 ///
 /// Each check is skipped when its trigger category is absent from the source, so the
 /// common valid source pays for one presence pass instead of one full scan per check.
+/// Several checks can match one source, so the smallest source position wins; a tie keeps
+/// the first check's diagnostic.
 pub(super) fn run_prechecks<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
@@ -121,77 +123,67 @@ pub(super) fn run_prechecks<T: SourceToken>(
     reference_delimiters: &OnceCell<Vec<Option<usize>>>,
     names: &mut Vec<usize>,
 ) -> Option<ValidationError> {
-    if presence.close_tag_else {
-        if let Some(error) = close_tag_else_error(source, tokens) {
-            return Some(error);
+    let mut earliest: Option<ValidationError> = None;
+    let mut consider = |error: Option<ValidationError>| {
+        let Some(error) = error else {
+            return;
+        };
+        if earliest
+            .as_ref()
+            .is_none_or(|current| error.pos < current.pos)
+        {
+            earliest = Some(error);
         }
+    };
+    if presence.close_tag_else {
+        consider(close_tag_else_error(source, tokens));
     }
     if presence.halt_compiler {
-        if let Some(error) = halt_compiler_scope_error(source, tokens) {
-            return Some(error);
-        }
+        consider(halt_compiler_scope_error(source, tokens));
     }
     if presence.new {
-        if let Some(error) = new_dynamic_static_error(source, tokens) {
-            return Some(error);
-        }
+        consider(new_dynamic_static_error(source, tokens));
     }
     if presence.reference_ampersand {
-        if let Some(error) = invalid_array_reference_error(source, tokens, reference_delimiters) {
-            return Some(error);
-        }
-        if let Some(error) =
-            invalid_reference_write_continuation_error(source, tokens, reference_delimiters)
-        {
-            return Some(error);
-        }
+        consider(invalid_array_reference_error(
+            source,
+            tokens,
+            reference_delimiters,
+        ));
+        consider(invalid_reference_write_continuation_error(
+            source,
+            tokens,
+            reference_delimiters,
+        ));
     }
     if presence.goto {
-        if let Some(error) = goto_statement_error(source, tokens) {
-            return Some(error);
-        }
+        consider(goto_statement_error(source, tokens));
     }
     if presence.backtick {
-        if let Some(error) = unterminated_backtick_error(source, tokens) {
-            return Some(error);
-        }
+        consider(unterminated_backtick_error(source, tokens));
     }
     if presence.void_cast {
-        if let Some(error) = void_cast_expression_error(tokens) {
-            return Some(error);
-        }
+        consider(void_cast_expression_error(tokens));
     }
     if presence.switch_html {
-        if let Some(error) = switch_case_html_error(source, tokens) {
-            return Some(error);
-        }
+        consider(switch_case_html_error(source, tokens));
     }
     if presence.dollar_brace {
-        if let Some(error) = dollar_brace_expression_error(source, tokens, names) {
-            return Some(error);
-        }
+        consider(dollar_brace_expression_error(source, tokens, names));
     }
     if presence.computed_member {
-        if let Some(error) = computed_member_expression_error(source, tokens, names) {
-            return Some(error);
-        }
+        consider(computed_member_expression_error(source, tokens, names));
     }
     if presence.declaration_variable {
-        if let Some(error) = declaration_variable_variable_error(source, tokens) {
-            return Some(error);
-        }
+        consider(declaration_variable_variable_error(source, tokens));
     }
     if presence.curly_open {
-        if let Some(error) = complex_interpolation_error(source, tokens) {
-            return Some(error);
-        }
+        consider(complex_interpolation_error(source, tokens));
     }
     if presence.interpolation_offset {
-        if let Some(error) = simple_interpolation_offset_error(source, tokens) {
-            return Some(error);
-        }
+        consider(simple_interpolation_offset_error(source, tokens));
     }
-    None
+    earliest
 }
 
 /// Rejects an unterminated backtick shell string with Zend's delimiter expectation.

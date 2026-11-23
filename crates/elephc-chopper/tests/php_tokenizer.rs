@@ -2923,3 +2923,16 @@ fn tokenizer_static_member_first_class_callables_are_valid() {
             .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
     }
 }
+
+/// A later reference write error must not hide an earlier `${...}` syntax error.
+#[test]
+fn tokenizer_earlier_dollar_brace_error_wins_over_later_reference() {
+    let error = tokenize(b"<?php ${1+}; $a = &$b++;", TOKEN_PARSE)
+        .expect_err("malformed ${...} must fail");
+    assert_eq!(error.message, "syntax error, unexpected token \"}\"");
+    assert_eq!(error.pos, 10);
+
+    let error = tokenize(b"<?php $a = &$b++; ${1+};", TOKEN_PARSE)
+        .expect_err("reference write continuation must fail");
+    assert_eq!(error.message, "syntax error, unexpected token \"++\"");
+}
