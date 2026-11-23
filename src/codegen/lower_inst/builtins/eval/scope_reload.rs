@@ -431,8 +431,9 @@ pub(super) fn store_missing_scope_entry_to_local(
         PhpType::Mixed | PhpType::Union(_) => {
             ensure_eval_local_writeback_owns_value(ctx, local)?;
             ctx.release_local_before_refcounted_writeback(local.slot)?;
-            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
-            abi::emit_call_label(ctx.emitter, &symbol);
+            // An absent PHP binding uses the same zeroed slot as native unset. No new lease
+            // should survive on a path where the local was never successfully bound.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Int | PhpType::Bool => {
