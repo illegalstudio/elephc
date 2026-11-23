@@ -53,6 +53,24 @@ echo $values['Vendor\Thing'];
     );
 }
 
+/// Rejects eval magic keys and PHP 8.2 safe folds before later passes can hide their writes.
+#[test]
+fn test_strict_array_keys_audits_safe_folded_keys_before_target_pruning() {
+    let eval = r#"<?php eval('$values = [__LINE__ => []]; $values[__LINE__][false] = "x";');"#;
+    StrictFixture::new(eval).assert_error(&["--strict-array-keys"], "strict-array-keys");
+
+    let source = r#"<?php
+if (PHP_OS_FAMILY === 'Windows') {
+    $values = [(match (1) { 1 => -2 }) => [], 'ab'];
+    $values[-1][false] = 'x';
+}
+"#;
+    StrictFixture::new(source).assert_error(
+        &["--php-version", "8.2", "--strict-array-keys"],
+        "strict-array-keys",
+    );
+}
+
 /// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.
 #[test]
 fn test_strict_boxed_overflow_staged_native_arithmetic_and_powers() {

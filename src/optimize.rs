@@ -82,6 +82,30 @@ fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
         | ExprKind::NullCoalesce { value, default } => {
             source_array_key_is_fold_safe(value) && source_array_key_is_fold_safe(default)
         }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            source_array_key_is_fold_safe(subject)
+                && arms.iter().all(|(patterns, value)| {
+                    patterns.iter().all(source_array_key_is_fold_safe)
+                        && source_array_key_is_fold_safe(value)
+                })
+                && default
+                    .as_deref()
+                    .is_none_or(source_array_key_is_fold_safe)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            source_array_key_is_fold_safe(array) && source_array_key_is_fold_safe(index)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().all(source_array_key_is_fold_safe),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
+            source_array_key_is_fold_safe(key) && source_array_key_is_fold_safe(value)
+        }),
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => name.is_fully_qualified(),
         _ => false,
     }
 }

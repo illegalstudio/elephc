@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and `crate::resolver` when preparing main and included files.
+//! - Strict source validation when recursively auditing literal eval fragments.
 //!
 //! Key details:
 //! - `__LINE__` is lowered by the parser, while file/scope constants must be resolved before type checking and codegen.
@@ -55,11 +56,22 @@ pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -
     })
 }
 
+/// Lowers constants in an eval audit without publishing the later AOT pass's compile warnings.
+pub fn substitute_eval_constants(stmts: Vec<Stmt>, file_path: Option<&Path>) -> Vec<Stmt> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        let stmts = match file_path {
+            Some(file_path) => substitute_file_constants(stmts, file_path),
+            None => stmts,
+        };
+        scope_pass::substitute_scope_constants(stmts, file_path, false)
+    })
+}
+
 /// Resolves scope-dependent magic constants (`__FUNCTION__`, `__CLASS__`, `__METHOD__`,
 /// `__NAMESPACE__`, `__TRAIT__`) based on lexical position within `program`.
 /// `__FILE__` and `__DIR__` must already be lowered by `substitute_file_constants`.
 pub fn substitute_scope_constants_in_file(program: Program, file_path: &Path) -> Program {
-    scope_pass::substitute_scope_constants_in_file(program, file_path)
+    scope_pass::substitute_scope_constants(program, Some(file_path), true)
 }
 
 /// Rebinds `__CLASS__` placeholders to `class_name` in `properties` and `methods`

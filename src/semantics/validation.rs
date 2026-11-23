@@ -29,7 +29,8 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
             super::array_keys::validate_source_writes(program, profile)?;
         }
         let mut validator = SourceValidator { depth: 0, error: None, profile,
-            source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new() };
+            source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new(),
+            eval_source_paths: Vec::new() };
         walk_program(program, &mut validator);
         validator.error.map_or(Ok(()), Err)
     })
@@ -43,6 +44,8 @@ struct SourceValidator {
     error: Option<CompileError>,
     quiet_operations: Vec<crate::span::Span>,
     quiet_frames: Vec<usize>,
+    /// Inherits the physical call-site file through recursively parsed eval fragments.
+    eval_source_paths: Vec<Option<String>>,
 }
 
 impl AstVisitor for SourceValidator {
@@ -210,11 +213,21 @@ impl AstVisitor for SourceValidator {
                 &format!("--{verification_flag} literal eval nesting exceeds 64 levels")));
             return;
         }
+        let source_id = crate::span::Span::fresh_synthetic_source_id();
+        let source_path = expr.span.source_path().or_else(|| {
+            self.eval_source_paths
+                .last()
+                .and_then(|source_path| source_path.clone())
+        });
         let parsed = crate::lexer::tokenize_with_semantics(&format!("<?php {source}"),
-            crate::source::SourceMode::Php, crate::span::Span::fresh_synthetic_source_id(), self.profile)
+            crate::source::SourceMode::Php, source_id, self.profile)
             .and_then(|tokens| crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php));
         match parsed {
             Ok(program) => {
+                let program = crate::magic_constants::substitute_eval_constants(
+                    program,
+                    source_path.as_deref().map(std::path::Path::new),
+                );
                 self.depth += 1;
                 match super::numeric_constants::validate(&program, self.profile).and_then(|()| {
                     if self.profile.contains(StrictFeature::ArrayKeys) {
@@ -223,7 +236,11 @@ impl AstVisitor for SourceValidator {
                         Ok(())
                     }
                 }) {
-                    Ok(()) => walk_program(&program, self),
+                    Ok(()) => {
+                        self.eval_source_paths.push(source_path);
+                        walk_program(&program, self);
+                        self.eval_source_paths.pop();
+                    }
                     Err(error) => self.error = Some(error),
                 }
                 self.depth -= 1;

@@ -176,6 +176,33 @@ fn strict_array_key_source_validation_defers_unresolved_literal_keys() {
     }
 }
 
+/// Literal eval lowers magic constants before proving nested strict array-key writes.
+#[test]
+fn strict_array_key_source_validation_lowers_eval_magic_keys() {
+    let source = r#"<?php eval('$values = [__LINE__ => []]; $values[__LINE__][false] = "x";');"#;
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .expect_err("equal eval line keys must expose the invalid nested boolean key");
+    assert!(error.message.contains("strict-array-keys"), "{error:?}");
+}
+
+/// Safe scalar folds retain pre-prune receiver proofs in a PHP 8.2 target guard.
+#[test]
+fn strict_array_key_source_validation_folds_safe_target_guard_keys() {
+    let _profile = select_php_version(PhpVersion::Php82);
+    for (key, lookup) in [
+        (r#"\Vendor\Thing::class"#, r#"'Vendor\Thing'"#),
+        ("match (1) { 1 => -2 }", "-1"),
+        ("[-2][0]", "-1"),
+    ] {
+        let source = format!(
+            "<?php if (PHP_OS_FAMILY === 'Windows') {{ $values = [({key}) => [], 'ab']; $values[{lookup}][false] = 'x'; }}"
+        );
+        let error = crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+            .expect_err("safe source folds must retain the invalid guarded receiver");
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.
 #[test]
 fn strict_array_key_source_validation_audits_target_guarded_writes() {
