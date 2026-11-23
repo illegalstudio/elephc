@@ -96,22 +96,20 @@ collectionScalarSnapshot('item');
 /// Opaque eval snapshots scalar references before array and object writeback in both profiles.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn strict_settype_reference_snapshots_native_eval_values_and_owners() {
+fn verify_settype_reference_snapshots_native_eval(casts: bool, optimize: bool) {
     let fragment = include_str!("../../../tests/fixtures/strict/settype_reference_snapshots.php")
         .strip_prefix("<?php\n").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
-    for casts in [false, true] {
-        for optimize in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts);
-            let module = super::semantic_sources::lower_capturing_arguments(&source,
-                Target::detect_host(), profile, optimize, crate::source::SourceMode::Php);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "casts={casts} opt={optimize}: {:?}; {stderr}", output.status);
-            assert_eq!(String::from_utf8_lossy(&output.stdout),
-                "0|item|kept:number|I|kept:number|N|42|kept:kept", "casts={casts} opt={optimize}: {stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={casts} opt={optimize}: {stderr}");
-        }
-    }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts);
+    let module = super::semantic_sources::lower_capturing_arguments(
+        &source, Target::detect_host(), profile, optimize, crate::source::SourceMode::Php,
+    );
+    let output = super::native_module::run(&module);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "casts={casts} opt={optimize}: {:?}; {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout),
+        "0|item|kept:number|I|kept:number|N|42|kept:kept", "casts={casts} opt={optimize}: {stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={casts} opt={optimize}: {stderr}");
 }
+
+opaque_eval_profile_cases!(strict_settype_reference_snapshots_native_eval, verify_settype_reference_snapshots_native_eval);
