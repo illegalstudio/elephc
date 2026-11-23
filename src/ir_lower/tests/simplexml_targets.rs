@@ -627,7 +627,7 @@ targetXmlHandoffNullableHolder()->items[] = 2;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     let function = module.functions.iter().find(|function| function.name == "targetXmlHandoffErasedAppend").unwrap();
-    assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGet
+    assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == crate::ir::Op::PropGet
         && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
             if module.data.strings[id.as_raw() as usize] == "items")),
         "{target}: erased temporary holders must select their declared XML child before mutation");

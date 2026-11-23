@@ -190,6 +190,56 @@ mod instance_dimension_incdec;
 mod native_property_child_probes;
 mod shared_property_reads;
 
+/// The bodies that hold the lowering of the property writes `function` makes through a receiver that
+/// lost its class: the function itself and the shared helpers those writes call
+/// (`crate::ir_lower::erased_writes`), whose bodies are the ladders the sites used to inline.
+fn with_erased_write_helpers<'m>(
+    module: &'m crate::ir::Module, function: &'m crate::ir::Function,
+) -> Vec<&'m crate::ir::Function> {
+    let mut bodies = vec![function];
+    bodies.extend(module.functions.iter()
+        .filter(|candidate| candidate.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX)));
+    bodies
+}
+
+/// The shared helper of one erased property write: `form` is `set`, `setd`, `push`, `assign`,
+/// `inc`, `dec` or `op<Operator>` and `property` a lower-case name. A body with that single write
+/// lowers inside it exactly as the same statement did inline in the caller.
+fn erased_write_helper<'m>(
+    module: &'m crate::ir::Module, form: &str, property: &str,
+) -> &'m crate::ir::Function {
+    let prefix = format!("{}{form}", crate::names::ERASED_WRITE_HELPER_PREFIX);
+    let suffix = format!("@{property}");
+    module.functions.iter()
+        .find(|candidate| candidate.name.starts_with(&prefix) && candidate.name.ends_with(&suffix))
+        .unwrap_or_else(|| panic!("no erased write helper {form} of {property}"))
+}
+
+/// Whether `inst` is the call of a shared erased-write helper, which is not a call the PHP source wrote.
+fn is_erased_write_call(module: &crate::ir::Module, inst: &crate::ir::Instruction) -> bool {
+    inst.op == crate::ir::Op::Call && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+        if module.data.function_names[id.as_raw() as usize].starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX))
+}
+
+/// Whether `function` or a shared erased-write helper it calls holds an instruction `predicate` accepts.
+fn any_with_erased_writes(
+    module: &crate::ir::Module, function: &crate::ir::Function,
+    predicate: impl Fn(&crate::ir::Instruction) -> bool,
+) -> bool {
+    with_erased_write_helpers(module, function).into_iter()
+        .any(|body| body.instructions.iter().any(&predicate))
+}
+
+/// How many instructions `predicate` accepts across `function` and the shared erased-write helpers it calls.
+fn count_with_erased_writes(
+    module: &crate::ir::Module, function: &crate::ir::Function,
+    predicate: impl Fn(&crate::ir::Instruction) -> bool,
+) -> usize {
+    with_erased_write_helpers(module, function).into_iter()
+        .map(|body| body.instructions.iter().filter(|inst| predicate(inst)).count())
+        .sum()
+}
+
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
     lower_source_at(source, Path::new("main.php"), Path::new("."))

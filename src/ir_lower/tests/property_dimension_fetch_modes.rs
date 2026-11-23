@@ -285,9 +285,9 @@ echo get_class(new AttachedAppendUnrelated());
         );
         for name in ["attachedAppendMixed", "attachedAppendObject", "attachedAppendInterface"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite),
+            assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == Op::PropGetForWrite),
                 "{target}: {name} must select the declared array slot");
-            assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            assert!(super::any_with_erased_writes(&module, function, |inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
                 "{target}: {name} must select an attached dynamic cell");
         }
@@ -299,9 +299,12 @@ echo get_class(new AttachedAppendUnrelated());
                 | crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite)))),
             "{target}: known declared array must not emit a runtime class ladder or hash arm");
         let known = module.functions.iter().find(|f| f.name == "attachedAppendKnown").unwrap();
+        // A class arm names its class by string, or by class id when the program loads no code.
         let classes: Vec<_> = known.instructions.iter().filter_map(|inst| match inst.immediate {
             Some(crate::ir::Immediate::Data(id)) if inst.op == Op::ConstStr =>
                 Some(module.data.strings[id.as_raw() as usize].as_str()),
+            Some(crate::ir::Immediate::I64(id)) if inst.op == Op::ConstI64 =>
+                module.class_infos.iter().find(|(_, info)| info.class_id as i64 == id).map(|(name, _)| name.as_str()),
             _ => None,
         }).collect();
         for class in ["stdClass", "AttachedAppendStdChild"] {
@@ -315,10 +318,14 @@ echo get_class(new AttachedAppendUnrelated());
             && deprecated.dynamic_property_creation_is_deprecated(),
             "{target}: clone-with must reserve a deprecated ordinary hash");
         let write = module.functions.iter().find(|f| f.name == "attachedAppendDeprecated").unwrap();
-        assert!(write.instructions.iter().any(|inst| inst.op == Op::ConstStr && matches!(inst.immediate,
-            Some(crate::ir::Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] == "AttachedAppendDeprecated")),
-            "{target}: mixed writer must contain the deprecated class arm");
-        assert!(write.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+        let deprecated_id = module.class_infos["AttachedAppendDeprecated"].class_id as i64;
+        assert!(super::any_with_erased_writes(&module, write, |inst| match inst.immediate {
+            Some(crate::ir::Immediate::Data(id)) if inst.op == Op::ConstStr =>
+                module.data.strings[id.as_raw() as usize] == "AttachedAppendDeprecated",
+            Some(crate::ir::Immediate::I64(id)) => inst.op == Op::ConstI64 && id == deprecated_id,
+            _ => false,
+        }), "{target}: mixed writer must contain the deprecated class arm");
+        assert!(super::any_with_erased_writes(&module, write, |inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
             "{target}: deprecated hash case must reach the attached fetch");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
@@ -353,7 +360,7 @@ function magicAttachedWrite(mixed $box): void { $box->items[0] = 1; }
         assert!(add.instructions.iter().any(|inst| inst.op == Op::PropSet),
             "{target}: first append must initialize the declared array");
         let write = module.functions.iter().find(|f| f.name == "magicAttachedWrite").unwrap();
-        assert!(write.instructions.iter().any(|inst| inst.op == Op::IsNull),
+        assert!(super::any_with_erased_writes(&module, write, |inst| inst.op == Op::IsNull),
             "{target}: nullable object slot in a magic class must reject array initialization");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
@@ -391,10 +398,10 @@ magicAppendInterface(new MagicAppendReference());
         );
         for name in ["magicAppendMixed", "magicAppendObject", "magicAppendInterface"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            assert!(super::any_with_erased_writes(&module, function, |inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::PropertyHashContains))),
                 "{target}: {name} must distinguish a stored null from a missing getter entry");
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::ConstStr && matches!(inst.immediate,
+            assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == Op::ConstStr && matches!(inst.immediate,
                 Some(crate::ir::Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] ==
                     "Unsupported property append through an overloaded __get()")),
                 "{target}: {name} must explicitly diagnose missing getter storage");

@@ -31,9 +31,11 @@ runtimeHookAssignBase($object, 'derived');
 runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
-    let function = module.functions.iter().find(|function| function.name == "runtimeHookAssign").unwrap();
-    assert!(function.instructions.iter().any(|inst| inst.op == Op::RuntimeCall
-        && inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass)))),
+    // The assignment through a boxed receiver lowers inside its shared helper (`erased_writes`).
+    let function = super::erased_write_helper(&module, "assign", "value");
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ObjectClassId
+        || (inst.op == Op::RuntimeCall
+            && inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass))))),
         "{target}: boxed receivers require exact runtime class selection");
     let setter = function.instructions.iter().find(|inst| inst.op == Op::MethodCall
         && matches!(inst.immediate, Some(Immediate::Data(data))
@@ -56,7 +58,7 @@ runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
         && base.value(inst.operands[0]).unwrap().php_type == PhpType::Mixed
         && base.value(inst.operands[2]).unwrap().php_type == PhpType::Mixed),
         "{target}: boxed fallback receivers and values must use the runtime property guard");
-    let strings = module.functions.iter().find(|function| function.name == "runtimeStringHookAssign").unwrap();
+    let strings = super::erased_write_helper(&module, "assign", "text");
     let (call_position, setter) = strings.instructions.iter().enumerate().find(|(_, inst)| inst.op == Op::MethodCall
         && matches!(inst.immediate, Some(Immediate::Data(data))
             if module.data.strings[data.as_raw() as usize] == "__propset_text")).unwrap();
@@ -185,7 +187,13 @@ writeUnknownMixedProperty(new LiteralWriteOther(), 'unrelatedWriteSlot');
             let helper = assembly.split_once("\n_eir_shared_dyn_prop_set_").map(|(_, rest)| rest)
                 .expect("the shared dynamic-write helper is emitted");
             helper.split("\n.globl ").next().unwrap()
-        } else { body };
+        } else {
+            // A literal name keeps its ladder in the shared helper of that write (`erased_writes`).
+            let helper = super::erased_write_helper(&module, "assign", "chosen");
+            let helper_symbol = crate::names::function_symbol(&helper.name);
+            let helper_body = assembly.split_once(&format!("{helper_symbol}:\n")).unwrap().1;
+            helper_body.split("\n.globl ").next().unwrap()
+        };
         assert!(scope.contains("mixed_dyn_prop_set_chosen_"), "{target}: preserve matching slot dispatch");
         assert_eq!(scope.contains("mixed_dyn_prop_set_unrelatedWriteSlot_"), dynamic,
             "{target}: only computed names need unrelated declared candidates");

@@ -28,9 +28,7 @@
 //!   a warning or an `Error` it raises names the file and line the CALL site published, which is
 //!   the PHP statement. The function has no source identity, so no backtrace frame is published.
 //! - Left inline: an expression `++`/`--` of an element (its old and new values are published into
-//!   caller locals), a plain `$o->p = $v` of a name some class declares readonly or with an
-//!   asymmetric `set` (the backend's refusal names the line of its own instruction, which a shared
-//!   body does not have), compound or `??=` updates of a plain property, nested dimensions
+//!   caller locals), compound or `??=` updates of a plain property, nested dimensions
 //!   (`$o->p[a][b] = $v`), static properties, `unset()`, values held in buffer, pointer or packed
 //!   storage, a body with a runtime closure scope, a name written inside its own property hook,
 //!   and the helper bodies themselves.
@@ -139,15 +137,12 @@ thread_local! {
     static REQUESTS: RefCell<BTreeMap<String, Request>> = const { RefCell::new(BTreeMap::new()) };
     /// Scope groups of the property names written so far, by name.
     static GROUPS: RefCell<FastMap<String, Rc<NamedHelperScopes>>> = RefCell::new(FastMap::default());
-    /// Names some class declares readonly or with an asymmetric `set` visibility.
-    static GUARDED: RefCell<Option<Rc<crate::fast_hash::FastSet<String>>>> = const { RefCell::new(None) };
 }
 
 /// Forgets the requests and scope groups of the previous program.
 pub(super) fn reset() {
     REQUESTS.with(|requests| requests.borrow_mut().clear());
     GROUPS.with(|groups| groups.borrow_mut().clear());
-    GUARDED.with(|guarded| *guarded.borrow_mut() = None);
 }
 
 /// Environment switch that keeps the inline ladders.
@@ -211,30 +206,6 @@ fn helper_scope(ctx: &LoweringContext<'_, '_>, property: &str) -> Option<String>
     groups.scope_of(lexical, ctx.classes)
 }
 
-/// Whether some class declares `property` readonly or with an asymmetric `set` visibility.
-///
-/// The backend guard that refuses such a plain write names the line of its own instruction, which
-/// a shared helper does not have; those names keep the inline write, whose guard is at the site.
-fn guarded_name(ctx: &LoweringContext<'_, '_>, property: &str) -> bool {
-    let names = GUARDED.with(|guarded| {
-        if let Some(names) = guarded.borrow().as_ref() {
-            return Rc::clone(names);
-        }
-        let mut names = crate::fast_hash::FastSet::default();
-        for info in ctx.classes.values() {
-            if info.is_readonly_class {
-                names.extend(info.properties.iter().map(|(name, _)| name.clone()));
-            }
-            names.extend(info.readonly_properties.iter().cloned());
-            names.extend(info.property_set_visibilities.keys().cloned());
-        }
-        let names = Rc::new(names);
-        *guarded.borrow_mut() = Some(Rc::clone(&names));
-        names
-    });
-    names.contains(property)
-}
-
 /// Spells a property name so it can sit inside a function name. Function names are matched
 /// without regard to case and property names are not, so an upper-case letter is spelled in hex.
 fn escape(property: &str) -> String {
@@ -258,7 +229,6 @@ pub(super) fn eligible(
         || property.starts_with("__elephc_")
         || ctx.has_local_slot(crate::names::CLOSURE_SCOPE_LOCAL)
         || ctx.in_own_property_accessor(property)
-        || (*form == Form::Assign && guarded_name(ctx, property))
         || !erased(ctx, &ctx.builder.value_php_type(receiver.value))
         || value.is_some() != form.has_value()
         || value.is_some_and(|value| !boxable(ctx, value))

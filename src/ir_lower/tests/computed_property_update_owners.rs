@@ -32,7 +32,7 @@ writeRuntimeArrayTyped($box); writeRuntimeArrayErased($box);
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         for name in ["writeRuntimeArrayTyped", "writeRuntimeArrayErased"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite
+            assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == Op::PropGetForWrite
                 && matches!(inst.immediate, Some(Immediate::Data(id))
                     if module.data.strings[id.as_raw() as usize] == "items")),
                 "{target}: {name} must mutate the actual declared slot\n{}",
@@ -173,7 +173,8 @@ writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        let function = module.functions.iter().find(|f| f.name == "writeNullableDimensionSlot").unwrap();
+        // The element write through the boxed receiver lowers inside its shared helper.
+        let function = super::erased_write_helper(&module, "set", "items");
         let guards = function.instructions.iter().filter(|inst| (inst.op == Op::IsNull
             || (inst.op == Op::TypePredicate && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))))
             && inst.operands.first().and_then(|value| function.value(*value))
@@ -218,14 +219,19 @@ guardedCompound($box); guardedIncrement($box); guardedExpression($box);
         );
         for name in ["guardedCompound", "guardedIncrement", "guardedExpression"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            let check = function.instructions.iter().position(|inst| inst.op == Op::IsNull)
-                .unwrap_or_else(|| panic!("{target}: {name} requires a nullable slot guard"));
-            let read = function.instructions.iter().position(|inst| matches!(inst.op,
-                Op::RuntimeCall | Op::MethodCall | Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet)
-                && inst.result.is_some() && inst.operands.len() >= 2
-                && inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed)
-                .unwrap_or_else(|| panic!("{target}: {name} must retain its element read"));
-            assert!(check < read, "{target}: {name} must refuse null before the element read");
+            // The guard and the element read sit together in the function or in the shared helper
+            // of its write; the order is asserted in whichever body holds both.
+            let mut ordered = false;
+            for body in super::with_erased_write_helpers(&module, function) {
+                let Some(check) = body.instructions.iter().position(|inst| inst.op == Op::IsNull) else { continue };
+                let Some(read) = body.instructions.iter().position(|inst| matches!(inst.op,
+                    Op::RuntimeCall | Op::MethodCall | Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet)
+                    && inst.result.is_some() && inst.operands.len() >= 2
+                    && inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed) else { continue };
+                assert!(check < read, "{target}: {name} must refuse null before the element read");
+                ordered = true;
+            }
+            assert!(ordered, "{target}: {name} requires a nullable slot guard and its element read");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
@@ -303,9 +309,9 @@ fn erased_property_dimension_uses_declared_storage_on_every_target() {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "mutateErasedStorage").unwrap();
-        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGetForWrite),
+        assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == crate::ir::Op::PropGetForWrite),
             "{target}: the runtime class must write its declared slot\n{}", crate::ir::print_function(function));
-        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::DynamicPropSet),
+        assert!(!super::any_with_erased_writes(&module, function, |inst| inst.op == crate::ir::Op::DynamicPropSet),
             "{target}: element writes must not introduce magic setters");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
@@ -335,7 +341,7 @@ writeErasedDeclaredBuffer(new BufferDeclaredWriteStorage($values)); buffer_free(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
-    let items = module.functions.iter().find(|function| function.name == "writeErasedDeclaredItems").unwrap();
+    let items = super::erased_write_helper(&module, "set", "items");
     assert!(!items.instructions.iter().any(|inst| inst.op == Op::MixedUnbox
         && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
             matches!(&value.php_type, crate::types::PhpType::Object(class)
@@ -349,7 +355,7 @@ writeErasedDeclaredBuffer(new BufferDeclaredWriteStorage($values)); buffer_free(
     assert!(!object_arm.instructions.iter().any(|id| items.instruction(*id).is_some_and(|inst|
         inst.op == Op::RuntimeCall && matches!(inst.immediate, Some(Immediate::Data(_))))),
         "{target}: ArrayAccess writes must not use the stdClass-only property fallback");
-    let buffer = module.functions.iter().find(|function| function.name == "writeErasedDeclaredBuffer").unwrap();
+    let buffer = super::erased_write_helper(&module, "set", "values");
     assert!(buffer.instructions.iter().any(|inst| inst.op == Op::BufferSet), "{target}: typed buffer write");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));

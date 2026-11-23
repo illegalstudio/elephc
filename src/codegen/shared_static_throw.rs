@@ -60,9 +60,12 @@ mod field {
 /// throwable takes the line of the statement that called it, published in `_php_site`.
 pub(in crate::codegen) const LINE_OF_CALLING_SITE: u32 = u32::MAX;
 
-/// Returns whether `ctx` is a shared helper body, whose raises belong to the calling statement.
+/// Returns whether `ctx` is a shared helper body (a named property helper, an outlined property
+/// write), whose raises belong to the calling statement.
 pub(in crate::codegen) fn raises_on_calling_site(ctx: &FunctionContext<'_>) -> bool {
-    ctx.function.flags.is_synthetic && ctx.function.name.starts_with("_eir_shared_")
+    ctx.function.flags.is_synthetic
+        && (ctx.function.name.starts_with("_eir_shared_")
+            || ctx.function.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX))
 }
 
 /// php's uncaught-throwable report: flush the output buffer, write to fd 1, exit 255.

@@ -22,10 +22,10 @@ indexedProtocolWrite(new IndexedProtocolDynamic());
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let function = module.functions.iter().find(|function| function.name == "indexedProtocolWrite").unwrap();
-    assert!(function.instructions.iter().any(|inst| inst.op == Op::DynamicPropGet),
+    assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == Op::DynamicPropGet),
         "{target}: the class dispatcher must preserve read visibility and magic access");
     for target in [RuntimeCallTarget::PropertyHashFetchForWrite, RuntimeCallTarget::WriteDiagnostic] {
-        assert!(function.instructions.iter().any(|inst| inst.op == Op::RuntimeCall
+        assert!(super::any_with_erased_writes(&module, function, |inst| inst.op == Op::RuntimeCall
             && inst.immediate == Some(Immediate::RuntimeCall(target))),
             "{target:?}: retain the indexed property protocol in EIR");
     }

@@ -212,14 +212,14 @@ C::$nullable->items[] = 3;
         assert_eq!(function.instructions.iter().filter(|inst|
             inst.op == crate::ir::Op::LoadStaticProperty).count(), 1,
             "{target}: {name} shares one indexed receiver across compound read and write");
-        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call && !super::is_erased_write_call(&module, inst)).unwrap();
         let receiver = function.instructions.iter().position(|inst|
             inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
         assert!(rhs < receiver, "{target}: {name} captures its RHS before the shared receiver");
     }
     for name in ["writeComputedNested", "writeComputedLeaf", "writeComputedCompound", "writeNullChain"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
-        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call && !super::is_erased_write_call(&module, inst)).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
         assert!(rhs < receiver, "{target}: {name} RHS precedes static traversal");
         if name == "writeNullChain" {
@@ -227,7 +227,7 @@ C::$nullable->items[] = 3;
             let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
             assert!(guard < read, "{target}: intermediate null is guarded before a property read");
         } else {
-            assert_eq!(function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::Call).count(), 2,
+            assert_eq!(function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::Call && !super::is_erased_write_call(&module, inst)).count(), 2,
                 "{target}: {name} calls the key and RHS only once");
         }
     }
