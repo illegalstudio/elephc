@@ -169,7 +169,10 @@ echo (int) ((PHP_INT_MIN + $one) - PHP_INT_MAX);
 fn test_checked_numeric_chain_int_min_overflow_matches_checked_mul_sink() {
     let source = r#"<?php
 $one = $argc;
-echo (int) (PHP_INT_MIN * -$one), "|";
+// The bitwise result stays an integer with range analysis disabled.
+$minusOne = ~($one ^ 1);
+echo (int) (PHP_INT_MIN * $minusOne), "|";
+echo (int) (PHP_INT_MIN * $minusOne + $one), "|";
 echo (int) (PHP_INT_MIN * -$one + $one);
 "#;
     let optimized_ir = emit_main_ir(source, &[]);
@@ -185,13 +188,17 @@ echo (int) (PHP_INT_MIN * -$one + $one);
         optimized_ir.contains("[mul,add]"),
         "optimized EIR did not retain the multiply/add order:\n{optimized_ir}"
     );
+    assert!(
+        optimized_ir.contains("[sub,mul,add]"),
+        "optimized EIR did not retain the checked negation:\n{optimized_ir}"
+    );
 
     let (unoptimized, unoptimized_stderr) =
         compile_and_run_variant(source, &["--no-ir-opt"]);
     let (optimized, optimized_stderr) = compile_and_run_variant(source, &[]);
     assert_eq!(optimized, unoptimized);
     assert_eq!(optimized_stderr, unoptimized_stderr);
-    assert_eq!(optimized, "-9223372036854775808|-9223372036854775808");
+    assert_eq!(optimized, "-9223372036854775808|-9223372036854775808|-9223372036854775808");
 }
 
 /// Eliminates all transient heap allocations in the benchmark loop in both IR modes.

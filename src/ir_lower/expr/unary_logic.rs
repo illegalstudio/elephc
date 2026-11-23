@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Preserves native unary contracts, then uses an explicit scalar operation without synthetic arithmetic.
+/// Preserves scalar unary results and PHP's overflow promotion through boxed storage.
 pub(super) fn lower_numeric_unary(
     ctx: &mut LoweringContext<'_, '_>, inner: &Expr,
     operator: elephc_semantics::numeric_unary::NumericUnaryOp, expr: &Expr,
@@ -38,17 +38,16 @@ pub(super) fn lower_numeric_unary(
             if crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
                 return crate::ir_lower::checked_arithmetic::negate(ctx, value, expr.span);
             }
-            // A replay-proven integer counter cannot reach PHP_INT_MIN on its admitted loop
-            // backedge. Keep its negate in the scalar region just like a safe literal. Other
-            // integer values can still hold PHP_INT_MIN, whose negation promotes to float, so
-            // they retain the boxed PHP overflow helper below.
-            let replay_proved_counter = matches!(&inner.kind,
-                ExprKind::Variable(name) if ctx.is_int_seed_binding(name));
             let safe_literal =
                 matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN);
-            if replay_proved_counter || safe_literal {
+            if safe_literal {
                 return ctx.emit_value(Op::INeg, vec![value.value], None, PhpType::Int, Op::INeg.default_effects(), Some(expr.span));
             }
+            // The result can promote to float. Use checked subtraction so later range proofs
+            // can eliminate boxing without assuming the source integer excludes PHP_INT_MIN.
+            let zero = lower_int_literal(ctx, 0, expr);
+            return ctx.emit_value(Op::ICheckedSub, vec![zero.value, value.value], None,
+                PhpType::Mixed, Op::ICheckedSub.default_effects(), Some(expr.span));
         }
     }
     let zero = lower_int_literal(ctx, 0, expr);
