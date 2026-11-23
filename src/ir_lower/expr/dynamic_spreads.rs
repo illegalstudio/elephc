@@ -169,9 +169,15 @@ fn nested_spread_assoc_literal(source: &Expr) -> bool {
     matches!(source.kind, ExprKind::ArrayLiteralMixed(_))
 }
 
-/// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.
+/// Captures an argument's value before later arguments can mutate a shared box.
 fn root_value(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> String {
-    initialize_owned_slot(ctx, PhpType::Mixed, expr)
+    let ty = PhpType::Mixed;
+    let slot = ctx.declare_hidden_temp(ty.clone());
+    let value = lower_expr(ctx, expr);
+    let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(expr.span));
+    store_value_into_temp(ctx, &slot, ty, value, expr.span);
+    register_owned_call_operand(ctx, ctx.local_slots[&slot], expr.span);
+    slot
 }
 
 /// Creates and publishes a refcounted temporary for same-frame exception cleanup.
