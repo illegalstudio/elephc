@@ -592,7 +592,10 @@ fn lower_method_call_with_binding(
         }
         None => args,
     };
-    promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
+    // php refuses a `__call` that takes its arguments by reference: nothing to promote or bind.
+    if !method.eq_ignore_ascii_case("__call") {
+        promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
+    }
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
     // argument and receiver cleanup, so its staging is published before the arguments.
