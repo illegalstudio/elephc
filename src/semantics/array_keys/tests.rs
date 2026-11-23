@@ -199,6 +199,35 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     assert!(error.message.contains("strict-arithmetic"), "{strict}: {error:?}");
 }
 
+/// A selected match arm fixes the key before any later unreachable pattern is inspected.
+#[test]
+fn strict_array_key_source_validation_stops_after_selected_match_arm() {
+    for (version, accepted_index, rejected_index) in [
+        (PhpVersion::Php82, 0, -1),
+        (PhpVersion::Php85, -1, 0),
+    ] {
+        let _profile = select_php_version(version);
+        let accepted = format!(
+            "<?php $values = [(match (1) {{ 1 => -2, $unused => 9, default => 0 }}) => [], 'ab']; $values[{accepted_index}][false] = 'x';"
+        );
+        crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+        let rejected = format!(
+            "<?php $values = [(match (1) {{ 1 => -2, $unused => 9, default => 0 }}) => [], 'ab']; $values[{rejected_index}][false] = 'x';"
+        );
+        let error = crate::semantics::validate_source(
+            &parse(&rejected, SourceMode::Php),
+            profile(),
+        )
+        .expect_err("the missing slot must retain strict nested-key validation");
+        assert!(
+            error.message.contains("strict-array-keys"),
+            "{rejected}: {error:?}"
+        );
+    }
+}
+
 /// Pre-resolution source facts leave magic constants and imported class names unresolved.
 #[test]
 fn strict_array_key_source_validation_defers_unresolved_literal_keys() {

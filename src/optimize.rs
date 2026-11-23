@@ -182,28 +182,24 @@ pub(crate) fn select_match_array_key_for_source(
     };
     let _profile = scoped_semantic_profile(profile);
     let subject = fold::expr::fold_expr(prepare_source_array_key_for_fold(subject, profile)?);
-    let arms = arms
-        .iter()
-        .map(|(patterns, value)| {
-            Some((
-                patterns
-                    .iter()
-                    .map(|pattern| {
-                        prepare_source_array_key_for_fold(pattern, profile)
-                            .map(fold::expr::fold_expr)
-                    })
-                    .collect::<Option<Vec<_>>>()?,
-                value.clone(),
-            ))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let kind = try_prune_match_expr(subject, arms, default.clone());
-    if matches!(kind, ExprKind::Match { .. }) {
-        return None;
+    let subject = scalar_value(&subject)?;
+    for (patterns, value) in arms {
+        let mut has_unknown = false;
+        for pattern in patterns {
+            let pattern = fold::expr::fold_expr(prepare_source_array_key_for_fold(
+                pattern, profile,
+            )?);
+            match pattern_matches_scalar(&subject, &pattern, CaseComparison::Strict) {
+                Some(true) => return Some(value.clone()),
+                Some(false) => {}
+                None => has_unknown = true,
+            }
+        }
+        if has_unknown {
+            return None;
+        }
     }
-    let mut selected = expr.clone();
-    selected.kind = kind;
-    Some(selected)
+    default.as_deref().cloned()
 }
 
 /// Folds one source expression only when pre-resolution folding and literal planning are safe.

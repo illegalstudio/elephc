@@ -70,6 +70,32 @@ echo ':', $literal[0];
     );
 }
 
+/// Stops match-key proof after the first selected arm across versioned append cursors.
+#[test]
+fn test_strict_array_keys_match_ignores_later_unreachable_patterns() {
+    for (version, accepted_index, rejected_index) in [("8.2", 0, -1), ("8.5", -1, 0)] {
+        let accepted = format!(
+            "<?php $values = [(match (1) {{ 1 => -2, $unused => 9, default => 0 }}) => [], 'ab']; $values[{accepted_index}][false] = 'x'; echo $values[{accepted_index}];"
+        );
+        assert_eq!(
+            StrictFixture::new(&accepted).run(&[
+                "--php-version",
+                version,
+                "--strict-array-keys",
+            ]),
+            "xb"
+        );
+
+        let rejected = format!(
+            "<?php $values = [(match (1) {{ 1 => -2, $unused => 9, default => 0 }}) => [], 'ab']; $values[{rejected_index}][false] = 'x';"
+        );
+        StrictFixture::new(&rejected).assert_error(
+            &["--php-version", version, "--strict-array-keys"],
+            "strict-array-keys",
+        );
+    }
+}
+
 /// Defers magic constants and imported class names until their canonical resolution passes.
 #[test]
 fn test_strict_array_keys_defers_unresolved_literal_keys() {
