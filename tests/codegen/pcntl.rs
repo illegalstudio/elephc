@@ -2438,3 +2438,22 @@ fn test_pcntl_eval_macos_qos_explicit_default_and_target_surface() {
     );
     assert_eq!(out, "visible|no-linux|default");
 }
+
+/// Verifies PHP 8.6 rejects an out-of-range `pcntl_alarm()` seconds value.
+#[test]
+fn test_pcntl_alarm_range_php86() {
+    use elephc::php_version::PhpVersion;
+
+    let out = compile_and_run_with_php_version(
+        r#"<?php
+try { pcntl_alarm(-1); echo "negative"; } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+try { pcntl_alarm(4294967296); echo "overflow"; } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+echo pcntl_alarm(0);
+"#,
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "pcntl_alarm(): Argument #1 ($seconds) must be between 0 and 4294967295|pcntl_alarm(): Argument #1 ($seconds) must be between 0 and 4294967295|0"
+    );
+}

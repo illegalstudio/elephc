@@ -41,7 +41,7 @@ pub(crate) fn lower(
     target: PcntlRuntime,
 ) -> Result<()> {
     match target {
-        PcntlRuntime::Alarm => lower_unary_int_bridge(ctx, inst, "pcntl_alarm", "elephc_pcntl_alarm", false),
+        PcntlRuntime::Alarm => lower_alarm(ctx, inst),
         PcntlRuntime::AsyncSignals => super::pcntl_handlers::lower_async_signals(ctx, inst),
         PcntlRuntime::Daemon => lower_daemon(ctx, inst),
         PcntlRuntime::Exec => super::pcntl_exec::lower_exec(ctx, inst),
@@ -961,6 +961,34 @@ pub(super) fn emit_pcntl_last_error_warning(ctx: &mut FunctionContext<'_>, kind:
 }
 
 /// Lowers a one-integer PCNTL bridge and optionally boxes its integer into `Mixed` storage.
+/// Lowers `pcntl_alarm()` with PHP 8.6's unsigned-seconds range guard.
+///
+/// The bridge truncates its argument to the C `unsigned int` alarm API, so 8.6 rejects a
+/// negative value or anything above `UINT_MAX` before the call instead of silently wrapping.
+fn lower_alarm(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "pcntl_alarm", 1)?;
+    let value = expect_operand(inst, 0)?;
+    load_as_int(ctx, value, "pcntl_alarm")?;
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        super::super::exceptions::emit_value_error_unless(
+            ctx,
+            super::super::exceptions::ValueGuard::SignedAtLeast(abi::int_result_reg(ctx.emitter), 0),
+            "pcntl_alarm(): Argument #1 ($seconds) must be between 0 and 4294967295",
+        );
+        super::super::exceptions::emit_value_error_unless(
+            ctx,
+            super::super::exceptions::ValueGuard::SignedAtMost(abi::int_result_reg(ctx.emitter), 4_294_967_295),
+            "pcntl_alarm(): Argument #1 ($seconds) must be between 0 and 4294967295",
+        );
+    }
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the integer operand through the SysV C ABI
+    }
+    ctx.emitter.bl_c("elephc_pcntl_alarm");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers one unary PHP integer argument through a C-ABI bridge function.
 fn lower_unary_int_bridge(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
