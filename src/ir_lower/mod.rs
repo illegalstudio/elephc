@@ -13,6 +13,7 @@
 mod array_pointer_scan;
 mod boxed_array_appends;
 mod builtin_datetime;
+mod class_scans;
 mod clone_overrides;
 mod closure_param_hints;
 mod closure_scopes;

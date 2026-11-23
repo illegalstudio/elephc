@@ -126,6 +126,7 @@ fn lower_on_compiler_stack(
     source_catalog: Option<crate::ir::SourceCatalog>,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
+    let _class_scans = super::class_scans::install();
     // A transparent literal `eval()` (`prelude_prune::usage::transparent_literal_eval`) loads no
     // code: it can neither add a function nor a class the closed world has not seen. Counting it anyway gave
     // `eval('return 1;')` the run-time fallbacks of a program that loads PHP (ArrayAccess probes

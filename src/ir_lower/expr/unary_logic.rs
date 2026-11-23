@@ -297,7 +297,7 @@ pub(super) fn lower_logical_xor(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let native_boolean = ctx.classes.keys().any(|name|
+    let native_boolean = crate::ir_lower::class_scans::contract_classes(ctx).iter().any(|name|
         elephc_builtin_contract::lookup_class(name)
             .and_then(|class| class.operators).and_then(|operators| operators.boolean).is_some());
     let (lhs, rhs) = if native_boolean {

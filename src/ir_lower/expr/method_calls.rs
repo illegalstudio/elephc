@@ -141,7 +141,7 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall && args.is_empty()
         && matches!(php_symbol_key(method).as_str(),
             "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
-        && ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
+        && crate::ir_lower::class_scans::any_initialization_effect(ctx)
     {
         if is_reflection_class_construction_receiver(ctx, object.value) {
             let owns_receiver = ctx.value_is_owning_temporary(object)
@@ -1112,7 +1112,7 @@ fn initialize_reflected_class_from_receiver(
     expr: &Expr,
 ) {
     if !is_reflection_class_construction_receiver(ctx, object.value)
-        || !ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
+        || !crate::ir_lower::class_scans::any_initialization_effect(ctx)
     {
         return;
     }

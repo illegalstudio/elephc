@@ -45,9 +45,10 @@ pub(super) fn lower(
     { return None; }
     let key = php_symbol_key(method);
     let signature = method_signature(ctx, object.value, method);
-    let select_all = key == "__invoke" || ctx.classes.values().any(|info|
-        !info.methods.contains_key(&key) && info.methods.contains_key("__call"))
-        || ctx.classes.values().any(|info| info.methods.get(&key).is_some_and(|sig|
+    let scan = |key: &str| crate::ir_lower::class_scans::classes_with_method(ctx, key);
+    let select_all = key == "__invoke"
+        || scan("__call").iter().any(|name| !ctx.classes[name].methods.contains_key(&key))
+        || scan(&key).iter().any(|name| ctx.classes[name].methods.get(&key).is_some_and(|sig|
             sig.variadic.is_none() && args.len() > sig.params.len()));
     if signature.is_some() && !select_all { return None; }
     let candidates = candidates(ctx, &object_ty, method, select_all, args.len());
@@ -83,8 +84,13 @@ fn candidates(
     arg_count: usize,
 ) -> Vec<Candidate> {
     let key = php_symbol_key(method);
-    let mut names = ctx.classes.keys().cloned().collect::<Vec<_>>();
-    names.sort();
+    // Only a class that has the method, or `__call`, can answer; the calling class may also reach
+    // a private method of its own that no table lists.
+    let mut names = crate::ir_lower::class_scans::classes_with_method(ctx, &key);
+    names.extend(crate::ir_lower::class_scans::classes_with_method(ctx, "__call"));
+    names.extend(ctx.current_class.iter().filter(|class| ctx.classes.contains_key(*class)).cloned());
+    names.sort_unstable();
+    names.dedup();
     let mut groups: Vec<Candidate> = Vec::new();
     for name in names {
         let info = &ctx.classes[&name];

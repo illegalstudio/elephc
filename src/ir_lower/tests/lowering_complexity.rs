@@ -1415,3 +1415,37 @@ fn mixed_storage_scan_indexes_named_methods_once_per_class_table() {
         "named method table scans grew with the calls: {small} for 40 calls, {large} for 160"
     );
 }
+
+/// `count` bodies with an untyped method call, an untyped condition and a `new`, in a program that
+/// declares `__call` classes: the questions that used to walk the class table at each of them.
+fn many_untyped_calls(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\nclass M { public function __call($n, $a) { return $n; } }\n\
+         class Z { public function __call($n, $a) { return $n; } }\n\
+         class P { const A = 1; public $v = self::A; public function go($x) { return $x; } }\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!(
+            "function f{index}($o, $c) {{ $p = new P; if ($c) {{ return $o->go($p->go({index})); }} return $o->other({index}); }}\n"
+        ));
+    }
+    source.push_str("$o = $argc > 1 ? new M : new P;\n");
+    for index in 0..count {
+        source.push_str(&format!("echo f{index}($o, $argc);\n"));
+    }
+    source
+}
+
+/// Untyped calls and conditions ask their class-table questions once per program, not once per
+/// site: those walks were most of the Symfony Demo's lowering.
+#[test]
+fn untyped_calls_walk_the_class_table_once_per_program() {
+    let walks = |count: usize| {
+        let before = crate::ir_lower::class_scans::walks();
+        let _module = lower_source(&many_untyped_calls(count));
+        crate::ir_lower::class_scans::walks() - before
+    };
+    let (small, large) = (walks(2), walks(32));
+    assert!(small > 0, "the fixture no longer asks about the class table");
+    assert_eq!(small, large, "class table walks grew with the call sites: {small} vs {large}");
+}

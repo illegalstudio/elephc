@@ -450,7 +450,7 @@ fn is_gradual_bitwise_operand(
 
 /// Whether the program declares a class whose objects convert to integers natively.
 fn program_has_native_int_casts(ctx: &LoweringContext<'_, '_>) -> bool {
-    ctx.classes.keys().any(|name| {
+    crate::ir_lower::class_scans::contract_classes(ctx).iter().any(|name| {
         elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
             .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
     })
@@ -561,10 +561,7 @@ fn coerce_bitwise_operands(
 ) -> (LoweredValue, LoweredValue) {
     // Publishing scalar checked boxes changes their producer chain and blocks numeric
     // fusion. A program without native integer casts keeps its ordinary coercion path.
-    let native_casts = ctx.classes.keys().any(|name| {
-        elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
-            .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
-    });
+    let native_casts = program_has_native_int_casts(ctx);
     let possible_object = object_operators::can_contain_object(&ctx.builder.value_php_type(lhs.value))
         || object_operators::can_contain_object(&ctx.builder.value_php_type(rhs.value));
     if !native_casts || !possible_object {

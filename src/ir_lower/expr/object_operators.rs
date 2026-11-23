@@ -289,7 +289,7 @@ pub(super) fn lower_object_bitnot(
         }
     } else {
         if !can_contain_object(&ty) { return None; }
-        let mut handlers = ctx.classes.keys().filter_map(|name| {
+        let mut handlers = crate::ir_lower::class_scans::contract_classes(ctx).iter().filter_map(|name| {
             let class = elephc_builtin_contract::lookup_class(name)?;
             Some((class.name, class.operators?.bit_not?))
         }).collect::<Vec<_>>();
@@ -466,7 +466,7 @@ pub(crate) fn lower_object_truthy(
         return Some(result);
     }
     if !can_contain_object(&ty) { return None; }
-    let mut handlers = ctx.classes.keys().filter_map(|name| {
+    let mut handlers = crate::ir_lower::class_scans::contract_classes(ctx).iter().filter_map(|name| {
         let class = elephc_builtin_contract::lookup_class(name)?;
         Some((class.name, class.operators?.boolean?))
     }).collect::<Vec<_>>();
@@ -526,7 +526,7 @@ pub(super) fn lower_object_numeric_cast(
     let ty = ctx.builder.value_php_type(input.value);
     if !can_contain_object(&ty) { return None; }
     let result_type = if matches!(target, CastType::Int) { PhpType::Int } else { PhpType::Float };
-    let mut handlers = ctx.classes.keys().filter_map(|name| {
+    let mut handlers = crate::ir_lower::class_scans::contract_classes(ctx).iter().filter_map(|name| {
         let class = elephc_builtin_contract::lookup_class(name)?;
         Some((class.name, class.operators?.cast_method(cast)?))
     }).collect::<Vec<_>>();

@@ -79,9 +79,12 @@ pub(crate) fn initialization_label(ctx: &LoweringContext<'_, '_>, class_name: &s
 /// constant, directly or through user class constants.
 pub(crate) fn class_initialization_reports(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
     use super::initializer_reads as reads;
-    reads::constant_table_reports(ctx, class_name) || reads::class_own_initialization_defaults(ctx, class_name)
-        .iter()
-        .any(|slot| reads::reaches_deprecated_read_in(ctx, Some(&slot.declaring), &slot.default))
+    super::class_scans::initialization_reports(class_name, || {
+        reads::constant_table_reports(ctx, class_name)
+            || reads::class_own_initialization_defaults(ctx, class_name)
+                .iter()
+                .any(|slot| reads::reaches_deprecated_read_in(ctx, Some(&slot.declaring), &slot.default))
+    })
 }
 
 /// Returns the flags that tell, at run time, that `class_name`'s copy of instance slot `slot`
