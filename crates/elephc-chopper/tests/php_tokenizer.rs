@@ -1742,6 +1742,21 @@ fn tokenizer_php_src_heredoc_parse_errors() {
     assert!(tokenize(b"<?php <<<INNER_END\n\n   INNER_END;", TOKEN_PARSE).is_ok());
 }
 
+/// An unclosed delimiter highlights its opener but parsing stopped at EOF, so warnings
+/// reached before that stop must still be reported.
+#[test]
+fn tokenizer_unclosed_delimiter_keeps_earlier_warnings() {
+    let error = tokenize_with_warnings(b"<?php function f() { (integer)$x;", TOKEN_PARSE)
+        .expect_err("unclosed block");
+    assert_eq!(error.message, "Unclosed '{'");
+    assert_eq!(error.warnings.len(), 1, "{:?}", error.warnings);
+    assert_eq!(
+        error.warnings[0].message,
+        "Non-canonical cast (integer) is deprecated, use the (int) cast instead"
+    );
+    assert_eq!(error.warnings[0].severity, 8_192);
+}
+
 /// php-src tokenizer invalid escapes report PHP's parser-facing messages.
 #[test]
 fn tokenizer_php_src_unicode_escape_errors() {

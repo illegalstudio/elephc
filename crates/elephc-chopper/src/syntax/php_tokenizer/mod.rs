@@ -21,6 +21,19 @@ pub fn tokenize(source: &[u8], flags: i64) -> Result<Vec<Token>, ParseError> {
     tokenize_with_warnings(source, flags).map(|output| output.tokens)
 }
 
+/// Returns the source offset before which PHP emits warnings for a validation failure.
+///
+/// An unclosed delimiter reports the opener's position while the parser actually stopped at
+/// end of input; warnings reached before that stop must survive, so those failures use the
+/// full source length as the cutoff. Every other failure reports the position it stopped at.
+fn warning_cutoff(message: &str, pos: usize, source_len: usize) -> usize {
+    if message.starts_with("Unclosed '") {
+        source_len
+    } else {
+        pos
+    }
+}
+
 /// Splits source into tokens and keeps the diagnostics emitted by the requested mode.
 pub fn tokenize_with_warnings(source: &[u8], flags: i64) -> Result<TokenizeOutput, ParseError> {
     if flags & TOKEN_PARSE == 0 {
@@ -35,8 +48,10 @@ pub fn tokenize_with_warnings(source: &[u8], flags: i64) -> Result<TokenizeOutpu
             Ok(TokenizeOutput { tokens, warnings: attach_warning_lines(source, warnings) })
         }
         Err(mut error) => {
-            // PHP emits only diagnostics reached before the failure.
-            let failure = error.pos;
+            // PHP emits only diagnostics reached before the failure. A reported position can
+            // point back at the construct that was left open, so the warning cutoff stays
+            // separate from the position the diagnostic highlights.
+            let failure = warning_cutoff(&error.message, error.pos, source.len());
             let mut merged: Vec<Warning> = attach_warning_lines(source, warnings)
                 .into_iter()
                 .filter(|warning| warning.pos <= failure)
