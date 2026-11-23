@@ -463,8 +463,8 @@ pub(crate) fn validate_abstract_trait_signature(
     checker: &Checker, span: crate::span::Span, owner: &str, method: &str,
     actual: &FunctionSig, required: &FunctionSig,
 ) -> Result<(), CompileError> {
-    let actual = SourceVisibleShape::of(actual);
-    let required = SourceVisibleShape::of(required);
+    let actual = SourceVisibleShape::of(&with_by_ref_variadic_element(checker, span, actual)?);
+    let required = SourceVisibleShape::of(&with_by_ref_variadic_element(checker, span, required)?);
     if !actual.widens_parameter_shape(&required) {
         return Err(CompileError::new(span, &format!(
             "Incompatible parameter shape when implementing trait method: {owner}::{method}",
@@ -481,6 +481,28 @@ pub(crate) fn validate_abstract_trait_signature(
         }
     }
     Ok(())
+}
+
+/// `build_method_sig` leaves a by-reference variadic as `array<mixed>`, its reference storage,
+/// so its declared element type (`int &...$xs`) would compare as `mixed`. Returns `sig` with that
+/// slot refined to the declared element type, for comparison only.
+fn with_by_ref_variadic_element(
+    checker: &Checker, span: crate::span::Span, sig: &FunctionSig,
+) -> Result<FunctionSig, CompileError> {
+    let mut sig = sig.clone();
+    let Some(variadic) = sig.variadic.clone() else { return Ok(sig); };
+    let Some(index) = sig.params.iter().position(|(name, _)| *name == variadic) else {
+        return Ok(sig);
+    };
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return Ok(sig);
+    }
+    let Some(Some(hint)) = sig.param_type_exprs.get(index).cloned() else { return Ok(sig); };
+    let element = checker.resolve_declared_param_type_hint(
+        &hint, span, &format!("Method variadic parameter ${variadic}"),
+    )?;
+    sig.params[index].1 = PhpType::Array(Box::new(element));
+    Ok(sig)
 }
 
 /// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.

@@ -830,6 +830,8 @@ Same parameter count, same pass-by-reference positions, same default layout, sam
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
 
+Two traits that bring the same method name collide unless `insteadof` picks one, as in PHP: `Trait method B::foo has not been applied as C::foo, because of collision with A::foo`. The same trait method reached along two paths (`trait A { use T; } trait B { use T; } class C { use A, B; }`) is one method, not a collision. An abstract trait method is a requirement, not a definition: another trait's method or the class's own method satisfies it, and must be compatible with its signature.
+
 Traits may declare abstract hooked property contracts. A concrete class using the trait must satisfy the contract directly or inherit it through an abstract base class that is later completed by a concrete child.
 
 ## Property access

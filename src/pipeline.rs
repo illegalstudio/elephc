@@ -334,9 +334,9 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
-        HashSet::new()
+        autoload::prelude_probe::AutoloadedPreludes::default()
     } else {
-        autoload::prelude_probe::autoloaded_prelude_groups(
+        autoload::prelude_probe::autoloaded_preludes(
             &ast,
             parent,
             &autoload_registry,
@@ -344,7 +344,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("autoload-prelude-probe", phase_started);
-    let autoloaded = |group: &str| autoloaded_preludes.contains(group);
+    let autoloaded = |group: &str| autoloaded_preludes.groups.contains(group);
 
     // Decide XML usage while the AST still contains only user and resolved-include code.
     // Opaque eval pulls in the large core prelude below; running XML's namespace-aware DOM
@@ -563,6 +563,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         opcache_preload_statistics.as_ref(),
         strict_opcache,
         force_ini_get,
+        &autoloaded_preludes.functions,
         &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
@@ -778,6 +779,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::version_prelude::inject_if_used(
         ast,
         php_version,
+        &autoloaded_preludes.functions,
         &mut prelude_inventory,
     );
     timings.record_since("version-prelude", phase_started);
