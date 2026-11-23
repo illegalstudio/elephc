@@ -172,8 +172,20 @@ pub(crate) struct CallArgumentEvaluationOwner {
 pub(crate) struct DeferredObjectParamChecks {
     /// Expression depth of the call whose arguments record into this frame.
     pub expression_depth: usize,
-    /// Regular parameter indices that need the runtime class check, with their source span.
-    pub checks: Vec<(usize, Span)>,
+    /// Regular parameters that need the runtime class check, in recording order.
+    pub checks: Vec<DeferredObjectParamCheck>,
+}
+
+/// One class-like parameter check a call runs once all of its arguments were evaluated.
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredObjectParamCheck {
+    /// Regular parameter index.
+    pub index: usize,
+    /// Source span of the argument, for the `called in ... on line N` suffix.
+    pub span: Span,
+    /// For a by-reference parameter, the caller local whose CURRENT value is checked: PHP
+    /// binds the reference first and reads it at the boundary, after later arguments ran.
+    pub reference_local: Option<String>,
 }
 
 /// Keeps one call's evaluation owners distinct from nested expression lowering.

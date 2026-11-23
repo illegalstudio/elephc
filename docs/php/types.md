@@ -446,7 +446,7 @@ A value of the wrong class or type throws `TypeError` with PHP's message for tha
 - parameter: `take(): Argument #1 ($t) must be of type Timer, int given, called in … on line N`
 - property: `Cannot assign int to property Holder::$timer of type Timer`
 
-A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. After the boundary, the value has the declared type.
+A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. As in PHP, the parameter checks of a call run in declaration order after every argument was evaluated, by-reference parameters included, so the first invalid parameter is the one reported. After the boundary, the value has the declared type.
 
 **Differences from PHP.** A `Closure` is rejected at a bare `object` return or parameter, and at an `object` or `?object` property, because elephc stores closures apart from class instances. A `?object` return or parameter keeps it.
 

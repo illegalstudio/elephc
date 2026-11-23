@@ -527,3 +527,84 @@ echo take(...$args, t: getMixed(new T())), "\n";
     );
     assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\nT\n");
 }
+
+/// PHP checks every parameter in declaration order once all arguments were evaluated, so a
+/// `mixed` local bound to an earlier class-like by-reference parameter, or reaching an earlier
+/// re-read `T` parameter, reports its `TypeError` before a later deferred check does. The
+/// reference check reads the value the local holds at the boundary.
+#[test]
+fn test_class_checks_of_reference_parameters_keep_parameter_order() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface I {}
+class T implements I {}
+class U {}
+function take(?T &$first, ?T $second) { echo "take\n"; $first = new T(); }
+function iface(I &$first, ?I $second) { echo "iface\n"; }
+function gap(T|U|null &$first, int $n, ?T $second) { echo "gap\n"; }
+function plain(T &$first) { echo "plain\n"; }
+function reread(?T $first, T $second) { echo "reread\n"; }
+function refLater(?T $first, T &$second) { echo "refLater\n"; }
+function unionLater(?T $first, T $second) { echo "unionLater\n"; }
+function arrFirst(?array &$first, ?T $second) { echo "arrFirst\n"; }
+function tf(bool $b): T|false { return $b ? new T() : false; }
+function tn(bool $b): ?T { return $b ? new T() : null; }
+function src(int $i): mixed { return $i == 0 ? "bad" : 7; }
+function side(): mixed { echo "side\n"; return 7; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+$a = src(0);
+$b = src(1);
+try { take($a, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { take(second: $b, first: $a); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { take($a, side()); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { iface($a, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { gap($a, 1, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { plain($a); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { reread($a, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { refLater($a, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+$false = tf(false);
+$null = tn(false);
+try { unionLater($a, $false); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { unionLater($a, $null); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { unionLater(null, $false); } catch (TypeError $e) { echo msg($e), "\n"; }
+$object = tf(true);
+unionLater(null, $object);
+try { arrFirst($a, $b); } catch (TypeError $e) { echo msg($e), "\n"; }
+$list = src(1);
+try { arrFirst($list, $list = null); } catch (TypeError $e) { echo msg($e), "\n"; }
+$c = src(0);
+take($c, $c = new T());
+$d = src(0);
+try { take($d, $d = src(1)); } catch (TypeError $e) { echo msg($e), "\n"; }
+$g = null;
+take($g, null);
+echo get_class($g), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "take(): Argument #1 ($first) must be of type ?T, string given\n",
+            "take(): Argument #1 ($first) must be of type ?T, string given\n",
+            "side\n",
+            "take(): Argument #1 ($first) must be of type ?T, string given\n",
+            "iface(): Argument #1 ($first) must be of type I, string given\n",
+            "gap(): Argument #1 ($first) must be of type T|U|null, string given\n",
+            "plain(): Argument #1 ($first) must be of type T, string given\n",
+            "reread(): Argument #1 ($first) must be of type ?T, string given\n",
+            "refLater(): Argument #1 ($first) must be of type ?T, string given\n",
+            "unionLater(): Argument #1 ($first) must be of type ?T, string given\n",
+            "unionLater(): Argument #1 ($first) must be of type ?T, string given\n",
+            "unionLater(): Argument #2 ($second) must be of type T, false given\n",
+            "unionLater\n",
+            "arrFirst(): Argument #1 ($first) must be of type ?array, string given\n",
+            "arrFirst\n",
+            "take\n",
+            "take(): Argument #1 ($first) must be of type ?T, int given\n",
+            "take\n",
+            "T\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

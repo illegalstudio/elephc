@@ -413,8 +413,25 @@ pub(crate) fn guard_reference_parameter_entry(
     name: &str,
     ty: &PhpType,
 ) {
+    guard_reference_argument_value(ctx, function, position, name, name, ty, "");
+}
+
+/// Checks the value `local` holds against by-reference parameter `name` of type `ty`, throwing
+/// `<function>(): Argument #<position> ($name) must be of type T, U given<suffix>`.
+///
+/// The callee entry checks its own parameter; a caller that runs the check in parameter order
+/// with its other deferred checks passes its local and the `, called in` suffix.
+pub(crate) fn guard_reference_argument_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    position: usize,
+    name: &str,
+    local: &str,
+    ty: &PhpType,
+    suffix: &str,
+) {
     let span = Span::synthetic();
-    let variable = Expr::new(ExprKind::Variable(name.to_string()), span);
+    let variable = Expr::new(ExprKind::Variable(local.to_string()), span);
     let Some(accepted) = accepts_type(ty, &variable, span) else { return; };
     let accepted = lower_expr(ctx, &accepted);
     let ok = ctx.builder.create_named_block("ref.param.type.ok", Vec::new());
@@ -429,7 +446,8 @@ pub(crate) fn guard_reference_parameter_entry(
         "{function}(): Argument #{position} (${name}) must be of type {}, ",
         diagnostic_type(ty)
     ));
-    let message = concat(prefix, concat(runtime_debug_type(&variable, span), literal(" given".to_string()), span), span);
+    let message = concat(prefix, concat(runtime_debug_type(&variable, span),
+        literal(format!(" given{suffix}")), span), span);
     throw_message(ctx, "TypeError", message, span);
     ctx.builder.position_at_end(ok);
 }

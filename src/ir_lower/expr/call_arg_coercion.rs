@@ -8,7 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
-use crate::ir_lower::context::ReferencePropertyGuard;
+use crate::ir_lower::context::{DeferredObjectParamCheck, ReferencePropertyGuard};
 
 /// Lowers positional/named/spread call arguments in source order.
 pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir::ValueId> {
@@ -515,9 +515,15 @@ pub(super) fn capture_call_argument_value(
 
 /// Rechecks a declared object reference when an earlier call has changed its boxed payload.
 ///
-/// Only a non-nullable class parameter is checked here: inside the callee its slot reads an
-/// object pointer. A union of `null`, arrays and objects (`?A &$v`, `?array &$v`) is a boxed
-/// cell in the callee and is checked on entry instead, after every argument was evaluated
+/// When the call defers its class checks (`DeferredObjectParamChecks`), a `mixed` local bound
+/// to a class-like reference parameter, or to a union of `null`, arrays and objects, joins
+/// them instead: PHP checks every parameter in
+/// declaration order once all arguments were evaluated, so `f(?T &$a, ?T $b)` must report
+/// `$a` first even though `$b` is checked by the caller.
+///
+/// Otherwise only a non-nullable class parameter is checked here: inside the callee its slot
+/// reads an object pointer. A union of `null`, arrays and objects (`?A &$v`, `?array &$v`) is a
+/// boxed cell in the callee and is checked on entry instead, after every argument was evaluated
 /// (`crate::ir_lower::expr::guard_reference_parameter_entry`).
 fn guard_boxed_object_reference_argument(
     ctx: &mut LoweringContext<'_, '_>,
@@ -526,6 +532,9 @@ fn guard_boxed_object_reference_argument(
     arg: &Expr,
 ) {
     if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    if defer_reference_object_param_check(ctx, sig, index, arg) {
         return;
     }
     let declared_object = match sig.params.get(index).map(|(_, ty)| ty) {
@@ -815,6 +824,9 @@ pub(super) fn guard_object_param_argument(
     let static_ty = argument_static_type(ctx, arg);
     let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
     if let Some(given) = union_object_guard_word(guard_ty, &class_name) {
+        if let Some(deferred) = defer_union_object_param_check(ctx, sig, index, value, arg) {
+            return Some(deferred);
+        }
         return Some(guard_union_object_param(
             ctx, sig, index, value, &class_name, Some(given), arg,
         ));
@@ -832,11 +844,41 @@ pub(super) fn guard_object_param_argument(
     let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
     let literal_null = matches!(arg.kind, ExprKind::Null);
     if rerunnable && !already_object && !literal_null {
+        if let Some(deferred) = defer_union_object_param_check(ctx, sig, index, value, arg) {
+            return Some(deferred);
+        }
         return Some(guard_union_object_param(
             ctx, sig, index, value, &class_name, None, arg,
         ));
     }
     None
+}
+
+/// Adds the `instanceof` check of a `Class|false`, `Class|null` or re-read source to the current
+/// call's deferred class checks once an earlier parameter's check was deferred, so it runs in
+/// parameter order: with `f(?T $a, T $b)`, an invalid `$a` must be reported before an invalid
+/// `$b`. The boxed value is pinned until `coerce_operands_to_params_with_checks` checks and
+/// unboxes it. Returns `None` when nothing was deferred before it, and the check stays at the
+/// argument.
+fn defer_union_object_param_check(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    if !earlier_object_param_check_deferred(ctx)
+        || !defer_object_param_check(ctx, sig, index, arg.span)
+    {
+        return None;
+    }
+    let boxed = if matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+        value
+    } else {
+        ctx.emit_owned_value(Op::MixedBox, vec![value.value], None, PhpType::Mixed,
+            Op::MixedBox.default_effects(), Some(arg.span))
+    };
+    Some(pin_evaluated_call_argument(ctx, boxed, arg.span))
 }
 
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
@@ -935,7 +977,9 @@ fn guard_runtime_object_param(
         let guarded_by_rereading = union_object_guard_word(&source_ty, class_name).is_some()
             || (matches!(arg.kind, ExprKind::Variable(_) | ExprKind::This)
                 && source_ty.codegen_repr() == PhpType::Mixed);
-        if guarded_by_rereading {
+        // Once an earlier parameter's check was deferred, this one is deferred too, so the
+        // parameters are checked in declaration order.
+        if guarded_by_rereading && !earlier_object_param_check_deferred(ctx) {
             return None;
         }
     }
@@ -955,15 +999,8 @@ fn emit_object_param_guard(
     boundary: &crate::types::object_boundary::ObjectBoundary,
     span: Span,
 ) -> LoweredValue {
-    let (param_name, param_ty) = &sig.params[index];
-    let callable = ctx.call_description.as_deref().unwrap_or("call").to_string();
-    let source = ctx.source_path().unwrap_or("unknown").to_string();
-    let prefix = Expr::string_lit(format!(
-        "{callable}(): Argument #{} (${param_name}) must be of type {}, ",
-        index + 1,
-        crate::types::diagnostic_names::php_type_name(param_ty),
-    ));
-    let suffix = format!(" given, called in {source} on line {}", span.line);
+    let param_ty = &sig.params[index].1;
+    let (prefix, suffix) = object_param_error_parts(ctx, sig, index, param_ty, span);
     let release = ctx.value_needs_release_after_use(value);
     let value = crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
         ctx, value, boundary, prefix, &suffix, release, span,
@@ -975,6 +1012,124 @@ fn emit_object_param_guard(
         Op::mixed_unbox_effects(param_ty), Some(span));
     release_coerced_source_if_owned(ctx, value, Some(span));
     result
+}
+
+/// Builds the `TypeError` text around the runtime type for argument `index` declared as
+/// `declared`: `f(): Argument #N ($p) must be of type T, ` and ` given, called in F on line L`.
+fn object_param_error_parts(
+    ctx: &LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, declared: &PhpType, span: Span,
+) -> (Expr, String) {
+    let param_name = &sig.params[index].0;
+    let callable = ctx.call_description.as_deref().unwrap_or("call").to_string();
+    let source = ctx.source_path().unwrap_or("unknown").to_string();
+    let prefix = Expr::string_lit(format!(
+        "{callable}(): Argument #{} (${param_name}) must be of type {}, ",
+        index + 1,
+        crate::types::diagnostic_names::php_type_name(declared),
+    ));
+    (prefix, format!(" given, called in {source} on line {}", span.line))
+}
+
+/// The check a caller runs for a `mixed` local bound to a by-reference parameter.
+enum ReferenceParamCheck {
+    /// A class-like declaration (`T`, `?T`, `A|B|null`, `object`).
+    Object(PhpType, crate::types::object_boundary::ObjectBoundary),
+    /// Another union of `null`, arrays and objects (`?array`, `array|A`), which the callee
+    /// entry checks as well (`reference_parameter_needs_entry_guard`).
+    Entry(PhpType),
+}
+
+/// Returns the check by-reference parameter `index` needs for a `mixed` local, if any.
+///
+/// A by-reference parameter whose declaration the signature widened to `mixed` storage keeps
+/// its hint in `param_type_exprs`. Relative names (`self`, `static`, `parent`) name the
+/// callee's class, which only its entry check can resolve, so they answer `None`.
+fn reference_param_check(
+    ctx: &LoweringContext<'_, '_>, sig: &FunctionSig, index: usize,
+) -> Option<ReferenceParamCheck> {
+    if !sig.declared_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let (_, ty) = sig.params.get(index)?;
+    let declared = if *ty == PhpType::Mixed {
+        ctx.type_expr_to_php_type_for_value(sig.param_type_exprs.get(index)?.as_ref()?)
+    } else {
+        ty.clone()
+    };
+    let relative = |class: &str| {
+        let class = class.trim_start_matches('\\');
+        ["self", "static", "parent"].iter().any(|word| class.eq_ignore_ascii_case(word))
+    };
+    let names_relative_class = match &declared {
+        PhpType::Object(class) => relative(class),
+        PhpType::Union(members) => members.iter()
+            .any(|member| matches!(member, PhpType::Object(class) if relative(class))),
+        _ => false,
+    };
+    if names_relative_class {
+        return None;
+    }
+    if let Some(boundary) = crate::types::object_boundary::declared_object_boundary(&declared) {
+        return Some(ReferenceParamCheck::Object(declared, boundary));
+    }
+    crate::ir_lower::expr::reference_parameter_needs_entry_guard(&declared)
+        .then_some(ReferenceParamCheck::Entry(declared))
+}
+
+/// Records the check of a `mixed` local passed to a typed by-reference parameter in the
+/// current call's frame, so it runs in parameter order with the deferred value checks.
+///
+/// The check re-reads the local when it runs: a later argument may assign it, and PHP checks
+/// the value the reference holds at the boundary. Returns false when nothing was recorded.
+fn defer_reference_object_param_check(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, arg: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &arg.kind else { return false; };
+    // Lowering temporaries (property and receiver aliases) keep their own boundary checks.
+    if name == "this" || crate::names::is_generated_local_name(name) || name.starts_with("__eir_") {
+        return false;
+    }
+    let source = ctx.local_type(name);
+    let recorded = match reference_param_check(ctx, sig, index) {
+        Some(ReferenceParamCheck::Object(..)) =>
+            crate::types::object_boundary::runtime_checked_object_source(&source),
+        Some(ReferenceParamCheck::Entry(_)) => source.codegen_repr() == PhpType::Mixed,
+        None => false,
+    };
+    recorded && defer_param_check(ctx, sig, DeferredObjectParamCheck {
+        index,
+        span: arg.span,
+        reference_local: Some(name.clone()),
+    })
+}
+
+/// Checks the current value of `local`, bound to by-reference parameter `index`, against the
+/// parameter's declaration. The callee entry keeps its own check for other callers.
+fn emit_reference_object_param_guard(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, local: &str, span: Span,
+) {
+    let (declared, boundary) = match reference_param_check(ctx, sig, index) {
+        Some(ReferenceParamCheck::Object(declared, boundary)) => (declared, boundary),
+        Some(ReferenceParamCheck::Entry(declared)) => {
+            let callable = ctx.call_description.as_deref().unwrap_or("call").to_string();
+            let source = ctx.source_path().unwrap_or("unknown").to_string();
+            crate::ir_lower::expr::guard_reference_argument_value(
+                ctx, &callable, index + 1, &sig.params[index].0, local, &declared,
+                &format!(", called in {source} on line {}", span.line),
+            );
+            return;
+        }
+        None => return,
+    };
+    let (prefix, suffix) = object_param_error_parts(ctx, sig, index, &declared, span);
+    let value = ctx.load_local(local, Some(span));
+    let release = ctx.value_needs_release_after_use(value);
+    let value = crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
+        ctx, value, &boundary, prefix, &suffix, release, span,
+    );
+    if release {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
 }
 
 /// Returns whether the call being lowered is the builtin `ReflectionObject`/`ReflectionClass`
@@ -1006,7 +1161,7 @@ pub(super) fn begin_deferred_object_param_checks(ctx: &mut LoweringContext<'_, '
 /// Closes the frame opened by `begin_deferred_object_param_checks` and returns its checks.
 pub(super) fn finish_deferred_object_param_checks(
     ctx: &mut LoweringContext<'_, '_>,
-) -> Vec<(usize, Span)> {
+) -> Vec<DeferredObjectParamCheck> {
     ctx.deferred_object_param_checks.pop().map(|frame| frame.checks).unwrap_or_default()
 }
 
@@ -1015,6 +1170,24 @@ pub(super) fn finish_deferred_object_param_checks(
 fn defer_object_param_check(
     ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, span: Span,
 ) -> bool {
+    defer_param_check(ctx, sig, DeferredObjectParamCheck { index, span, reference_local: None })
+}
+
+/// Returns whether the call being lowered at the current depth already deferred a class check.
+///
+/// A check its argument can run at once keeps PHP's parameter order only while no earlier
+/// parameter's check waits for the end of the argument list.
+fn earlier_object_param_check_deferred(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.deferred_object_param_checks.last()
+        .is_some_and(|frame| frame.expression_depth == ctx.expression_depth && !frame.checks.is_empty())
+}
+
+/// Records `check` in the current call's frame. Returns false when no frame of the current
+/// call is open.
+fn defer_param_check(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, check: DeferredObjectParamCheck,
+) -> bool {
+    let index = check.index;
     let depth = ctx.expression_depth;
     if index >= crate::types::call_args::regular_param_count(sig) {
         return false;
@@ -1024,8 +1197,8 @@ fn defer_object_param_check(
     else {
         return false;
     };
-    if !frame.checks.iter().any(|(recorded, _)| *recorded == index) {
-        frame.checks.push((index, span));
+    if !frame.checks.iter().any(|recorded| recorded.index == index) {
+        frame.checks.push(check);
     }
     true
 }
@@ -1385,7 +1558,7 @@ pub(super) fn coerce_boxed_operands_to_params(
             && sig.declared_params.get(*index).copied().unwrap_or(false)
             && sig.params.get(*index).is_some_and(|(_, ty)|
                 crate::types::object_boundary::declared_object_boundary(ty).is_some()))
-        .map(|index| (index, span))
+        .map(|index| DeferredObjectParamCheck { index, span, reference_local: None })
         .collect::<Vec<_>>();
     coerce_operands_to_params_with_checks(ctx, sig, operands, &object_checks)
 }
@@ -1397,10 +1570,13 @@ fn coerce_operands_to_params_with_checks(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
-    object_checks: &[(usize, Span)],
+    object_checks: &[DeferredObjectParamCheck],
 ) -> Vec<crate::ir::ValueId> {
     let object_check = |index: usize| object_checks.iter()
-        .find(|(checked, _)| *checked == index).map(|(_, span)| *span);
+        .find(|check| check.index == index).map(|check| check.span);
+    let reference_check = |index: usize| object_checks.iter()
+        .find(|check| check.index == index)
+        .and_then(|check| check.reference_local.clone().map(|local| (local, check.span)));
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
     let needs_coercion = (0..limit)
@@ -1431,6 +1607,9 @@ fn coerce_operands_to_params_with_checks(
     }
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
+            if let Some((local, span)) = reference_check(index) {
+                emit_reference_object_param_guard(ctx, sig, index, &local, span);
+            }
             continue;
         }
         let Some((_, param_ty)) = sig.params.get(index) else {
