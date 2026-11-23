@@ -12,6 +12,7 @@
 //! - An unresolved, empty, non-file, or symlinked bridge fails before command rendering.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -1422,19 +1423,41 @@ fn compiler_runs_from_release_profile() -> bool {
 
 /// Returns the directory `build_staticlib` writes its archive to.
 ///
-/// That is Cargo's own choice for a `cargo build` run in `workspace`: `CARGO_TARGET_DIR`
-/// when set (relative to the workspace, where the build runs), else `<workspace>/target`,
-/// under the profile `build_staticlib` selects.
+/// That is Cargo's own choice for a `cargo build` run in `workspace`, which inherits this
+/// process's environment, under the profile `build_staticlib` selects.
 fn rebuild_output_dir(workspace: &Path) -> PathBuf {
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-        .filter(|directory| !directory.is_empty())
-        .map(|directory| workspace.join(directory))
-        .unwrap_or_else(|| workspace.join("target"));
-    target_dir.join(if compiler_runs_from_release_profile() {
-        "release"
-    } else {
-        "debug"
-    })
+    cargo_output_dir(
+        workspace,
+        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+        std::env::var_os("CARGO_BUILD_TARGET").as_deref(),
+        compiler_runs_from_release_profile(),
+    )
+}
+
+/// Returns Cargo's output directory for a build run in `workspace`.
+///
+/// The root is `CARGO_TARGET_DIR` when set (relative to the workspace, where the build runs),
+/// else `<workspace>/target`. `CARGO_BUILD_TARGET` adds a directory for the selected target,
+/// even when it names the host; a custom target specification is named by its file stem.
+fn cargo_output_dir(
+    workspace: &Path,
+    target_dir: Option<&OsStr>,
+    build_target: Option<&OsStr>,
+    release: bool,
+) -> PathBuf {
+    let mut output_dir = match target_dir.filter(|directory| !directory.is_empty()) {
+        Some(directory) => workspace.join(directory),
+        None => workspace.join("target"),
+    };
+    if let Some(target) = build_target.filter(|target| !target.is_empty()) {
+        let specification = Path::new(target);
+        if specification.extension().is_some_and(|extension| extension == "json") {
+            output_dir.push(specification.file_stem().unwrap_or(target));
+        } else {
+            output_dir.push(target);
+        }
+    }
+    output_dir.join(if release { "release" } else { "debug" })
 }
 
 /// Environment variable that makes a skipped bridge rebuild explain itself.
@@ -1655,15 +1678,34 @@ mod tests {
     }
 
     /// The rebuild targets Cargo's own output directory for a build run in the workspace.
+    ///
+    /// `CARGO_BUILD_TARGET` is inherited by the rebuild, so leaving its directory out made a
+    /// stale bridge look like one the rebuild could not refresh, and link unrebuilt.
     #[test]
     fn the_rebuild_output_dir_follows_cargo() {
-        let workspace = Path::new("/checkout");
-        let profile = if compiler_runs_from_release_profile() { "release" } else { "debug" };
-        let expected = match std::env::var_os("CARGO_TARGET_DIR").filter(|dir| !dir.is_empty()) {
-            Some(target_dir) => workspace.join(target_dir).join(profile),
-            None => workspace.join("target").join(profile),
-        };
-        assert_eq!(rebuild_output_dir(workspace), expected);
+        for (target_dir, build_target, release, expected) in [
+            ("", "", false, "/checkout/target/debug"),
+            ("", "", true, "/checkout/target/release"),
+            ("out", "", false, "/checkout/out/debug"),
+            ("/shared", "", true, "/shared/release"),
+            ("", "aarch64-apple-darwin", false, "/checkout/target/aarch64-apple-darwin/debug"),
+            ("/shared", "x86_64-unknown-linux-gnu", true, "/shared/x86_64-unknown-linux-gnu/release"),
+            ("", "specs/custom.json", false, "/checkout/target/custom/debug"),
+        ] {
+            assert_eq!(
+                cargo_output_dir(
+                    Path::new("/checkout"),
+                    Some(OsStr::new(target_dir)),
+                    Some(OsStr::new(build_target)),
+                    release,
+                ),
+                Path::new(expected)
+            );
+        }
+        assert_eq!(
+            cargo_output_dir(Path::new("/checkout"), None, None, false),
+            Path::new("/checkout/target/debug")
+        );
     }
 
     /// The manifest walk reads the three dependency kinds and ignores registry dependencies.
