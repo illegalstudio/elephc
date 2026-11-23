@@ -308,3 +308,27 @@ restore_error_handler();
         "fseek(): Stream filter convert.iconv.* is seekable only to start position\nfseek(): Stream filter zlib.inflate is seekable only to start position\n"
     );
 }
+
+/// An allowed rewind also resets the filter state, so the replacement payload written
+/// after `ftruncate(0)` + `rewind()` decodes exactly.
+#[test]
+fn test_stream_filter_write_seek_mode_resets_state_on_rewind_php86() {
+    let out = run86(
+        r#"<?php
+$text1 = "First message that will be discarded.";
+$text2 = "Second message that replaces the first.";
+$fp = fopen("rwreset.bin", "w+");
+stream_filter_append($fp, "zlib.deflate", STREAM_FILTER_WRITE, ['write_seek_mode' => 'reset']);
+fwrite($fp, $text1);
+ftruncate($fp, 0);
+echo rewind($fp) ? "rewound|" : "bad|";
+fwrite($fp, $text2);
+fclose($fp);
+$rd = fopen("rwreset.bin", "r");
+stream_filter_append($rd, "zlib.inflate", STREAM_FILTER_READ);
+echo stream_get_contents($rd) === $text2 ? "reset-ok" : "reset-bad";
+fclose($rd);
+"#,
+    );
+    assert_eq!(out, "rewound|reset-ok");
+}

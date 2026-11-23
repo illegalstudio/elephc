@@ -237,6 +237,27 @@ pub(super) fn lower_rewind_aarch64(
     emit_fseek_seek_warning_arm64(ctx, "rewind()", " is never seekable", done_label, 0, false);
     ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "x0");
+    // php-src resets the filter state on the allowed rewind too.
+    let reset_skip = ctx.next_label("rewind_seek_reset_skip");
+    let reset_zlib_skip = ctx.next_label("rewind_seek_reset_zlib_skip");
+    let reset_bz2_skip = ctx.next_label("rewind_seek_reset_bz2_skip");
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");                       // is a write filter registered for this descriptor?
+    ctx.emitter.instruction(&format!("cbz x10, {reset_skip}"));                 // no filter: keep the plain rewind
+    abi::emit_symbol_address(ctx.emitter, "x9", "_zlib_reset_fn");
+    ctx.emitter.instruction("ldr x10, [x9]");                                   // published zlib.deflate reset hook
+    ctx.emitter.instruction(&format!("cbz x10, {reset_zlib_skip}"));
+    ctx.emitter.instruction("ldr x0, [sp]");                                    // pass the parked descriptor
+    ctx.emitter.instruction("blr x10");                                         // deflateReset for this descriptor
+    ctx.emitter.label(&reset_zlib_skip);
+    abi::emit_symbol_address(ctx.emitter, "x9", "_bz2_reset_fn");
+    ctx.emitter.instruction("ldr x10, [x9]");                                   // published bzip2.compress reset hook
+    ctx.emitter.instruction(&format!("cbz x10, {reset_bz2_skip}"));
+    ctx.emitter.instruction("ldr x0, [sp]");
+    ctx.emitter.instruction("blr x10");                                         // reinitialize the bzip2 stream
+    ctx.emitter.label(&reset_bz2_skip);
+    ctx.emitter.instruction("ldr x0, [sp]");                                    // restore the descriptor for lseek
+    ctx.emitter.label(&reset_skip);
     ctx.emitter.instruction("mov x1, #0");                                      // use offset 0 for rewind
     ctx.emitter.instruction("mov x2, #0");                                      // use SEEK_SET for rewind
     ctx.emitter.syscall(199);
@@ -286,6 +307,29 @@ pub(super) fn lower_rewind_x86_64(
     emit_fseek_seek_warning_x86_64(ctx, "rewind()", " is never seekable", done_label, 0, false);
     ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "rdi");
+    let reset_skip = ctx.next_label("rewind_seek_reset_skip");
+    let reset_zlib_skip = ctx.next_label("rewind_seek_reset_zlib_skip");
+    let reset_bz2_skip = ctx.next_label("rewind_seek_reset_bz2_skip");
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                 // is a write filter registered for this descriptor?
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_skip}"));                       // no filter: keep the plain rewind
+    abi::emit_symbol_address(ctx.emitter, "r9", "_zlib_reset_fn");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // published zlib.deflate reset hook
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_zlib_skip}"));
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the parked descriptor
+    ctx.emitter.instruction("call r10");                                        // deflateReset for this descriptor
+    ctx.emitter.label(&reset_zlib_skip);
+    abi::emit_symbol_address(ctx.emitter, "r9", "_bz2_reset_fn");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // published bzip2.compress reset hook
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_bz2_skip}"));
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");
+    ctx.emitter.instruction("call r10");                                        // reinitialize the bzip2 stream
+    ctx.emitter.label(&reset_bz2_skip);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // restore the descriptor for lseek
+    ctx.emitter.label(&reset_skip);
     ctx.emitter.instruction("xor esi, esi");                                    // use offset 0 for rewind
     ctx.emitter.instruction("xor edx, edx");                                    // use SEEK_SET for rewind
     ctx.emitter.instruction("call lseek");                                      // rewind the stream through libc lseek()
