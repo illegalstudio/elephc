@@ -2034,6 +2034,40 @@ fn test_pcntl_eval_get_detached_handler_remains_callable() {
     assert_eq!(out, "yes|callable|callable|done");
 }
 
+/// The caller can catch an exception from the last exported lease's retired resource owners.
+#[test]
+fn test_pcntl_exported_handler_context_cleanup_reaches_caller_catch() {
+    let out = compile_and_run(
+        r#"<?php
+        function register_resource_owned_eval_handler(): void {
+            eval('
+                class ExportedPcntlResourceOwner {
+                    public function __destruct() { throw new RuntimeException("retired|"); }
+                }
+                function exported_resource_handler(): void { echo "called|"; }
+                $resource = stream_context_create(["test" => ["owner" => new ExportedPcntlResourceOwner()]]);
+                pcntl_signal(SIGUSR1, "exported_resource_handler");
+            ');
+        }
+        function run_and_retire_exported_handler(): void {
+            eval('
+                $handler = pcntl_signal_get_handler(SIGUSR1);
+                pcntl_signal(SIGUSR1, SIG_DFL);
+                $handler();
+            ');
+        }
+        register_resource_owned_eval_handler();
+        try {
+            run_and_retire_exported_handler();
+            echo "missed|";
+        } catch (RuntimeException $error) {
+            echo $error->getMessage();
+        }
+        echo "after";"#,
+    );
+    assert_eq!(out, "called|retired|after");
+}
+
 /// Refuses a detached eval handler before its context-local descriptor can escape into AOT.
 #[test]
 fn test_pcntl_detached_eval_handler_cannot_escape_to_aot() {

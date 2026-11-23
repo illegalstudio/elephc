@@ -549,8 +549,9 @@ unsafe fn finish_eval_context(
     if !context.has_abi_owners() && !defer_eval_context(ctx, &mut context) {
         #[cfg(not(test))]
         {
-            let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(ctx);
-            context.release_pcntl_foreign_callables(&mut values);
+            thrown = context.release_pcntl_foreign_callables(thrown, |callback, pending| {
+                crate::runtime_hooks::release::release_native_cells([callback], pending)
+            });
         }
         thrown = drain_eval_context(&mut context, thrown);
     }

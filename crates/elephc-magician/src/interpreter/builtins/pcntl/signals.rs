@@ -22,7 +22,7 @@ impl EvalHandlerDispatchGuard {
     fn finish(mut self, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
         let owner = std::mem::replace(&mut self.0, std::ptr::null_mut());
         if pcntl_runtime::end_handler_dispatch(owner) {
-            finish_detached_context(owner, context)
+            pcntl_runtime::finish_detached_context(owner, context)
         } else {
             Ok(())
         }
@@ -548,28 +548,11 @@ fn release_replaced_pcntl_handler(
         EvalPcntlSignalHandler::Disposition(_) => Ok(()),
     };
     let finalized = if pcntl_runtime::take_collectable_context(previous.context) {
-        finish_detached_context(previous.context, context)
+        pcntl_runtime::finish_detached_context(previous.context, context)
     } else {
         Ok(())
     };
     released.and(finalized)
-}
-
-/// Keeps the dispatcher's pending Throwable alive through detached-owner finalization.
-fn finish_detached_context(
-    owner: *mut ElephcEvalContext,
-    context: &mut ElephcEvalContext,
-) -> Result<(), EvalStatus> {
-    let pending = context.take_pending_throw();
-    // The PCNTL registry already surrendered this context's final dispatch/registration pin.
-    let thrown = unsafe { crate::ffi::context::retire_detached_pcntl_context(owner, pending) };
-    if let Some(thrown) = thrown {
-        context.set_pending_throw(thrown);
-        if Some(thrown) != pending {
-            return Err(EvalStatus::UncaughtThrowable);
-        }
-    }
-    Ok(())
 }
 
 /// Discards the rest of a masked snapshot after one handler propagates a Throwable.

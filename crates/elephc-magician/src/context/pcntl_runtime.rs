@@ -11,6 +11,7 @@
 //!   reclaimed after their last reference, or at shutdown if they own PHP statics.
 
 use super::{ElephcEvalContext, EvalPcntlSignalHandler};
+use crate::errors::EvalStatus;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use std::sync::{Mutex, OnceLock};
@@ -40,6 +41,46 @@ impl EvalPcntlContextLease {
     pub(crate) fn context_ptr(&self) -> *mut ElephcEvalContext {
         self.context
     }
+
+    /// Ends the active use and forwards any Throwable from the final context teardown.
+    pub(crate) fn finish(mut self, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+        if self.claim_detached_context() {
+            finish_detached_context(self.context, context)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Retires this lease while carrying an owned pending Throwable through the teardown.
+    pub(crate) fn retire(mut self, pending: Option<RuntimeCellHandle>) -> Option<RuntimeCellHandle> {
+        if self.claim_detached_context() {
+            // The active-use registry surrendered its last claim to this context.
+            unsafe { crate::ffi::context::retire_detached_pcntl_context(self.context, pending) }
+        } else {
+            pending
+        }
+    }
+
+    /// Clears the active-use lease before handing any detached allocation to teardown.
+    fn claim_detached_context(&mut self) -> bool {
+        std::mem::take(&mut self.counted) && end_handler_dispatch(self.context)
+    }
+}
+
+/// Preserves the caller's pending Throwable while finalizing a claimed detached context.
+pub(crate) fn finish_detached_context(
+    owner: *mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let pending = context.take_pending_throw();
+    let thrown = unsafe { crate::ffi::context::retire_detached_pcntl_context(owner, pending) };
+    if let Some(thrown) = thrown {
+        context.set_pending_throw(thrown);
+        if Some(thrown) != pending {
+            return Err(EvalStatus::UncaughtThrowable);
+        }
+    }
+    Ok(())
 }
 
 impl Clone for EvalPcntlContextLease {
@@ -68,6 +109,40 @@ impl Clone for EvalPcntlContextLease {
 mod lease_tests {
     use super::*;
 
+    /// The last exported lease forwards the detached context's Throwable to its caller.
+    #[test]
+    fn last_exported_handler_lease_propagates_detached_context_throwable() {
+        let mut owner = Box::new(ElephcEvalContext::new());
+        let mut cell = 0_u64;
+        let thrown = RuntimeCellHandle::from_raw(std::ptr::from_mut(&mut cell).cast());
+        owner.set_pending_throw(thrown);
+        let context = Box::into_raw(owner);
+        let address = context as usize;
+        {
+            let mut state = pcntl_runtime().lock().unwrap();
+            state.active_contexts.insert(address, 1);
+        }
+        assert!(unsafe { crate::ffi::context::__elephc_eval_context_free(context) }.is_null());
+        assert!(pcntl_runtime().lock().unwrap().detached_contexts.contains(&address));
+        let lease = EvalPcntlContextLease { context, counted: true };
+        let mut caller = ElephcEvalContext::new();
+        assert_eq!(lease.clone().finish(&mut caller), Ok(()));
+        assert!(caller.take_pending_throw().is_none());
+        let mut callback_cell = 0_u64;
+        let callback = RuntimeCellHandle::from_raw(std::ptr::from_mut(&mut callback_cell).cast());
+        caller.pcntl_foreign_callables.insert(callback.as_ptr() as usize, (callback, lease));
+        let retired = caller.release_pcntl_foreign_callables(None, |released, pending| {
+            assert_eq!(released, callback);
+            assert!(pending.is_none());
+            pending
+        });
+        assert_eq!(retired, Some(thrown));
+        assert!(caller.pcntl_foreign_callables.is_empty());
+        let state = pcntl_runtime().lock().unwrap();
+        assert!(!state.active_contexts.contains_key(&address));
+        assert!(!state.detached_contexts.contains(&address));
+    }
+
     /// Copying a view owned by a dynamic object never makes it a counted signal-handler lease.
     #[test]
     fn dynamic_object_context_views_do_not_acquire_pcntl_ownership() {
@@ -87,7 +162,7 @@ mod lease_tests {
 impl Drop for EvalPcntlContextLease {
     /// Releases the active-use count and finalizes an otherwise unreferenced detached context.
     fn drop(&mut self) {
-        if self.counted && end_handler_dispatch(self.context) {
+        if self.claim_detached_context() {
             unsafe {
                 crate::ffi::context::drop_eval_context_now(self.context);
             }

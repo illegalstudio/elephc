@@ -84,15 +84,16 @@ impl ElephcEvalContext {
             .map(|(_, owner)| owner)
     }
 
-    /// Releases every cell pin before dropping its foreign context lease.
+    /// Retires each exported cell before its context lease, chaining both teardown results.
     pub(crate) fn release_pcntl_foreign_callables(
         &mut self,
-        values: &mut impl RuntimeValueOps,
-    ) {
+        mut pending: Option<RuntimeCellHandle>,
+        mut release: impl FnMut(RuntimeCellHandle, Option<RuntimeCellHandle>) -> Option<RuntimeCellHandle>,
+    ) -> Option<RuntimeCellHandle> {
         for (_, (callback, owner)) in std::mem::take(&mut self.pcntl_foreign_callables) {
-            let _ = values.release(callback);
-            drop(owner);
+            pending = owner.retire(release(callback, pending));
         }
+        pending
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
