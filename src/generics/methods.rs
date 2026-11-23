@@ -47,6 +47,21 @@ pub struct MethodTemplate {
     pub return_type: Option<TypeExpr>,
 }
 
+/// The name of the hidden twin that carries the PHPDoc reading of the method `written`.
+///
+/// A method whose type parameters all come from PHPDoc stays as written (one body, native types,
+/// one name). Its annotated signature is declared once more as a twin template, which the checker
+/// reads at each call to type the result and which is dropped before lowering like every
+/// template. See [`crate::generics::DOC_TWIN_SUFFIX`].
+pub fn doc_twin_name(written: &str) -> String {
+    format!("{written}{}", super::DOC_TWIN_SUFFIX)
+}
+
+/// Whether `name` is the hidden twin of a PHPDoc method template.
+pub fn is_doc_twin(name: &str) -> bool {
+    name.ends_with(super::DOC_TWIN_SUFFIX)
+}
+
 /// The key a template is found by: the class and the method, both normalized.
 pub fn template_key(class: &str, method: &str) -> (String, String) {
     (
@@ -189,6 +204,10 @@ pub fn instantiate(
         let instantiated = instantiated_name(&template.declared_method, bindings);
         if attach(&mut program, class_key, &template.declared_method, &instantiated, bindings) {
             added += 1;
+            super::stats::record_method_instance(
+                !template.type_params.is_empty()
+                    && template.type_params.iter().all(|param| param.from_docblock),
+            );
         }
     }
 

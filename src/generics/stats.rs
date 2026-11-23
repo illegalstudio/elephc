@@ -26,6 +26,7 @@ static TEMPLATES: AtomicU64 = AtomicU64::new(0);
 static DOC_TEMPLATES: AtomicU64 = AtomicU64::new(0);
 static INSTANCES: AtomicU64 = AtomicU64::new(0);
 static DOC_INSTANCES: AtomicU64 = AtomicU64::new(0);
+static DOC_METHOD_INSTANCES: AtomicU64 = AtomicU64::new(0);
 static ROUNDS: AtomicU64 = AtomicU64::new(0);
 static CHECKS: AtomicU64 = AtomicU64::new(0);
 static ERASURE_SKIPPED: AtomicU64 = AtomicU64::new(0);
@@ -55,6 +56,15 @@ pub(crate) fn record_instance(doc: bool) {
     INSTANCES.fetch_add(1, Ordering::Relaxed);
     if doc {
         DOC_INSTANCES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Records one method instantiation (they count as instances), and whether the template's type
+/// parameters all come from PHPDoc.
+pub(crate) fn record_method_instance(doc: bool) {
+    INSTANCES.fetch_add(1, Ordering::Relaxed);
+    if doc {
+        DOC_METHOD_INSTANCES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -108,11 +118,12 @@ pub(crate) fn report() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
     eprintln!(
-        "[elephc-generics] templates={} doc_templates={} instances={} doc_class_instances={} rounds={} checks={} erasure_reruns={} erasure_rerun_skipped={} check_ms={} instantiate_ms={}",
+        "[elephc-generics] templates={} doc_templates={} instances={} doc_class_instances={} doc_method_instances={} rounds={} checks={} erasure_reruns={} erasure_rerun_skipped={} check_ms={} instantiate_ms={}",
         TEMPLATES.load(Ordering::Relaxed),
         DOC_TEMPLATES.load(Ordering::Relaxed),
         INSTANCES.load(Ordering::Relaxed),
         DOC_INSTANCES.load(Ordering::Relaxed),
+        DOC_METHOD_INSTANCES.load(Ordering::Relaxed),
         ROUNDS.load(Ordering::Relaxed),
         CHECKS.load(Ordering::Relaxed),
         reruns,

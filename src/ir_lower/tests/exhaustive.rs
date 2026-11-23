@@ -133,6 +133,7 @@ fn dummy_check_result() -> CheckResult {
         generic_method_sites: crate::fast_hash::FastMap::default(),
         generic_new_sites: Default::default(),
         generic_call_sites: HashMap::default(),
+        doc_return_sites: HashMap::default(),
         global_env: Default::default(),
         functions,
         function_attribute_names: HashMap::default(),

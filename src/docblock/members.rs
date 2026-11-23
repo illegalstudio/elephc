@@ -24,7 +24,7 @@ pub(super) fn apply(
     class_templates: &mut [TypeParam],
     erased_class_params: &[String],
     properties: &mut [ClassProperty],
-    methods: &mut [ClassMethod],
+    methods: &mut Vec<ClassMethod>,
     blocks: &HashMap<(u32, u32), DocBlock>,
     scope: &NameScope,
 ) {
@@ -49,115 +49,185 @@ pub(super) fn apply(
         }
     }
     let mut promoted = Vec::new();
+    let mut twins: Vec<ClassMethod> = Vec::new();
     for method in methods.iter_mut() {
         let Some(block) = blocks.get(&(method.span.line, method.span.col)) else {
             continue;
         };
-        if !method.type_params.is_empty() {
-            continue;
-        }
-        // A method with no body (an interface or abstract method) is only ever reached through
-        // dynamic dispatch, and an instantiated generic method never takes a vtable slot. Its
-        // PHPDoc is therefore not adopted at all: the method keeps its native signature, so an
-        // implementation that omits a type PHPDoc only claimed is still compatible, exactly as
-        // php-src sees it.
-        if !method.has_body {
-            continue;
-        }
-        // The names an annotation must mention to be honoured: the class's parameters, plus the
-        // method's own when it is a template. `@param string $key` beside a `@template` says
-        // nothing generic, and adopting it would narrow a parameter the native signature (and
-        // every interface the method implements) leaves untyped.
-        let mut in_scope: Vec<String> = class_params.to_vec();
-        let own: Vec<TypeParam> = if block.declares_generics() {
-            in_scope.extend(block.type_params.iter().map(|param| param.name.clone()));
-            let anchored = anchor_native_hints(
-                &block.type_params,
-                &annotated_positions(
-                    &method.params,
-                    method.variadic.as_deref(),
-                    method.variadic_type.as_ref(),
-                    method.return_type.as_ref(),
-                    block,
-                ),
+        // A method whose type parameters all come from PHPDoc stays exactly as written (one
+        // body, native types, under its written name). Its annotated reading is kept as a hidden
+        // twin declaration the checker reads at each call (see `crate::generics::DOC_TWIN_SUFFIX`),
+        // the way a free function does; a class that is itself a native template instantiates its
+        // methods with it, so those keep the adopted signature.
+        let overlay = class_templates.is_empty()
+            && method.type_params.is_empty()
+            && method.has_body
+            && block.declares_generics()
+            && !method.name.eq_ignore_ascii_case("__construct");
+        if overlay {
+            let body = std::mem::take(&mut method.body);
+            let mut adopted = method.clone();
+            method.body = body;
+            adopt_method(
+                &mut adopted,
+                block,
+                class_templates,
+                class_params,
+                erased_class_params,
                 scope,
+                &mut Vec::new(),
             );
-            method.type_params = anchored.clone();
-            anchored
-        } else {
-            Vec::new()
-        };
-        let own = own.as_slice();
-        // The class's PHPDoc templates are not adopted (`DocView`), so an annotation naming one
-        // has nothing to bind: the position keeps its written type. A method template of the
-        // same name shadows it.
-        let erased: Vec<String> = erased_class_params
-            .iter()
-            .filter(|name| !own.iter().any(|shadow| &shadow.name == *name))
-            .cloned()
-            .collect();
-        let erased = erased.as_slice();
-        // The method's own templates shadow a class template of the same name.
-        let templates: Vec<TypeParam> = own
-            .iter()
-            .chain(
-                class_templates
-                    .iter()
-                    .filter(|param| !own.iter().any(|shadow| shadow.name == param.name)),
-            )
-            .cloned()
-            .collect();
-        let templates = templates.as_slice();
-        let in_scope = in_scope.as_slice();
-        let is_constructor = method.name.eq_ignore_ascii_case("__construct");
-        for (name, declared, _, _) in method.params.iter_mut() {
-            let Some(annotated) = block.params.get(name) else {
-                continue;
-            };
-            if apply_signature_type(declared, annotated, in_scope, erased, templates, scope)
-                && is_constructor
-            {
-                promoted.extend(declared.clone().map(|adopted| (name.clone(), adopted)));
+            if !adopted.type_params.is_empty() {
+                // `@param class-string<T> $c` over a native `string $c`: the twin's parameter
+                // says `class-string<T>`, which is what lets `Foo::class` bind `T` (the written
+                // `string` is unchanged on the method itself).
+                for (name, declared, _, _) in adopted.params.iter_mut() {
+                    let Some(template) = block.class_strings.get(name.as_str()) else {
+                        continue;
+                    };
+                    if adopted.type_params.iter().any(|param| &param.name == template) {
+                        *declared = Some(TypeExpr::Named(crate::names::Name::unqualified(
+                            &format!("{}{template}>", super::CLASS_STRING_PREFIX),
+                        )));
+                    }
+                }
+                adopted.name.push_str(crate::generics::DOC_TWIN_SUFFIX);
+                adopted.attributes = Vec::new();
+                adopted.param_attributes = vec![Vec::new(); adopted.param_attributes.len()];
+                twins.push(adopted);
             }
+            continue;
         }
-        if let Some(annotated) = method
-            .variadic
-            .as_ref()
-            .and_then(|name| block.params.get(name))
-        {
-            apply_signature_type(&mut method.variadic_type, annotated, in_scope, erased, templates, scope);
-        }
-        if let Some(annotated) = &block.return_type {
-            apply_signature_type(&mut method.return_type, annotated, in_scope, erased, templates, scope);
-        }
-        // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
-        // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
-        // leaves a PHPDoc parameter undetermined reads it as `mixed`
-        // (`crate::generics::infer_bindings_with_args`), which is the native signature php-src
-        // runs. Keeping it is what lets a written `$repo->id<int>(7)` still select an
-        // instantiation.
-        //
-        // A template no position adopted (every annotation lost to a native hint) changes no
-        // declared type, so the method is not a template at all: it keeps its name and its
-        // vtable slot, exactly as php-src declares it.
-        if !own.is_empty() {
-            let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
-            let adopted = method
-                .params
-                .iter()
-                .map(|(_, declared, _, _)| declared)
-                .chain([&method.variadic_type, &method.return_type])
-                .flatten()
-                .any(|declared| declared.mentions_type_param(&names));
-            if !adopted {
-                method.type_params.clear();
-            }
-        }
+        adopt_method(
+            method,
+            block,
+            class_templates,
+            class_params,
+            erased_class_params,
+            scope,
+            &mut promoted,
+        );
     }
+    methods.extend(twins);
     // The parser creates a promoted parameter and its property separately. Both must agree.
     for property in properties.iter_mut().filter(|property| property.is_promoted) {
         if let Some((_, annotated)) = promoted.iter().find(|(name, _)| *name == property.name) {
             property.type_expr = Some(annotated.clone());
+        }
+    }
+}
+
+/// Adopts one method's own `@template` declaration and the annotations naming its parameters
+/// (and the class's), rewriting `method` in place.
+///
+/// A template no position adopted leaves the method untouched and without type parameters.
+fn adopt_method(
+    method: &mut ClassMethod,
+    block: &DocBlock,
+    class_templates: &[TypeParam],
+    class_params: &[String],
+    erased_class_params: &[String],
+    scope: &NameScope,
+    promoted: &mut Vec<(String, TypeExpr)>,
+) {
+    if !method.type_params.is_empty() {
+        return;
+    }
+    // A method with no body (an interface or abstract method) is only ever reached through
+    // dynamic dispatch, and an instantiated generic method never takes a vtable slot. Its
+    // PHPDoc is therefore not adopted at all: the method keeps its native signature, so an
+    // implementation that omits a type PHPDoc only claimed is still compatible, exactly as
+    // php-src sees it.
+    if !method.has_body {
+        return;
+    }
+    // The names an annotation must mention to be honoured: the class's parameters, plus the
+    // method's own when it is a template. `@param string $key` beside a `@template` says
+    // nothing generic, and adopting it would narrow a parameter the native signature (and
+    // every interface the method implements) leaves untyped.
+    let mut in_scope: Vec<String> = class_params.to_vec();
+    let own: Vec<TypeParam> = if block.declares_generics() {
+        in_scope.extend(block.type_params.iter().map(|param| param.name.clone()));
+        let anchored = anchor_native_hints(
+            &block.type_params,
+            &annotated_positions(
+                &method.params,
+                method.variadic.as_deref(),
+                method.variadic_type.as_ref(),
+                method.return_type.as_ref(),
+                block,
+            ),
+            scope,
+        );
+        method.type_params = anchored.clone();
+        anchored
+    } else {
+        Vec::new()
+    };
+    let own = own.as_slice();
+    // The class's PHPDoc templates are not adopted (`DocView`), so an annotation naming one
+    // has nothing to bind: the position keeps its written type. A method template of the
+    // same name shadows it.
+    let erased: Vec<String> = erased_class_params
+        .iter()
+        .filter(|name| !own.iter().any(|shadow| &shadow.name == *name))
+        .cloned()
+        .collect();
+    let erased = erased.as_slice();
+    // The method's own templates shadow a class template of the same name.
+    let templates: Vec<TypeParam> = own
+        .iter()
+        .chain(
+            class_templates
+                .iter()
+                .filter(|param| !own.iter().any(|shadow| shadow.name == param.name)),
+        )
+        .cloned()
+        .collect();
+    let templates = templates.as_slice();
+    let in_scope = in_scope.as_slice();
+    let is_constructor = method.name.eq_ignore_ascii_case("__construct");
+    for (name, declared, _, _) in method.params.iter_mut() {
+        let Some(annotated) = block.params.get(name) else {
+            continue;
+        };
+        if apply_signature_type(declared, annotated, in_scope, erased, templates, scope)
+            && is_constructor
+        {
+            promoted.extend(declared.clone().map(|adopted| (name.clone(), adopted)));
+        }
+    }
+    if let Some(annotated) = method
+        .variadic
+        .as_ref()
+        .and_then(|name| block.params.get(name))
+    {
+        apply_signature_type(&mut method.variadic_type, annotated, in_scope, erased, templates, scope);
+    }
+    if let Some(annotated) = &block.return_type {
+        apply_signature_type(&mut method.return_type, annotated, in_scope, erased, templates, scope);
+    }
+    // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
+    // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
+    // leaves a PHPDoc parameter undetermined reads it as `mixed`
+    // (`crate::generics::infer_bindings_with_args`), which is the native signature php-src
+    // runs. Keeping it is what lets a written `$repo->id<int>(7)` still select an
+    // instantiation.
+    //
+    // A template no position adopted (every annotation lost to a native hint) changes no
+    // declared type, so the method is not a template at all: it keeps its name and its
+    // vtable slot, exactly as php-src declares it.
+    if !own.is_empty() {
+        let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
+        let adopted = method
+            .params
+            .iter()
+            .map(|(_, declared, _, _)| declared)
+            .chain([&method.variadic_type, &method.return_type])
+            .flatten()
+            .any(|declared| declared.mentions_type_param(&names));
+        if !adopted {
+            method.type_params.clear();
         }
     }
 }

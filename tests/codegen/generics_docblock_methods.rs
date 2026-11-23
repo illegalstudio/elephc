@@ -1697,3 +1697,150 @@ var_dump($number, $text);
     );
     assert_eq!(out, "int(7)\nstring(5) \"seven\"\n");
 }
+
+/// A program whose PHPDoc method templates are called at several types. `php -n` prints
+/// `foo bar foo 6 3 2 5 get|4 id` for it.
+const DOC_METHOD_PROGRAM: &str = r#"<?php
+class Foo { public function hi(): string { return "foo"; } }
+class Bar { public function hi(): string { return "bar"; } }
+class Reg {
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function get(string $c) { return new $c(); }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function id($x) { return $x; }
+    /**
+     * @template T
+     * @param array<T> $xs
+     * @return T
+     */
+    public function first(array $xs) { return $xs[0]; }
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public static function make(string $c): object { return new $c(); }
+}
+function run(Reg $r, int $n, string $s, float $f) {
+    echo $r->get(Foo::class)->hi(), "\n";
+    echo $r->get(Bar::class)->hi(), "\n";
+    echo Reg::make(Foo::class)->hi(), "\n";
+    echo $r->id($n) + 1, "\n";
+    echo strlen($r->id($s)), "\n";
+    echo $r->first([1, 2, 3]) * 2, "\n";
+    echo $r->id($f) * 2, "\n";
+}
+run(new Reg(), 5, "abc", 2.5);
+echo get_class_methods('Reg')[0], "|", count(get_class_methods('Reg')), "\n";
+$m = new ReflectionMethod('Reg', 'id');
+echo $m->getName(), "\n";
+"#;
+
+/// A method whose type parameters all come from PHPDoc is one method under its written name:
+/// nothing is instantiated, no extra check round runs, and each call is still typed by its own
+/// binding (`$r->id($n) + 1` is an int sum, `get(Foo::class)->hi()` a call on `Foo`).
+#[test]
+fn test_docblock_method_templates_are_one_method_called_at_precise_types() {
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &[("main.php", DOC_METHOD_PROGRAM)],
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(stdout, "foo\nbar\nfoo\n6\n3\n2\n5\nget|4\nid\n", "{stderr}");
+    let line = generics_stats_line(&stderr);
+    for expected in [
+        " instances=0 ",
+        " doc_class_instances=0 ",
+        " doc_method_instances=0 ",
+        " rounds=0 ",
+        " checks=1 ",
+        " erasure_reruns=0 ",
+    ] {
+        assert!(line.contains(expected), "{expected}: {line}");
+    }
+}
+
+/// The narrowed call results own their boxes and payloads: no leak, no double release.
+#[test]
+fn test_docblock_method_templates_are_heap_debug_clean() {
+    let output = compile_and_run_with_heap_debug(DOC_METHOD_PROGRAM);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(output.stdout, "foo\nbar\nfoo\n6\n3\n2\n5\nget|4\nid\n");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        output.stderr
+    );
+}
+
+/// php sees a PHPDoc template method under its written name only, wherever a name is observable.
+#[test]
+fn test_docblock_method_templates_keep_their_written_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Reg {
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function id($x) { return debug_backtrace()[0]['function']; }
+}
+$r = new Reg();
+echo $r->id('x'), "|", implode(",", get_class_methods($r)), "|",
+    (new ReflectionClass('Reg'))->getMethods()[0]->name, "|",
+    method_exists($r, 'id') ? "y" : "n", "|", is_callable([$r, 'id']) ? "y" : "n", "|",
+    (string) call_user_func([$r, 'id'], 6), "\n";
+"#,
+    );
+    assert_eq!(out, "id|id|id|y|y|id\n");
+}
+
+/// An annotation php does not enforce never makes the program read storage as the wrong type:
+/// the call result is converted (a scalar) or guarded (a class) before it is typed by the
+/// annotation, and the heap stays clean. (php itself returns the body's value untouched; the
+/// converted or guarded value is the price of typing the call by the annotation.)
+#[test]
+fn test_docblock_method_template_lies_do_not_misread_storage() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Foo { public function hi(): string { return "foo"; } }
+class Bar { public function hi(): string { return "bar"; } }
+class Liar {
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function get(string $c) { return unserialize(serialize(new Bar())); }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function id($x) { return unserialize(serialize("7")); }
+}
+function run(Liar $l) {
+    echo (new Foo())->hi(), "\n";
+    var_dump($l->id(3) + 1);
+    try {
+        echo $l->get(Foo::class)->hi(), "\n";
+    } catch (\Throwable $e) {
+        echo get_class($e), "\n";
+    }
+}
+run(new Liar());
+"#,
+    );
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(output.stdout, "foo\nint(8)\nTypeError\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

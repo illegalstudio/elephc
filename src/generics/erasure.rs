@@ -87,7 +87,11 @@ fn index_owners(stmts: &[Stmt], owners: &mut HashMap<String, Owner>) {
             .collect()
     };
     let method_names = |methods: &[ClassMethod]| {
-        methods.iter().map(|m| m.name.to_ascii_lowercase()).collect()
+        methods
+            .iter()
+            .filter(|m| !super::methods::is_doc_twin(&m.name))
+            .map(|m| m.name.to_ascii_lowercase())
+            .collect()
     };
     for stmt in stmts {
         let (name, owner) = match &stmt.kind {
@@ -277,6 +281,10 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                     .map(|param| param.name.clone())
                     .collect();
                 for method in methods.iter_mut() {
+                    // A PHPDoc twin is read at calls, never dispatched: it is not a method.
+                    if super::methods::is_doc_twin(&method.name) {
+                        continue;
+                    }
                     let key = (owner.clone(), method.name.to_ascii_lowercase());
                     let is_dispatched = dispatched.contains(&key)
                         && !method.name.eq_ignore_ascii_case("__construct");

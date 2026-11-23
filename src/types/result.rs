@@ -190,6 +190,10 @@ pub struct CheckResult {
     /// Keyed by `Span` exactly like `builtin_call_types`, and consumed by lowering the same
     /// way. See `Checker::generic_call_sites` for why lowering cannot re-derive it.
     pub generic_call_sites: HashMap<(String, Span), String>,
+    /// Call site -> the result type the PHPDoc reading of the called method gives (a method whose
+    /// type parameters all come from PHPDoc stays as written; the checker binds them at each
+    /// call). Lowering narrows the call's native result to it, guarded at run time.
+    pub doc_return_sites: HashMap<(String, Span), PhpType>,
     /// Every generic CLASS instantiation a `new` asked for, as (template key, type arguments).
     pub requested_class_instantiations: Vec<(String, crate::generics::Bindings)>,
     /// The generic METHOD instantiations this round asked for.

@@ -890,9 +890,15 @@ impl Checker {
             && self.classes.get(class_name)
                 .and_then(|class_info| class_info.methods.get(&php_symbol_key(method)))
                 .is_some_and(|sig| crate::types::call_args::spread_reaches_by_ref_suffix(sig, args));
-        self.infer_method_call_on_class_type_with_options(
+        let result = self.infer_method_call_on_class_type_with_options(
             class_name, method, args, expr, env, allow_by_ref_spread,
-        )
+        )?;
+        // A plain call (not a nullsafe or descriptor-backed one) of a method carrying a PHPDoc
+        // twin is typed by the annotation; see `apply_doc_method_overlay`.
+        if allow_by_ref_spread || !matches!(expr.kind, ExprKind::MethodCall { .. }) {
+            return Ok(result);
+        }
+        self.apply_doc_method_overlay(class_name, method, false, args, expr, env, result)
     }
 
     /// Returns the receiver expression of a method-call expression, in either call form.
@@ -1910,9 +1916,17 @@ impl Checker {
                 info.static_methods.get(&method_key).or_else(|| info.methods.get(&method_key))
                     .is_some_and(|sig| crate::types::call_args::spread_reaches_by_ref_suffix(sig, args))
             });
-        self.infer_static_method_call_type_with_options(
+        let result = self.infer_static_method_call_type_with_options(
             receiver, method, args, expr, env, allow_by_ref_spread,
-        )
+        )?;
+        match class_name {
+            Some(class_name)
+                if !allow_by_ref_spread && matches!(expr.kind, ExprKind::StaticMethodCall { .. }) =>
+            {
+                self.apply_doc_method_overlay(&class_name, method, true, args, expr, env, result)
+            }
+            _ => Ok(result),
+        }
     }
 
     /// Infers a static method call for descriptor-backed callback paths that can

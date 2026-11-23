@@ -45,6 +45,53 @@ fn boundary_cast_effects() -> crate::ir::Effects {
     Op::Cast.default_effects() | crate::ir::Effects::MAY_THROW
 }
 
+/// Narrows the native result of a call to the type the checker read off the PHPDoc of the method
+/// it runs (`Checker::doc_return_sites`).
+///
+/// The method is compiled once, with its written types: its result has the native
+/// representation (a boxed `mixed`, or an object of the declared class), and php enforces no
+/// annotation. The result is therefore boxed and converted (a scalar) or guarded (a class: a
+/// value of another class raises a `TypeError` instead of being read as one) before the call
+/// is typed by the annotation.
+pub(super) fn narrow_doc_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &crate::parser::ast::Expr,
+) -> LoweredValue {
+    if ctx.doc_return_sites.is_empty() || ctx.builder.insertion_block_is_terminated() {
+        return value;
+    }
+    let Some(target) = ctx
+        .doc_return_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .cloned()
+    else {
+        return value;
+    };
+    let source = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source == target.codegen_repr() || matches!(source, PhpType::Void | PhpType::Never) {
+        return value;
+    }
+    let boxed = if source == PhpType::Mixed {
+        value
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+    };
+    // The guard can raise a `TypeError` (or a conversion warning a handler turns into one) before
+    // the box is released, so the box is guarded for the unwinding path while it is narrowed.
+    let owned = ctx.value_is_owning_temporary(boxed);
+    ctx.begin_argument_guard_scope();
+    if owned {
+        ctx.guard_call_argument(boxed, 0, expr.span);
+    }
+    let narrowed = coerce_gradual_value_to_boundary(ctx, boxed, &target, Some(expr.span));
+    if owned {
+        ctx.unguard_call_argument(boxed.value, expr.span);
+    }
+    ctx.end_argument_guard_scope();
+    narrowed
+}
+
 /// Narrows a boxed gradual value into a concrete boundary representation when supported.
 pub(super) fn coerce_gradual_value_to_boundary(
     ctx: &mut LoweringContext<'_, '_>,

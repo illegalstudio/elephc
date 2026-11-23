@@ -1107,8 +1107,11 @@ one thing in the language and in a docblock.
 
 ### A method
 
-A method may declare its own `@template`, even when its class is not generic. Its `@param` and
-`@return` annotations become the method's signature, just as on a generic function:
+A method may declare its own `@template`, even when its class is not generic. php never reads
+the annotation, so the method stays exactly as written: one body, its native types, under its
+written name (reflection, `get_class_methods()` and backtraces see `copy` and nothing else). The
+annotation is kept beside it and read at each call, which binds `T` from the argument types and
+types the call by the substituted `@return`:
 
 ```php
 <?php
@@ -1123,27 +1126,30 @@ class Identity
 }
 
 $identity = new Identity();
-echo $identity->copy(7), '|', $identity->copy('seven');   // 7|seven
+echo $identity->copy(7) + 1, '|', strlen($identity->copy('seven'));   // 8|5
 ```
 
-The two calls specialize `copy<int>` and `copy<string>`. This works with and without
-`--strict-php`, including static methods and methods declared in traits and enums. Method
-templates also support bounds, defaults and variadic annotations such as `@param T ...$values`.
-A doc comment binds to the declaration that follows it, including one on the same line after
-`*/` (`/** @template T */ class Box`).
+Nothing is instantiated and no extra check runs: `copy(7)` is an `int` and `copy('seven')` a
+`string` at their call sites, with one `copy` underneath. The binding reads `T`, `array<T>`,
+`callable(T): U` and `class-string<T>` (bound by a `Foo::class` argument, so a factory typed
+`@param class-string<T> $class` / `@return T` returns a `Foo`), plus bounds and defaults. A call
+typed by the annotation narrows the method's native result to it behind a run-time guard (a scalar
+is converted, a class is checked), so an annotation that is wrong never makes the program read
+storage as the wrong type. A container result (`@return array<T>`) keeps the method's native type.
+This works with and without `--strict-php`, including static methods and methods declared in traits
+and enums. Method templates also support bounds, defaults and variadic annotations such as
+`@param T ...$values`. A doc comment binds to the declaration that follows it, including one on
+the same line after `*/` (`/** @template T */ class Box`).
 
 In a generic class, a method can refer to the class's `T` and declare a separate `U` of its own.
 `U` is bound at the method call and does not enter the scope of properties or sibling methods.
 If a method already declares native type parameters, its written signature takes precedence
-over the docblock.
+over the docblock. A method of a class declared with native type parameters (`class Box<T>`) that
+also carries its own PHPDoc `@template` is still specialized with the class.
 
-A PHPDoc method template is erased, not monomorphized, when the method is dispatched
-dynamically: an interface method, a method that implements or overrides another one
-(including built-in interfaces such as `ArrayAccess`, `Countable` or `IteratorAggregate`),
-or any method of a class with an undeclared ancestor. An instantiated method never takes a
-vtable slot (see above), so specializing it would break interface conformance and override
-dispatch; the method keeps its native signature and runs as php-src runs it. A method template
-that no parameter or return position adopts is dropped the same way.
+An interface or abstract method (no body) and a constructor are not read this way: a bodiless
+method keeps its native signature, and a constructor's `@template` specializes the constructed
+class as before. A method template that no parameter or return position adopts is dropped.
 
 `instanceof` on a generic class or interface template (`$x instanceof Coll`) holds for every
 instantiation and subclass, as in php-src, where the template is an ordinary class. The marker

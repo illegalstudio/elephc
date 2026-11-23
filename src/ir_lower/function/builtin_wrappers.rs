@@ -155,6 +155,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         &Default::default(), // checked declared-array append elements
         &Default::default(), // synthesized bodies have no checked integer read sites
         &Default::default(),
+        &Default::default(), // doc-narrowed call sites
         &Default::default(),
         &Default::default(),
         &Default::default(),

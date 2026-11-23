@@ -593,6 +593,35 @@ fn infer_bindings_erasing(
         };
         bind_from_closure(&names, params, ret, arg, lexical_class, &mut bound)?;
     }
+    // `@param class-string<T> $c` (a PHPDoc method template's twin) binds `T` to the class a
+    // `Foo::class` argument names. Any other argument binds nothing: `T` then reads as its bound.
+    for (index, declared) in declared_params.iter().enumerate() {
+        let (Some(TypeExpr::Named(written)), Some(arg)) = (declared.as_ref(), args.get(index))
+        else {
+            continue;
+        };
+        let Some(template) = crate::docblock::class_string_template(written.as_str()) else {
+            continue;
+        };
+        if !names.iter().any(|name| name == template)
+            || bound.iter().any(|(name, _)| name == template)
+        {
+            continue;
+        }
+        let crate::parser::ast::ExprKind::ClassConstant { receiver } = &arg.kind else {
+            continue;
+        };
+        let class = match receiver {
+            crate::parser::ast::StaticReceiver::Named(name) => Some(name.clone()),
+            crate::parser::ast::StaticReceiver::Self_ => {
+                lexical_class.map(|(class, _)| Name::unqualified(class))
+            }
+            _ => None,
+        };
+        if let Some(class) = class {
+            bound.push((template.to_string(), TypeExpr::Named(class)));
+        }
+    }
     for (declared, actual) in declared_params.iter().zip(actual_types.iter()) {
         let Some(declared) = declared else { continue };
         if !declared.mentions_type_param(&names) {
@@ -1543,5 +1572,88 @@ echo run(1);
         );
         assert!(result.functions.contains_key(clone), "the clone must be typed");
         assert_eq!(checks, 1, "a clone must not check the program again");
+    }
+    /// A method whose type parameters all come from PHPDoc is not instantiated: several such
+    /// methods called at several types cost the one check, spawn no method copy, and every call
+    /// is still typed by its own binding (php never reads the annotation, so the method stays
+    /// one body under its written name).
+    #[test]
+    fn phpdoc_method_templates_cost_one_check() {
+        let source = r#"<?php
+class Foo { public function hi(): string { return "foo"; } }
+class Bar { public function hi(): string { return "bar"; } }
+class Reg {
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public function get(string $c) { return new $c(); }
+    /**
+     * @template T
+     * @param T $x
+     * @return T
+     */
+    public function id($x) { return $x; }
+    /**
+     * @template T
+     * @param array<T> $xs
+     * @return T
+     */
+    public function first(array $xs) { return $xs[0]; }
+    /**
+     * @template T of object
+     * @param class-string<T> $c
+     * @return T
+     */
+    public static function make(string $c): object { return new $c(); }
+}
+function run(Reg $r, int $n, string $s, float $f) {
+    echo $r->get(Foo::class)->hi(), $r->get(Bar::class)->hi();
+    echo $r->id($n) + 1, strlen($r->id($s)), $r->id($f) * 2;
+    echo $r->first([1, 2, 3]) * 2, Reg::make(Foo::class)->hi();
+}
+run(new Reg(), 1, "a", 1.5);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokens");
+        let program = crate::parser::parse(&tokens).expect("program");
+        let program = crate::docblock::apply(program, source);
+        let program = crate::name_resolver::resolve(program).expect("resolved names");
+        let mut checks = 0;
+        let (program, result) = crate::generics::monomorphize(program, |program, context| {
+            checks += 1;
+            crate::types::check_with_options_and_bounds(program, Default::default(), context)
+        })
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(checks, 1, "PHPDoc method templates must not cost another check");
+        assert!(result.requested_method_instantiations.is_empty());
+        let methods: Vec<String> = program
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                crate::parser::ast::StmtKind::ClassDecl { name, methods, .. } if name == "Reg" => {
+                    Some(methods.iter().map(|method| method.name.clone()).collect())
+                }
+                _ => None,
+            })
+            .next()
+            .expect("class Reg");
+        assert_eq!(methods, ["get", "id", "first", "make"], "only the written methods remain");
+        let mut narrowed: Vec<String> = result
+            .doc_return_sites
+            .values()
+            .map(|ty| format!("{ty:?}"))
+            .collect();
+        narrowed.sort();
+        narrowed.dedup();
+        assert_eq!(
+            narrowed,
+            [
+                "Float".to_string(),
+                "Int".to_string(),
+                "Object(\"Bar\")".to_string(),
+                "Object(\"Foo\")".to_string(),
+                "Str".to_string(),
+            ]
+        );
     }
 }

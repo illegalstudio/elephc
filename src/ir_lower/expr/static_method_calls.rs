@@ -17,7 +17,8 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_static_method_call_impl(ctx, receiver, method, args, expr, None)
+    let call = lower_static_method_call_impl(ctx, receiver, method, args, expr, None);
+    crate::ir_lower::gradual_coercions::narrow_doc_call_result(ctx, call, expr)
 }
 
 /// Lowers `$object->staticMethod()` through the statically named `receiver`.

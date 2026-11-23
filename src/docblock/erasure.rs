@@ -103,6 +103,8 @@ fn declaration_index(
                 key.clone(),
                 methods
                     .iter()
+                    // A PHPDoc twin shares its method's position and is no member of its own.
+                    .filter(|method| !crate::generics::methods::is_doc_twin(&method.name))
                     .map(|method| (method.span.line, method.name.to_ascii_lowercase()))
                     .collect(),
             );

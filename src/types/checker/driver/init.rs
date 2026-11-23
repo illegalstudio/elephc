@@ -81,6 +81,8 @@ impl Checker {
             interface_method_boxed_params: HashSet::default(),
             requested_instantiations: Vec::new(),
             generic_call_sites: HashMap::default(),
+            doc_return_sites: HashMap::default(),
+            doc_overlays_present: false,
             requested_promotable_clones: Vec::new(),
             class_templates: Vec::new(),
             method_templates: crate::fast_hash::FastMap::default(),

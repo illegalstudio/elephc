@@ -49,6 +49,10 @@ struct DocBlock {
     type_params: Vec<TypeParam>,
     /// `@param <type> $name`, by parameter name without the `$`.
     params: HashMap<String, TypeExpr>,
+    /// `@param class-string<T> $name`, as parameter name -> template name. The type grammar has
+    /// no `class-string`, so the annotation is not a `params` entry; a PHPDoc method template
+    /// reads it to bind `T` from a `Foo::class` argument (see [`CLASS_STRING_PREFIX`]).
+    class_strings: HashMap<String, String>,
     /// `@return <type>`.
     return_type: Option<TypeExpr>,
     /// `@var <type>`, the annotation a property carries. Only a class member reads it.
@@ -91,6 +95,7 @@ impl DocBlock {
     fn is_empty(&self) -> bool {
         self.type_params.is_empty()
             && self.params.is_empty()
+            && self.class_strings.is_empty()
             && self.return_type.is_none()
             && self.var_type.is_none()
             && self.extends.is_empty()
@@ -539,6 +544,8 @@ fn parse_block(lines: &[&str]) -> DocBlock {
                     // First read wins: a tag MENTIONED in a later description (`see @param U $w`)
                     // must not retype the parameter the earlier annotation bound.
                     block.params.entry(name).or_insert(ty);
+                } else if let Some((name, template)) = parse_class_string_param(rest) {
+                    block.class_strings.entry(name).or_insert(template);
                 }
             } else if let Some(rest) = segment.strip_prefix("@return ") {
                 // First read wins: a later `@return` inside a description (`see @return mixed`)
@@ -673,6 +680,37 @@ fn parse_param(rest: &str) -> Option<(String, TypeExpr)> {
     Some((name, ty))
 }
 
+/// The spelling a twin parameter carries for `class-string<T>`: a name no declaration can have
+/// (the parser rejects `<` in one), so no pass mistakes it for a class. Only the PHPDoc twin of a
+/// method template holds it, and only inference reads it.
+pub(crate) const CLASS_STRING_PREFIX: &str = "class-string<";
+
+/// Returns the template `T` named by a twin parameter type spelled `class-string<T>`.
+pub(crate) fn class_string_template(written: &str) -> Option<&str> {
+    let start = written.find(CLASS_STRING_PREFIX)? + CLASS_STRING_PREFIX.len();
+    written[start..].strip_suffix('>').filter(|name| !name.is_empty())
+}
+
+/// Parses `class-string<T> $name`, which the type grammar cannot read, into the parameter name
+/// and the template it names.
+fn parse_class_string_param(rest: &str) -> Option<(String, String)> {
+    let rest = rest.trim();
+    let dollar = rest.find('$')?;
+    let ty = rest[..dollar].trim();
+    let template = ty.strip_prefix(CLASS_STRING_PREFIX)?.strip_suffix('>')?.trim();
+    if template.is_empty() || !template.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let name: String = rest[dollar + 1..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, template.to_string()))
+}
+
 /// Parses `@var <type>`, with or without the trailing variable a PHPStan inline `@var` names.
 fn parse_var(rest: &str) -> Option<TypeExpr> {
     let rest = rest.trim();
@@ -779,6 +817,19 @@ mod tests {
         let tokens = crate::lexer::tokenize(source).expect("tokenizes");
         let program = crate::parser::parse(&tokens).expect("parses");
         apply(program, source)
+    }
+
+    /// The hidden annotated twin of the method `name`: a method whose type parameters come from
+    /// PHPDoc stays as written, and its annotated reading is declared once more beside it.
+    fn twin_method<'a>(
+        methods: &'a [crate::parser::ast::ClassMethod],
+        name: &str,
+    ) -> &'a crate::parser::ast::ClassMethod {
+        let twin_name = crate::generics::methods::doc_twin_name(name);
+        methods
+            .iter()
+            .find(|method| method.name == twin_name)
+            .unwrap_or_else(|| panic!("no PHPDoc twin for method {name}"))
     }
 
     /// The hidden annotated twin of the function named `name` (see [`apply_with_twin`]).
@@ -1067,8 +1118,10 @@ mod tests {
             panic!("expected a class");
         };
         assert!(generics.is_none());
-        assert_eq!(methods[0].type_params[0].name, "T");
-        assert_eq!(methods[1].type_params[0].name, "U");
+        // The methods stay as written; each annotation is read from its own twin.
+        assert!(methods[0].type_params.is_empty() && methods[1].type_params.is_empty());
+        assert_eq!(twin_method(methods, "id").type_params[0].name, "T");
+        assert_eq!(twin_method(methods, "other").type_params[0].name, "U");
     }
 
     /// Apparent annotations inside strings or line comments never become declaration metadata.
@@ -1088,9 +1141,13 @@ mod tests {
         let StmtKind::EnumDecl { methods, .. } = &program[0].kind else {
             panic!("expected an enum");
         };
-        assert_eq!(methods[0].type_params.len(), 1);
-        assert_eq!(methods[0].type_params[0].bound, Some(TypeExpr::Int));
-        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+        // The method stays as written; its annotated reading is the twin's.
+        assert!(methods[0].type_params.is_empty());
+        assert_eq!(methods[0].params[0].1, None);
+        let id = twin_method(methods, "id");
+        assert_eq!(id.type_params.len(), 1);
+        assert_eq!(id.type_params[0].bound, Some(TypeExpr::Int));
+        assert_eq!(id.params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
     }
 
     /// `@template` on a class does NOT make it a template (php never reads a docblock): the
@@ -1358,7 +1415,8 @@ mod tests {
             panic!("expected a class declaration");
         };
         assert!(generics.is_none(), "a method template must not make the class generic");
-        let method = &methods[0];
+        assert!(methods[0].type_params.is_empty() && methods[0].params[0].1.is_none());
+        let method = twin_method(methods, "id");
         assert_eq!(method.type_params.len(), 2);
         assert_eq!(method.type_params[0].name, "T");
         assert_eq!(method.type_params[0].bound, Some(TypeExpr::Named(Name::unqualified("Entity"))));
@@ -1367,6 +1425,36 @@ mod tests {
         assert_eq!(method.variadic_type, Some(TypeExpr::Named(Name::unqualified("U"))));
         // `@return int` names no type parameter, so it does not narrow the native signature.
         assert_eq!(method.return_type, None);
+    }
+
+    /// A method template leaves the declaration exactly as written (spans included): the only
+    /// thing the annotation adds is the hidden twin, and the twin is the one place that reads
+    /// `class-string<T>` over a native `string`.
+    #[test]
+    fn a_doc_template_method_equals_a_parse_without_adoption_but_for_its_twin() {
+        let source = concat!(
+            "<?php\nclass EqReg {\n",
+            "/**\n * @template T of object\n * @param class-string<T> $c\n * @return T\n */\n",
+            "public function get(string $c) { return new $c(); }\n}\n",
+        );
+        let tokens = crate::lexer::tokenize(source).expect("tokenizes");
+        let plain = crate::parser::parse(&tokens).expect("parses");
+        let mut overlaid = apply(plain.clone(), source);
+        let StmtKind::ClassDecl { methods, .. } = &mut overlaid[0].kind else {
+            panic!("expected a class declaration");
+        };
+        let twin = twin_method(methods, "get").clone();
+        methods.retain(|method| !crate::generics::methods::is_doc_twin(&method.name));
+        assert_eq!(format!("{plain:?}"), format!("{overlaid:?}"));
+        assert_eq!(twin.type_params[0].name, "T");
+        assert_eq!(twin.return_type, Some(TypeExpr::Named(Name::unqualified("T"))));
+        assert_eq!(
+            twin.params[0].1,
+            Some(TypeExpr::Named(Name::unqualified("class-string<T>")))
+        );
+        assert_eq!(class_string_template("class-string<T>"), Some("T"));
+        assert_eq!(class_string_template("App\\class-string<T>"), Some("T"));
+        assert_eq!(class_string_template("string"), None);
     }
 
     /// A template takes over a native hint when every hinted position annotated directly with it
@@ -1402,7 +1490,8 @@ mod tests {
         let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
-        let same = &methods[0];
+        assert!(methods.iter().take(4).all(|method| method.type_params.is_empty()));
+        let same = twin_method(methods, "same");
         assert_eq!(
             same.type_params[0].native_hint,
             hint(
@@ -1417,7 +1506,7 @@ mod tests {
         assert_eq!(same.params[2].1, Some(named("T")));
         assert_eq!(same.return_type, Some(nullable(named("T"))));
         // The return type is the only hinted position: the untyped parameters just take `T`.
-        let untyped = &methods[1];
+        let untyped = twin_method(methods, "untyped");
         assert_eq!(untyped.type_params[0].native_hint, hint("Model", &[], Some(named("Model"))));
         assert_eq!(untyped.params[0].1, Some(named("T")));
         assert_eq!(untyped.return_type, Some(named("T")));
@@ -1425,8 +1514,9 @@ mod tests {
         let differ = &methods[2];
         assert!(differ.type_params.is_empty());
         assert_eq!(differ.params[0].1, Some(named("object")));
+        assert!(!methods.iter().any(|method| method.name == crate::generics::methods::doc_twin_name("differ")));
         // `object` beside the class that bounds the template: the class speaks for both.
-        let wide = &methods[3];
+        let wide = twin_method(methods, "wide");
         assert_eq!(
             wide.type_params[0].native_hint,
             hint("Model", &[("a", named("object"))], Some(named("Model")))
@@ -1472,10 +1562,12 @@ mod tests {
             panic!("expected a class declaration");
         };
         assert_eq!(properties[0].type_expr, None);
-        assert_eq!(methods[0].type_params[0].name, "U");
+        assert!(methods[0].type_params.is_empty());
+        let choose = twin_method(methods, "choose");
+        assert_eq!(choose.type_params[0].name, "U");
         // `T` is the class's PHPDoc template (a `DocView`, not adopted): it binds nothing here.
-        assert_eq!(methods[0].params[0].1, None);
-        assert_eq!(methods[0].params[1].1, Some(TypeExpr::Named(Name::unqualified("U"))));
+        assert_eq!(choose.params[0].1, None);
+        assert_eq!(choose.params[1].1, Some(TypeExpr::Named(Name::unqualified("U"))));
         assert!(methods[1].type_params.is_empty());
         assert_eq!(methods[1].params[0].1, None);
         assert_eq!(methods[1].return_type, None);

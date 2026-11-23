@@ -280,6 +280,17 @@ pub(crate) struct Checker {
     /// same-named functions in two included files remain indistinguishable. That residue is a
     /// hard error rather than a silent miscompile — see `instantiate_generic_call`.
     pub generic_call_sites: HashMap<(String, Span), String>,
+    /// Call site -> the precise result type the PHPDoc reading of the called method gives it.
+    ///
+    /// A method whose type parameters all come from PHPDoc is NOT instantiated: one body, native
+    /// types, under its written name. Its annotated signature is a hidden twin template the
+    /// checker binds at each call (`generic_method.rs`), and the call is typed by the substituted
+    /// return type. The body returns the native representation, so lowering narrows each such
+    /// call to this type with a run-time guard (`ir_lower::gradual_coercions`). Keyed like
+    /// `generic_call_sites`.
+    pub doc_return_sites: HashMap<(String, Span), PhpType>,
+    /// Whether any method carries a PHPDoc twin, so a call only looks one up when one exists.
+    pub doc_overlays_present: bool,
     /// The generic class templates, for inferring type arguments at `new Box(5)`.
     ///
     /// Empty on every path that does not run `generics::monomorphize`, which makes those paths
@@ -2308,6 +2319,7 @@ fn check_types_on_compiler_stack(
         requested_instantiations: checker.requested_instantiations,
         requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,
+        doc_return_sites: checker.doc_return_sites,
         requested_class_instantiations: checker.requested_class_instantiations,
         requested_method_instantiations: checker.requested_method_instantiations,
         generic_method_sites: checker.generic_method_sites,

@@ -105,8 +105,26 @@ pub(super) fn recorded_method_access_message(
     })
 }
 
-/// Lowers an object method call.
+/// Lowers an object method call, narrowing its native result to the type the checker read off the
+/// PHPDoc of the method it runs, if any (`Checker::doc_return_sites`).
 pub(super) fn lower_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    op: Op,
+    expr: &Expr,
+) -> LoweredValue {
+    let call = lower_method_call_native(ctx, object, method, args, op, expr);
+    if op == Op::MethodCall {
+        crate::ir_lower::gradual_coercions::narrow_doc_call_result(ctx, call, expr)
+    } else {
+        call
+    }
+}
+
+/// Lowers an object method call with the result its signature gives.
+fn lower_method_call_native(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
     method: &str,
