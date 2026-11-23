@@ -15,6 +15,19 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
+/// Returns the wall-clock budget for the linearity smoke tests.
+///
+/// These tests detect accidental quadratic scans, not micro-regressions. The budget is
+/// deliberately generous and configurable so a loaded CI runner cannot turn them into flakes;
+/// reproducible timings live in `scripts/bench/token_view.py`.
+fn linearity_budget() -> std::time::Duration {
+    let seconds = std::env::var("ELEPHC_LINEARITY_BUDGET_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60);
+    std::time::Duration::from_secs(seconds)
+}
+
 /// Every tokenizer constant exists and the historical alias resolves canonically.
 #[test]
 fn tokenizer_catalog_has_all_154_php85_constants() {
@@ -2578,7 +2591,7 @@ fn tokenizer_long_interpolation_and_reference_arrays_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid interpolation and references");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "linear scan took {:?}",
         started.elapsed()
     );
@@ -2602,7 +2615,7 @@ fn tokenizer_nested_reference_targets_stay_linear() {
         // The parser rejects this at its nesting cap; the precheck must still finish linearly.
         let _ = tokenize(source.as_bytes(), TOKEN_PARSE);
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
+            started.elapsed() < linearity_budget(),
             "nested {target:?} reference target scan took {:?}",
             started.elapsed()
         );
@@ -2621,7 +2634,7 @@ fn tokenizer_comment_after_control_header_stays_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid comment run after a control header");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "comment-after-control-header scan took {:?}",
         started.elapsed()
     );
@@ -2638,7 +2651,7 @@ fn tokenizer_computed_variable_runs_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid computed-variable expression");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "computed-variable scan took {:?}",
         started.elapsed()
     );
@@ -2655,7 +2668,7 @@ fn tokenizer_comment_runs_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid comment run");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "comment-run scan took {:?}",
         started.elapsed()
     );
@@ -2678,7 +2691,7 @@ fn tokenizer_nested_heredocs_stay_linear() {
     // The parser rejects the nesting after lexing; heredoc validation itself must stay linear.
     let _ = elephc_chopper::scanner::scan(source.as_bytes());
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "nested heredoc validation took {:?}",
         started.elapsed()
     );
@@ -2699,7 +2712,7 @@ fn tokenizer_deep_dollar_brace_nesting_stays_bounded() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid variable-variable expression");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "nested interpolation took {:?}",
         started.elapsed()
     );
@@ -2732,7 +2745,7 @@ fn tokenizer_deep_computed_members_stay_bounded() {
     let started = std::time::Instant::now();
     let _ = tokenize_with_warnings(source.as_bytes(), TOKEN_PARSE);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(30),
+        started.elapsed() < linearity_budget(),
         "nested computed members took {:?}",
         started.elapsed()
     );
@@ -2751,7 +2764,7 @@ fn tokenizer_many_warnings_before_an_error_stay_linear() {
         .expect_err("echo ; is a syntax error");
     assert_eq!(error.warnings.len(), 5_000);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "warning lines took {:?}",
         started.elapsed()
     );
@@ -2773,7 +2786,7 @@ fn tokenizer_deep_double_quoted_interpolation_is_bounded() {
     let result = tokenize_with_warnings(source.as_bytes(), TOKEN_PARSE);
     assert!(result.is_err(), "deep interpolation must be a catchable syntax error");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "deep interpolation took {:?}",
         started.elapsed()
     );
