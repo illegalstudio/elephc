@@ -189,3 +189,118 @@ fn enum_dependent_keys_and_offsets_retain_ordered_reads_on_all_targets() {
         assert!(elements[1].key == Some(ConstDefaultArrayKey::String("z".into())), "{target}");
     }
 }
+
+/// Builds an enum module with cases `A` and `B` of enum `E` for comparison folds.
+fn comparison_module(target: &str) -> Module {
+    let mut module = Module::new(Target::parse(target).unwrap());
+    let case = |name: &str| crate::types::EnumCaseInfo {
+        name: name.into(), value: None, span: None, deprecated_mt_rand_php: false,
+        attribute_names: Vec::new(), attribute_args: Vec::new(),
+    };
+    module.enum_infos.insert("E".into(), crate::types::EnumInfo {
+        backing_type: None, cases: vec![case("A"), case("B")],
+    });
+    module
+}
+
+/// Folds `left op right` and returns the bool plus the enum reads the fold retained.
+fn compare(
+    module: &Module, left: ExprKind, op: BinOp, right: ExprKind,
+) -> Option<(bool, Vec<(String, String)>)> {
+    let expr = |kind| Expr::new(kind, Span::dummy());
+    let expression = expr(ExprKind::BinaryOp {
+        left: Box::new(expr(left)), op, right: Box::new(expr(right)),
+    });
+    let context = ConstDefaultContext { module, current_class: None };
+    let value = resolve_const_default(&expression, &context)?;
+    let mut reads = Vec::new();
+    collect_enum_reads(&value, &mut reads);
+    match without_enum_effects(value) {
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_BOOL, payload } => Some((payload != 0, reads)),
+        _ => panic!("a comparison must resolve to a bool"),
+    }
+}
+
+/// Builds the `E::name` enum-case expression used as a comparison operand.
+fn case(name: &str) -> ExprKind {
+    ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named("E".into()), name: name.into() }
+}
+
+/// Enum cases are identical only to themselves, and the fold keeps both reads in order.
+#[test]
+fn enum_comparison_defaults_fold_identity_and_keep_reads_on_all_targets() {
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = comparison_module(target);
+        for (op, left, right, expected) in [
+            (BinOp::StrictEq, "A", "A", true), (BinOp::StrictEq, "A", "B", false),
+            (BinOp::StrictNotEq, "A", "B", true), (BinOp::StrictNotEq, "B", "B", false),
+            (BinOp::Eq, "B", "B", true), (BinOp::Eq, "A", "B", false),
+            (BinOp::NotEq, "A", "B", true), (BinOp::NotEq, "A", "A", false),
+        ] {
+            let (value, reads) = compare(&module, case(left), op.clone(), case(right)).unwrap();
+            assert_eq!(value, expected, "{target}: {left} {op:?} {right}");
+            let mut expected_reads = vec![("E".to_string(), left.to_string())];
+            if left != right { expected_reads.push(("E".to_string(), right.to_string())); }
+            assert_eq!(reads, expected_reads, "{target}: reads of {left} {op:?} {right}");
+        }
+    }
+}
+
+/// An enum case against a non-enum is false under strict comparison and declines under loose.
+#[test]
+fn enum_comparison_defaults_decline_loose_cross_type_on_all_targets() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let module = comparison_module(target);
+        assert_eq!(
+            compare(&module, case("A"), BinOp::StrictEq, ExprKind::IntLiteral(1)).map(|c| c.0),
+            Some(false), "{target}",
+        );
+        assert_eq!(
+            compare(&module, ExprKind::StringLiteral("x".into()), BinOp::StrictNotEq, case("A")).map(|c| c.0),
+            Some(true), "{target}",
+        );
+        assert!(compare(&module, case("A"), BinOp::Eq, ExprKind::IntLiteral(1)).is_none(), "{target}");
+        assert!(compare(&module, case("A"), BinOp::NotEq, ExprKind::BoolLiteral(true)).is_none(), "{target}");
+    }
+}
+
+/// Scalar comparisons keep PHP's type rules: strict needs the same type, loose strings may be numeric.
+#[test]
+fn scalar_comparison_defaults_follow_php_type_rules_on_all_targets() {
+    let module = comparison_module("linux-x86_64");
+    let string = |value: &str| ExprKind::StringLiteral(value.into());
+    let check = |left, op, right| compare(&module, left, op, right).map(|result| result.0);
+    assert_eq!(check(string("abc"), BinOp::StrictEq, string("abc")), Some(true));
+    assert_eq!(check(string("abc"), BinOp::StrictEq, string("abd")), Some(false));
+    assert_eq!(check(string("abc"), BinOp::Eq, string("abc")), Some(true));
+    // "1e1" == "10" holds in PHP, so a loose string mismatch cannot be decided by bytes.
+    assert_eq!(check(string("1e1"), BinOp::Eq, string("10")), None);
+    assert_eq!(check(string("1e1"), BinOp::StrictEq, string("10")), Some(false));
+    assert_eq!(check(ExprKind::IntLiteral(1), BinOp::StrictEq, ExprKind::FloatLiteral(1.0)), Some(false));
+    assert_eq!(check(ExprKind::IntLiteral(1), BinOp::Eq, ExprKind::FloatLiteral(1.0)), None);
+    assert_eq!(check(ExprKind::FloatLiteral(1.5), BinOp::StrictEq, ExprKind::FloatLiteral(1.5)), Some(true));
+    assert_eq!(check(ExprKind::FloatLiteral(f64::NAN), BinOp::StrictEq, ExprKind::FloatLiteral(f64::NAN)), Some(false));
+    assert_eq!(check(ExprKind::Null, BinOp::StrictEq, ExprKind::Null), Some(true));
+    assert_eq!(check(ExprKind::Null, BinOp::StrictEq, ExprKind::BoolLiteral(false)), Some(false));
+    assert_eq!(check(ExprKind::Null, BinOp::Eq, ExprKind::BoolLiteral(false)), None);
+}
+
+/// `PHP_BINARY` is a string only known at run time: a comparison with a string literal must decline,
+/// while a comparison with a type that is never a string stays decidable under `===`.
+#[test]
+fn executable_path_comparison_defaults_decline_string_operands_on_all_targets() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let module = comparison_module(target);
+        let path = || ExprKind::ConstRef("PHP_BINARY".into());
+        let string = |value: &str| ExprKind::StringLiteral(value.into());
+        for op in [BinOp::StrictEq, BinOp::StrictNotEq, BinOp::Eq, BinOp::NotEq] {
+            assert!(compare(&module, path(), op.clone(), string("/opt/app")).is_none(), "{target}: path {op:?} string");
+            assert!(compare(&module, string("/opt/app"), op.clone(), path()).is_none(), "{target}: string {op:?} path");
+        }
+        assert_eq!(
+            compare(&module, path(), BinOp::StrictEq, ExprKind::IntLiteral(1)).map(|c| c.0),
+            Some(false), "{target}",
+        );
+        assert!(compare(&module, path(), BinOp::Eq, ExprKind::IntLiteral(1)).is_none(), "{target}");
+    }
+}
