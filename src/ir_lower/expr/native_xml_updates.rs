@@ -25,6 +25,9 @@ struct Inputs { receiver: String, name: String, rhs: String, owners: Vec<Capture
 pub(super) fn lower_plain_dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, value: &Expr, span: Span,
 ) -> bool {
+    // `$object->$name = &$value` stores a marker over the variable's cell. There is no value to
+    // capture, and the ordinary write below materializes the marker.
+    if matches!(value.kind, ExprKind::ArrayReference(_)) { return false; }
     if !possible(ctx, object, Property::Dynamic(property))
         || !defer_native_property_write_receiver(ctx, object) { return false; }
     let expr = Expr::new(ExprKind::DynamicPropertyAccess {

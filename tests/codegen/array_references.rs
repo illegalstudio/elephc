@@ -712,3 +712,53 @@ echo $o[0](), ' ', $a[0]('abc'), "\n";
     );
     assert_eq!(out, "fcc flat\nclosure flat\n49999 3\n");
 }
+
+/// `$this->x[$k][] = &$v` binds the new element to the variable's own cell: a nested property
+/// append must not stage the reference as a value, which panicked the compiler.
+#[test]
+fn test_property_nested_append_binds_a_reference_to_the_new_element() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class R {
+  private array $o = [];
+  public function add(string $e, mixed $l): int {
+    $c = &$this->o[$e][];
+    $c = $l;
+    return count($this->o[$e]);
+  }
+  public function first(string $e): mixed { return $this->o[$e][0]; }
+  public function run(string $e, array $ls): string {
+    $this->o[$e] = [];
+    foreach ($ls as &$l) { $c = &$this->o[$e][]; $c = $l; }
+    return implode(",", $this->o[$e]);
+  }
+}
+$r = new R;
+echo $r->add("x", "p"), $r->add("x", "q"), $r->first("x"), "|", $r->run("y", ["p", "q", "r"]);
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12p|p,q,r", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `$o->$name = &$v` on an erased receiver lowers in a program with SimpleXML (symfony/var-exporter's
+/// hydrator): the XML-aware write captured the reference as a value and panicked. Assembly only.
+#[test]
+fn test_dynamic_property_reference_lowers_with_simplexml() {
+    let dir = make_cli_test_dir("dynamic_property_reference_simplexml");
+    compile_source_to_asm_with_options(
+        r#"<?php
+class P { public $a; }
+function bind(mixed $o, string $n, &$v): void { $o->$n = &$v; }
+$x = 1;
+$p = $argc > 9 ? new SimpleXMLElement("<r/>") : new P;
+bind($p, "a", $x);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

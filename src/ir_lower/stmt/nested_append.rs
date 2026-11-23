@@ -296,7 +296,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         lower_deep_nested_append(ctx, group, span);
         return;
     }
-    if matches!(group.base, BaseKind::Property { .. }) {
+    // A reference append (`$this->x[$k][] = &$v`) has no value to stage: its marker wraps the
+    // variable's own cell, and only the push itself can materialize it.
+    let pushes_reference = matches!(&group.push.kind, StmtKind::ArrayPush { value, .. }
+        if matches!(value.kind, ExprKind::ArrayReference(_)));
+    if matches!(group.base, BaseKind::Property { .. }) && !pushes_reference {
         let StmtKind::ArrayPush { array, value } = &group.push.kind else { unreachable!() };
         let rhs = lower_expr(ctx, value);
         if ctx.builder.insertion_block_is_terminated() { return; }
