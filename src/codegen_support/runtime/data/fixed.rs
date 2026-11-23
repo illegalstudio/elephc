@@ -1532,6 +1532,23 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(
         ".globl _socket_so_broadcast_key_str\n_socket_so_broadcast_key_str:\n    .ascii \"so_broadcast\"\n",
     );
+    // PHP 8.6 socket context option keys. Emitted unconditionally so the runtime `.data`
+    // layout does not depend on the compile profile that references them.
+    for (symbol, key) in [
+        ("_socket_so_reuseaddr_key_str", "so_reuseaddr"),
+        ("_socket_so_keepalive_key_str", "so_keepalive"),
+        ("_socket_so_linger_key_str", "so_linger"),
+        ("_socket_tcp_keepidle_key_str", "tcp_keepidle"),
+        ("_socket_tcp_keepintvl_key_str", "tcp_keepintvl"),
+        ("_socket_tcp_keepcnt_key_str", "tcp_keepcnt"),
+        ("_socket_so_rcvbuf_key_str", "so_rcvbuf"),
+        ("_socket_so_sndbuf_key_str", "so_sndbuf"),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{key}\"\n"));
+    }
+    // PHP 8.6's invalid socket buffer-size warnings, shared by the socket option helpers.
+    out.push_str(".globl _diag_so_rcvbuf_range\n_diag_so_rcvbuf_range:\n    .ascii \"Warning: so_rcvbuf context option must be between 1 and 2147483647\\n\"\n");
+    out.push_str(".globl _diag_so_sndbuf_range\n_diag_so_sndbuf_range:\n    .ascii \"Warning: so_sndbuf context option must be between 1 and 2147483647\\n\"\n");
     out.push_str(
         ".globl _socket_backlog_key_str\n_socket_backlog_key_str:\n    .ascii \"backlog\"\n",
     );

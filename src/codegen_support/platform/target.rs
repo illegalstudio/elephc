@@ -214,6 +214,83 @@ impl Platform {
         }
     }
 
+    /// `SO_REUSEADDR` setsockopt option name. macOS = 0x0004, Linux = 2.
+    /// PHP 8.6 enables it by default on bound sockets; the `so_reuseaddr`
+    /// context option only disables it when falsy.
+    pub fn so_reuseaddr(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 2,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `SO_KEEPALIVE` setsockopt option name. macOS = 0x0008, Linux = 9.
+    pub fn so_keepalive(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0008,
+            Platform::Linux => 9,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `SO_LINGER` setsockopt option name. macOS = 0x0080, Linux = 13.
+    pub fn so_linger(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0080,
+            Platform::Linux => 13,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `SO_RCVBUF` setsockopt option name. macOS = 0x1002, Linux = 8.
+    pub fn so_rcvbuf(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x1002,
+            Platform::Linux => 8,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `SO_SNDBUF` setsockopt option name. macOS = 0x1001, Linux = 7.
+    pub fn so_sndbuf(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x1001,
+            Platform::Linux => 7,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `TCP_KEEPIDLE` (Linux) / `TCP_KEEPALIVE` (macOS) keepalive idle time
+    /// option name. macOS = 0x10, Linux = 4.
+    pub fn tcp_keepidle(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x10,
+            Platform::Linux => 4,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `TCP_KEEPINTVL` keepalive probe interval option name. macOS = 0x101,
+    /// Linux = 5.
+    pub fn tcp_keepintvl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x101,
+            Platform::Linux => 5,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `TCP_KEEPCNT` keepalive probe count option name. macOS = 0x102,
+    /// Linux = 6.
+    pub fn tcp_keepcnt(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x102,
+            Platform::Linux => 6,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `IPPROTO_IPV6` setsockopt level for IPV6_V6ONLY. Same value (41) on
     /// both macOS and Linux. Consumed by the IPv6 server/client option emitter.
     #[allow(dead_code)]

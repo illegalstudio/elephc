@@ -177,7 +177,7 @@ fn emit_apply_socket_bindto_linux_x86_64(emitter: &mut Emitter) {
 /// socket options. Currently honors `socket.tcp_nodelay`.
 /// Input:  AArch64 x0 = fd
 ///         x86_64  rdi = fd
-/// Output: none (fd is preserved through caller-saved spill).
+/// Output: x0 = 0 when the options applied, -1 when an invalid buffer size failed creation.
 pub fn emit_apply_socket_client_opts(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_apply_socket_client_opts_linux_x86_64(emitter);
@@ -185,73 +185,274 @@ pub fn emit_apply_socket_client_opts(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
+    let php86 = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
     emitter.blank();
     emitter.comment("--- runtime: apply_socket_client_opts ---");
     emitter.label_global("__rt_apply_socket_client_opts");
 
-    // Frame:
+    // Frame (48 bytes):
     //   [sp,  0] saved fd
-    //   [sp,  8] int-option scratch (out + setsockopt arg)
-    //   [sp, 16] saved x29
-    //   [sp, 24] saved x30
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // advance runtime pointer or counter
+    //   [sp,  8] int-option value / out slot
+    //   [sp, 16..24) struct linger
+    //   [sp, 24] status (0 = ok, -1 = invalid buffer size)
+    //   [sp, 32] saved x29
+    //   [sp, 40] saved x30
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // advance runtime pointer or counter
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
+    emitter.instruction("str xzr, [sp, #24]");                                  // assume a successful option pass
 
-    // tcp_nodelay lookup. Zero scratch first so a miss keeps falsy default.
+    // -- nodelay: apply when present and truthy --
     emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
-    abi::emit_symbol_address(emitter, "x0", "_socket_key_str");
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
     emitter.instruction("mov x1, #6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "x2", "_socket_tcp_nodelay_key_str");
-    emitter.instruction("mov x3, #11");                                         // strlen("tcp_nodelay")
+    emitter.instruction("adrp x2, _socket_tcp_nodelay_key_str@PAGE");           // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_nodelay_key_str@PAGEOFF");     // complete the option key address
+    emitter.instruction("mov x3, #11");                                         // option key length
     emitter.instruction("add x4, sp, #8");                                      // out_int_addr
-    emitter.instruction("bl __rt_get_int_context_option");                      // call runtime helper
-    emitter.instruction("ldr x9, [sp, #8]");                                    // load runtime value
-    emitter.instruction("cbz x9, __rt_asco_bcast");                             // not truthy → still check so_broadcast
-
-    // setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &1, 4)
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_nodelay_skip");                      // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asco_nodelay_skip");                      // falsy value → skip the setsockopt
     emitter.instruction("mov w9, #1");                                          // option value = 1
-    emitter.instruction("str w9, [sp, #8]");                                    // reuse scratch as option-value buffer
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd
-    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));           // IPPROTO_TCP level
-    emitter.instruction(&format!("mov x2, #{}", plat.tcp_nodelay()));           // TCP_NODELAY option name
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_nodelay()));                         // setsockopt option name
     emitter.instruction("add x3, sp, #8");                                      // option value pointer
-    emitter.instruction("mov x4, #4");                                          // sizeof(int)
-    emitter.syscall(105);                                                       // setsockopt — best-effort, ignore failures
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_nodelay_skip");
 
-    // so_broadcast lookup. Enables sendto() to broadcast addresses on UDP.
-    emitter.label("__rt_asco_bcast");
+    // -- bcast: apply when present and truthy --
     emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
-    abi::emit_symbol_address(emitter, "x0", "_socket_key_str");
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
     emitter.instruction("mov x1, #6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "x2", "_socket_so_broadcast_key_str");
-    emitter.instruction("mov x3, #12");                                         // strlen("so_broadcast")
+    emitter.instruction("adrp x2, _socket_so_broadcast_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_broadcast_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
     emitter.instruction("add x4, sp, #8");                                      // out_int_addr
-    emitter.instruction("bl __rt_get_int_context_option");                      // call runtime helper
-    emitter.instruction("ldr x9, [sp, #8]");                                    // load runtime value
-    emitter.instruction("cbz x9, __rt_asco_done");                              // not truthy → skip setsockopt
-
-    // setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &1, 4)
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_bcast_skip");                        // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asco_bcast_skip");                        // falsy value → skip the setsockopt
     emitter.instruction("mov w9, #1");                                          // option value = 1
-    emitter.instruction("str w9, [sp, #8]");                                    // reuse scratch as option-value buffer
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd
-    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));            // SOL_SOCKET level
-    emitter.instruction(&format!("mov x2, #{}", plat.so_broadcast()));          // SO_BROADCAST option name
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_broadcast()));                        // setsockopt option name
     emitter.instruction("add x3, sp, #8");                                      // option value pointer
-    emitter.instruction("mov x4, #4");                                          // sizeof(int)
-    emitter.syscall(105);                                                       // setsockopt — best-effort, ignore failures
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort, ignore failures
+    emitter.label("__rt_asco_bcast_skip");
+    if php86 {
+    // -- keepalive: apply when present and truthy --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_keepalive_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_keepalive_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_keepalive_skip");                    // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asco_keepalive_skip");                    // falsy value → skip the setsockopt
+    emitter.instruction("mov w9, #1");                                          // option value = 1
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_keepalive()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_keepalive_skip");
 
-    emitter.label("__rt_asco_done");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release frame
-    emitter.instruction("ret");                                                 // return to caller
+    // -- so_linger: positive enables, zero/negative disables, 65535 clamp --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_linger_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_linger_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_linger_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured linger time
+    emitter.instruction("mov x10, #0");                                         // start with lingering disabled
+    emitter.instruction("cmp x9, #0");                                          // is the configured value positive?
+    emitter.instruction("b.le __rt_asco_linger_off");                           // zero or negative disables lingering
+    emitter.instruction("mov x10, #1");                                         // a positive value enables lingering
+    emitter.instruction("mov x11, #65535");                                     // the platform linger cap
+    emitter.instruction("cmp x9, x11");                                         // is the linger time above the cap?
+    emitter.instruction("b.le __rt_asco_linger_store");                         // a value within the cap is kept as-is
+    emitter.instruction("mov x9, x11");                                         // clamp the linger time to the unsigned short cap
+    emitter.label("__rt_asco_linger_store");
+    emitter.instruction("str w10, [sp, #16]");                                  // publish struct linger's l_onoff
+    emitter.instruction("str w9, [sp, #20]");                                   // publish struct linger's l_linger
+    emitter.instruction("b __rt_asco_linger_apply");                            // apply the assembled linger value
+    emitter.label("__rt_asco_linger_off");
+    emitter.instruction("str wzr, [sp, #16]");                                  // disable lingering
+    emitter.instruction("str wzr, [sp, #20]");                                  // a disabled linger keeps a zero timeout
+    emitter.label("__rt_asco_linger_apply");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_linger()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #16");                                     // option value pointer
+    emitter.instruction("mov x4, #8");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_linger_skip");
+
+    // -- keepidle: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepidle_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepidle_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_keepidle_skip");                     // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepidle()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_keepidle_skip");
+
+    // -- keepintvl: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepintvl_key_str@PAGE");         // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepintvl_key_str@PAGEOFF");   // complete the option key address
+    emitter.instruction("mov x3, #13");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_keepintvl_skip");                    // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepintvl()));                       // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_keepintvl_skip");
+
+    // -- keepcnt: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepcnt_key_str@PAGE");           // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepcnt_key_str@PAGEOFF");     // complete the option key address
+    emitter.instruction("mov x3, #11");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_keepcnt_skip");                      // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepcnt()));                         // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asco_keepcnt_skip");
+
+    // -- rcvbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_rcvbuf_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_rcvbuf_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_rcvbuf_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the requested buffer size
+    emitter.instruction("cmp x9, #1");                                          // the wrapper requires a positive size
+    emitter.instruction("b.lt __rt_asco_rcvbuf_invalid");                       // below one byte → reject the stream
+    emitter.instruction("mov x10, #2147483647");                                // the largest accepted buffer size
+    emitter.instruction("cmp x9, x10");                                         // is the request still an int?
+    emitter.instruction("b.gt __rt_asco_rcvbuf_invalid");                       // above INT_MAX → reject the stream
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_rcvbuf()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.instruction("b __rt_asco_rcvbuf_skip");                             // the valid buffer size has been applied
+    emitter.label("__rt_asco_rcvbuf_invalid");
+    emitter.instruction("adrp x1, _diag_so_rcvbuf_range@PAGE");                 // load the range warning text
+    emitter.instruction("add x1, x1, _diag_so_rcvbuf_range@PAGEOFF");           // complete the warning text address
+    emitter.instruction("mov x2, #67");                                         // pass the complete range-warning length
+    emitter.instruction("bl __rt_diag_warning");                                // report the invalid buffer size before failing
+    emitter.instruction("mov x0, #-1");                                         // mark the helper as failed
+    emitter.instruction("str x0, [sp, #24]");                                   // publish the failure to the epilogue
+    emitter.label("__rt_asco_rcvbuf_skip");
+
+    // -- sndbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_sndbuf_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_sndbuf_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asco_sndbuf_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the requested buffer size
+    emitter.instruction("cmp x9, #1");                                          // the wrapper requires a positive size
+    emitter.instruction("b.lt __rt_asco_sndbuf_invalid");                       // below one byte → reject the stream
+    emitter.instruction("mov x10, #2147483647");                                // the largest accepted buffer size
+    emitter.instruction("cmp x9, x10");                                         // is the request still an int?
+    emitter.instruction("b.gt __rt_asco_sndbuf_invalid");                       // above INT_MAX → reject the stream
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_sndbuf()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.instruction("b __rt_asco_sndbuf_skip");                             // the valid buffer size has been applied
+    emitter.label("__rt_asco_sndbuf_invalid");
+    emitter.instruction("adrp x1, _diag_so_sndbuf_range@PAGE");                 // load the range warning text
+    emitter.instruction("add x1, x1, _diag_so_sndbuf_range@PAGEOFF");           // complete the warning text address
+    emitter.instruction("mov x2, #67");                                         // pass the complete range-warning length
+    emitter.instruction("bl __rt_diag_warning");                                // report the invalid buffer size before failing
+    emitter.instruction("mov x0, #-1");                                         // mark the helper as failed
+    emitter.instruction("str x0, [sp, #24]");                                   // publish the failure to the epilogue
+    emitter.label("__rt_asco_sndbuf_skip");
+    }
+
+    // -- return the pass/fail status --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // report 0 or -1 to the stream constructor
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return to the socket constructor
 }
 
-/// `__rt_apply_socket_server_opts(fd)` — best-effort apply of pre-bind socket
-/// options. Currently honors `socket.so_reuseport`.
+/// `__rt_apply_socket_server_opts(fd)` — apply the pre-bind socket context
+/// options, including PHP 8.6's `so_reuseaddr` default-on behaviour and the
+/// keepalive/linger/buffer-size family.
 /// Input:  AArch64 x0 = fd
-///         x86_64  rdi = fd
+/// Output: x0 = 0 when the options applied, -1 when an invalid buffer size failed creation.
 pub fn emit_apply_socket_server_opts(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_apply_socket_server_opts_linux_x86_64(emitter);
@@ -259,178 +460,861 @@ pub fn emit_apply_socket_server_opts(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
+    let php86 = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
     emitter.blank();
     emitter.comment("--- runtime: apply_socket_server_opts ---");
     emitter.label_global("__rt_apply_socket_server_opts");
 
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // advance runtime pointer or counter
+    // Frame (48 bytes):
+    //   [sp,  0] saved fd
+    //   [sp,  8] int-option value / out slot
+    //   [sp, 16..24) struct linger
+    //   [sp, 24] status (0 = ok, -1 = invalid buffer size)
+    //   [sp, 32] saved x29
+    //   [sp, 40] saved x30
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // advance runtime pointer or counter
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
+    emitter.instruction("str xzr, [sp, #24]");                                  // assume a successful option pass
 
-    // so_reuseport lookup.
+    if php86 {
+    // -- reuseaddr: enabled by default unless the option is present and falsy --
     emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
-    abi::emit_symbol_address(emitter, "x0", "_socket_key_str");
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
     emitter.instruction("mov x1, #6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "x2", "_socket_so_reuseport_key_str");
-    emitter.instruction("mov x3, #12");                                         // strlen("so_reuseport")
+    emitter.instruction("adrp x2, _socket_so_reuseaddr_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_reuseaddr_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
     emitter.instruction("add x4, sp, #8");                                      // out_int_addr
-    emitter.instruction("bl __rt_get_int_context_option");                      // call runtime helper
-    emitter.instruction("ldr x9, [sp, #8]");                                    // load runtime value
-    emitter.instruction("cbz x9, __rt_asso_done");                              // not truthy → skip setsockopt
-
-    // setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &1, 4)
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbnz x0, __rt_asso_reuseaddr_present");                // present option → inspect its value
+    emitter.instruction("b __rt_asso_reuseaddr_apply");                         // missing option → keep the default-on behaviour
+    emitter.label("__rt_asso_reuseaddr_present");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asso_reuseaddr_skip");                    // explicitly falsy → disable the option
+    emitter.label("__rt_asso_reuseaddr_apply");
     emitter.instruction("mov w9, #1");                                          // option value = 1
-    emitter.instruction("str w9, [sp, #8]");                                    // reuse scratch as option-value buffer
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd
-    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));            // SOL_SOCKET level
-    emitter.instruction(&format!("mov x2, #{}", plat.so_reuseport()));          // SO_REUSEPORT option name
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_reuseaddr()));                        // setsockopt option name
     emitter.instruction("add x3, sp, #8");                                      // option value pointer
-    emitter.instruction("mov x4, #4");                                          // sizeof(int)
-    emitter.syscall(105);                                                       // setsockopt — best-effort, ignore failures
-
-    emitter.label("__rt_asso_done");
-    // ipv6_v6only lookup. setsockopt on a v4 socket fails silently here; the
-    // emitter is reused for both v4 and v6 server paths so we just probe and
-    // let an unsupported family bail out via setsockopt's normal error
-    // semantics.
-    emitter.instruction("str xzr, [sp, #8]");                                   // reset out_int slot
-    abi::emit_symbol_address(emitter, "x0", "_socket_key_str");
-    emitter.instruction("mov x1, #6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "x2", "_socket_ipv6_v6only_key_str");
-    emitter.instruction("mov x3, #11");                                         // strlen("ipv6_v6only")
-    emitter.instruction("add x4, sp, #8");                                      // advance runtime pointer or counter
-    emitter.instruction("bl __rt_get_int_context_option");                      // call runtime helper
-    emitter.instruction("ldr x9, [sp, #8]");                                    // load runtime value
-    emitter.instruction("cbz x9, __rt_asso_v6_done");                           // branch when the checked value is zero or equal
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_reuseaddr_skip");
+    } else {
+    // -- reuseaddr: PHP enables address reuse by default --
     emitter.instruction("mov w9, #1");                                          // option value = 1
-    emitter.instruction("str w9, [sp, #8]");                                    // store runtime value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd
-    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_ipv6()));          // IPPROTO_IPV6 level
-    emitter.instruction(&format!("mov x2, #{}", plat.ipv6_v6only()));           // IPV6_V6ONLY option name
-    emitter.instruction("add x3, sp, #8");                                      // advance runtime pointer or counter
-    emitter.instruction("mov x4, #4");                                          // prepare AArch64 call argument
-    emitter.syscall(105);                                                       // best-effort
-    emitter.label("__rt_asso_v6_done");
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_reuseaddr()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    }
 
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release frame
-    emitter.instruction("ret");                                                 // return to caller
+    // -- reuseport: apply when present and truthy --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_reuseport_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_reuseport_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_reuseport_skip");                    // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asso_reuseport_skip");                    // falsy value → skip the setsockopt
+    emitter.instruction("mov w9, #1");                                          // option value = 1
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_reuseport()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort, ignore failures
+    emitter.label("__rt_asso_reuseport_skip");
+
+    // -- v6only: apply when present and truthy --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_ipv6_v6only_key_str@PAGE");           // load runtime data address
+    emitter.instruction("add x2, x2, _socket_ipv6_v6only_key_str@PAGEOFF");     // complete the option key address
+    emitter.instruction("mov x3, #11");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_v6only_skip");                       // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asso_v6only_skip");                       // falsy value → skip the setsockopt
+    emitter.instruction("mov w9, #1");                                          // option value = 1
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_ipv6()));                        // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.ipv6_v6only()));                         // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_v6only_skip");
+    if php86 {
+    // -- keepalive: apply when present and truthy --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_keepalive_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_keepalive_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_keepalive_skip");                    // missing option → leave the default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("cbz x9, __rt_asso_keepalive_skip");                    // falsy value → skip the setsockopt
+    emitter.instruction("mov w9, #1");                                          // option value = 1
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the boolean option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_keepalive()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_keepalive_skip");
+
+    // -- so_linger: positive enables, zero/negative disables, 65535 clamp --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_linger_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_linger_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_linger_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured linger time
+    emitter.instruction("mov x10, #0");                                         // start with lingering disabled
+    emitter.instruction("cmp x9, #0");                                          // is the configured value positive?
+    emitter.instruction("b.le __rt_asso_linger_off");                           // zero or negative disables lingering
+    emitter.instruction("mov x10, #1");                                         // a positive value enables lingering
+    emitter.instruction("mov x11, #65535");                                     // the platform linger cap
+    emitter.instruction("cmp x9, x11");                                         // is the linger time above the cap?
+    emitter.instruction("b.le __rt_asso_linger_store");                         // a value within the cap is kept as-is
+    emitter.instruction("mov x9, x11");                                         // clamp the linger time to the unsigned short cap
+    emitter.label("__rt_asso_linger_store");
+    emitter.instruction("str w10, [sp, #16]");                                  // publish struct linger's l_onoff
+    emitter.instruction("str w9, [sp, #20]");                                   // publish struct linger's l_linger
+    emitter.instruction("b __rt_asso_linger_apply");                            // apply the assembled linger value
+    emitter.label("__rt_asso_linger_off");
+    emitter.instruction("str wzr, [sp, #16]");                                  // disable lingering
+    emitter.instruction("str wzr, [sp, #20]");                                  // a disabled linger keeps a zero timeout
+    emitter.label("__rt_asso_linger_apply");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_linger()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #16");                                     // option value pointer
+    emitter.instruction("mov x4, #8");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_linger_skip");
+
+    // -- keepidle: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepidle_key_str@PAGE");          // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepidle_key_str@PAGEOFF");    // complete the option key address
+    emitter.instruction("mov x3, #12");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_keepidle_skip");                     // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepidle()));                        // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_keepidle_skip");
+
+    // -- keepintvl: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepintvl_key_str@PAGE");         // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepintvl_key_str@PAGEOFF");   // complete the option key address
+    emitter.instruction("mov x3, #13");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_keepintvl_skip");                    // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepintvl()));                       // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_keepintvl_skip");
+
+    // -- keepcnt: apply the configured integer when present --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_tcp_keepcnt_key_str@PAGE");           // load runtime data address
+    emitter.instruction("add x2, x2, _socket_tcp_keepcnt_key_str@PAGEOFF");     // complete the option key address
+    emitter.instruction("mov x3, #11");                                         // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_keepcnt_skip");                      // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the configured value
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.tcp_keepcnt()));                         // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.label("__rt_asso_keepcnt_skip");
+
+    // -- rcvbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_rcvbuf_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_rcvbuf_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_rcvbuf_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the requested buffer size
+    emitter.instruction("cmp x9, #1");                                          // the wrapper requires a positive size
+    emitter.instruction("b.lt __rt_asso_rcvbuf_invalid");                       // below one byte → reject the stream
+    emitter.instruction("mov x10, #2147483647");                                // the largest accepted buffer size
+    emitter.instruction("cmp x9, x10");                                         // is the request still an int?
+    emitter.instruction("b.gt __rt_asso_rcvbuf_invalid");                       // above INT_MAX → reject the stream
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_rcvbuf()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.instruction("b __rt_asso_rcvbuf_skip");                             // the valid buffer size has been applied
+    emitter.label("__rt_asso_rcvbuf_invalid");
+    emitter.instruction("adrp x1, _diag_so_rcvbuf_range@PAGE");                 // load the range warning text
+    emitter.instruction("add x1, x1, _diag_so_rcvbuf_range@PAGEOFF");           // complete the warning text address
+    emitter.instruction("mov x2, #67");                                         // pass the complete range-warning length
+    emitter.instruction("bl __rt_diag_warning");                                // report the invalid buffer size before failing
+    emitter.instruction("mov x0, #-1");                                         // mark the helper as failed
+    emitter.instruction("str x0, [sp, #24]");                                   // publish the failure to the epilogue
+    emitter.label("__rt_asso_rcvbuf_skip");
+
+    // -- sndbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
+    emitter.instruction("adrp x0, _socket_key_str@PAGE");                       // load runtime data address
+    emitter.instruction("add x0, x0, _socket_key_str@PAGEOFF");                 // complete the socket wrapper key address
+    emitter.instruction("mov x1, #6");                                          // strlen("socket")
+    emitter.instruction("adrp x2, _socket_so_sndbuf_key_str@PAGE");             // load runtime data address
+    emitter.instruction("add x2, x2, _socket_so_sndbuf_key_str@PAGEOFF");       // complete the option key address
+    emitter.instruction("mov x3, #9");                                          // option key length
+    emitter.instruction("add x4, sp, #8");                                      // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // look up the socket context option
+    emitter.instruction("cbz x0, __rt_asso_sndbuf_skip");                       // missing option → keep the kernel default
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the requested buffer size
+    emitter.instruction("cmp x9, #1");                                          // the wrapper requires a positive size
+    emitter.instruction("b.lt __rt_asso_sndbuf_invalid");                       // below one byte → reject the stream
+    emitter.instruction("mov x10, #2147483647");                                // the largest accepted buffer size
+    emitter.instruction("cmp x9, x10");                                         // is the request still an int?
+    emitter.instruction("b.gt __rt_asso_sndbuf_invalid");                       // above INT_MAX → reject the stream
+    emitter.instruction("str w9, [sp, #8]");                                    // publish the 32-bit option value
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_sndbuf()));                           // setsockopt option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // option value size
+    emitter.instruction("svc #105");                                            // setsockopt — best-effort
+    emitter.instruction("b __rt_asso_sndbuf_skip");                             // the valid buffer size has been applied
+    emitter.label("__rt_asso_sndbuf_invalid");
+    emitter.instruction("adrp x1, _diag_so_sndbuf_range@PAGE");                 // load the range warning text
+    emitter.instruction("add x1, x1, _diag_so_sndbuf_range@PAGEOFF");           // complete the warning text address
+    emitter.instruction("mov x2, #67");                                         // pass the complete range-warning length
+    emitter.instruction("bl __rt_diag_warning");                                // report the invalid buffer size before failing
+    emitter.instruction("mov x0, #-1");                                         // mark the helper as failed
+    emitter.instruction("str x0, [sp, #24]");                                   // publish the failure to the epilogue
+    emitter.label("__rt_asso_sndbuf_skip");
+    }
+
+    // -- return the pass/fail status --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // report 0 or -1 to the stream constructor
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return to the socket constructor
 }
 
 /// Emits the Linux x86_64 stream runtime helper for apply socket client opts.
 fn emit_apply_socket_client_opts_linux_x86_64(emitter: &mut Emitter) {
+    let plat = emitter.platform;
+    let php86 = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
     emitter.blank();
     emitter.comment("--- runtime: apply_socket_client_opts ---");
     emitter.label_global("__rt_apply_socket_client_opts");
 
+    // rbp-relative frame:
+    //   [rbp -  8] saved fd
+    //   [rbp - 16] int-option value / out slot
+    //   [rbp - 24] struct linger l_onoff
+    //   [rbp - 28] struct linger l_linger
+    //   [rbp - 32] status (0 = ok, -1 = invalid buffer size)
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
-    emitter.instruction("sub rsp, 16");                                         // [rbp-8]=fd, [rbp-16]=scratch
+    emitter.instruction("sub rsp, 48");                                         // allocate the option frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
-    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // assume a successful option pass
 
-    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
-    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_nodelay_key_str");    // load runtime data address
-    emitter.instruction("mov rcx, 11");                                         // strlen("tcp_nodelay")
-    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
-    emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // prepare runtime result value
-    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_asco_bcast_x");                                // not truthy → still check so_broadcast
-
-    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1 (lower 4 bytes)
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    emitter.instruction("mov esi, 6");                                          // IPPROTO_TCP
-    emitter.instruction("mov edx, 1");                                          // TCP_NODELAY
-    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
-    emitter.instruction("mov r8d, 4");                                          // sizeof(int)
-    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
-    emitter.instruction("syscall");                                             // best-effort, ignore failures
-
-    // so_broadcast lookup. Enables sendto() to broadcast addresses on UDP.
-    emitter.label("__rt_asco_bcast_x");
+    // -- nodelay: apply when present and truthy --
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
     abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "rdx", "_socket_so_broadcast_key_str");   // load runtime data address
-    emitter.instruction("mov rcx, 12");                                         // strlen("so_broadcast")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_nodelay_key_str");
+    emitter.instruction("mov rcx, 11");                                         // option key length
     emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
-    emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // prepare runtime result value
-    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_asco_done_x");                                 // not truthy → skip setsockopt
-
-    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1 (lower 4 bytes)
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_nodelay_skip_x");                         // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asco_nodelay_skip_x");                         // falsy value → skip the setsockopt
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    emitter.instruction("mov esi, 1");                                          // SOL_SOCKET
-    emitter.instruction("mov edx, 6");                                          // SO_BROADCAST (Linux)
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_nodelay()));                         // setsockopt option name
     emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
-    emitter.instruction("mov r8d, 4");                                          // sizeof(int)
-    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
-    emitter.instruction("syscall");                                             // best-effort, ignore failures
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_nodelay_skip_x");
 
-    emitter.label("__rt_asco_done_x");
-    emitter.instruction("add rsp, 16");                                         // release runtime stack frame
+    // -- bcast: apply when present and truthy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_broadcast_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_bcast_skip_x");                           // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asco_bcast_skip_x");                           // falsy value → skip the setsockopt
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_broadcast()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_bcast_skip_x");
+    if php86 {
+    // -- keepalive: apply when present and truthy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_keepalive_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_keepalive_skip_x");                       // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asco_keepalive_skip_x");                       // falsy value → skip the setsockopt
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_keepalive()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_keepalive_skip_x");
+
+    // -- so_linger: positive enables, zero/negative disables, 65535 clamp --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_linger_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_linger_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured linger time
+    emitter.instruction("xor ecx, ecx");                                        // start with lingering disabled
+    emitter.instruction("cmp rax, 0");                                          // is the configured value positive?
+    emitter.instruction("jle __rt_asco_linger_off_x");                          // zero or negative disables lingering
+    emitter.instruction("mov ecx, 1");                                          // a positive value enables lingering
+    emitter.instruction("mov rdx, 65535");                                      // the platform linger cap
+    emitter.instruction("cmp rax, rdx");                                        // is the linger time above the cap?
+    emitter.instruction("jle __rt_asco_linger_store_x");                        // a value within the cap is kept as-is
+    emitter.instruction("mov rax, rdx");                                        // clamp the linger time to the unsigned short cap
+    emitter.label("__rt_asco_linger_store_x");
+    emitter.instruction("mov DWORD PTR [rbp - 24], ecx");                       // publish struct linger's l_onoff
+    emitter.instruction("mov DWORD PTR [rbp - 28], eax");                       // publish struct linger's l_linger
+    emitter.instruction("jmp __rt_asco_linger_apply_x");                        // apply the assembled linger value
+    emitter.label("__rt_asco_linger_off_x");
+    emitter.instruction("mov DWORD PTR [rbp - 24], 0");                         // disable lingering
+    emitter.instruction("mov DWORD PTR [rbp - 28], 0");                         // a disabled linger keeps a zero timeout
+    emitter.label("__rt_asco_linger_apply_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_linger()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 24]");                                 // option value pointer
+    emitter.instruction("mov r8d, 8");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_linger_skip_x");
+
+    // -- keepidle: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepidle_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_keepidle_skip_x");                        // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepidle()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_keepidle_skip_x");
+
+    // -- keepintvl: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepintvl_key_str");
+    emitter.instruction("mov rcx, 13");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_keepintvl_skip_x");                       // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepintvl()));                       // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_keepintvl_skip_x");
+
+    // -- keepcnt: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepcnt_key_str");
+    emitter.instruction("mov rcx, 11");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_keepcnt_skip_x");                         // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepcnt()));                         // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asco_keepcnt_skip_x");
+
+    // -- rcvbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_rcvbuf_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_rcvbuf_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the requested buffer size
+    emitter.instruction("cmp rax, 1");                                          // the wrapper requires a positive size
+    emitter.instruction("jl __rt_asco_rcvbuf_invalid_x");                       // below one byte → reject the stream
+    emitter.instruction("mov rcx, 2147483647");                                 // the largest accepted buffer size
+    emitter.instruction("cmp rax, rcx");                                        // is the request still an int?
+    emitter.instruction("jg __rt_asco_rcvbuf_invalid_x");                       // above INT_MAX → reject the stream
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_rcvbuf()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.instruction("jmp __rt_asco_rcvbuf_skip_x");                         // the valid buffer size has been applied
+    emitter.label("__rt_asco_rcvbuf_invalid_x");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_so_rcvbuf_range");
+    emitter.instruction("mov esi, 67");                                         // pass the complete range-warning length
+    emitter.instruction("call __rt_diag_warning");                              // report the invalid buffer size before failing
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // mark the helper as failed
+    emitter.label("__rt_asco_rcvbuf_skip_x");
+
+    // -- sndbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_sndbuf_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asco_sndbuf_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the requested buffer size
+    emitter.instruction("cmp rax, 1");                                          // the wrapper requires a positive size
+    emitter.instruction("jl __rt_asco_sndbuf_invalid_x");                       // below one byte → reject the stream
+    emitter.instruction("mov rcx, 2147483647");                                 // the largest accepted buffer size
+    emitter.instruction("cmp rax, rcx");                                        // is the request still an int?
+    emitter.instruction("jg __rt_asco_sndbuf_invalid_x");                       // above INT_MAX → reject the stream
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_sndbuf()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.instruction("jmp __rt_asco_sndbuf_skip_x");                         // the valid buffer size has been applied
+    emitter.label("__rt_asco_sndbuf_invalid_x");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_so_sndbuf_range");
+    emitter.instruction("mov esi, 67");                                         // pass the complete range-warning length
+    emitter.instruction("call __rt_diag_warning");                              // report the invalid buffer size before failing
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // mark the helper as failed
+    emitter.label("__rt_asco_sndbuf_skip_x");
+    }
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // report 0 or -1 to the stream constructor
+    emitter.instruction("add rsp, 48");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return to the socket constructor
 }
 
 /// Emits the Linux x86_64 stream runtime helper for apply socket server opts.
 fn emit_apply_socket_server_opts_linux_x86_64(emitter: &mut Emitter) {
+    let plat = emitter.platform;
+    let php86 = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
     emitter.blank();
     emitter.comment("--- runtime: apply_socket_server_opts ---");
     emitter.label_global("__rt_apply_socket_server_opts");
 
+    // rbp-relative frame:
+    //   [rbp -  8] saved fd
+    //   [rbp - 16] int-option value / out slot
+    //   [rbp - 24] struct linger l_onoff
+    //   [rbp - 28] struct linger l_linger
+    //   [rbp - 32] status (0 = ok, -1 = invalid buffer size)
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
-    emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
+    emitter.instruction("sub rsp, 48");                                         // allocate the option frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
-    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // assume a successful option pass
 
+    if php86 {
+    // -- reuseaddr: enabled by default unless the option is present and falsy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
     abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "rdx", "_socket_so_reuseport_key_str");   // load runtime data address
-    emitter.instruction("mov rcx, 12");                                         // strlen("so_reuseport")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_reuseaddr_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
     emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
-    emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // prepare runtime result value
-    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_asso_done_x");                                 // not truthy → skip setsockopt
-
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jnz __rt_asso_reuseaddr_present_x");                   // present option → inspect its value
+    emitter.instruction("jmp __rt_asso_reuseaddr_apply_x");                     // missing option → keep the default-on behaviour
+    emitter.label("__rt_asso_reuseaddr_present_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asso_reuseaddr_skip_x");                       // explicitly falsy → disable the option
+    emitter.label("__rt_asso_reuseaddr_apply_x");
     emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    emitter.instruction("mov esi, 1");                                          // SOL_SOCKET
-    emitter.instruction("mov edx, 15");                                         // SO_REUSEPORT (Linux)
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_reuseaddr()));                        // setsockopt option name
     emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
-    emitter.instruction("mov r8d, 4");                                          // sizeof(int)
-    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
-    emitter.instruction("syscall");                                             // best-effort, ignore failures
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_reuseaddr_skip_x");
+    } else {
+    // -- reuseaddr: PHP enables address reuse by default --
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_reuseaddr()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    }
 
-    emitter.label("__rt_asso_done_x");
-    // ipv6_v6only lookup. setsockopt on a v4 socket fails silently; we just
-    // probe regardless and let the kernel reject if the family is wrong.
-    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // reset out_int slot
+    // -- reuseport: apply when present and truthy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
     abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    abi::emit_symbol_address(emitter, "rdx", "_socket_ipv6_v6only_key_str");    // load runtime data address
-    emitter.instruction("mov rcx, 11");                                         // strlen("ipv6_v6only")
-    emitter.instruction("lea r8, [rbp - 16]");                                  // load runtime data address
-    emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // prepare runtime result value
-    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_asso_v6_done_x");                              // branch when the checked value is zero or equal
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_reuseport_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_reuseport_skip_x");                       // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asso_reuseport_skip_x");                       // falsy value → skip the setsockopt
     emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    emitter.instruction("mov esi, 41");                                         // IPPROTO_IPV6
-    emitter.instruction("mov edx, 26");                                         // IPV6_V6ONLY (Linux)
-    emitter.instruction("lea r10, [rbp - 16]");                                 // load runtime data address
-    emitter.instruction("mov r8d, 4");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 54");                                         // setsockopt
-    emitter.instruction("syscall");                                             // best-effort
-    emitter.label("__rt_asso_v6_done_x");
-    emitter.instruction("add rsp, 16");                                         // release runtime stack frame
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_reuseport()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_reuseport_skip_x");
+
+    // -- v6only: apply when present and truthy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_ipv6_v6only_key_str");
+    emitter.instruction("mov rcx, 11");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_v6only_skip_x");                          // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asso_v6only_skip_x");                          // falsy value → skip the setsockopt
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_ipv6()));                        // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.ipv6_v6only()));                         // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_v6only_skip_x");
+    if php86 {
+    // -- keepalive: apply when present and truthy --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_keepalive_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_keepalive_skip_x");                       // missing option → leave the default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("test rax, rax");                                       // is the configured value truthy?
+    emitter.instruction("jz __rt_asso_keepalive_skip_x");                       // falsy value → skip the setsockopt
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_keepalive()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_keepalive_skip_x");
+
+    // -- so_linger: positive enables, zero/negative disables, 65535 clamp --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_linger_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_linger_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured linger time
+    emitter.instruction("xor ecx, ecx");                                        // start with lingering disabled
+    emitter.instruction("cmp rax, 0");                                          // is the configured value positive?
+    emitter.instruction("jle __rt_asso_linger_off_x");                          // zero or negative disables lingering
+    emitter.instruction("mov ecx, 1");                                          // a positive value enables lingering
+    emitter.instruction("mov rdx, 65535");                                      // the platform linger cap
+    emitter.instruction("cmp rax, rdx");                                        // is the linger time above the cap?
+    emitter.instruction("jle __rt_asso_linger_store_x");                        // a value within the cap is kept as-is
+    emitter.instruction("mov rax, rdx");                                        // clamp the linger time to the unsigned short cap
+    emitter.label("__rt_asso_linger_store_x");
+    emitter.instruction("mov DWORD PTR [rbp - 24], ecx");                       // publish struct linger's l_onoff
+    emitter.instruction("mov DWORD PTR [rbp - 28], eax");                       // publish struct linger's l_linger
+    emitter.instruction("jmp __rt_asso_linger_apply_x");                        // apply the assembled linger value
+    emitter.label("__rt_asso_linger_off_x");
+    emitter.instruction("mov DWORD PTR [rbp - 24], 0");                         // disable lingering
+    emitter.instruction("mov DWORD PTR [rbp - 28], 0");                         // a disabled linger keeps a zero timeout
+    emitter.label("__rt_asso_linger_apply_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_linger()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 24]");                                 // option value pointer
+    emitter.instruction("mov r8d, 8");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_linger_skip_x");
+
+    // -- keepidle: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepidle_key_str");
+    emitter.instruction("mov rcx, 12");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_keepidle_skip_x");                        // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepidle()));                        // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_keepidle_skip_x");
+
+    // -- keepintvl: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepintvl_key_str");
+    emitter.instruction("mov rcx, 13");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_keepintvl_skip_x");                       // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepintvl()));                       // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_keepintvl_skip_x");
+
+    // -- keepcnt: apply the configured integer when present --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_keepcnt_key_str");
+    emitter.instruction("mov rcx, 11");                                         // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_keepcnt_skip_x");                         // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the configured value
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.ipproto_tcp()));                         // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.tcp_keepcnt()));                         // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.label("__rt_asso_keepcnt_skip_x");
+
+    // -- rcvbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_rcvbuf_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_rcvbuf_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the requested buffer size
+    emitter.instruction("cmp rax, 1");                                          // the wrapper requires a positive size
+    emitter.instruction("jl __rt_asso_rcvbuf_invalid_x");                       // below one byte → reject the stream
+    emitter.instruction("mov rcx, 2147483647");                                 // the largest accepted buffer size
+    emitter.instruction("cmp rax, rcx");                                        // is the request still an int?
+    emitter.instruction("jg __rt_asso_rcvbuf_invalid_x");                       // above INT_MAX → reject the stream
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_rcvbuf()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.instruction("jmp __rt_asso_rcvbuf_skip_x");                         // the valid buffer size has been applied
+    emitter.label("__rt_asso_rcvbuf_invalid_x");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_so_rcvbuf_range");
+    emitter.instruction("mov esi, 67");                                         // pass the complete range-warning length
+    emitter.instruction("call __rt_diag_warning");                              // report the invalid buffer size before failing
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // mark the helper as failed
+    emitter.label("__rt_asso_rcvbuf_skip_x");
+
+    // -- sndbuf: validate 1..=INT_MAX, failing stream creation otherwise --
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
+    emitter.instruction("mov rsi, 6");                                          // strlen("socket")
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_sndbuf_key_str");
+    emitter.instruction("mov rcx, 9");                                          // option key length
+    emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // look up the socket context option
+    emitter.instruction("test rax, rax");                                       // did the context option exist?
+    emitter.instruction("jz __rt_asso_sndbuf_skip_x");                          // missing option → keep the kernel default
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the requested buffer size
+    emitter.instruction("cmp rax, 1");                                          // the wrapper requires a positive size
+    emitter.instruction("jl __rt_asso_sndbuf_invalid_x");                       // below one byte → reject the stream
+    emitter.instruction("mov rcx, 2147483647");                                 // the largest accepted buffer size
+    emitter.instruction("cmp rax, rcx");                                        // is the request still an int?
+    emitter.instruction("jg __rt_asso_sndbuf_invalid_x");                       // above INT_MAX → reject the stream
+    emitter.instruction("mov DWORD PTR [rbp - 16], eax");                       // publish the 32-bit option value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction(&format!("mov esi, {}", plat.sol_socket()));                          // setsockopt level
+    emitter.instruction(&format!("mov edx, {}", plat.so_sndbuf()));                           // setsockopt option name
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // option value size
+    emitter.instruction("mov eax, 54");                                         // setsockopt syscall
+    emitter.instruction("syscall");                                             // setsockopt — best-effort
+    emitter.instruction("jmp __rt_asso_sndbuf_skip_x");                         // the valid buffer size has been applied
+    emitter.label("__rt_asso_sndbuf_invalid_x");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_so_sndbuf_range");
+    emitter.instruction("mov esi, 67");                                         // pass the complete range-warning length
+    emitter.instruction("call __rt_diag_warning");                              // report the invalid buffer size before failing
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // mark the helper as failed
+    emitter.label("__rt_asso_sndbuf_skip_x");
+    }
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // report 0 or -1 to the stream constructor
+    emitter.instruction("add rsp, 48");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return to the socket constructor
 }

@@ -157,7 +157,9 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.instruction("b __rt_stream_socket_server_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
-    emitter.instruction("bl __rt_apply_socket_server_opts");                    // apply so_reuseport before bind (best-effort)
+    emitter.instruction("bl __rt_apply_socket_server_opts");                    // apply the socket context options before bind
+    emitter.instruction("cmp x0, #0");                                          // did an invalid buffer size reject the stream?
+    emitter.instruction("b.lt __rt_stream_socket_server_fail_close");           // a rejected option closes the descriptor and fails creation
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the descriptor (helper clobbers x0)
 
     // -- build the 16-byte sockaddr_in at [sp, #40] --
@@ -364,7 +366,9 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_stream_socket_server_fail_x86");               // socket() failed
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
     emitter.instruction("mov rdi, rax");                                        // pass the fd to the options helper
-    emitter.instruction("call __rt_apply_socket_server_opts");                  // apply so_reuseport before bind (best-effort)
+    emitter.instruction("call __rt_apply_socket_server_opts");                  // apply the socket context options before bind
+    emitter.instruction("test rax, rax");                                       // did an invalid buffer size reject the stream?
+    emitter.instruction("js __rt_stream_socket_server_fail_close_x86");         // a rejected option closes the descriptor and fails creation
 
     emitter.instruction("mov WORD PTR [rbp - 40], 2");                          // Linux sin_family = AF_INET
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the port

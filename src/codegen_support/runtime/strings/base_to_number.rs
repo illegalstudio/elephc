@@ -22,21 +22,12 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::php_version::PhpVersion;
 
 /// The `.data` label carrying PHP 8.6's imprecise base-conversion notice.
 ///
 /// The message begins with `Notice: ` so `__rt_diag_warning` classifies it as `E_NOTICE`
 /// after stripping the category prefix, exactly like php-src's `zend_error(E_NOTICE, ...)`.
 const IMPRECISE_CONVERSION_MESSAGE: &str = "_diag_base_conversion_imprecise";
-
-/// Returns true when the active compile profile reports imprecise base conversions.
-///
-/// The diagnostic landed in PHP 8.6: 8.5 and earlier silently widen the accumulator to
-/// `double`, so older profiles emit neither the probe nor the call.
-pub(crate) fn imprecise_conversion_notice_enabled() -> bool {
-    crate::codegen_support::compile_php_version() >= PhpVersion::Php86
-}
 
 /// Emits `__rt_base_conversion_imprecise_notice`, the tail-call wrapper that reports PHP
 /// 8.6's precision-loss notice.

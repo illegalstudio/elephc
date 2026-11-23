@@ -36,6 +36,8 @@ mod paths;
 mod modify;
 #[path = "io/streams_ext.rs"]
 mod streams_ext;
+#[path = "io/socket_options_php86.rs"]
+mod socket_options_php86;
 #[path = "io/stream_errors_php86.rs"]
 mod stream_errors_php86;
 #[path = "io/stream_close_failure_php86.rs"]

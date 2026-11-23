@@ -199,7 +199,9 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_socket_client_ok");
     emitter.instruction("ldr x0, [sp, #32]");                                   // load fd before the options helper
-    emitter.instruction("bl __rt_apply_socket_client_opts");                    // apply tcp_nodelay etc. (best-effort, preserves nothing in x0)
+    emitter.instruction("bl __rt_apply_socket_client_opts");                    // apply the socket context options after connect
+    emitter.instruction("cmp x0, #0");                                          // did an invalid buffer size reject the stream?
+    emitter.instruction("b.lt __rt_stream_socket_client_fail_close");           // a rejected option closes the descriptor and fails creation
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload fd as the return value
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
@@ -386,7 +388,9 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_stream_socket_client_fail_close_x86");         // connect() failed
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // fd into the options helper's first arg
-    emitter.instruction("call __rt_apply_socket_client_opts");                  // apply tcp_nodelay etc. (best-effort)
+    emitter.instruction("call __rt_apply_socket_client_opts");                  // apply the socket context options after connect
+    emitter.instruction("test rax, rax");                                       // did an invalid buffer size reject the stream?
+    emitter.instruction("js __rt_stream_socket_client_fail_close_x86");         // a rejected option closes the descriptor and fails creation
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload fd as the return value
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

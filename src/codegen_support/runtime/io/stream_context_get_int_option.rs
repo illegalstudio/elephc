@@ -75,12 +75,22 @@ pub fn emit_get_int_context_option(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // opt_len
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=lo, x2=hi, x3=tag
     emitter.instruction("cbz x0, __rt_gico_miss");                              // branch when the checked value is zero or equal
-    // Accept int (tag 0) and bool (tag 3). Both already carry the numeric
-    // payload in x1.
+    // Accept int (tag 0), string (tag 1) and bool (tag 3). The 4-arg
+    // `stream_context_set_option()` currently stores every scalar as a string,
+    // so the string arm parses the digits with the shared `atoi` helper.
+    emitter.instruction("cmp x3, #1");                                          // tag 1 = string
+    emitter.instruction("b.eq __rt_gico_string");                               // parse the stored digits as an integer
     emitter.instruction("cmp x3, #0");                                          // tag 0 = int
     emitter.instruction("b.eq __rt_gico_write");                                // branch when the checked value is zero or equal
     emitter.instruction("cmp x3, #3");                                          // tag 3 = bool
     emitter.instruction("b.ne __rt_gico_miss");                                 // branch when the checked value is nonzero or different
+    emitter.instruction("b __rt_gico_write");                                   // bool payloads are already numeric
+    emitter.label("__rt_gico_string");
+    emitter.instruction("bl __rt_atoi");                                        // x1/x2 already hold the stored string pointer and length
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload out_int_addr after the parser call
+    emitter.instruction("str x0, [x9]");                                        // *out_int = parsed integer
+    emitter.instruction("mov x0, #1");                                          // hit
+    emitter.instruction("b __rt_gico_done");                                    // continue at the helper exit
 
     emitter.label("__rt_gico_write");
     emitter.instruction("ldr x9, [sp, #32]");                                   // out_int_addr
@@ -135,10 +145,21 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=lo, rsi=hi, rcx=tag
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gico_miss_x86");                               // branch when the checked value is zero or equal
+    emitter.instruction("cmp rcx, 1");                                          // string tag
+    emitter.instruction("je __rt_gico_string_x86");                             // parse the stored digits as an integer
     emitter.instruction("cmp rcx, 0");                                          // int tag
     emitter.instruction("je __rt_gico_write_x86");                              // branch when the checked value is zero or equal
     emitter.instruction("cmp rcx, 3");                                          // bool tag
     emitter.instruction("jne __rt_gico_miss_x86");                              // branch when the checked value is nonzero or different
+    emitter.instruction("jmp __rt_gico_write_x86");                             // bool payloads are already numeric
+    emitter.label("__rt_gico_string_x86");
+    emitter.instruction("mov rax, rdi");                                        // `atoi` reads the string pointer from rax
+    emitter.instruction("mov rdx, rsi");                                        // and its byte length from rdx
+    emitter.instruction("call __rt_atoi");                                      // parse the stored digits
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload out_int_addr after the parser call
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // *out_int = parsed integer
+    emitter.instruction("mov eax, 1");                                          // hit
+    emitter.instruction("jmp __rt_gico_done_x86");                              // continue at the helper exit
 
     emitter.label("__rt_gico_write_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // out_int_addr
