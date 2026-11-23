@@ -9,5 +9,5 @@
 
 builtin! {
     contract: "gmp_div_qr",
-    semantics: crate::builtins::gmp::indexed_array_semantics(),
+    semantics: crate::builtins::gmp::array_semantics(),
 }

@@ -12,6 +12,26 @@
 
 use crate::support::*;
 
+/// Preserves indexed and string-keyed array payloads across boxed GMP helper returns.
+#[test]
+fn test_gmp_array_results_match_the_prelude_abi() {
+    let out = compile_and_run_capture_merged_with_gmp(
+        r#"<?php
+$pair = gmp_div_qr(10, 3);
+echo count($pair), ':', gmp_strval($pair[0]), ':', gmp_strval($pair[1]), '|';
+$pair = gmp_sqrtrem(10);
+echo count($pair), ':', gmp_strval($pair[0]), ':', gmp_strval($pair[1]), '|';
+$pair = gmp_rootrem(30, 3);
+echo count($pair), ':', gmp_strval($pair[0]), ':', gmp_strval($pair[1]), '|';
+$parts = gmp_gcdext(12, 18);
+echo count($parts), ':', gmp_strval($parts['g']), ':',
+    12 * gmp_intval($parts['s']) + 18 * gmp_intval($parts['t']);
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "2:3:1|2:3:1|2:3:3|3:6:6");
+}
+
 /// Verifies n-ary, array, and mixed-stored GMP operands plus php-src's tie rules.
 #[test]
 fn test_gmp_min_max_nary_array_and_ties() {

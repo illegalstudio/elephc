@@ -9,5 +9,5 @@
 
 builtin! {
     contract: "gmp_rootrem",
-    semantics: crate::builtins::gmp::indexed_array_semantics(),
+    semantics: crate::builtins::gmp::array_semantics(),
 }

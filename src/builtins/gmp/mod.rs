@@ -195,22 +195,9 @@ fn invert_result(_input: &BuiltinSemanticInput<'_>) -> PhpType {
     PhpType::Union(vec![PhpType::Object("GMP".to_string()), PhpType::False])
 }
 
-/// Resolves an indexed array returned by the generic prelude helper.
-///
-/// The helper's declared PHP type is `array`, so its element representation is the
-/// boxed `Mixed` storage even though every element happens to be a `GMP` object.
-/// Narrowing the EIR result to `array<GMP>` would tell codegen to read raw object
-/// pointers out of boxed cells.
-fn indexed_gmp_array_result(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Array(Box::new(PhpType::Mixed))
-}
-
-/// Resolves `gmp_gcdext()`'s string-keyed generic array.
-fn keyed_gmp_array_result(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::AssocArray {
-        key: Box::new(PhpType::Str),
-        value: Box::new(PhpType::Mixed),
-    }
+/// Uses the boxed PHP `array` ABI declared by the GMP prelude's array producers.
+fn array_result(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::php_array()
 }
 
 /// Resolves a scalar integer result.
@@ -243,14 +230,9 @@ pub(crate) const fn invert_semantics() -> BuiltinSemantics {
     semantics_for(invert_result, BuiltinResultOwnership::Fresh)
 }
 
-/// Semantics for an indexed array of fresh GMP objects.
-pub(crate) const fn indexed_array_semantics() -> BuiltinSemantics {
-    semantics_for(indexed_gmp_array_result, BuiltinResultOwnership::Fresh)
-}
-
-/// Semantics for `gmp_gcdext()`'s keyed array.
-pub(crate) const fn keyed_array_semantics() -> BuiltinSemantics {
-    semantics_for(keyed_gmp_array_result, BuiltinResultOwnership::Fresh)
+/// Semantics for a PHP array of fresh GMP objects.
+pub(crate) const fn array_semantics() -> BuiltinSemantics {
+    semantics_for(array_result, BuiltinResultOwnership::Fresh)
 }
 
 /// Semantics for a non-heap integer result.
@@ -394,7 +376,7 @@ mod tests {
         assert!(prelude_helpers_for("strlen").next().is_none());
     }
 
-    /// Verifies result families stay distinct, especially invert and the keyed array.
+    /// Verifies scalar, object, and boxed array result families stay distinct.
     #[test]
     fn result_type_families_are_distinct() {
         let empty = BuiltinSemanticInput {
@@ -411,7 +393,6 @@ mod tests {
         assert_eq!(string_result(&empty), PhpType::Str);
         assert_eq!(void_result(&empty), PhpType::Void);
         assert!(matches!(invert_result(&empty), PhpType::Union(_)));
-        assert!(matches!(indexed_gmp_array_result(&empty), PhpType::Array(_)));
-        assert!(matches!(keyed_gmp_array_result(&empty), PhpType::AssocArray { .. }));
+        assert_eq!(array_result(&empty), PhpType::php_array());
     }
 }
