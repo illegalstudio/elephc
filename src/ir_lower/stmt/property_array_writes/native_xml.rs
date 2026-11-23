@@ -23,7 +23,18 @@ impl Fetch {
 }
 
 /// Captures a native write-fetch or a null sentinel after every dimension operand runs.
+///
+/// Selecting the child is receiver work: a `??=` write borrows its VALUE only, and the boxed null
+/// sentinel below is a temporary this fetch owns. Under the borrowed-operand scope it leaked.
 pub(super) fn fetch(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &property_write_receiver::PropertyWriteReceiver,
+    expression: &Expr, property: &str, span: Span,
+) -> Option<Fetch> {
+    ctx.with_independent_write_receiver(|ctx| fetch_child(ctx, receiver, expression, property, span))
+}
+
+/// Selects the child of [`fetch`], whose caller already left the borrowed-operand scope.
+fn fetch_child(
     ctx: &mut LoweringContext<'_, '_>, receiver: &property_write_receiver::PropertyWriteReceiver,
     expression: &Expr, property: &str, span: Span,
 ) -> Option<Fetch> {
@@ -86,9 +97,7 @@ fn call_fetch(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, propert
         if class.is_empty() || ctx.interfaces.contains_key(&class))
     { ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span)) } else { object };
     let expr = Expr::new(ExprKind::StringLiteral(property.into()), span);
-    // Selecting the child is receiver work: only the written value can be a borrowed operand.
-    ctx.with_independent_write_receiver(|ctx|
-        crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, object, property, &expr))
+    crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, object, property, &expr)
 }
 
 /// Retires a native parent after publishing its child, or keeps an ordinary parent for writeback.

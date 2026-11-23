@@ -141,3 +141,72 @@ review_value_owners(new ReviewEcho(), new ReviewArgs(), new ReviewReference());
     assert_eq!(out.stdout, "payload|a|ababab|ababab|payload|reference");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Returns the assembly size of `probe()` in a program with `magic_classes` unrelated `__call`
+/// classes, for a receiver typed `receiver`.
+fn probe_assembly_size(receiver: &str, magic_classes: usize) -> usize {
+    let classes: String = (0..magic_classes)
+        .map(|i| format!(
+            "class M{i} {{ public function __call(string $n, array $a): mixed {{ return $n . count($a); }} }}\n"
+        ))
+        .collect();
+    let source = format!(
+        "<?php\ninterface Client {{ public function request(string $m, array $o = []): mixed; }}\n\
+         class Real implements Client {{ public function request(string $m, array $o = []): mixed {{ return $m . count($o); }} }}\n\
+         class Other implements Client {{ public function request(string $m, array $o = []): mixed {{ return $m; }} }}\n{classes}\
+         function pick(int $i): {receiver} {{ return $i ? new Real : new Other; }}\n\
+         function probe({receiver} $c): mixed {{ return $c->request(\"a\" . $c->request(\"b\", [1 => $c]), [2]); }}\n\
+         echo probe(pick($argc));"
+    );
+    let dir = make_cli_test_dir("method_ladder_size");
+    let (asm, _runtime, _libs) = compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
+    let _ = std::fs::remove_dir_all(&dir);
+    let body = &asm[asm.find("fn_probe:").expect("the probe() label")..];
+    body.find("fn_probe_epilogue:").expect("the probe() epilogue")
+}
+
+/// A receiver typed by an interface that declares the method never selects `__call` classes: no
+/// implementor can reach its own `__call` through it.
+#[test]
+fn test_interface_call_ignores_magic_call_classes() {
+    let (none, many) = (probe_assembly_size("Client", 0), probe_assembly_size("Client", 24));
+    // Wider class and string ids move a few bytes; one ladder rung costs thousands.
+    assert!(many < none + 1_024, "an interface call grew with unrelated __call classes: {none} -> {many}");
+}
+
+/// An untyped receiver evaluates its arguments once for all `__call` classes, not once per class:
+/// each extra class may only add its name test.
+#[test]
+fn test_opaque_call_lowers_arguments_once_for_all_magic_call_classes() {
+    let (few, many) = (probe_assembly_size("mixed", 4), probe_assembly_size("mixed", 24));
+    let per_class = many.saturating_sub(few) / 20;
+    assert!(per_class < 2_500, "each __call class adds {per_class} bytes to a nested opaque call");
+}
+
+/// Every `__call` class answers through the shared arm, with its own arguments and return type.
+#[test]
+fn test_opaque_call_reaches_each_magic_call_class() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function __call(string $n, array $a): string { return "A" . $n . implode(",", $a); } }
+class B { public function __call($n, $a): int { return count($a); } }
+class C { public function __call($n, $a): array { return $a; } }
+class D { private function go($x) { return "private"; } public function __call($n, $a) { return "D" . $n; } }
+class E { public function go(string $x, int $y = 3): string { return $x . $y; } }
+function pick(int $i): mixed { return match ($i) { 0 => new A, 1 => new B, 2 => new C, 3 => new D, default => new E }; }
+function step(string $s): string { echo "<", $s, ">"; return $s; }
+for ($i = 0; $i < 5; $i++) { echo json_encode(pick($i)->go(step("x" . $i), 7)), "\n"; }
+class F { public function __call($n, $a) { throw new LogicException($n); } }
+function thrower(mixed $o): string { try { return $o->boom(step("t")); } catch (LogicException $e) { return $e->getMessage(); } }
+echo thrower($argc > 5 ? new A : new F), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "<x0>\"Agox0,7\"\n<x1>2\n<x2>[\"x2\",7]\n<x3>\"Dgo\"\n<x4>\"x47\"\n<t>boom\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -58,3 +58,34 @@ pub(super) fn lower(
     if let Some(owner) = receiver_owner { retire_owned_call_operand(ctx, owner, span); }
     Some(take_prepublished_call_result(ctx, result_owner, call, span))
 }
+
+/// Forwards a missing method to whichever `__call` the runtime class declares.
+///
+/// The caller has already proved that the receiver is one of the program's `__call` classes, so
+/// the arguments are evaluated once into one container and `__call` itself is dispatched by name.
+pub(super) fn lower_shared(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], signature: &FunctionSig, expr: &Expr,
+) -> LoweredValue {
+    let span = expr.span;
+    let arguments = lower_descriptor_invoker_arg_container_for_call_user_func(
+        ctx, args, Some(signature), false, span,
+    );
+    let slot = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    store_value_into_temp(ctx, &slot, PhpType::Mixed, arguments, span);
+    let argument_owner = ctx.local_slots[&slot];
+    register_owned_call_operand(ctx, argument_owner, span);
+    let magic_args = [
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::Variable(slot), span),
+    ];
+    let call = super::nullable_method_calls::lower_method_call_with_receiver_direct(
+        ctx, object, "__call", &magic_args, Op::MethodCall, expr,
+    );
+    let call = if call.ir_type == IrType::Heap(IrHeapKind::Mixed) { call }
+        else { ctx.box_value_as_mixed(call, PhpType::Mixed, Some(span)) };
+    let result_owner = prepublish_call_result(ctx, &PhpType::Mixed, span);
+    stage_call_result(ctx, result_owner.as_ref(), call, span);
+    retire_owned_call_operand(ctx, argument_owner, span);
+    take_prepublished_call_result(ctx, result_owner, call, span)
+}

@@ -31,9 +31,13 @@ pub(super) fn lower(
     let object_ty = ctx.builder.value_php_type(object.value);
     // A nullable concrete receiver already has its own argument plan and dispatch target.
     // Unrelated classes with the same method name must not force a global class ladder.
+    // An interface that declares the method settles it the same way: every implementor has it, so
+    // its `__call` cannot answer, and the interface table dispatches the call.
     if singular_object_class(&object_ty).is_some_and(|(class, _)| !class.is_empty()
         && (class_method_signature(ctx, class, &php_symbol_key(method)).is_some()
-            || class_method_signature(ctx, class, "__call").is_some()))
+            || class_method_signature(ctx, class, "__call").is_some()
+            || ctx.interfaces.get(class.trim_start_matches('\\'))
+                .is_some_and(|interface| interface.methods.contains_key(&php_symbol_key(method)))))
     { return None; }
     if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall)
         || !(dynamic_method_receiver_needs_mixed_fallback(&object_ty)
@@ -49,7 +53,7 @@ pub(super) fn lower(
         || ctx.classes.values().any(|info| info.methods.get(&key).is_some_and(|sig|
             sig.variadic.is_none() && args.len() > sig.params.len()));
     if signature.is_some() && !select_all { return None; }
-    let candidates = candidates(ctx, method, select_all);
+    let candidates = candidates(ctx, &object_ty, method, select_all, args.len());
     if candidates.is_empty() && key != "__invoke" { return None; }
     Some(if op == Op::NullsafeMethodCall {
         lower_guarded_nullsafe_receiver(ctx, object, PhpType::Mixed, expr, |ctx, object|
@@ -57,24 +61,52 @@ pub(super) fn lower(
     } else { dispatch(ctx, object, method, args, &candidates, expr) })
 }
 
+/// Returns whether a receiver of static type `ty` can be an instance of `class` at run time.
+fn receiver_admits(ctx: &LoweringContext<'_, '_>, ty: &PhpType, class: &str) -> bool {
+    match ty {
+        PhpType::Object(bound) if !bound.is_empty() => {
+            let bound = bound.trim_start_matches('\\');
+            class.eq_ignore_ascii_case(bound)
+                || super::call_arg_coercion::nominal_class_implements_or_extends(ctx, class, bound)
+        }
+        PhpType::Union(members) => members.iter().any(|member| receiver_admits(ctx, member, class)),
+        PhpType::Mixed | PhpType::Object(_) => true,
+        _ => false,
+    }
+}
+
 /// Includes accessible native classes while leaving different or eval-only signatures untouched.
-fn candidates(ctx: &LoweringContext<'_, '_>, method: &str, select_all: bool) -> Vec<Candidate> {
+///
+/// Every candidate lowers the whole argument list again, so a class is selected only when its own
+/// argument plan differs from the shared dispatch: a variadic, a call with surplus arguments, or
+/// the program's `__call` classes, which all share ONE arm. A Symfony program declares dozens of
+/// `__call` classes; one arm each made three-line methods take seconds to lower.
+fn candidates(
+    ctx: &LoweringContext<'_, '_>, object_ty: &PhpType, method: &str, select_all: bool,
+    arg_count: usize,
+) -> Vec<Candidate> {
     let key = php_symbol_key(method);
     let mut names = ctx.classes.keys().cloned().collect::<Vec<_>>();
     names.sort();
     let mut groups: Vec<Candidate> = Vec::new();
     for name in names {
         let info = &ctx.classes[&name];
-        let magic = !info.methods.contains_key(&key) && info.methods.contains_key("__call");
+        // php hands a method the caller cannot access to `__call`, exactly like a missing one.
+        let accessible = |key: &str| {
+            let declaring = info.method_declaring_classes.get(key).map(String::as_str).unwrap_or(&name);
+            info.method_visibilities.get(key).is_none_or(|visibility|
+                ir_can_access_member(ctx, declaring, visibility))
+        };
+        let magic = info.methods.contains_key("__call")
+            && (!info.methods.contains_key(&key) || !accessible(&key));
         let selected_key = if magic { "__call" } else { key.as_str() };
         let Some(signature) = class_method_signature(ctx, &name, selected_key) else { continue; };
-        if !select_all && (signature.variadic.is_none()
-            || crate::func_args::sig_collects_surplus_args(signature)) {
-            continue;
-        }
-        let declaring = info.method_declaring_classes.get(selected_key).map(String::as_str).unwrap_or(&name);
-        if info.method_visibilities.get(selected_key).is_some_and(|visibility|
-            !ir_can_access_member(ctx, declaring, visibility)) { continue; }
+        let own_plan = (signature.variadic.is_some()
+            && !crate::func_args::sig_collects_surplus_args(signature))
+            || (select_all && (magic || key == "__invoke"
+                || (signature.variadic.is_none() && arg_count > signature.params.len())));
+        if !own_plan || !receiver_admits(ctx, object_ty, &name) { continue; }
+        if !accessible(selected_key) { continue; }
         let implementation = info.method_impl_classes.get(selected_key)
             .filter(|implementation| ctx.classes.contains_key(*implementation))
             .cloned().unwrap_or_else(|| name.clone());
@@ -144,7 +176,21 @@ fn dispatch(
         PhpType::Str, target.effects(), Some(span));
     store_value_into_temp(ctx, &class_name, PhpType::Str, name, span);
     let mut merged: Option<HashSet<LocalSlotId>> = closure_branch.then(|| initial.clone());
-    for candidate in candidates {
+    let (magic, direct): (Vec<&Candidate>, Vec<&Candidate>) =
+        candidates.iter().partition(|candidate| candidate.magic);
+    // Named and unpacked arguments keep their own arm: `__call` receives their keys.
+    let share_magic = !magic.is_empty() && !args.iter().any(|arg|
+        matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
+    let shared = share_magic.then(|| Candidate {
+        implementation: String::new(),
+        classes: magic.iter().flat_map(|candidate| candidate.classes.iter().cloned()).collect(),
+        signature: magic[0].signature.clone(),
+        magic: true,
+    });
+    let arms = direct.into_iter()
+        .chain(magic.iter().copied().filter(|_| !share_magic))
+        .chain(shared.as_ref());
+    for candidate in arms {
         let selected = ctx.builder.create_named_block("method.selected.selected", vec![]);
         let next_group = ctx.builder.create_named_block("method.selected.next_group", vec![]);
         for (index, class) in candidate.classes.iter().enumerate() {
@@ -168,7 +214,9 @@ fn dispatch(
             ctx, &candidate.implementation, method, &candidate.signature, args, span,
         ) {
             let ty = PhpType::Object(candidate.implementation.clone());
-            let receiver = if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
+            let shared_magic = candidate.implementation.is_empty();
+            let receiver = if shared_magic || matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
+                let ty = if shared_magic { ctx.builder.value_php_type(object.value) } else { ty };
                 let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
                     Op::Borrow.default_effects(), Some(span));
                 ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
@@ -177,9 +225,14 @@ fn dispatch(
                 ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
                     Op::mixed_unbox_effects(&ty), Some(span))
             };
-            let call = super::nullable_method_calls::lower_method_call_with_receiver_direct(
-                ctx, receiver, method, args, Op::MethodCall, expr,
-            );
+            let call = if shared_magic {
+                super::magic_method_calls::lower_shared(
+                    ctx, receiver, method, args, &candidate.signature, expr)
+            } else {
+                super::nullable_method_calls::lower_method_call_with_receiver_direct(
+                    ctx, receiver, method, args, Op::MethodCall, expr,
+                )
+            };
             store_value_into_temp(ctx, &result, PhpType::Mixed, call, span);
             branch_to(ctx, done);
             let slots = ctx.initialized_slots_snapshot();

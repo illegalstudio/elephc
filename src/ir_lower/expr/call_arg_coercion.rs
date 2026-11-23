@@ -1219,7 +1219,7 @@ fn call_description_is_internal_method(ctx: &LoweringContext<'_, '_>) -> bool {
 }
 
 /// Whether class or interface `source` is `target`, extends it or implements it.
-fn nominal_class_implements_or_extends(
+pub(super) fn nominal_class_implements_or_extends(
     ctx: &LoweringContext<'_, '_>,
     source: &str,
     target: &str,

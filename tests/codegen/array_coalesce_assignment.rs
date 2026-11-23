@@ -132,10 +132,11 @@ class H { public mixed $p; }
 function boxed(mixed $x, string $k): string { if ($x["a"][$k] ??= "v" . $k) { return "set"; } return "no"; }
 function deep(mixed &$x, string $k): string { return $x["a"]["b"][$k] ??= "v" . $k; }
 function property(H $h, string $k): string { return $h->p["a"][$k] ??= "v" . $k; }
+function erased(mixed $o, string $k): string { return $o->p[$k] ??= "v" . $k; }
 $x = pick($argc + 2);
 $h = new H;
 $h->p = $x;
-echo boxed($x, "k"), deep($x, "k"), property($h, "k");
+echo boxed($x, "k"), deep($x, "k"), property($h, "k"), erased($h, "j");
 "#,
         &dir,
         8_388_608,
@@ -143,4 +144,27 @@ echo boxed($x, "k"), deep($x, "k"), property($h, "k");
         false,
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The compiler's `__elephc_*` helpers are native: a program's `__call` classes must not become
+/// candidates for them, so adding such classes leaves an erased write's assembly unchanged in size.
+#[test]
+fn test_internal_helper_calls_do_not_select_magic_call_classes() {
+    let asm_len = |magic_classes: usize| {
+        let classes: String = (0..magic_classes)
+            .map(|i| format!("class M{i} {{ public function __call(string $n, array $a): mixed {{ return $n; }} }}\n"))
+            .collect();
+        let source = format!(
+            "<?php\n{classes}function erased(mixed $o, string $k): string {{ return $o->p[$k] ??= \"v\" . $k; }}\n\
+             class H {{ public mixed $p = []; }}\n$h = $argc > 9 ? new SimpleXMLElement(\"<r/>\") : new H;\necho erased($h, \"k\");\n"
+        );
+        let dir = make_cli_test_dir("internal_helper_magic_classes");
+        let (asm, _runtime, _libs) = compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
+        let _ = std::fs::remove_dir_all(&dir);
+        let start = asm.find("fn_erased:").expect("the erased() label");
+        let body = &asm[start..];
+        body.find("fn_erased_epilogue:").expect("the erased() epilogue")
+    };
+    let (one, many) = (asm_len(1), asm_len(12));
+    assert!(many < one + one / 4, "erased() grows with __call classes: {one} -> {many} bytes");
 }
