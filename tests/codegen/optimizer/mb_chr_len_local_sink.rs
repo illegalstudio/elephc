@@ -391,10 +391,12 @@ function observe(int $index): int {
         "linux-x86_64",
     ] {
         let assembly = emit_target_assembly(source, target);
-        assert!(
-            assembly.contains("mb_chr_observation_tagged_null"),
-            "{target} drops the tagged-null fallback"
-        );
+        // The branch also carries the name, so require the label definition itself.
+        let defined = assembly.lines().any(|line| {
+            let line = line.trim_end();
+            line.ends_with(':') && line.contains("mb_chr_observation_tagged_null")
+        });
+        assert!(defined, "{target} drops the tagged-null fallback label");
     }
 }
 
