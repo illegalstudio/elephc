@@ -59,9 +59,29 @@ pub(crate) fn logical_type(php_type: &PhpType,allow_return_atoms: bool) -> Optio
     Some(match php_type {
         PhpType::Array(element)=>Type::Apply("array".into(),vec![Type::atom("int"),logical_type(element,false)?]),
         PhpType::AssocArray{key,value}=>Type::Apply("array".into(),vec![logical_type(key,false)?,logical_type(value,false)?]),
-        PhpType::Union(members)=>Type::Union(members.iter().map(|ty|logical_type(ty,false)).collect::<Option<Vec<_>>>()?),
+        PhpType::Union(members) => logical_union_type(members)?,
         ty=>Type::atom(php_type_spec(ty,allow_return_atoms)?),
     })
+}
+
+/// Rejoins both internal storage alternatives as bare PHP `array` inside a wider union.
+fn logical_union_type(members: &[PhpType]) -> Option<elephc_generics::Type> {
+    use elephc_generics::Type;
+    let PhpType::Union(array_layouts) = PhpType::php_array() else { unreachable!() };
+    let has_bare_array = array_layouts.iter().all(|layout| members.contains(layout));
+    let mut terms = Vec::new();
+    let mut emitted_array = false;
+    for member in members {
+        if has_bare_array && array_layouts.contains(member) {
+            if !emitted_array {
+                terms.push(Type::atom("array"));
+                emitted_array = true;
+            }
+        } else {
+            terms.push(logical_type(member, false)?);
+        }
+    }
+    Some(Type::Union(terms))
 }
 
 /// Canonicalizes value-position null atoms while retaining a callable's declared void return.
@@ -131,5 +151,19 @@ mod registration_source_tests {
             vec![elephc_generics::Type::atom("int"), elephc_generics::Type::atom("int")]));
         assert_eq!(logical_type(&PhpType::php_array(), false), Some(elephc_generics::Type::atom("array")));
         assert_eq!(php_type_spec(&ty, false).as_deref(), Some("array"));
+    }
+
+    /// Native overrides compare nullable bare arrays by their PHP contract, not by layout.
+    #[test]
+    fn native_nullable_array_return_metadata_retains_bare_array() {
+        let PhpType::Union(mut layouts) = PhpType::php_array() else { unreachable!() };
+        layouts.push(PhpType::Void);
+        assert_eq!(
+            logical_type(&PhpType::Union(layouts), true),
+            Some(elephc_generics::Type::Union(vec![
+                elephc_generics::Type::atom("array"),
+                elephc_generics::Type::atom("null"),
+            ])),
+        );
     }
 }
