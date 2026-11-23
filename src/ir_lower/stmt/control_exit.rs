@@ -1005,7 +1005,12 @@ pub(crate) fn lower_throw_access_exception(
         },
         span,
     );
-    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    // The exception is a fresh owner of its own, never the borrowed right-hand side of the container
+    // write (`receiver()->ro ??= f()`) that is rejecting: classified as borrowed, its defaulted
+    // `previous` box was neither rooted nor released and leaked once per rejection.
+    let error_value = ctx.with_independent_write_receiver(|ctx| {
+        crate::ir_lower::expr::lower_expr(ctx, &error_expr)
+    });
     terminate_throw(ctx, error_value.value);
 }
 
@@ -1067,7 +1072,12 @@ pub(crate) fn lower_throw_access_class_expr_as(
         },
         span,
     );
-    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    // The exception is a fresh owner of its own, never the borrowed right-hand side of the container
+    // write (`receiver()->ro ??= f()`) that is rejecting: classified as borrowed, its defaulted
+    // `previous` box was neither rooted nor released and leaked once per rejection.
+    let error_value = ctx.with_independent_write_receiver(|ctx| {
+        crate::ir_lower::expr::lower_expr(ctx, &error_expr)
+    });
     ctx.emit_void(
         Op::ThrowException,
         vec![error_value.value],
