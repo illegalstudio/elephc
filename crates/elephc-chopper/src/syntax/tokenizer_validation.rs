@@ -443,13 +443,16 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     }
 }
 
-/// Returns whether the source-spanned token-view prototype is enabled.
+/// Returns whether the source-spanned token view is enabled.
+///
+/// The token view is the default for supported sources; `ELEPHC_TOKEN_VIEW=text`
+/// keeps the legacy text view as an escape hatch during rollout.
 fn token_view_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("ELEPHC_TOKEN_VIEW")
+        !std::env::var_os("ELEPHC_TOKEN_VIEW")
             .and_then(|value| value.to_str().map(str::to_owned))
-            .is_some_and(|value| value == "1" || value == "token")
+            .is_some_and(|value| matches!(value.as_str(), "0" | "off" | "text"))
     })
 }
 
