@@ -68,8 +68,16 @@ mod tests {
             assert!(published < cleanup, "{name}: initialize the visitor before exposing the record");
             assert!(assembly.contains("965:"), "{name}: preserve newer activation records during detachment");
             assert!(assembly.contains("__rt_gc_frame_owner_slot"), "{name}: use the collector's real slot identity");
-            assert!(!assembly.lines().any(|line| line.trim_start().starts_with("bl ")
-                || line.trim_start().starts_with("call ")), "{name}: linking, unlinking and visiting cannot run PHP");
+            // A call would run PHP, which can re-enter the collector while this record is live.
+            // The x86_64 SysV shim's `call` to its own local body is the one exception: it is the
+            // wrapper that makes the Rust-called export safe, not PHP work.
+            let php_calls: Vec<&str> = assembly
+                .lines()
+                .map(str::trim_start)
+                .filter(|line| line.starts_with("bl ") || line.starts_with("call "))
+                .filter(|line| !line.ends_with("_sysv_body"))
+                .collect();
+            assert!(php_calls.is_empty(), "{name}: linking, unlinking and visiting cannot run PHP: {php_calls:?}");
         }
     }
 }
