@@ -57,7 +57,7 @@ impl Checker {
                 template.constructor_variadic.as_ref(),
             ));
         }
-        let bindings = generics::infer_bindings(
+        let mut bindings = generics::infer_bindings(
             &template.type_params,
             &declared_params,
             &actual_types,
@@ -68,6 +68,7 @@ impl Checker {
                 &describe_construction_error(&template.declared_name, &error),
             )
         })?;
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.reject_uninformative_bindings(&template, &bindings, expr)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
         self.warn_on_inferred_mixed(&template, &bindings, expr);
@@ -161,7 +162,7 @@ impl Checker {
                 signature.variadic_type.as_ref(),
             ));
         }
-        let bindings =
+        let mut bindings =
             generics::infer_bindings(&template.type_params, &declared_params, &actual_types)
                 .map_err(|error| {
                     CompileError::new(
@@ -173,6 +174,7 @@ impl Checker {
                         ),
                     )
                 })?;
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.reject_uninformative_bindings(&template, &bindings, expr)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
         self.warn_on_inferred_mixed(&template, &bindings, expr);
@@ -275,6 +277,7 @@ impl Checker {
         for arg in args {
             self.infer_type(arg, env)?;
         }
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
 
         let instantiated = generics::instantiated_name(&template.declared_name, &bindings);
@@ -348,19 +351,23 @@ impl Checker {
             let Some((_, argument)) = bindings.iter().find(|(name, _)| name == &param.name) else {
                 continue;
             };
+            if Self::skips_docblock_bound(param, argument) {
+                continue;
+            }
             // Substituted first, as every bound check does: `<T : Cmp<T>>` names `T` itself.
             let bound_ty =
                 self.resolve_type_expr(&generics::substitute_value_type(bound, bindings), expr.span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                return Err(CompileError::new(
+                self.report_bound_violation(
+                    param.from_docblock,
                     expr.span,
-                    &format!(
+                    format!(
                         "Constructing '{}' binds type parameter <{}> to {}, which does not \
                          satisfy its bound {}",
                         template.declared_name, generics::parameter_name(&param.name), argument_ty, bound_ty
                     ),
-                ));
+                )?;
             }
         }
         Ok(())

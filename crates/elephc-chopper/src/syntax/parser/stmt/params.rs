@@ -355,6 +355,7 @@ pub fn parse_type_param_list(
             default,
             variance,
             from_docblock: false,
+            native_hint: None,
         });
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;

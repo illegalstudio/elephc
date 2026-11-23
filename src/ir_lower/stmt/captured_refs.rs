@@ -296,6 +296,8 @@ fn expr_has_reference_capture(expr: &Expr) -> bool {
             key.as_deref().is_some_and(expr_has_reference_capture)
                 || value.as_deref().is_some_and(expr_has_reference_capture)
         }
+        // A runtime template expression can carry a nested closure body, so fail closed.
+        ExprKind::Runtime(_) => true,
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

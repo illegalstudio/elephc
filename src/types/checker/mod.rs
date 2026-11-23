@@ -948,15 +948,6 @@ pub(crate) struct SavedNarrowingOrigin {
 }
 
 impl Checker {
-    /// Whether `name` is a generic CLASS template, whose marker interface is hidden from
-    /// reflection (see `InterfaceInfo::reflection_hidden`).
-    pub(crate) fn names_generic_class_template(&self, name: &str) -> bool {
-        let key = crate::generics::classes::template_key(name);
-        self.class_templates
-            .iter()
-            .any(|template| template.is_class && template.key == key)
-    }
-
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
     /// incompatible type (by assignment) at the current program point. See
     /// `docs/php/types.md`, Local retyping: the depth-0 and non-aliased rule.

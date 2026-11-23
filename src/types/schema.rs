@@ -282,11 +282,6 @@ pub struct InterfaceInfo {
     pub interface_id: u64,
     /// Source span of the interface declaration, or `Span::dummy()` for compiler-injected interfaces.
     pub declaration_span: crate::span::Span,
-    /// `true` for the marker interface a generic CLASS template leaves behind
-    /// (`crate::generics::classes`). php-src has a class there, not an interface, so the marker
-    /// answers `instanceof` and nothing else: reflection (`interface_exists`,
-    /// `get_declared_interfaces`, `class_implements`, `is_subclass_of`) does not see it.
-    pub reflection_hidden: bool,
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
@@ -322,6 +317,11 @@ pub struct InterfaceInfo {
     pub constant_declaring_interfaces: HashMap<String, String>,
     /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.
     pub final_constants: HashSet<String>,
+    /// `true` for the marker interface a generic CLASS template leaves behind
+    /// (`crate::generics::classes`). php-src has a class there, not an interface, so the marker
+    /// answers `instanceof` and nothing else: reflection (`interface_exists`,
+    /// `get_declared_interfaces`, `class_implements`, `is_subclass_of`) does not see it.
+    pub reflection_hidden: bool,
 }
 
 /// One retired, narrower instance-vtable slot left behind by a widening override.

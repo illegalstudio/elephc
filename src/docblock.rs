@@ -14,6 +14,9 @@
 //! - A class says the same four things: `@template` its parameters, `@var`/`@param`/`@return`
 //!   its members' types, and `@extends`/`@implements` the instantiation it inherits. Inside one,
 //!   an ordinary member annotation must mention a class type parameter to be honoured.
+//! - An annotation never replaces a native hint php-src enforces (`int $m`, a class name): only
+//!   a missing or loosely enforced hint gives way, and a template no position adopts is not
+//!   adopted at all. php-src ignores the comment, so the annotated file must keep compiling.
 //! - A method may declare its own `@template` parameters even in a non-generic class or trait.
 //!   Its annotations then form a generic declaration, just as on a free function. Method-local
 //!   type parameters do not enter the scope of other members, and native method syntax wins.
@@ -95,130 +98,81 @@ pub fn apply(program: Program, source: &str) -> Program {
     if blocks.is_empty() {
         return program;
     }
-    program
+    apply_in(program, &blocks, NameScope::default())
+}
+
+/// The namespace and class imports in effect where a declaration is written.
+///
+/// Annotations are applied per file, before name resolution, so comparing a native class hint
+/// with the class an annotation names (`Crate $b` against `@param \Lib\Box<T> $b` under
+/// `use Lib\Box as Crate`) has to resolve both the way php-src will.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct NameScope {
+    namespace: Option<String>,
+    /// Lowercased alias to the imported class's fully qualified name.
+    classes: HashMap<String, String>,
+}
+
+impl NameScope {
+    /// Returns the lowercased fully qualified name `name` resolves to in this scope.
+    pub(crate) fn class_key(&self, name: &Name) -> String {
+        let written = name.parts.join("\\");
+        let resolved = if name.is_fully_qualified() {
+            written
+        } else {
+            let import = name
+                .parts
+                .first()
+                .and_then(|first| self.classes.get(&first.to_ascii_lowercase()));
+            match (import, &self.namespace) {
+                (Some(target), _) if name.parts.len() == 1 => target.clone(),
+                (Some(target), _) => format!("{}\\{}", target, name.parts[1..].join("\\")),
+                (None, Some(namespace)) => format!("{namespace}\\{written}"),
+                (None, None) => written,
+            }
+        };
+        resolved.trim_start_matches('\\').to_ascii_lowercase()
+    }
+
+    /// Records the class imports of one `use` statement.
+    fn import(&mut self, imports: &[crate::parser::ast::UseItem]) {
+        for item in imports {
+            if item.kind == crate::parser::ast::UseKind::Class {
+                self.classes
+                    .insert(item.alias.to_ascii_lowercase(), item.name.parts.join("\\"));
+            }
+        }
+    }
+}
+
+/// Applies the annotations to a statement list, tracking the namespace and the imports each
+/// declaration is written under.
+fn apply_in(stmts: Program, blocks: &HashMap<(u32, u32), DocBlock>, mut scope: NameScope) -> Program {
+    stmts
         .into_iter()
-        .map(|stmt| apply_to_stmt(stmt, &blocks))
+        .map(|stmt| {
+            match &stmt.kind {
+                // A namespace declaration starts a new scope: its imports are its own.
+                StmtKind::NamespaceDecl { name } => {
+                    scope = NameScope {
+                        namespace: name.as_ref().map(|name| name.parts.join("\\")),
+                        classes: HashMap::new(),
+                    };
+                }
+                StmtKind::UseDecl { imports } => scope.import(imports),
+                _ => {}
+            }
+            apply_to_stmt(stmt, blocks, &scope)
+        })
         .collect()
 }
 
-/// Returns whether a written hint is one php-src treats loosely.
-///
-/// `array`, `iterable` and `callable` accept any element, iterable or callable, so a PHPDoc
-/// annotation refines them without changing what a call may pass. Every other hint is a contract
-/// php-src enforces (and coerces to), and an annotation never replaces it.
-fn is_loose_hint(native: &TypeExpr) -> bool {
-    match native {
-        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } | TypeExpr::Iterable => true,
-        TypeExpr::Named(name) => is_loose_keyword(name.as_str()),
-        _ => false,
-    }
-}
-
-/// Returns whether `name` spells one of the hints php-src treats loosely.
-fn is_loose_keyword(name: &str) -> bool {
-    matches!(
-        name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
-        "array" | "iterable" | "callable" | "closure"
-    )
-}
-
-/// Returns whether `expr` names the `null` type.
-fn is_null_type(expr: &TypeExpr) -> bool {
-    matches!(expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"))
-}
-
-/// Returns the declared type parameter `annotated` names on its own, if any.
-fn direct_template<'a>(annotated: &TypeExpr, own: &'a [TypeParam]) -> Option<&'a TypeParam> {
-    match annotated {
-        TypeExpr::Named(name) => own.iter().find(|param| param.name == name.as_str()),
-        TypeExpr::Nullable(inner) => direct_template(inner, own),
-        TypeExpr::Union(members) => {
-            let mut rest = members.iter().filter(|member| !is_null_type(member));
-            let template = direct_template(rest.next()?, own)?;
-            rest.next().is_none().then_some(template)
-        }
-        _ => None,
-    }
-}
-
-/// Returns whether `annotated` may replace the written `native` hint.
-///
-/// A bare `@param T` states no contract of its own, so it only refines a loose hint: documenting
-/// `function keep(object $v)` with `@template T` / `@param T $v` must not let `keep(1)` through.
-/// A concrete annotation replaces a loose hint only when it refines it.
-fn adopts_annotation(native: Option<&TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) -> bool {
-    let Some(native) = native else {
-        return true;
-    };
-    // Nullability belongs to the written hint and is restored on the adopted type, so the
-    // loose/refinement tests look at the hint itself.
-    let hinted = strip_nullable(native);
-    if direct_template(annotated, own).is_some() {
-        return is_loose_hint(hinted);
-    }
-    is_loose_hint(hinted) && refines_loose_hint(hinted, strip_nullable(annotated))
-}
-
-/// Returns `expr` without its `?` wrapper.
-fn strip_nullable(expr: &TypeExpr) -> &TypeExpr {
-    match expr {
-        TypeExpr::Nullable(inner) => strip_nullable(inner),
-        other => other,
-    }
-}
-
-/// Returns whether a concrete annotation refines a loose written hint.
-fn refines_loose_hint(native: &TypeExpr, annotated: &TypeExpr) -> bool {
-    let array_shaped = matches!(annotated, TypeExpr::Array(_) | TypeExpr::AssocArray { .. });
-    let class_shaped = match annotated {
-        TypeExpr::GenericClass { .. } => true,
-        TypeExpr::Named(name) => {
-            !is_loose_keyword(name.as_str())
-                && !name.as_str().eq_ignore_ascii_case("mixed")
-                && !is_null_type(annotated)
-        }
-        _ => false,
-    };
-    let iterable_shaped = array_shaped || class_shaped || matches!(annotated, TypeExpr::Iterable);
-    match native {
-        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => array_shaped,
-        TypeExpr::Iterable => iterable_shaped,
-        TypeExpr::Named(name) => match name
-            .as_str()
-            .trim_start_matches('\\')
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "array" => array_shaped,
-            "iterable" => iterable_shaped,
-            "callable" | "closure" => {
-                class_shaped || matches!(annotated, TypeExpr::CallableSig { .. })
-            }
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// Wraps an adopted annotation in the nullability the written hint carried.
-fn with_written_nullability(native: Option<&TypeExpr>, adopted: TypeExpr) -> TypeExpr {
-    let Some(TypeExpr::Nullable(_)) = native else {
-        return adopted;
-    };
-    match adopted {
-        TypeExpr::Union(mut members) => {
-            if !members.iter().any(is_null_type) {
-                members.push(TypeExpr::Named(Name::unqualified("null")));
-            }
-            TypeExpr::Union(members)
-        }
-        bare if is_null_type(&bare) || matches!(bare, TypeExpr::Nullable(_)) => bare,
-        bare => TypeExpr::Nullable(Box::new(bare)),
-    }
-}
-
 /// Applies the doc comment that ends just above `stmt`, if any.
-fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt {
+fn apply_to_stmt(
+    mut stmt: Stmt,
+    blocks: &HashMap<(u32, u32), DocBlock>,
+    scope: &NameScope,
+) -> Stmt {
     let block = blocks.get(&(stmt.span.line, stmt.span.col));
     match &mut stmt.kind {
         StmtKind::FunctionDecl {
@@ -233,86 +187,55 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             if !block.declares_generics() || !type_params.is_empty() {
                 return stmt;
             }
-            let own = block.type_params.clone();
-            let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
-            let mut adopted = false;
-            for (name, declared, _, _) in params.iter_mut() {
+            // Built on copies and committed together: a template no position ends up naming is
+            // not adopted, and then none of its annotations may leak into the declaration.
+            let own = members::anchor_native_hints(
+                &block.type_params,
+                &members::annotated_positions(
+                    params,
+                    variadic.as_deref(),
+                    variadic_type.as_ref(),
+                    return_type.as_ref(),
+                    block,
+                ),
+                scope,
+            );
+            let mut adopted_params = params.clone();
+            let mut adopted_variadic = variadic_type.clone();
+            let mut adopted_return = return_type.clone();
+            for (name, declared, _, _) in adopted_params.iter_mut() {
                 if let Some(annotated) = block.params.get(name) {
                     // The annotation REPLACES a hint php-src treats loosely, which is the point:
-                    // `array $a` with `@param array<T> $a` is precisely the shape PHPStan-annotated
-                    // code has, and the annotation is the more precise of the two. A hint php-src
-                    // enforces stays: `@param T $m` documenting `int $m` keeps `int`.
-                    if adopts_annotation(declared.as_ref(), annotated, &own) {
-                        let written = declared.take();
-                        *declared =
-                            Some(with_written_nullability(written.as_ref(), annotated.clone()));
-                        adopted = true;
-                    }
+                    // `array $a` with `@param array<T> $a` is precisely the shape
+                    // PHPStan-annotated code has, and the annotation is the more precise of the
+                    // two. A native scalar or class hint is a contract php-src enforces (and
+                    // coerces to), so it wins: `@param T $m` documenting `int $m` stays `int`.
+                    adopt_annotation(declared, annotated, &own, scope);
                 }
             }
             if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                if adopts_annotation(variadic_type.as_ref(), annotated, &own) {
-                    let written = variadic_type.take();
-                    *variadic_type =
-                        Some(with_written_nullability(written.as_ref(), annotated.clone()));
-                    adopted = true;
-                }
+                adopt_annotation(&mut adopted_variadic, annotated, &own, scope);
             }
-            let parameter_binds = adopted
-                || params.iter().any(|(_, declared, _, _)| {
-                    declared
-                        .as_ref()
-                        .is_some_and(|ty| ty.mentions_type_param(&names))
-                })
-                || variadic_type
-                    .as_ref()
-                    .is_some_and(|ty| ty.mentions_type_param(&names));
-            // A `@param T` the written hint refused to adopt names a template no call argument
-            // can bind for this function. Adopting the return `T` then makes a bare call ask
-            // for a type argument inference cannot supply, so the written return hint stays.
-            // A return-only template has no such refused annotation and is kept: an explicit
-            // `f<int>()` or a template default still binds it.
-            let refused_parameter_annotation = params.iter().any(|(name, declared, _, _)| {
-                block.params.get(name).is_some_and(|annotated| {
-                    annotated.mentions_type_param(&names)
-                        && !declared
-                            .as_ref()
-                            .is_some_and(|ty| ty.mentions_type_param(&names))
-                })
-            }) || variadic
-                .as_ref()
-                .and_then(|name| block.params.get(name))
-                .is_some_and(|annotated| {
-                    annotated.mentions_type_param(&names)
-                        && !variadic_type
-                            .as_ref()
-                            .is_some_and(|ty| ty.mentions_type_param(&names))
-                });
             if let Some(annotated) = &block.return_type {
-                let return_blocked = annotated.mentions_type_param(&names)
-                    && !parameter_binds
-                    && refused_parameter_annotation;
-                if !return_blocked && adopts_annotation(return_type.as_ref(), annotated, &own) {
-                    let written = return_type.take();
-                    *return_type = Some(with_written_nullability(written.as_ref(), annotated.clone()));
-                    adopted = true;
-                }
+                adopt_annotation(&mut adopted_return, annotated, &own, scope);
             }
-            // A template no position adopted and no written hint mentions changes no declared
-            // type: the function is not a template, keeps its name, and compiles exactly as
-            // php-src declares it.
-            let written_mentions = params.iter().any(|(_, declared, _, _)| {
-                declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&names))
-            }) || variadic_type
-                .as_ref()
-                .is_some_and(|ty| ty.mentions_type_param(&names))
-                || return_type
-                    .as_ref()
-                    .is_some_and(|ty| ty.mentions_type_param(&names));
-            if !adopted && !written_mentions {
+            // A template no position adopted changes no declared type: the function is not a
+            // template, keeps its own name, and compiles exactly as php-src declares it.
+            let names: Vec<String> =
+                block.type_params.iter().map(|param| param.name.clone()).collect();
+            let adopted = adopted_params
+                .iter()
+                .map(|(_, declared, _, _)| declared)
+                .chain([&adopted_variadic, &adopted_return])
+                .flatten()
+                .any(|declared| declared.mentions_type_param(&names));
+            if !adopted {
                 return stmt;
             }
             *type_params = own;
+            *params = adopted_params;
+            *variadic_type = adopted_variadic;
+            *return_type = adopted_return;
         }
         StmtKind::ClassDecl {
             generics,
@@ -323,12 +246,8 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             ..
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
-            let type_params = adopt_generics(block, generics, extends_args, implements);
-            let class_own: &[TypeParam] = generics
-                .as_ref()
-                .map(|generics| generics.type_params.as_slice())
-                .unwrap_or(&[]);
-            members::apply(&type_params, class_own, properties, methods, blocks);
+            adopt_generics(block, generics, extends_args, implements);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -340,41 +259,50 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // An interface has no single parent, so everything it inherits is an interface and
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
-            let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            let class_own: &[TypeParam] = generics
-                .as_ref()
-                .map(|generics| generics.type_params.as_slice())
-                .unwrap_or(&[]);
-            members::apply(&type_params, class_own, properties, methods, blocks);
+            adopt_generics(block, generics, Vec::new(), extends);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
-            let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            let class_own: &[TypeParam] = generics
-                .as_ref()
-                .map(|generics| generics.type_params.as_slice())
-                .unwrap_or(&[]);
-            members::apply(&type_params, class_own, properties, methods, blocks);
+            adopt_generics(block, generics, Vec::new(), &[]);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&[], &[], &mut [], methods, blocks);
+            members::apply(&mut [], &mut [], methods, blocks, scope);
         }
-        StmtKind::NamespaceBlock { body, .. } => {
-            let nested = std::mem::take(body);
-            *body = nested
-                .into_iter()
-                .map(|inner| apply_to_stmt(inner, blocks))
-                .collect();
+        StmtKind::NamespaceBlock { name, body } => {
+            let nested = NameScope {
+                namespace: name.as_ref().map(|name| name.parts.join("\\")),
+                classes: HashMap::new(),
+            };
+            *body = apply_in(std::mem::take(body), blocks, nested);
         }
         _ => {}
     }
     stmt
 }
 
-/// Gives a declaration its generic half from `block`, and returns the type parameters now in
-/// scope for its members.
+/// Replaces a function parameter's or return's declared type with its annotation when the
+/// annotation refines it.
+///
+/// The rule is the one a method template follows (`members::adopted_signature_type`): a missing
+/// or loosely enforced native hint gives way to the annotation, a native scalar or class hint
+/// does not, and a hint a template takes over stays binding through `TypeParam::native_hint`.
+fn adopt_annotation(
+    declared: &mut Option<TypeExpr>,
+    annotated: &TypeExpr,
+    own: &[TypeParam],
+    scope: &NameScope,
+) {
+    if let Some(adopted) = members::adopted_signature_type(declared.as_ref(), annotated, own, scope)
+    {
+        *declared = Some(adopted);
+    }
+}
+
+/// Gives a declaration its generic half from `block`.
 ///
 /// Written syntax wins over an annotation, so a file can migrate one declaration at a time — and
 /// the test is whether the parser built a `GenericDecl` at all, not whether it holds type
@@ -384,25 +312,26 @@ fn adopt_generics(
     generics: &mut Option<Box<GenericDecl>>,
     extends_args: Vec<TypeExpr>,
     inherited_interfaces: &[Name],
-) -> Vec<String> {
-    if let Some(written) = generics.as_ref() {
-        return written
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect();
+) {
+    if generics.is_some() {
+        return;
     }
     let Some(block) = block.filter(|block| block.declares_class_generics()) else {
-        return Vec::new();
+        return;
     };
-    let names = block
-        .type_params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect();
     let interface_args = align_inherited(inherited_interfaces, block);
     *generics = GenericDecl::new(block.type_params.clone(), extends_args, interface_args);
-    names
+}
+
+/// The type parameters in scope for a declaration's members, written or adopted.
+///
+/// Mutable because `members::apply` records on each PHPDoc one the native hint its members let
+/// it replace (`TypeParam::native_hint`).
+fn class_templates(generics: &mut Option<Box<GenericDecl>>) -> &mut [TypeParam] {
+    generics
+        .as_mut()
+        .map(|generics| generics.type_params.as_mut_slice())
+        .unwrap_or_default()
 }
 
 /// Reads the type arguments annotated on a class's single parent.
@@ -586,6 +515,7 @@ fn parse_template(rest: &str, variance: Variance) -> Option<TypeParam> {
         default,
         variance,
         from_docblock: true,
+        native_hint: None,
     })
 }
 
@@ -1098,10 +1028,10 @@ mod tests {
             generics.interface_args,
             vec![vec![TypeExpr::Named(Name::unqualified("T"))]]
         );
-        assert_eq!(
-            methods[0].return_type,
-            Some(TypeExpr::Named(Name::unqualified("T")))
-        );
+        // A bodiless method keeps its native signature: its PHPDoc only describes what an
+        // implementation returns, and adopting it would make an untyped implementation
+        // incompatible with a type php-src never declared.
+        assert_eq!(methods[0].return_type, None);
     }
 
     /// Written syntax wins over an annotation, so a file can migrate one class at a time — and
@@ -1211,7 +1141,78 @@ mod tests {
         assert_eq!(method.type_params[1].default, Some(TypeExpr::Str));
         assert_eq!(method.params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
         assert_eq!(method.variadic_type, Some(TypeExpr::Named(Name::unqualified("U"))));
-        assert_eq!(method.return_type, Some(TypeExpr::Int));
+        // `@return int` names no type parameter, so it does not narrow the native signature.
+        assert_eq!(method.return_type, None);
+    }
+
+    /// A template takes over a native hint when every hinted position annotated directly with it
+    /// carries that hint, and then records it with the hints as written; the hint alone decides
+    /// whether a position accepts `null`.
+    #[test]
+    fn a_template_records_the_native_hint_it_takes_over() {
+        let program = program_of(concat!(
+            "<?php\nclass C {\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @param ?T $b\n * @param ?T $c\n",
+            " * @return T\n */\n",
+            "public function same(Model $a, ?Model $b, Model $c, $d): ?Model { return $a; }\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @param T $b\n * @return T\n */\n",
+            "public function untyped($a, $b): Model { return $a; }\n",
+            "/**\n * @template T\n * @param T $a\n * @param T $b\n */\n",
+            "public function differ(object $a, callable $b) { return 1; }\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @return T\n */\n",
+            "public function wide(object $a): Model { return $a; }\n}\n",
+            "/**\n * @template T\n * @param T $o\n */\n",
+            "function weak(object $o) { return 1; }\n",
+        ));
+        let named = |name: &str| TypeExpr::Named(Name::unqualified(name));
+        let nullable = |ty: TypeExpr| TypeExpr::Nullable(Box::new(ty));
+        let hint = |ty: &str, params: &[(&str, TypeExpr)], return_type: Option<TypeExpr>| {
+            Some(crate::parser::ast::NativeHint {
+                ty: named(ty),
+                params: params.iter().map(|(name, ty)| (name.to_string(), ty.clone())).collect(),
+                return_type,
+                member_returns: Vec::new(),
+                member_params: Vec::new(),
+            })
+        };
+        let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        let same = &methods[0];
+        assert_eq!(
+            same.type_params[0].native_hint,
+            hint(
+                "Model",
+                &[("a", named("Model")), ("b", nullable(named("Model"))), ("c", named("Model"))],
+                Some(nullable(named("Model")))
+            )
+        );
+        assert_eq!(same.params[0].1, Some(named("T")));
+        assert_eq!(same.params[1].1, Some(nullable(named("T"))));
+        // `@param ?T $c` on a native `Model $c`: php-src rejects `null` there.
+        assert_eq!(same.params[2].1, Some(named("T")));
+        assert_eq!(same.return_type, Some(nullable(named("T"))));
+        // The return type is the only hinted position: the untyped parameters just take `T`.
+        let untyped = &methods[1];
+        assert_eq!(untyped.type_params[0].native_hint, hint("Model", &[], Some(named("Model"))));
+        assert_eq!(untyped.params[0].1, Some(named("T")));
+        assert_eq!(untyped.return_type, Some(named("T")));
+        // Two different hints: both stay, no position adopts `T`, and the template is dropped.
+        let differ = &methods[2];
+        assert!(differ.type_params.is_empty());
+        assert_eq!(differ.params[0].1, Some(named("object")));
+        // `object` beside the class that bounds the template: the class speaks for both.
+        let wide = &methods[3];
+        assert_eq!(
+            wide.type_params[0].native_hint,
+            hint("Model", &[("a", named("object"))], Some(named("Model")))
+        );
+        assert_eq!(wide.params[0].1, Some(named("T")));
+        let StmtKind::FunctionDecl { type_params, params, .. } = &program[1].kind else {
+            panic!("expected a function declaration");
+        };
+        assert_eq!(type_params[0].native_hint, hint("object", &[("o", named("object"))], None));
+        assert_eq!(params[0].1, Some(named("T")));
     }
 
     /// Native method declarations retain their written types even when PHPDoc disagrees.

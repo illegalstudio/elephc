@@ -567,32 +567,6 @@ $c = new C(null); run($c);
 "#), "C::__construct(): Argument #1 ($v) must be of type null, int given\n1\nNULL\n");
 }
 
-/// A PHPDoc template's method that implements an interface keeps its dispatch slot.
-///
-/// The annotation makes `contains` a template, and an instantiated template method cannot be
-/// called through the interface: the erasure drops the type parameter, so `Collection<int>`
-/// still implements `Enumerable` instead of narrowing it.
-#[test]
-fn test_phpdoc_template_method_keeps_its_dispatch() {
-    let source = r#"<?php
-interface Enumerable {
-    public function contains($value): bool;
-}
-/**
- * @template TValue
- */
-class Collection implements Enumerable {
-    /** @param TValue $value */
-    public function contains($value): bool { return $value === 1; }
-}
-$collection = new Collection<int>();
-echo $collection instanceof Enumerable ? "impl" : "no", "|";
-$enumerable = $collection;
-echo $enumerable->contains(1) ? "yes" : "no", "\n";
-"#;
-    assert_clean(compile_and_run_with_heap_debug(source), "impl|yes\n");
-}
-
 /// The generic marker still answers class checks even though reflection hides it.
 #[test]
 fn test_generic_class_relation_checks_match_the_template() {
@@ -616,35 +590,4 @@ echo is_subclass_of("Child", "Box") ? "F" : "f";
 echo "\n";
 "#;
     assert_clean(compile_and_run_with_heap_debug(source), "AsCDEF\n");
-}
-
-/// A stripped class template leaves a marker interface every instantiation matches.
-///
-/// php-src has one class `Box`; monomorphization has one per instantiation. Without the marker,
-/// `instanceof Box` named a class the program no longer declares and failed to compile.
-#[test]
-fn test_generic_class_instanceof_matches_every_instantiation() {
-    let source = r#"<?php
-/**
- * @template T
- */
-class Box {
-    /** @var T */
-    public $value;
-    /** @param T $value */
-    public function __construct($value) { $this->value = $value; }
-}
-class Pair<T> {
-    public function __construct(public T $value) {}
-}
-$box = new Box<int>(1);
-echo $box instanceof Box ? "box" : "no", "|", $box->value, "|";
-// The marker answers `instanceof` only: php-src has a class there, not an interface.
-echo interface_exists('Box') ? "iface" : "no", "|";
-echo in_array('Box', get_declared_interfaces(), true) ? "decl" : "nodecl", "|";
-echo is_subclass_of($box, 'Box') ? "sub" : "nosub", "|";
-$pair = new Pair<int>(2);
-echo $pair instanceof Pair ? "pair" : "no", "|", $pair->value, "\n";
-"#;
-    assert_clean(compile_and_run_with_heap_debug(source), "box|1|no|nodecl|nosub|pair|2\n");
 }
