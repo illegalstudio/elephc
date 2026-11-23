@@ -79,28 +79,33 @@ fn lower_false_write(
     let pending_slot = ctx.local_slots[&pending_name];
     ctx.emit_void(Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(pending_slot)),
         Op::PushCallOperandOwner.default_effects(), Some(span));
-    let mut direct = predicate(ctx, key, crate::ir::PhpTypePredicate::Int, span);
-    for kind in [crate::ir::PhpTypePredicate::String, crate::ir::PhpTypePredicate::Bool] {
-        let other = predicate(ctx, key, kind, span);
-        direct = ctx.emit_value(Op::IBitOr, vec![direct.value, other.value], None,
-            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    }
-    let insert = ctx.builder.create_named_block("nested.write.false.pending.insert", Vec::new());
-    let check = ctx.builder.create_named_block("nested.write.false.pending.key", Vec::new());
     let rethrow = ctx.builder.create_named_block("nested.write.false.pending.rethrow", Vec::new());
-    branch(ctx, direct, insert, check);
-    ctx.builder.position_at_end(insert);
-    emit_set(ctx, parent, key, value, span, key_already_diagnosed);
-    ctx.builder.terminate(Terminator::Br { target: rethrow, args: Vec::new() });
-    ctx.builder.position_at_end(check);
-    let array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
-    let object = predicate(ctx, key, crate::ir::PhpTypePredicate::Object, span);
-    let invalid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None,
-        PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    let key_error = ctx.builder.create_named_block("nested.write.false.pending.type.error", Vec::new());
-    branch(ctx, invalid, key_error, rethrow);
-    ctx.builder.position_at_end(key_error);
-    lower_pending_key_error(ctx, key, object, &pending_name, pending_slot, span);
+    if super::nested_false_errors::key_always_completes(ctx, key) {
+        emit_set(ctx, parent, key, value, span, key_already_diagnosed);
+        branch_to(ctx, rethrow);
+    } else {
+        let mut direct = predicate(ctx, key, crate::ir::PhpTypePredicate::Int, span);
+        for kind in [crate::ir::PhpTypePredicate::String, crate::ir::PhpTypePredicate::Bool] {
+            let other = predicate(ctx, key, kind, span);
+            direct = ctx.emit_value(Op::IBitOr, vec![direct.value, other.value], None,
+                PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+        }
+        let insert = ctx.builder.create_named_block("nested.write.false.pending.insert", Vec::new());
+        let check = ctx.builder.create_named_block("nested.write.false.pending.key", Vec::new());
+        branch(ctx, direct, insert, check);
+        ctx.builder.position_at_end(insert);
+        emit_set(ctx, parent, key, value, span, key_already_diagnosed);
+        branch_to(ctx, rethrow);
+        ctx.builder.position_at_end(check);
+        let array = predicate(ctx, key, crate::ir::PhpTypePredicate::Array, span);
+        let object = predicate(ctx, key, crate::ir::PhpTypePredicate::Object, span);
+        let invalid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+        let key_error = ctx.builder.create_named_block("nested.write.false.pending.type.error", Vec::new());
+        branch(ctx, invalid, key_error, rethrow);
+        ctx.builder.position_at_end(key_error);
+        lower_pending_key_error(ctx, key, object, &pending_name, pending_slot, span);
+    }
     ctx.builder.position_at_end(rethrow);
     let pending = ctx.load_local(&pending_name, Some(span));
     ctx.clear_owned_hidden_temp(&pending_name, Some(span));

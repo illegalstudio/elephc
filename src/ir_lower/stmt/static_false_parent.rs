@@ -15,7 +15,7 @@
 use super::*;
 
 /// Returns whether a boxed parent can still be a promotable PHP scalar at run time.
-fn parent_requires_scalar_normalization(
+pub(super) fn parent_requires_scalar_normalization(
     ctx: &LoweringContext<'_, '_>,
     parent: LoweredValue,
 ) -> bool {

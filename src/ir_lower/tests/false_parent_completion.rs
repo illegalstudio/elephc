@@ -67,6 +67,39 @@ fn false_parent_completion_native_key_priority_and_owners() {
     }
 }
 
+/// Known completing keys keep the callback handler without a dynamic key diagnostic graph.
+#[test]
+fn false_parent_completion_omits_impossible_key_errors() {
+    let source = "<?php
+        function putKnownKeys(mixed $owner, int $key): void {
+            $owner[$key] = 1;
+            $owner['name'] = 2;
+        }
+        function putKnownNestedKeys(mixed $owner): void { $owner['branch'][0] = 3; }
+        function putOriginalKey(mixed $owner, mixed $key): void { $owner[$key] = 1; }
+        function putOriginalNestedKey(mixed $owner, mixed $key): void { $owner['branch'][$key] = 3; }
+        $owner = $argc > 2 ? false : [];
+        $key = $argc > 2 ? 1 : [];
+        putKnownKeys($owner, $argc);
+        putKnownNestedKeys($owner);
+        putOriginalKey($owner, $key);
+        putOriginalNestedKey($owner, $key);";
+    let module = super::semantic_sources::lower_capturing_arguments(
+        source, Target::detect_host(), SemanticProfile::PERMISSIVE, false, SourceMode::Php,
+    );
+    for (name, key_error, scalar_key_error) in [
+        ("putKnownKeys", false, false),
+        ("putKnownNestedKeys", false, false),
+        ("putOriginalKey", true, false),
+        ("putOriginalNestedKey", true, true),
+    ] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.blocks.iter().any(|block| block.name == "nested.false.capture"));
+        assert_eq!(function.blocks.iter().any(|block| block.name == "nested.false.invalid.key"), key_error, "{name}");
+        assert_eq!(function.blocks.iter().any(|block| block.name == "nested.write.false.pending.type.error"), scalar_key_error, "{name}");
+    }
+}
+
 /// Opaque runtime eval completes captured writes and preserves callback Throwable identities.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
