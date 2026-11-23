@@ -134,6 +134,7 @@ impl Checker {
             packed_loop_counter: None,
             filled_array_facts: None,
             nonnull_array_reads: None,
+            checking_loop_update: false,
             eval_barrier_active: false,
             eval_native_callables_reachable: false,
             flow_typed_returns: HashMap::new(),

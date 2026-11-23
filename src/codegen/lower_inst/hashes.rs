@@ -2033,6 +2033,9 @@ fn emit_hash_get_success_aarch64_entry(
         }
         PhpType::Float => {
             ctx.emitter.instruction("fmov d0, x1");                             // move the borrowed hash float bits into the standard float result
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {}
         PhpType::Mixed => {
@@ -2103,6 +2106,9 @@ fn emit_hash_get_success_x86_64_entry(
         }
         PhpType::Float => {
             ctx.emitter.instruction("movq xmm0, rdi");                          // move the borrowed hash float bits into the standard float result
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash string pointer into the standard string result

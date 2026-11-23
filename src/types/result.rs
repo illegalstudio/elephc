@@ -42,6 +42,10 @@ pub struct PromotableArrays {
     /// `(function-like scope, span)` of every promotable value a sink takes raw. They win over a
     /// view recorded for the same span by an earlier checker visit.
     pub raw_sites: HashSet<(String, Span)>,
+    /// `(function-like scope, read span)` of packed element reads the fill proof proves in
+    /// range. Every other read of a raw float array is miss-capable and boxes its result, so a
+    /// missing key materializes PHP's `null` instead of `0.0`.
+    pub nonnull_read_sites: HashSet<(String, Span)>,
 }
 
 /// Fixed-point loop storage contracts keyed by `(function-like scope, loop span)`.

@@ -1358,7 +1358,10 @@ impl Checker {
         if let Some(update) = update {
             // The update runs only after an iteration, so a proof it records stays inside it.
             let entry_proofs = self.begin_proof_scope();
+            let saved_loop_update = self.checking_loop_update;
+            self.checking_loop_update = true;
             let checked = self.check_stmt(update, &mut tail_env);
+            self.checking_loop_update = saved_loop_update;
             let _ = self.end_proof_scope(entry_proofs);
             if let Err(error) = checked {
                 errors.extend(error.flatten());

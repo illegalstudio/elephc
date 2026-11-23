@@ -69,6 +69,12 @@ impl Checker {
                 if **elem_ty != PhpType::Never {
                     if let ExprKind::Variable(name) = &array.kind {
                         if self.nonnull_array_read(name, index) {
+                            // Codegen keeps the raw slot representation only for reads the fill
+                            // proof proves in range; every other float read needs a boxed result.
+                            self.promotable_arrays.nonnull_read_sites.insert((
+                                self.current_loop_storage_scope.clone(),
+                                expr.span,
+                            ));
                             return Ok((**elem_ty).clone());
                         }
                     }
@@ -99,10 +105,10 @@ impl Checker {
                         && super::super::super::promotable_arrays::promotable_element(elem_ty))
                 {
                     // Once a promotable local may hold PHP's `null` (a missed read stored back,
-                    // or any key that skipped), its integer-key reads are `?int` too: the read
-                    // already produces that representation, and an `int` view would turn a
-                    // stored `null` into zero the next time the value is written back.
-                    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]))
+                    // or any key that skipped), its integer-key reads are nullable elements too:
+                    // the read already produces that representation, and an `int` view would
+                    // turn a stored `null` into zero (or truncate a float) when written back.
+                    Ok(self.normalize_union_type(vec![(**elem_ty).clone(), PhpType::Void]))
                 } else {
                     Ok(*elem_ty.clone())
                 }

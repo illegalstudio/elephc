@@ -888,7 +888,19 @@ pub(super) fn array_access_result_type(
         Op::StrCharAt => PhpType::Str,
         Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Array(elem_ty) => {
-                array_access_element_result_type(normalize_value_php_type(*elem_ty))
+                let elem_ty = normalize_value_php_type(*elem_ty);
+                let fill_proven = ctx
+                    .promotable_arrays
+                    .nonnull_read_sites
+                    .contains(&(ctx.loop_storage_scope.clone(), expr.span));
+                // A raw packed float slot has no spare bit for PHP's null. Only a read the fill
+                // proof proves in range keeps the raw F64 result; every other read stays boxed
+                // so a missing key materializes `null` instead of `0.0`.
+                if elem_ty.codegen_repr() == PhpType::Float && !fill_proven {
+                    PhpType::Mixed
+                } else {
+                    array_access_element_result_type(elem_ty)
+                }
             }
             _ => fallback_expr_type(expr),
         },

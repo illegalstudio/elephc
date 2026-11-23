@@ -66,6 +66,8 @@ echo $sum, "\n";
     let main = main_ir(source);
     assert!(main.contains("promotable_array"), "{main}");
     assert!(!main.contains("array_set_mixed_key"), "{main}");
+    // The loop's own `$i++` is control, not a proof-breaking write, so both the update loop's
+    // two reads and the later sum loop's read stay fill-proven and raw.
     assert_eq!(main.matches("F64 php=float = array_get").count(), 3, "{main}");
 }
 
@@ -166,4 +168,60 @@ echo implode(",", array_keys($b)), "\n";
 echo implode(",", $b), "\n";
 "#;
     assert_eq!(compile_and_run(source), "-3,-2,0,1,2\n1,2,0,0,0\nk,0,1\n1,2,2\n");
+}
+
+/// The fill proof only covers the range the fill loop actually wrote: switching the consumer
+/// from `<` to `<=` reaches one key past the fill and must stay a nullable read.
+#[test]
+fn test_fill_proof_requires_matching_range_operator() {
+    let source = r#"<?php
+$count = 3 + $argc;
+$x = [];
+for ($i = 0; $i < $count; $i++) {
+    $x[$i] = 1.5;
+}
+$last = null;
+for ($i = 0; $i <= $count; $i++) {
+    $last = $x[$i];
+}
+var_export($last);
+"#;
+    assert_eq!(compile_and_run(source), "NULL");
+}
+
+/// A promotable float read keeps the element type: an unannotated function returning it must
+/// infer `?float`, not the integer-or-null shape of an integer array.
+#[test]
+fn test_promotable_float_read_keeps_float_return_type() {
+    let source = r#"<?php
+function first(int $n) {
+    $a = [];
+    for ($i = 0; $i < $n; $i++) {
+        $a[$i] = 2.5;
+    }
+    return $a[0];
+}
+echo first(3 + $argc), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2.5\n");
+}
+
+/// A removal inside the consumer loop invalidates the reads earlier in the same body too: the
+/// next iteration re-executes them after the pop, so they must stay nullable.
+#[test]
+fn test_loop_carried_removal_unmarks_earlier_fill_reads() {
+    let source = r#"<?php
+$count = 3 + $argc;
+$x = [];
+for ($i = 0; $i < $count; $i++) {
+    $x[$i] = 1.5;
+}
+$last = null;
+for ($i = 0; $i < $count; $i++) {
+    $last = $x[$i];
+    array_pop($x);
+}
+var_export($last);
+"#;
+    assert_eq!(compile_and_run(source), "NULL");
 }

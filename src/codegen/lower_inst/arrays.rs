@@ -700,7 +700,10 @@ fn lower_array_get_in_mode(
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_get_result(&elem_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
-    if matches!(result_ty, PhpType::Mixed) {
+    // A raw float slot is read by the typed path, which hands back the F64 bits and boxes them
+    // itself when the result is Mixed. The generic runtime-mixed helper boxes by the header's
+    // value type, which a `array_splice()` rebuild can leave at the default int tag.
+    if matches!(result_ty, PhpType::Mixed) && elem_ty.codegen_repr() != PhpType::Float {
         return lower_array_get_runtime_mixed(
             ctx,
             inst,
@@ -2699,8 +2702,14 @@ fn emit_array_get_in_bounds_aarch64(
             array_reg, index_reg
         );
         ctx.emitter.instruction(&load_widened);                                 // load the boxed element using its widened slot layout
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        materialize_widened_array_payload_aarch64(ctx, elem_ty, result_ty);
+        if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+            // The widened slot already holds a boxed cell; return it as the boxed result instead
+            // of unboxing and losing the null a miss/float cell may carry.
+            emit_mixed_array_get_deref_invoker_ref_cell(ctx, "x0");
+        } else {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            materialize_widened_array_payload_aarch64(ctx, elem_ty, result_ty);
+        }
         ctx.emitter.instruction(&format!("b {}", done));                        // skip the original static-layout load
         ctx.emitter.label(&typed);
         Some(done)
@@ -2740,6 +2749,9 @@ fn emit_array_get_in_bounds_aarch64(
                 .instruction(
                 &format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)
             );                                                                  // load the selected indexed-array float element
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -2841,8 +2853,13 @@ fn emit_array_get_in_bounds_x86_64(
             array_reg, index_reg
         );
         ctx.emitter.instruction(&load_widened);                                 // load the boxed element using its widened slot layout
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        materialize_widened_array_payload_x86_64(ctx, elem_ty, result_ty);
+        if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+            // See the AArch64 twin: keep the boxed cell so a null stays PHP null.
+            emit_mixed_array_get_deref_invoker_ref_cell(ctx, "rax");
+        } else {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            materialize_widened_array_payload_x86_64(ctx, elem_ty, result_ty);
+        }
         ctx.emitter.instruction(&format!("jmp {}", done));                      // skip the original static-layout load
         ctx.emitter.label(&typed);
         Some(done)
@@ -2882,6 +2899,9 @@ fn emit_array_get_in_bounds_x86_64(
                 .instruction(
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
             );                                                                  // load the selected indexed-array float element
+            if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen_support::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            }
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);

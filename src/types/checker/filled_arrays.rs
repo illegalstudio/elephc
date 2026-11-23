@@ -24,8 +24,13 @@ use super::Checker;
 pub(crate) struct FilledArrayFact {
     /// The loop counter used as every write key.
     pub counter: String,
-    /// The exclusive (or inclusive) bound shared with the consumer loop.
+    /// The bound shared with the consumer loop.
     pub bound: Expr,
+    /// Whether the fill loop used `<=` and therefore also wrote the bound's key.
+    ///
+    /// A consumer that switches from `<` to `<=` would otherwise read one key past the filled
+    /// range through the non-null shortcut.
+    pub inclusive: bool,
     /// Local arrays the fill loop wrote.
     pub arrays: HashSet<String>,
 }
@@ -47,7 +52,7 @@ impl Checker {
         update: Option<&Stmt>,
         body: &[Stmt],
     ) -> Option<FilledArrayFact> {
-        let (counter, bound) = loop_counter_and_bound(init?, condition?, update?)?;
+        let (counter, inclusive, bound) = loop_counter_and_bound(init?, condition?, update?)?;
         let mut arrays = HashSet::new();
         for stmt in body {
             let StmtKind::ArrayAssign { array, index, .. } = &stmt.kind else {
@@ -69,6 +74,7 @@ impl Checker {
         (!arrays.is_empty()).then_some(FilledArrayFact {
             counter,
             bound: bound.clone(),
+            inclusive,
             arrays,
         })
     }
@@ -83,10 +89,11 @@ impl Checker {
         let (Some(init), Some(condition), Some(update)) = (init, condition, update) else {
             return false;
         };
-        let Some((counter, bound)) = loop_counter_and_bound(init, condition, update) else {
+        let Some((counter, inclusive, bound)) = loop_counter_and_bound(init, condition, update)
+        else {
             return false;
         };
-        counter == fact.counter && bound == &fact.bound
+        counter == fact.counter && inclusive == fact.inclusive && bound == &fact.bound
     }
 
     /// Returns whether `$name[$index]` is a non-null read under the active fill fact.
@@ -131,14 +138,28 @@ impl Checker {
             StmtKind::Assign { name, value }
                 if name == &fact.counter && matches!(value.kind, ExprKind::IntLiteral(0))
         );
-        if (!resets_counter && stmt_writes_local(stmt, &fact.counter))
-            || bound_locals.iter().any(|name| stmt_writes_local(stmt, name))
+        let loop_counter_advance =
+            self.checking_loop_update && stmt_is_counter_advance(stmt, &fact.counter);
+        if (!resets_counter
+            && !loop_counter_advance
+            && (stmt_writes_local(stmt, &fact.counter)
+                || stmt_expression_writes_inner(stmt, &fact.counter)))
+            || bound_locals.iter().any(|name| {
+                stmt_writes_local(stmt, name) || stmt_expression_writes(stmt, name)
+            })
         {
-            self.filled_array_facts = None;
-            self.nonnull_array_reads = None;
+            self.clear_fill_proof();
             return;
         }
-        let removes = match &stmt.kind {
+        // A call in any expression this statement evaluates can mutate a filled array by
+        // reference even when the assignment target is unrelated (`$removed = array_pop($x)`),
+        // and an expression-level whole-array rebind (`$removed = ($x = [])`) replaces it.
+        let removes = stmt_expressions_mention_call(stmt)
+            || fact
+                .arrays
+                .iter()
+                .any(|name| stmt_expression_writes(stmt, name))
+            || match &stmt.kind {
             StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } => {
                 fact.arrays.contains(name)
             }
@@ -153,31 +174,181 @@ impl Checker {
         if removes {
             // The active consumer loop must stop trusting the proof as soon as a statement can
             // remove or alias a filled array, not only the next loop.
-            self.filled_array_facts = None;
-            self.nonnull_array_reads = None;
+            self.clear_fill_proof();
         }
+    }
+
+    /// Ends the fill proof and unmarks reads it already proved.
+    ///
+    /// A removing statement invalidates the whole consumer loop, including reads that were
+    /// checked before it in the body: the loop re-executes them after the removal, so a read
+    /// marked non-null would return `0.0` for a key the previous iteration popped.
+    fn clear_fill_proof(&mut self) {
+        self.filled_array_facts = None;
+        self.nonnull_array_reads = None;
+        self.promotable_arrays.nonnull_read_sites.clear();
     }
 }
 
-/// Returns the counter and bound of `for ($i = 0; $i < B; $i++)`.
+/// Reports whether the statement is exactly the counter advance a `for` update performs.
+///
+/// Mirrors the advance forms `loop_counter_and_bound` accepts, so the loop's own `$i++` does not
+/// clear the fill fact it is about to consume.
+fn stmt_is_counter_advance(stmt: &Stmt, counter: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::ExprStmt(expr) => matches!(
+            &expr.kind,
+            ExprKind::PostIncrement(name) | ExprKind::PreIncrement(name) if name == counter
+        ),
+        StmtKind::Assign { name, value } => {
+            name == counter
+                && matches!(
+                    &value.kind,
+                    ExprKind::BinaryOp { left, op: BinOp::Add, right }
+                        if matches!(&left.kind, ExprKind::Variable(name) if name == counter)
+                            && matches!(right.kind, ExprKind::IntLiteral(1))
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Visits every expression the statement itself evaluates, without entering nested bodies.
+///
+/// Conditions and `for` init/update expressions run inside the fill proof's scope and must be
+/// inspected; nested statement bodies are checked one by one, so their expressions are not.
+fn stmt_direct_expressions<'a>(
+    stmt: &'a Stmt,
+    include_for_control: bool,
+    visitor: &mut dyn FnMut(&'a Expr),
+) {
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. }
+        | StmtKind::PropertyArrayPush { value: expr, .. }
+        | StmtKind::ArrayPush { value: expr, .. } => visitor(expr),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ListUnpack { value, .. }
+        | StmtKind::StaticVar { init: value, .. } => visitor(value),
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            visitor(index);
+            visitor(value);
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            visitor(target);
+            visitor(value);
+        }
+        StmtKind::RefAssign { source, .. } => visitor(source),
+        StmtKind::If {
+            condition,
+            elseif_clauses,
+            ..
+        } => {
+            visitor(condition);
+            for (condition, _) in elseif_clauses {
+                visitor(condition);
+            }
+        }
+        StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } => {
+            visitor(condition);
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            ..
+        } => {
+            // A loop's own init/update are its control writes. The counter check skips them:
+            // every matching consumer increments its counter, and that must not invalidate the
+            // fact before the loop it proves is even matched. The condition runs per iteration
+            // and is always inspected.
+            if include_for_control {
+                if let Some(init) = init {
+                    stmt_direct_expressions(init, include_for_control, visitor);
+                }
+            }
+            if let Some(condition) = condition {
+                visitor(condition);
+            }
+            if include_for_control {
+                if let Some(update) = update {
+                    stmt_direct_expressions(update, include_for_control, visitor);
+                }
+            }
+        }
+        StmtKind::Foreach { array, .. } => visitor(array),
+        StmtKind::Switch { subject, .. } => visitor(subject),
+        StmtKind::Include { path, .. } => visitor(path),
+        StmtKind::Return(Some(value)) => visitor(value),
+        _ => {}
+    }
+}
+
+/// Reports whether any expression the statement itself evaluates can run a call.
+fn stmt_expressions_mention_call(stmt: &Stmt) -> bool {
+    let mut found = false;
+    stmt_direct_expressions(stmt, true, &mut |expr| {
+        found = found || expr_mentions_call(expr);
+    });
+    found
+}
+
+/// Reports whether any expression the statement evaluates assigns, increments or decrements
+/// the whole local `name`.
+fn stmt_expression_writes(stmt: &Stmt, name: &str) -> bool {
+    stmt_expression_writes_with(stmt, name, true)
+}
+
+/// Reports whether an expression the statement evaluates writes `name`, optionally skipping the
+/// statement's own `for` init/update.
+fn stmt_expression_writes_with(stmt: &Stmt, name: &str, include_for_control: bool) -> bool {
+    let mut found = false;
+    stmt_direct_expressions(stmt, include_for_control, &mut |expr| {
+        found = found || expr_writes_local(expr, name);
+    });
+    found
+}
+
+/// Reports whether an expression the statement evaluates writes `name`, ignoring the statement's
+/// own `for` init/update control writes.
+fn stmt_expression_writes_inner(stmt: &Stmt, name: &str) -> bool {
+    stmt_expression_writes_with(stmt, name, false)
+}
+
+/// Returns the counter, range operator and bound of `for ($i = 0; $i < B; $i++)`.
+///
+/// The boolean is `true` when the condition is inclusive (`<=`), which fills one more key.
 fn loop_counter_and_bound<'a>(
     init: &'a Stmt,
     condition: &'a Expr,
     update: &'a Stmt,
-) -> Option<(String, &'a Expr)> {
+) -> Option<(String, bool, &'a Expr)> {
     let StmtKind::Assign { name: counter, value } = &init.kind else {
         return None;
     };
     if !matches!(value.kind, ExprKind::IntLiteral(0)) {
         return None;
     }
-    let ExprKind::BinaryOp {
-        left,
-        op: BinOp::Lt | BinOp::LtEq,
-        right,
-    } = &condition.kind
-    else {
-        return None;
+    let (left, inclusive, right) = match &condition.kind {
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Lt,
+            right,
+        } => (left, false, right),
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::LtEq,
+            right,
+        } => (left, true, right),
+        _ => return None,
     };
     if !matches!(&left.kind, ExprKind::Variable(name) if name == counter) {
         return None;
@@ -198,7 +369,7 @@ fn loop_counter_and_bound<'a>(
         }
         _ => false,
     };
-    advances.then_some((counter.clone(), right))
+    advances.then_some((counter.clone(), inclusive, right))
 }
 
 /// Collects the locals an expression reads.
@@ -255,7 +426,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 
 /// Reports whether an expression increments, decrements or assigns one local.
 fn expr_writes_local(expr: &Expr, name: &str) -> bool {
-    match &expr.kind {
+    let direct = match &expr.kind {
         ExprKind::PreIncrement(local)
         | ExprKind::PostIncrement(local)
         | ExprKind::PreDecrement(local)
@@ -263,11 +434,16 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::Assignment { target, .. } => {
             matches!(&target.kind, ExprKind::Variable(local) if local == name)
         }
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_writes_local(left, name) || expr_writes_local(right, name)
-        }
         _ => false,
+    };
+    if direct {
+        return true;
     }
+    let mut found = false;
+    super::loop_storage::visit_child_expressions(expr, &mut |child| {
+        found = found || expr_writes_local(child, name);
+    });
+    found
 }
 
 /// Reports whether an expression can assign, increment, or call during the fill loop.

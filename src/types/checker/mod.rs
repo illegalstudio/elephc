@@ -425,6 +425,9 @@ pub(crate) struct Checker {
     pub(crate) filled_array_facts: Option<filled_arrays::FilledArrayFact>,
     /// Non-null element reads active in the loop consuming `filled_array_facts`.
     pub(crate) nonnull_array_reads: Option<filled_arrays::NonnullArrayReads>,
+    /// Set while checking a `for` statement's own update. A pure counter advance there is loop
+    /// control, not a proof-breaking body write.
+    pub(crate) checking_loop_update: bool,
     /// Whether the active local statement stream has crossed an `eval()` call.
     ///
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because

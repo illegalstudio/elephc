@@ -873,6 +873,101 @@ var_dump((new Mw())->check(new Req()));
             "class ids should follow sorted names, not hash or declaration order"
         );
     }
+    /// Builds the checker state a fill-fact invalidation test starts from.
+    fn checker_with_fill_fact() -> super::Checker {
+        use crate::codegen_support::platform::{Arch, Platform, Target};
+        use crate::types::checker::filled_arrays::FilledArrayFact;
+
+        let mut checker = super::Checker::new(Target::new(Platform::Linux, Arch::AArch64));
+        checker.filled_array_facts = Some(FilledArrayFact {
+            counter: "i".to_string(),
+            bound: crate::parser::ast::Expr::int_lit(4),
+            inclusive: false,
+            arrays: std::collections::HashSet::from(["x".to_string()]),
+        });
+        checker
+    }
+
+    /// A call on an assignment's right-hand side can mutate a filled array by reference even
+    /// when the assignment target is unrelated, so it must clear the fill fact.
+    #[test]
+    fn assignment_rhs_call_invalidates_the_fill_fact() {
+        use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+        use crate::span::Span;
+
+        let mut checker = checker_with_fill_fact();
+        let argument = Expr::new(ExprKind::Variable("x".to_string()), Span::dummy());
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: "array_pop".into(),
+                args: vec![argument],
+            },
+            Span::dummy(),
+        );
+        let stmt = Stmt::new(
+            StmtKind::Assign {
+                name: "removed".to_string(),
+                value: call,
+            },
+            Span::dummy(),
+        );
+        checker.invalidate_filled_arrays(&stmt);
+        assert!(checker.filled_array_facts.is_none());
+    }
+
+    /// A whole-array rebind nested in an assignment's value replaces the filled storage even
+    /// though the statement's target is an unrelated local.
+    #[test]
+    fn expression_level_array_rebind_invalidates_the_fill_fact() {
+        use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+        use crate::span::Span;
+
+        let mut checker = checker_with_fill_fact();
+        let rebind = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::Variable("x".to_string()),
+                    Span::dummy(),
+                )),
+                value: Box::new(Expr::new(
+                    ExprKind::ArrayLiteral(Vec::new()),
+                    Span::dummy(),
+                )),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            Span::dummy(),
+        );
+        let stmt = Stmt::new(
+            StmtKind::Assign {
+                name: "removed".to_string(),
+                value: rebind,
+            },
+            Span::dummy(),
+        );
+        checker.invalidate_filled_arrays(&stmt);
+        assert!(checker.filled_array_facts.is_none());
+    }
+
+    /// A call-free assignment keeps a fact that no other statement invalidated.
+    #[test]
+    fn call_free_assignment_keeps_the_fill_fact() {
+        use crate::parser::ast::{Expr, Stmt, StmtKind};
+        use crate::span::Span;
+
+        let mut checker = checker_with_fill_fact();
+        let stmt = Stmt::new(
+            StmtKind::Assign {
+                name: "sum".to_string(),
+                value: Expr::int_lit(1),
+            },
+            Span::dummy(),
+        );
+        checker.invalidate_filled_arrays(&stmt);
+        assert!(checker.filled_array_facts.is_some());
+    }
+
 }
 
 /// The errors PHP raises while compiling the class declarations, in source order and each with its
