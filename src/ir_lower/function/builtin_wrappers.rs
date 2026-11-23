@@ -101,10 +101,23 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     for statement in &mut statements {
         statement.source_mode = source_mode;
     }
+    lower_synthetic_body_in_scope(module, label, signature, None, statements)
+}
+
+/// Lowers statements that already carry their source mode as the body of a synthetic function
+/// written inside `scope` (`None` for the global scope).
+pub(in crate::ir_lower) fn lower_synthetic_body_in_scope(
+    module: &mut Module,
+    label: &str,
+    signature: &FunctionSig,
+    scope: Option<&str>,
+    statements: Vec<Stmt>,
+) -> Function {
     let return_type = signature.return_type.codegen_repr();
     let mut function = Function::new(
         label.to_string(), return_ir_type(&return_type), return_type.clone(),
     );
+    function.lexical_class = scope.map(str::to_string);
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
     // The body calls user-level compatibility helpers (`__elephc_array_merge_gradual`, ...) by
@@ -173,7 +186,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         &Default::default(), // promotable arrays
         label.to_string(),
         &module.global_constants,
-        None,
+        scope.map(str::to_string),
         return_type,
         signature.declared_return,
         &signature.params,

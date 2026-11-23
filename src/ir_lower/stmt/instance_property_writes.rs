@@ -51,6 +51,7 @@ pub(super) fn lower_property_assign(
             None
         }
     });
+    let plain_write = readonly_write.is_none() && reflection_write.is_none();
     if readonly_write.is_some()
         || (reflection_write.is_some() && value.span.line == span.line && value.span.col == span.col)
     {
@@ -170,6 +171,22 @@ pub(super) fn lower_property_assign(
         }
     }
     receiver.narrow_for_assignment(ctx, property, lowered_value, span);
+    if plain_write {
+        use crate::ir_lower::erased_writes::{self as erased, Form};
+        if erased::eligible(ctx, receiver.value, &Form::Assign, property, None, Some(lowered_value)) {
+            erased::call(ctx, receiver.value, Form::Assign, None, property, None, Some(lowered_value), span);
+            // The inline store adopts or copies an owning source and then releases it; the helper
+            // received a box of its own, so the source is released here.
+            if ctx.value_is_owning_temporary(lowered_value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
+            }
+            receiver.finish(ctx, span);
+            if let Some(owner) = deferred_value_owner {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+            }
+            return;
+        }
+    }
     let object = receiver.value;
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard

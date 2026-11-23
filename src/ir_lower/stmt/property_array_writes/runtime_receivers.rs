@@ -204,9 +204,13 @@ fn dispatch(
     classes.sort_by(|a, b| a.0.cmp(&b.0));
     if classes.is_empty() { return false; }
 
-    let name = ctx.declare_owned_hidden_temp(PhpType::Str);
-    let name_slot = ctx.local_slots[&name];
-    crate::ir_lower::expr::register_owned_call_operand(ctx, name_slot, span);
+    // A program that loads no code at run time knows every class: an object's exact class is its
+    // class id, one load, where `get_class()` builds a string and each arm compares one. An
+    // interpreted subclass shares its compiled parent's layout, so such programs keep the names.
+    let by_id = !ctx.program_loads_code_at_run_time();
+    let name = if by_id { String::new() } else { ctx.declare_owned_hidden_temp(PhpType::Str) };
+    let name_slot = (!by_id).then(|| ctx.local_slots[&name]);
+    if let Some(slot) = name_slot { crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span); }
     let ordinary = ctx.builder.create_named_block("property.array.runtime_class", vec![]);
     let missing = ctx.builder.create_named_block("property.array.runtime_fallback", vec![]);
     let done = ctx.builder.create_named_block("property.array.runtime_done", vec![]);
@@ -217,22 +221,46 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
         then_target: ordinary, then_args: vec![], else_target: missing, else_args: vec![] });
     ctx.builder.position_at_end(ordinary);
-    let target = crate::ir::RuntimeFnId::GetClass;
-    let class = ctx.emit_value(Op::RuntimeCall, vec![object.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
-        PhpType::Str, target.effects(), Some(span));
-    crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class, span);
+    let class_id = if by_id {
+        let generic = PhpType::Object(String::new());
+        let unboxed = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            ctx.emit_value(Op::MixedUnbox, vec![object.value], None, generic.clone(),
+                Op::mixed_unbox_effects(&generic), Some(span))
+        } else {
+            ctx.emit_value(Op::Borrow, vec![object.value], None, generic,
+                Op::Borrow.default_effects(), Some(span))
+        };
+        ctx.builder.set_value_ownership(unboxed.value, Ownership::Borrowed);
+        Some(ctx.emit_value(Op::ObjectClassId, vec![unboxed.value], None, PhpType::Int,
+            Op::ObjectClassId.default_effects(), Some(span)))
+    } else {
+        let target = crate::ir::RuntimeFnId::GetClass;
+        let class = ctx.emit_value(Op::RuntimeCall, vec![object.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+            PhpType::Str, target.effects(), Some(span));
+        crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class, span);
+        None
+    };
     let mut merged = initial.clone();
     for (class, null_error, writable) in classes {
         let matched = ctx.builder.create_named_block("property.array.declared", vec![]);
         let next = ctx.builder.create_named_block("property.array.next_class", vec![]);
-        let current = ctx.load_local(&name, Some(span));
-        ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
-        let data = ctx.intern_string(class.trim_start_matches('\\'));
-        let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
-            Op::ConstStr.default_effects(), Some(span));
-        let condition = ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
-            PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+        let condition = if let Some(class_id) = class_id {
+            let wanted = ctx.classes.get(class.trim_start_matches('\\')).map_or(0, |info| info.class_id);
+            let wanted = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(wanted as i64)),
+                PhpType::Int, Op::ConstI64.default_effects(), Some(span));
+            ctx.emit_value(Op::ICmp, vec![class_id.value, wanted.value],
+                Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)), PhpType::Bool,
+                Op::ICmp.default_effects(), Some(span))
+        } else {
+            let current = ctx.load_local(&name, Some(span));
+            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+            let data = ctx.intern_string(class.trim_start_matches('\\'));
+            let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+                Op::ConstStr.default_effects(), Some(span));
+            ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
+                PhpType::Bool, Op::StrictEq.default_effects(), Some(span))
+        };
         let before = ctx.initialized_slots_snapshot();
         ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
             then_target: matched, then_args: vec![], else_target: next, else_args: vec![] });
@@ -265,7 +293,7 @@ fn dispatch(
     ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
     ctx.builder.position_at_end(done);
     ctx.restore_initialized_slots(merged);
-    crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span);
+    if let Some(slot) = name_slot { crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span); }
     true
 }
 

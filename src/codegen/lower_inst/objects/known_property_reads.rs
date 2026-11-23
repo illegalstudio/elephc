@@ -884,6 +884,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Object(_)
     ) {
+        if super::outlined_dynamic_property::try_lower_outlined_named_mixed_prop_init(ctx, inst, object, &property)? {
+            return Ok(());
+        }
         return lower_mixed_prop_initialized(ctx, inst, object, &property);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;

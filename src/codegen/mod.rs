@@ -68,6 +68,7 @@ pub(crate) use lower_inst::IS_A_INDEX_BUILDS;
 pub(crate) use lower_inst::CLASS_CONSTANT_EVALUATIONS;
 #[cfg(test)]
 pub(crate) use lower_inst::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
+pub(crate) use lower_inst::{named_helper_scope_groups_in, NamedHelperScopes};
 #[cfg(test)]
 pub(crate) use lower_inst::NAMED_SCOPE_GROUP_BUILDS;
 #[cfg(test)]

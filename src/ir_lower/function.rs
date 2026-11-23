@@ -31,7 +31,7 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
-pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
+pub(in crate::ir_lower) use builtin_wrappers::{lower_builtin_callable_body, lower_synthetic_body_in_scope};
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
@@ -2365,6 +2365,11 @@ fn lower_body_into_function(
             continue;
         }
         if name == "this" {
+            continue;
+        }
+        // An outlined property-write helper only borrows its operands and never writes one: the
+        // shadow would clone the receiver's box on every call.
+        if ctx.owner_name().starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX) {
             continue;
         }
         let by_ref_param = by_ref_params.get(index).copied().unwrap_or(false);

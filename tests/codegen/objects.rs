@@ -23,6 +23,8 @@ mod magic_methods;
 mod method_call_runtime;
 #[path = "objects/method_call_review.rs"]
 mod method_call_review;
+#[path = "objects/erased_write_helpers.rs"]
+mod erased_write_helpers;
 #[path = "objects/mixed_magic_hash.rs"]
 mod mixed_magic_hash;
 #[path = "objects/cloning.rs"]

@@ -1162,6 +1162,7 @@ fn emit_user_function(
         Some(epilogue_label),
     );
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
+    save_erased_write_site(&mut ctx)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, function.display_name());
@@ -3284,4 +3285,24 @@ mod duplicate_helper_tests {
             ["stub".to_string(), "_eir_cbody_1".to_string()].into_iter().collect();
         assert_eq!(drop_duplicate_helpers(text, &mut seen).unwrap(), "");
     }
+}
+
+/// Saves, at the entry of an outlined property-write helper, the call site its caller published.
+///
+/// The helper's instructions have compiler-built spans and publish no site, so a diagnostic they
+/// raise names the caller's statement; `publish_call_site` puts this saved site back after user
+/// code (`__get`, `offsetSet()`, an error handler) has published its own.
+fn save_erased_write_site(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if !ctx.function.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX) {
+        return Ok(());
+    }
+    let Some(slot) = ctx.local_slot_by_name(crate::names::ERASED_WRITE_SITE_LOCAL) else {
+        return Ok(());
+    };
+    let offset = ctx.local_offset(slot)?;
+    let scratch = crate::codegen_support::abi::secondary_scratch_reg(ctx.emitter);
+    let site = crate::codegen_support::abi::php_site_symbol(&ctx.emitter.target);
+    crate::codegen_support::abi::emit_load_symbol_to_reg(ctx.emitter, scratch, &site, 0);
+    crate::codegen_support::abi::store_at_offset(ctx.emitter, scratch, offset);
+    Ok(())
 }

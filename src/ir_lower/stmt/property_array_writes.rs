@@ -94,6 +94,7 @@ pub(super) fn lower_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let stores_reference = matches!(value.kind, ExprKind::ArrayReference(_));
     let receiver = Expr::new(ExprKind::PropertyAccess {
         object: Box::new(object.clone()), property: property.into(),
     }, span);
@@ -111,6 +112,14 @@ pub(super) fn lower_property_array_push(
         (receiver, value)
     };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
+    if !stores_reference && crate::ir_lower::erased_writes::eligible(ctx, receiver.value, &crate::ir_lower::erased_writes::Form::Append,
+        property, None, Some(value)) {
+        crate::ir_lower::erased_writes::call(ctx, receiver.value, crate::ir_lower::erased_writes::Form::Append,
+            None, property, None, Some(value), span);
+        receiver.finish(ctx, span);
+        retire_property_write_roots(ctx, roots, span);
+        return;
+    }
     if let Some(child) = native_xml::fetch(ctx, &receiver, object, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             PropertyDimensionFetchMode::Write).map(native_xml::Fetch::known)) {
@@ -352,7 +361,7 @@ pub(super) fn lower_property_array_assign(
         index,
         value,
         span,
-        update.is_some(),
+        update.is_some() || crate::ir_lower::erased_writes::key_is_diagnosed_marker(index),
         element_update,
     );
 }
@@ -633,6 +642,34 @@ pub(super) fn lower_property_array_assign_with_update(
     let fetch_mode = if delayed_incdec.is_some() || compound.is_some() {
         PropertyDimensionFetchMode::ReadWrite
     } else { PropertyDimensionFetchMode::Write };
+    if let (Some(increment), None) = (delayed_incdec, &incdec_results) {
+        use crate::ir_lower::erased_writes::{self as erased, Form};
+        let form = Form::IncDec { increment };
+        if erased::eligible(ctx, receiver.value, &form, property, Some(index), None) {
+            with_late_property_key(ctx, late_index, index, span, |ctx, index|
+                erased::call(ctx, receiver.value, form, None, property, Some(index), None, span));
+            receiver.finish(ctx, span);
+            retire_property_write_roots(ctx, roots, span);
+            return;
+        }
+    }
+    // A reference stored into the element (`$o->p[k] = &$x`) must reach the writer unboxed.
+    let stores_reference = matches!(source_value.kind, ExprKind::ArrayReference(_));
+    if delayed_incdec.is_none() && !stores_reference
+        && (compound.is_none() || key_already_diagnosed) {
+        use crate::ir_lower::erased_writes::{self as erased, Form};
+        let form = match compound {
+            Some((op, _)) => Form::Compound(format!("{op:?}")),
+            None => Form::Index { diagnosed: key_already_diagnosed },
+        };
+        if erased::eligible(ctx, receiver.value, &form, property, Some(index), Some(value)) {
+            with_late_property_key(ctx, late_index, index, span, |ctx, index|
+                erased::call(ctx, receiver.value, form, compound.map(|(op, _)| op), property, Some(index), Some(value), span));
+            receiver.finish(ctx, span);
+            retire_property_write_roots(ctx, roots, span);
+            return;
+        }
+    }
     if let Some(child) = native_xml::fetch(ctx, &receiver, object, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             fetch_mode).map(native_xml::Fetch::known)) {
@@ -763,6 +800,11 @@ fn lower_rooted_property_write_operand(
 ) -> LoweredValue {
     // `$this->items[$k] = &$x` stores a reference marker, which only the array-reference lowering
     // builds; any other operand falls through to `lower_expr` (see `nested_plain_writes`).
+    // A parameter of an outlined write helper cannot be rebound or released by the user code the
+    // write runs, so its operand needs no copy of its own: the caller keeps it alive.
+    if crate::ir_lower::erased_writes::lends_parameter(ctx, expr) {
+        return lower_expr(ctx, expr);
+    }
     let value = lower_array_reference_or_value(ctx, expr);
     root_property_write_value(ctx, value, expr.span, roots)
 }

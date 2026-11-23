@@ -376,6 +376,19 @@ pub const CALLED_CLASS_ID_LOCAL: &str = "__elephc_called_class_id#gen";
 /// `__rt_closure_set_scope` matches the name's bytes, so the two must change together.
 pub const CLOSURE_SCOPE_LOCAL: &str = "__elephc_closure_scope#gen";
 
+/// Name prefix of the shared outlined property-write helpers (`crate::ir_lower::erased_writes`).
+pub const ERASED_WRITE_HELPER_PREFIX: &str = "__eir_erased_write@";
+
+/// Hidden `Int` local of an outlined property-write helper holding the call site its caller
+/// published (`_php_site`) when the helper was entered.
+///
+/// The helper's own instructions carry compiler-built spans and so publish nothing; a diagnostic
+/// they raise names the published site. User code the helper runs in between (`__get`, an
+/// `offsetSet()`, an error handler) publishes its own lines, so the helper puts the saved site
+/// back before each instruction that can warn or enter user code. Marked generated like the
+/// other hidden locals.
+pub const ERASED_WRITE_SITE_LOCAL: &str = "__elephc_erased_write_site#gen";
+
 /// Storage name of the eval scope handle threaded into a scope-aware AOT eval fragment.
 ///
 /// A literal `eval()` whose fragment writes a caller variable is lowered as its own EIR function

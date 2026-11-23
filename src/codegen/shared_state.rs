@@ -389,6 +389,9 @@ pub(crate) enum DynamicPropHelperKind {
     /// `$mixed->name` read of one declared name, emitted as a synthetic function.
     /// `$mixed->name = $boxed` of one declared name, emitted as a synthetic function.
     NamedMixedSet { property: String },
+    /// `PropInitialized` of one declared name on a boxed receiver (the probe `isset()`, `??` and the
+    /// element-update reads ask first), emitted as a synthetic function returning a `bool`.
+    NamedMixedInit { property: String },
     NamedMixedGet {
         property: String,
         mode: crate::ir::PropertyFetchMode,

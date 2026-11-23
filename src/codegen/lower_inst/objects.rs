@@ -254,7 +254,7 @@ pub(crate) use reflection::CLASS_CONSTANT_EVALUATIONS;
 pub(crate) use dynamic_mixed_candidates::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
 #[cfg(test)]
 pub(crate) use outlined_dynamic_property::NAMED_SCOPE_GROUP_BUILDS;
-pub(in crate::codegen) use outlined_dynamic_property::NamedHelperScopes;
+pub(crate) use outlined_dynamic_property::{named_helper_scope_groups_in, NamedHelperScopes};
 mod runtime_magic_reads;
 mod dynamic_property_read_entry;
 mod unset_property_reads;

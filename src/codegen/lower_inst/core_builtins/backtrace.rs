@@ -134,6 +134,21 @@ fn publish_call_site(
     // file or line of their own, and a warning raised inside one names the user call that reached
     // it. Publishing line 0 here made `highlight_file()`'s warnings say "on line 0".
     let from_source = inst.span.is_some_and(|span| span.is_from_source());
+    // An outlined property-write helper publishes nothing of its own, and user code it ran
+    // (`__get`, `offsetSet()`, an error handler) left ITS line published: put the call site the
+    // helper was entered from back before an instruction that can warn or run user code.
+    if !from_source
+        && (instruction_may_enter_php_frame(ctx, inst) || warns_at_call_site)
+        && ctx.function.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX)
+    {
+        if let Some(slot) = ctx.local_slot_by_name(crate::names::ERASED_WRITE_SITE_LOCAL) {
+            let scratch = abi::int_result_reg(ctx.emitter);
+            let offset = ctx.local_offset(slot)?;
+            abi::load_at_offset(ctx.emitter, scratch, offset);
+            let site = abi::php_site_symbol(&ctx.emitter.target);
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &site, 0);
+        }
+    }
     if from_source && (instruction_may_enter_php_frame(ctx, inst) || warns_at_call_site) {
         // ONE pointer store names this site: a static `{file descriptor, line}` record, shared by
         // every site with the same file and line. It is both the location a warning raised here

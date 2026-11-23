@@ -147,6 +147,7 @@ fn lower_on_compiler_stack(
     source_catalog: Option<crate::ir::SourceCatalog>,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
+    super::erased_writes::reset();
     let _class_scans = super::class_scans::install();
     // A transparent literal `eval()` (`prelude_prune::usage::transparent_literal_eval`) loads no
     // code: it can neither add a function nor a class the closed world has not seen. Counting it anyway gave
@@ -308,6 +309,7 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     )?;
+    super::erased_writes::lower_requested(&mut module);
     super::boxed_operators::lower_requested(&mut module);
     include_lowered_runtime_features(&mut module);
     super::boxed_array_appends::normalize_module(&mut module);

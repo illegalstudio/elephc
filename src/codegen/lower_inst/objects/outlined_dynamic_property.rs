@@ -338,6 +338,9 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
             DynamicPropHelperKind::NamedMixedGet { property, mode } => {
                 emit_named_get_helper(module, emitter, data, shared, &pending, &property, mode)
             }
+            DynamicPropHelperKind::NamedMixedInit { .. } => {
+                emit_named_init_helper(module, emitter, data, shared, &pending)
+            }
             DynamicPropHelperKind::MixedMethodCall => {
                 crate::codegen::lower_inst::emit_mixed_method_call_helper(
                     module, emitter, data, shared, &pending,
@@ -948,6 +951,107 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
     Ok(true)
 }
 
+/// Readable part of the named initialization probe helper's entry symbol.
+pub(super) const NAMED_INIT_PREFIX: &str = "named_prop_init";
+
+/// Lowers the initialization probe of one declared name on a boxed `Mixed` receiver through a
+/// helper shared by every site that asks it from the same scope.
+///
+/// `isset()`, `??` and the element updates (`$o->p[$k] ??= $v`) ask whether a typed slot is
+/// initialized before they read it; the answer is a ladder with one arm per class that declares
+/// the name, so the inline form costs sites x classes, as the named reads and writes did. The
+/// helper is a synthetic EIR function `(object: Mixed): bool` holding the one `PropInitialized`,
+/// keyed like the named reads (the name and the scope group), so the ladder runs unchanged in it.
+pub(super) fn try_lower_outlined_named_mixed_prop_init(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    if outlining_disabled()
+        || inside_function_helper(ctx, NAMED_INIT_PREFIX)
+        || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
+        || inst.op != Op::PropInitialized
+        || !matches!(inst.immediate, Some(Immediate::Data(_)))
+        || ctx.value_php_type(object)?.codegen_repr() != PhpType::Mixed
+    {
+        return Ok(false);
+    }
+    let scope = named_helper_scope(ctx, property, false);
+    let key = format!("{}:{}:{}", NAMED_INIT_PREFIX, property, scope.as_deref().unwrap_or(""));
+    let label = ctx.keyed_global_label(&key, NAMED_INIT_PREFIX);
+    ctx.shared.request_dynamic_prop_helper(
+        &key,
+        &label,
+        DynamicPropHelperKind::NamedMixedInit { property: property.to_string() },
+        scope.as_deref(),
+    );
+    pending_named_get_ops(ctx, &key, inst, None);
+    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, &label);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Emits a named initialization probe helper as a synthetic EIR function holding the one
+/// `PropInitialized`.
+fn emit_named_init_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    pending: &crate::codegen::shared_state::PendingDynamicPropHelper,
+) -> Result<()> {
+    use crate::ir::{Builder, Function, FunctionParam, LocalKind, LocalSlotId, Terminator};
+
+    let Some((op, immediate, _)) = shared.named_get_templates.get(&pending.key).cloned() else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "named property probe helper {} has no template",
+            pending.key
+        )));
+    };
+    let mixed = IrType::Heap(IrHeapKind::Mixed);
+    let mut function = Function::new(pending.label.clone(), IrType::I64, PhpType::Bool);
+    function.flags.is_synthetic = true;
+    function.lexical_class = pending.scope.clone();
+    function.params.push(FunctionParam {
+        name: "object".to_string(),
+        ir_type: mixed.clone(),
+        php_type: PhpType::Mixed,
+        by_ref: false,
+        variadic: false,
+    });
+    function.add_local(Some("object".to_string()), mixed.clone(), PhpType::Mixed, LocalKind::PhpLocal);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let object = builder.emit_load_local(LocalSlotId::from_raw(0), mixed.clone(), PhpType::Mixed);
+        let value = builder.emit_with_effects(
+            op,
+            vec![object],
+            immediate,
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+            // The site already published the file and line of the PHP statement.
+            op.default_effects() - crate::ir::Effects::MAY_WARN,
+            None,
+        );
+        builder.terminate(Terminator::Return { value });
+    }
+    crate::codegen::block_emit::emit_synthetic_function_with_label(
+        module,
+        &function,
+        &pending.label,
+        emitter,
+        data,
+        shared,
+        false,
+    )
+}
+
 /// Emits a named-write helper as a synthetic EIR function holding the one `PropSet`.
 fn emit_named_set_helper(
     module: &Module,
@@ -1052,23 +1156,35 @@ fn named_helper_scope(ctx: &FunctionContext<'_>, property: &str, write: bool) ->
             .as_deref()
             .map(|class| class.trim_start_matches('\\').to_string())
     };
-    match &*scopes {
-        NamedHelperScopes::Insensitive => None,
-        NamedHelperScopes::ByLexicalClass => lexical(),
-        NamedHelperScopes::Grouped(groups) => {
-            let lexical = lexical()?;
-            match groups.get(lexical.as_str()) {
-                Some(representative) => Some(representative.clone()),
-                // Related to no declaring class: resolves every name as global code does.
-                None if !module.class_infos.get(lexical.as_str()).is_some_and(|info| info.is_internal) => None,
-                None => Some(lexical),
+    scopes.scope_of(lexical().as_deref(), &module.class_infos)
+}
+
+impl NamedHelperScopes {
+    /// The scope the helper of a body whose lexical class is `lexical` is built in and keyed on,
+    /// `None` for the module-wide helper.
+    pub(crate) fn scope_of(
+        &self,
+        lexical: Option<&str>,
+        classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    ) -> Option<String> {
+        match self {
+            NamedHelperScopes::Insensitive => None,
+            NamedHelperScopes::ByLexicalClass => lexical.map(str::to_string),
+            NamedHelperScopes::Grouped(groups) => {
+                let lexical = lexical?;
+                match groups.get(lexical) {
+                    Some(representative) => Some(representative.clone()),
+                    // Related to no declaring class: resolves every name as global code does.
+                    None if !classes.get(lexical).is_some_and(|info| info.is_internal) => None,
+                    None => Some(lexical.to_string()),
+                }
             }
         }
     }
 }
 
 /// How the scopes of a program share the named helpers of one property; see `named_helper_scope`.
-pub(in crate::codegen) enum NamedHelperScopes {
+pub(crate) enum NamedHelperScopes {
     /// Every scope reads the name alike: one module-wide helper.
     Insensitive,
     /// Every scope keeps its own helper.
@@ -1087,9 +1203,25 @@ thread_local! {
 /// Groups the program's class scopes by their relations to the classes declaring `property`
 /// non-public; see `named_helper_scope`.
 fn named_helper_scope_groups(module: &Module, property: &str, write: bool) -> NamedHelperScopes {
+    let features = &module.required_runtime_features;
+    named_helper_scope_groups_in(
+        &module.class_infos,
+        features.eval_bridge || features.eval_scope,
+        property,
+        write,
+    )
+}
+
+/// [`named_helper_scope_groups`] over a class table, for a caller that has no finished module yet.
+/// `eval_scopes` says whether the program can run eval (the eval bridge receives scopes by name).
+pub(crate) fn named_helper_scope_groups_in(
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+    eval_scopes: bool,
+    property: &str,
+    write: bool,
+) -> NamedHelperScopes {
     #[cfg(test)]
     NAMED_SCOPE_GROUP_BUILDS.with(|count| count.set(count.get() + 1));
-    let classes = &module.class_infos;
     let mut sensitive = false;
     let mut declaring: Vec<&str> = Vec::new();
     for (name, info) in classes {
@@ -1118,8 +1250,7 @@ fn named_helper_scope_groups(module: &Module, property: &str, write: bool) -> Na
     if !sensitive {
         return NamedHelperScopes::Insensitive;
     }
-    let features = &module.required_runtime_features;
-    if features.eval_bridge || features.eval_scope {
+    if eval_scopes {
         return NamedHelperScopes::ByLexicalClass;
     }
     declaring.sort_unstable();

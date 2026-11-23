@@ -76,7 +76,7 @@ pub(crate) use objects::CLASS_CONSTANT_EVALUATIONS;
 pub(crate) use objects::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
 #[cfg(test)]
 pub(crate) use objects::NAMED_SCOPE_GROUP_BUILDS;
-pub(in crate::codegen) use objects::NamedHelperScopes;
+pub(crate) use objects::{named_helper_scope_groups_in, NamedHelperScopes};
 mod ownership;
 mod pointers;
 mod scalar_widths;
