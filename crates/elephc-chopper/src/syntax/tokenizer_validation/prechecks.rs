@@ -13,6 +13,179 @@ use super::diagnostics::*;
 use super::parser_view::{parser_view, ternary_colon_before_label};
 use super::*;
 
+/// Token categories whose absence lets validation skip a precheck's full token scan.
+///
+/// Every precheck reacts only to a small set of token IDs. Recording those IDs once here
+/// replaces a dozen full passes over a source that contains none of them.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TokenPresence {
+    /// A `declare` keyword is present.
+    pub(super) declare: bool,
+    /// A close tag and an `else`/`elseif` are both present.
+    pub(super) close_tag_else: bool,
+    /// `__halt_compiler` is present.
+    pub(super) halt_compiler: bool,
+    /// `new` is present.
+    pub(super) new: bool,
+    /// A reference-shaped ampersand token is present.
+    pub(super) reference_ampersand: bool,
+    /// `goto` is present.
+    pub(super) goto: bool,
+    /// A backtick delimiter is present.
+    pub(super) backtick: bool,
+    /// A `(void)` cast is present.
+    pub(super) void_cast: bool,
+    /// A `switch` opener, close tag and inline HTML are all present.
+    pub(super) switch_html: bool,
+    /// A bare `$` or a `${` interpolation opener is present.
+    pub(super) dollar_brace: bool,
+    /// A member access operator is present.
+    pub(super) computed_member: bool,
+    /// A bare `$` that may start a declaration is present.
+    pub(super) declaration_variable: bool,
+    /// A `{$...}` interpolation opener is present.
+    pub(super) curly_open: bool,
+    /// A variable inside a string context is present.
+    pub(super) interpolation_offset: bool,
+    /// `list` is present.
+    pub(super) list: bool,
+}
+
+impl TokenPresence {
+    /// Collects the trigger categories for every validation precheck in one forward pass.
+    pub(super) fn scan<T: SourceToken>(tokens: &[T]) -> Self {
+        let mut presence = Self::default();
+        let mut saw_close_tag = false;
+        let mut saw_else = false;
+        let mut saw_switch = false;
+        let mut saw_inline_html = false;
+        let mut saw_dollar_brace = false;
+        let mut saw_variable = false;
+        let mut saw_string_context = false;
+        for token in tokens {
+            match token.id() {
+                tok::T_DECLARE => presence.declare = true,
+                tok::T_CLOSE_TAG => saw_close_tag = true,
+                tok::T_ELSE | tok::T_ELSEIF => saw_else = true,
+                tok::T_HALT_COMPILER => presence.halt_compiler = true,
+                tok::T_NEW => presence.new = true,
+                tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG => {
+                    presence.reference_ampersand = true;
+                }
+                tok::T_GOTO => presence.goto = true,
+                tok::T_VOID_CAST => presence.void_cast = true,
+                tok::T_SWITCH => saw_switch = true,
+                tok::T_INLINE_HTML => saw_inline_html = true,
+                tok::T_DOLLAR_OPEN_CURLY_BRACES => saw_dollar_brace = true,
+                tok::T_DOUBLE_COLON
+                | tok::T_OBJECT_OPERATOR
+                | tok::T_NULLSAFE_OBJECT_OPERATOR => presence.computed_member = true,
+                tok::T_CURLY_OPEN => presence.curly_open = true,
+                tok::T_LIST => presence.list = true,
+                tok::T_VARIABLE => saw_variable = true,
+                tok::T_ENCAPSED_AND_WHITESPACE | tok::T_START_HEREDOC => {
+                    saw_string_context = true;
+                }
+                id if id == i64::from(b'`') => {
+                    presence.backtick = true;
+                    saw_string_context = true;
+                }
+                id if id == i64::from(b'$') => {
+                    presence.declaration_variable = true;
+                    saw_dollar_brace = true;
+                }
+                id if id == i64::from(b'"') => saw_string_context = true,
+                _ => {}
+            }
+        }
+        presence.close_tag_else = saw_close_tag && saw_else;
+        presence.switch_html = saw_switch && saw_close_tag && saw_inline_html;
+        presence.dollar_brace = saw_dollar_brace;
+        presence.interpolation_offset = saw_variable && saw_string_context;
+        presence
+    }
+}
+
+/// Runs the source-level prechecks in diagnostic priority order.
+///
+/// Each check is skipped when its trigger category is absent from the source, so the
+/// common valid source pays for one presence pass instead of one full scan per check.
+pub(super) fn run_prechecks<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    presence: &TokenPresence,
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
+    names: &mut Vec<usize>,
+) -> Option<ValidationError> {
+    if presence.close_tag_else {
+        if let Some(error) = close_tag_else_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.halt_compiler {
+        if let Some(error) = halt_compiler_scope_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.new {
+        if let Some(error) = new_dynamic_static_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.reference_ampersand {
+        if let Some(error) = invalid_array_reference_error(source, tokens, reference_delimiters) {
+            return Some(error);
+        }
+    }
+    if presence.goto {
+        if let Some(error) = goto_statement_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.backtick {
+        if let Some(error) = unterminated_backtick_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.void_cast {
+        if let Some(error) = void_cast_expression_error(tokens) {
+            return Some(error);
+        }
+    }
+    if presence.switch_html {
+        if let Some(error) = switch_case_html_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.dollar_brace {
+        if let Some(error) = dollar_brace_expression_error(source, tokens, names) {
+            return Some(error);
+        }
+    }
+    if presence.computed_member {
+        if let Some(error) = computed_member_expression_error(source, tokens, names) {
+            return Some(error);
+        }
+    }
+    if presence.declaration_variable {
+        if let Some(error) = declaration_variable_variable_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.curly_open {
+        if let Some(error) = complex_interpolation_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    if presence.interpolation_offset {
+        if let Some(error) = simple_interpolation_offset_error(source, tokens) {
+            return Some(error);
+        }
+    }
+    None
+}
+
 /// Rejects an unterminated backtick shell string with Zend's delimiter expectation.
 #[inline(never)]
 pub(crate) fn unterminated_backtick_error<T: SourceToken>(

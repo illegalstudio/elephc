@@ -323,28 +323,25 @@ pub fn validate<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedba
 
 /// Runs the prechecks and validates the normalized view under the tokenizer grammar.
 fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedback {
+    let presence = TokenPresence::scan(tokens);
     // `declare(encoding=...)` is emitted while that statement is compiled, so it survives a
     // later parse failure. The caller drops the warnings that follow the failure position.
-    let encoding_warnings = declare_encoding_warnings(source, tokens);
+    let encoding_warnings = if presence.declare {
+        declare_encoding_warnings(source, tokens)
+    } else {
+        Vec::new()
+    };
     // These pre-checks parse regions the parser view blanks, so the identifier feedback they
     // record has to be merged with the main parse's feedback below.
     let mut precheck_names = Vec::new();
     let reference_delimiters = OnceCell::new();
-    let precheck = close_tag_else_error(source, tokens)
-        .or_else(|| halt_compiler_scope_error(source, tokens))
-        .or_else(|| new_dynamic_static_error(source, tokens))
-        .or_else(|| invalid_array_reference_error(source, tokens, &reference_delimiters))
-        .or_else(|| goto_statement_error(source, tokens))
-        .or_else(|| unterminated_backtick_error(source, tokens));
-    let precheck = precheck
-        .or_else(|| void_cast_expression_error(tokens))
-        .or_else(|| switch_case_html_error(source, tokens))
-        .or_else(|| dollar_brace_expression_error(source, tokens, &mut precheck_names));
-    let precheck = precheck
-        .or_else(|| computed_member_expression_error(source, tokens, &mut precheck_names))
-        .or_else(|| declaration_variable_variable_error(source, tokens))
-        .or_else(|| complex_interpolation_error(source, tokens))
-        .or_else(|| simple_interpolation_offset_error(source, tokens));
+    let precheck = run_prechecks(
+        source,
+        tokens,
+        &presence,
+        &reference_delimiters,
+        &mut precheck_names,
+    );
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
     let (view, map, reference_error) =
@@ -382,7 +379,11 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                     warnings: encoding_warnings,
                 };
             }
-            let error = reserved_list_error(source, tokens);
+            let error = if presence.list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
             let mut names = if error.is_some() || names.is_empty() {
                 Vec::new()
             } else {
