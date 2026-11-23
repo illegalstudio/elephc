@@ -1004,6 +1004,12 @@ impl RuntimeFnId {
         }
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
+            // `stream_filter_append`/`prepend` lower their static `$params` array into four
+            // trailing operands (level, blocks, work, write_seek_mode) beside the 2..4 PHP
+            // arguments, so validation has to accept the wider layout.
+            RuntimeFnId::StreamFilterAppend | RuntimeFnId::StreamFilterPrepend => {
+                Some((2, Some(8)))
+            }
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),

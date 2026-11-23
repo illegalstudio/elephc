@@ -9,6 +9,14 @@
 //! - Block parameters replace SSA phi nodes; ownership is explicit; effects
 //!   are immutable metadata assigned when instructions are built.
 
+/// Sentinel for a stream-filter parameter the caller did not specify.
+///
+/// `stream_filter_append()`/`stream_filter_prepend()` lower a static `$params` array
+/// into four trailing i64 operands (`level`, `blocks`, `work`, `write_seek_mode`).
+/// The first three use this value when their key is absent; no real parameter value
+/// can reach it.
+pub const STREAM_FILTER_PARAM_UNSET: i64 = i64::MIN;
+
 mod block;
 mod runtime_fn;
 mod builder;

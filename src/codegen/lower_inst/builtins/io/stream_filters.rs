@@ -44,9 +44,21 @@ pub(crate) fn lower_stream_filter_attach(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    ensure_arg_count_between(inst, name, 2, 4)?;
+    // Lowering appends four parameter operands (level, blocks, work, write_seek_mode),
+    // so the raw operand count runs up to eight.
+    ensure_arg_count_between(inst, name, 2, 8)?;
     let filter = expect_operand(inst, 1)?;
     if let Some(filter_name) = optional_const_string_operand(ctx, filter)? {
+        // PHP 8.6 parses `write_seek_mode` in the zlib/bzip2/iconv/convert/string filter
+        // factories only. php-src rejects the filter (after warning) when the value is
+        // not one of the three accepted modes.
+        if stream_filter_parses_write_seek_mode(&filter_name)
+            && crate::codegen_support::compile_php_version()
+                >= crate::php_version::PhpVersion::Php86
+            && stream_filter_seek_mode(ctx, inst)? == 3
+        {
+            return emit_rejected_stream_filter(ctx, inst, &filter_name);
+        }
         if filter_name == "zlib.deflate" {
             return lower_zlib_deflate_stream_filter_attach(ctx, inst);
         }
@@ -75,6 +87,16 @@ pub(crate) fn lower_stream_filter_attach(
     super::filter_dispatch::lower_dynamic_filter_attach(ctx, inst)?;
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Returns whether `name` belongs to a filter family whose factory parses the PHP 8.6
+/// `write_seek_mode` parameter.
+fn stream_filter_parses_write_seek_mode(name: &str) -> bool {
+    matches!(
+        name,
+        "zlib.deflate" | "zlib.inflate" | "bzip2.compress" | "bzip2.decompress"
+    ) || name.starts_with("convert.iconv.")
+        || stream_filter_id(name).is_some()
 }
 
 /// Lowers a `stream_filter_append()` whose `$filter_name` is only known at run time.

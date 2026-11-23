@@ -9,6 +9,8 @@
 
 use super::*;
 
+use crate::ir::STREAM_FILTER_PARAM_UNSET;
+
 /// Shared builtin filter names and byte-table ids for literal and dynamic dispatch.
 pub(super) const BUILTIN_STREAM_FILTERS: &[(&str, u8)] = &[
     ("string.toupper", 1),
@@ -27,22 +29,65 @@ pub(super) fn stream_filter_id(name: &str) -> Option<u8> {
     BUILTIN_STREAM_FILTERS.iter().find_map(|(candidate, id)| (*candidate == name).then_some(*id))
 }
 
-/// Reads a compile-time integer filter parameter from the fourth builtin operand.
+/// Returns how many PHP arguments the call supplied, excluding the four
+/// lowering-owned parameter operands (`level`, `blocks`, `work`, `write_seek_mode`)
+/// that `stream_filter_append()`/`prepend()` carry after the visible arguments.
+///
+/// A call without those four operands has at most four visible arguments, so a
+/// length of six or more always means they are present.
+pub(super) fn stream_filter_argument_count(inst: &Instruction) -> usize {
+    if inst.operands.len() >= 6 {
+        inst.operands.len() - 4
+    } else {
+        inst.operands.len()
+    }
+}
+
+/// Reads a compile-time integer filter parameter.
+///
+/// `$params` is PHP's fourth argument: either a bare int (the compression level or
+/// block size) or an associative array whose `level`/`blocks`/`work` keys are
+/// projected into the lowering-owned trailing operands. `key` selects which trailing
+/// operand to read.
 pub(super) fn const_int_filter_param(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
-    _key: &str,
+    key: &str,
     primary: bool,
     min: i64,
     max: i64,
 ) -> Result<Option<i64>> {
-    if !primary {
+    if inst.operands.len() >= 6 {
+        let base = inst.operands.len() - 4;
+        let slot = match key {
+            "level" => Some(0),
+            "blocks" => Some(1),
+            "work" => Some(2),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if let Some(number) = optional_const_i64_operand(ctx, inst.operands[base + slot])? {
+                if number != STREAM_FILTER_PARAM_UNSET {
+                    return Ok(Some(number.clamp(min, max)));
+                }
+            }
+        }
+    }
+    if !primary || stream_filter_argument_count(inst) < 4 {
         return Ok(None);
     }
-    let Some(value) = inst.operands.get(3).copied() else {
-        return Ok(None);
-    };
+    let value = inst.operands[3];
     Ok(optional_const_i64_operand(ctx, value)?.map(|n| n.clamp(min, max)))
+}
+
+/// Returns the projected `write_seek_mode` code: 0 = preserve/absent, 1 = reset,
+/// 2 = strict, 3 = statically invalid.
+pub(super) fn stream_filter_seek_mode(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<i64> {
+    if inst.operands.len() < 6 {
+        return Ok(0);
+    }
+    let slot = inst.operands.len() - 1;
+    Ok(optional_const_i64_operand(ctx, inst.operands[slot])?.unwrap_or(0))
 }
 
 /// Returns a literal integer operand when the value was produced by `ConstI64`.
@@ -135,7 +180,7 @@ pub(super) fn finish_builtin_stream_filter_attach(
 
 /// Materializes the stream-filter mode operand, defaulting to STREAM_FILTER_ALL.
 pub(super) fn materialize_stream_filter_mode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() >= 3 {
+    if stream_filter_argument_count(inst) >= 3 {
         let mode = expect_operand(inst, 2)?;
         require_int_or_bool(
             ctx.load_value_to_result(mode)?.codegen_repr(),
@@ -153,7 +198,7 @@ pub(super) fn materialize_stream_filter_params(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if inst.operands.len() < 4 {
+    if stream_filter_argument_count(inst) < 4 {
         emit_null_mixed(ctx);
         return Ok(());
     }
@@ -169,6 +214,76 @@ pub(super) fn materialize_stream_filter_params(
         emit_box_current_value_as_mixed(ctx.emitter, &params_ty);
     }
     Ok(())
+}
+
+/// Emits one `stream_filter_append(): <message>` warning through the shared diagnostic
+/// channel.
+fn emit_stream_filter_warning(ctx: &mut FunctionContext<'_>, message: &str) {
+    abi::emit_symbol_address(ctx.emitter, if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" }, "_rt_warning_prefix");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        if ctx.emitter.target.arch == Arch::AArch64 { "x2" } else { "rsi" },
+        "Warning: ".len() as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    for text in ["stream_filter_append", "(): ", message] {
+        let (label, length) = ctx.data.add_string(text.as_bytes());
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", length as i64);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", length as i64);
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    }
+    abi::emit_symbol_address(
+        ctx.emitter,
+        if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" },
+        "_rt_diag_newline",
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        if ctx.emitter.target.arch == Arch::AArch64 { "x2" } else { "rsi" },
+        1,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    // The handler receives the message without the producer's display newline: the
+    // shared dispatcher uses this length (full buffer minus the terminator) when it
+    // builds `$message`, and still emits the complete line for default display.
+    let handler_message_len =
+        "Warning: ".len() + "stream_filter_append".len() + "(): ".len() + message.len();
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        handler_message_len as i64,
+    );
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_rt_diag_warning_message_len",
+        0,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Emits php-src's two warnings for a filter rejected by its `$params` and boxes
+/// PHP false as the call result.
+pub(super) fn emit_rejected_stream_filter(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    emit_stream_filter_warning(
+        ctx,
+        "\"write_seek_mode\" filter parameter must be one of \"preserve\", \"reset\", or \"strict\"",
+    );
+    emit_stream_filter_warning(ctx, &format!("Unable to create or locate filter \"{name}\""));
+    emit_boxed_bool(ctx, false);
+    store_if_result(ctx, inst)
 }
 
 /// Attaches a user-defined stream filter through the runtime registry.

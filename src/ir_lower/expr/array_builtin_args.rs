@@ -176,7 +176,7 @@ pub(super) fn lower_builtin_call_args(
         validate_array_chunk_element_layout(ctx, def, &operands,
             args.first().map_or_else(Span::dummy, |arg| arg.span));
     }
-    operands
+    stream_filter_params::append_stream_filter_param_operands(ctx, &canonical, args, operands)
 }
 
 /// Reports the existing indexed-string chunking limitation before target codegen.
