@@ -53,10 +53,46 @@ pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
 pub use output::with_hosted_output;
 
-/// Folds one source expression only when literal-array planning accepts the resulting key.
+/// Reports whether pre-resolution source validation can safely fold one array-key expression.
+fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::UnaryPlus(inner)
+        | ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. } => source_array_key_is_fold_safe(inner),
+        ExprKind::BinaryOp { left, right, .. } => {
+            source_array_key_is_fold_safe(left) && source_array_key_is_fold_safe(right)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            source_array_key_is_fold_safe(condition)
+                && source_array_key_is_fold_safe(then_expr)
+                && source_array_key_is_fold_safe(else_expr)
+        }
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => {
+            source_array_key_is_fold_safe(value) && source_array_key_is_fold_safe(default)
+        }
+        _ => false,
+    }
+}
+
+/// Folds one source expression only when pre-resolution folding and literal planning are safe.
 pub(crate) fn fold_array_key_for_source(
     expr: &Expr, profile: elephc_semantics::SemanticProfile,
 ) -> Option<Expr> {
+    if !source_array_key_is_fold_safe(expr) {
+        return None;
+    }
     let _profile = scoped_semantic_profile(profile);
     let folded = fold::expr::fold_expr(expr.clone());
     crate::types::literal_array_key(&folded, profile)?;

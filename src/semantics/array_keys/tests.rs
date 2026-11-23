@@ -164,6 +164,18 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     assert!(error.message.contains("strict-arithmetic"), "{strict}: {error:?}");
 }
 
+/// Pre-resolution source facts leave magic constants and imported class names unresolved.
+#[test]
+fn strict_array_key_source_validation_defers_unresolved_literal_keys() {
+    for source in [
+        "<?php eval('$values = [__LINE__ => 1, 2];');",
+        "<?php use Vendor\\Thing as Alias; $values = [Alias::class => 'ab', 0]; $values['Vendor\\Thing'][false] = 'x';",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.
 #[test]
 fn strict_array_key_source_validation_audits_target_guarded_writes() {

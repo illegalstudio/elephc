@@ -37,6 +37,22 @@ echo $values[-1];
     );
 }
 
+/// Defers magic constants and imported class names until their canonical resolution passes.
+#[test]
+fn test_strict_array_keys_defers_unresolved_literal_keys() {
+    let source = r#"<?php
+use Vendor\Thing as Alias;
+eval('$temporary = [__LINE__ => 1, 2];');
+$values = [Alias::class => 'ab', 0];
+$values['Vendor\Thing'][false] = 'x';
+echo $values['Vendor\Thing'];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "xb"
+    );
+}
+
 /// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.
 #[test]
 fn test_strict_boxed_overflow_staged_native_arithmetic_and_powers() {
