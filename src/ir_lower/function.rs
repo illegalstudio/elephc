@@ -2146,6 +2146,7 @@ fn lower_body_into_function(
     )>,
     web: bool,
 ) -> Vec<Function> {
+    let _timing = LoweringTiming::start(&function.name);
     // The constructor calls this ordinary EIR function before allocating a coroutine.
     // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
     let mut eager_validators = Vec::new();
