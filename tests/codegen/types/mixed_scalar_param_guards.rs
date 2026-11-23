@@ -1233,6 +1233,40 @@ try { g(n: box(null), s: box(new Name())); } catch (Throwable $e) { show($e); }
     assert_eq!(out, "toString ran\nTypeError: f(): Argument #2 ($n) must be of type int, null given\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\nLogicException: from toString\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\n");
 }
 
+/// The named-call precheck checks an earlier object parameter before a later scalar one, as
+/// PHP checks parameters in order: `f(a: $int, s: $null)` for `f(C $a, string $s)` refuses
+/// `$a` (with or without a throwing trailing default, and whichever argument is named first),
+/// a later `Stringable` is not converted before the refusal, and an earlier `string` still is.
+/// The refused and converted values are released.
+#[test]
+fn test_named_call_precheck_checks_an_earlier_object_parameter_first() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {}
+class Name { public function __toString(): string { echo "toString ran\n"; return "n"; } }
+class O {
+    static function f(C $a, string $s, int $d = 1 % 0) { echo "f body\n"; }
+    static function g(C $a, string $s) { echo "g body ", $s, "\n"; }
+    static function h(string $s, C $a, int $d = 1 % 0) { echo "h body\n"; }
+}
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function run(mixed $x, mixed $n, mixed $name, mixed $c) {
+    try { O::f(a: $x, s: $n); } catch (Throwable $e) { show($e); }
+    try { O::f(s: $n, a: $x); } catch (Throwable $e) { show($e); }
+    try { O::f(a: $x, s: $name); } catch (Throwable $e) { show($e); }
+    try { O::g(a: $x, s: $n); } catch (Throwable $e) { show($e); }
+    try { O::g(s: $name, a: $x); } catch (Throwable $e) { show($e); }
+    try { O::h(a: $x, s: $name); } catch (Throwable $e) { show($e); }
+    try { O::f(a: $c, s: $name); } catch (Throwable $e) { show($e); }
+    try { O::g(s: $name, a: $c); } catch (Throwable $e) { show($e); }
+}
+run(42, null, new Name(), new C());
+"#,
+    );
+    assert_eq!(output.stdout, "TypeError: O::f(): Argument #1 ($a) must be of type C, int given\nTypeError: O::f(): Argument #1 ($a) must be of type C, int given\nTypeError: O::f(): Argument #1 ($a) must be of type C, int given\nTypeError: O::g(): Argument #1 ($a) must be of type C, int given\nTypeError: O::g(): Argument #1 ($a) must be of type C, int given\ntoString ran\nTypeError: O::h(): Argument #2 ($a) must be of type C, int given\ntoString ran\nDivisionByZeroError: Modulo by zero\ntoString ran\ng body n\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// A builtin's callback and a call through a callable value bind each value through the
 /// callable invoker's scalar checks, whose precision deprecation runs the error handler: a
 /// global it writes must not be read back from a value the optimizer saved before the call

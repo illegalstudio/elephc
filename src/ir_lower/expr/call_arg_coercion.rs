@@ -815,6 +815,20 @@ pub(super) fn guard_object_param_argument(
     value: LoweredValue,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    let (class_name, given) = object_param_guard(ctx, sig, index, value.value, arg)?;
+    Some(guard_union_object_param(ctx, sig, index, value, &class_name, given, arg))
+}
+
+/// Decides whether [`guard_object_param_argument`] guards `value` for parameter `index`: the
+/// declared class and, for a `Class|false` / `Class|null` argument, the refused alternative's
+/// spelling.
+pub(super) fn object_param_guard(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: crate::ir::ValueId,
+    arg: &Expr,
+) -> Option<(String, Option<&'static str>)> {
     let (_, param_ty) = sig.params.get(index)?;
     if sig.ref_params.get(index).copied().unwrap_or(false) {
         return None;
@@ -822,16 +836,11 @@ pub(super) fn guard_object_param_argument(
     let PhpType::Object(class_name) = param_ty.codegen_repr() else {
         return None;
     };
-    let source_ty = ctx.builder.value_php_type(value.value);
+    let source_ty = ctx.builder.value_php_type(value);
     let static_ty = argument_static_type(ctx, arg);
     let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
     if let Some(given) = union_object_guard_word(guard_ty, &class_name) {
-        if let Some(deferred) = defer_union_object_param_check(ctx, sig, index, value, arg) {
-            return Some(deferred);
-        }
-        return Some(guard_union_object_param(
-            ctx, sig, index, value, &class_name, Some(given), arg,
-        ));
+        return Some((class_name, Some(given)));
     }
     let rerunnable = matches!(
         arg.kind,
@@ -845,15 +854,7 @@ pub(super) fn guard_object_param_argument(
     );
     let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
     let literal_null = matches!(arg.kind, ExprKind::Null);
-    if rerunnable && !already_object && !literal_null {
-        if let Some(deferred) = defer_union_object_param_check(ctx, sig, index, value, arg) {
-            return Some(deferred);
-        }
-        return Some(guard_union_object_param(
-            ctx, sig, index, value, &class_name, None, arg,
-        ));
-    }
-    None
+    (rerunnable && !already_object && !literal_null).then_some((class_name, None))
 }
 
 /// Adds the `instanceof` check of a `Class|false`, `Class|null` or re-read source to the current

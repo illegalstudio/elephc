@@ -125,9 +125,11 @@ pub(super) fn lower_named_args_with_signature_options(
         crate::types::call_args::PlannedRegularArg::Default(default)
             if !super::call_arg_coercion::default_is_inert(default)));
     let mut leading_defaults = vec![None; plan.regular_args.len()];
-    if throwing_default {
+    let mut object_guarded = vec![false; plan.regular_args.len()];
+    if !capture_values {
         check_supplied_scalar_params_before_defaults(
-            ctx, sig, &plan, &mut source_values, &mut leading_defaults,
+            ctx, sig, &plan, &mut source_values, &mut leading_defaults, &mut object_guarded,
+            throwing_default,
         );
     }
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
@@ -167,6 +169,9 @@ pub(super) fn lower_named_args_with_signature_options(
         let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg else {
             continue;
         };
+        if object_guarded[param_index] {
+            continue;
+        }
         let source = &plan.source_args[*source_index];
         let value = lowered_value_from_id(ctx, operands[param_index]);
         if let Some(guarded) =
@@ -243,8 +248,15 @@ fn unpin_leading_reference_defaults(
     }
 }
 
-/// Runs the runtime scalar-parameter checks of the supplied named arguments before an omitted
-/// trailing default that can throw is evaluated.
+/// Runs the runtime scalar-parameter checks of the supplied named arguments in parameter order,
+/// before an omitted trailing default that can throw is evaluated.
+///
+/// It runs when the call has such a default (`throwing_default`), or when a supplied object
+/// parameter precedes a checked scalar one: the object check of each earlier parameter comes
+/// first (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a`, and a later
+/// `Stringable` is not converted), and `object_guarded` records the parameters checked here so
+/// the final pass does not check them again. An object argument is matched by its value
+/// expression, not the `name: value` wrapper the final pass sees.
 ///
 /// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
 /// releases them through the unwind chain. PHP fills the omitted parameters declared before the
@@ -260,15 +272,31 @@ fn check_supplied_scalar_params_before_defaults(
     plan: &crate::types::call_args::CallArgPlan,
     source_values: &mut [crate::ir::ValueId],
     leading_defaults: &mut [Option<LeadingDefault>],
+    object_guarded: &mut [bool],
+    throwing_default: bool,
 ) {
     use super::scalar_param_guards::GuardSource;
     let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
         crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => Some((param_index, *source_index)),
         _ => None,
     }).collect::<Vec<_>>();
-    if !supplied.iter().any(|(param_index, source_index)| super::scalar_param_guards::guarded_scalar_param(
-        ctx, sig, *param_index, source_values[*source_index], GuardSource::Unrecorded,
-    ).is_some()) {
+    let value_expr = |source_index: usize| plan.source_values.iter()
+        .find(|source| source.source_index() == source_index)
+        .map(|source| source.expr().clone());
+    let object_checked = |ctx: &LoweringContext<'_, '_>, param_index: usize, source_index: usize, value| {
+        value_expr(source_index).is_some_and(|expr| super::call_arg_coercion::object_param_guard(
+            ctx, sig, param_index, value, &expr,
+        ).is_some())
+    };
+    let first_scalar = supplied.iter().position(|(param_index, source_index)| {
+        super::scalar_param_guards::guarded_scalar_param(
+            ctx, sig, *param_index, source_values[*source_index], GuardSource::Unrecorded,
+        ).is_some()
+    });
+    let Some(first_scalar) = first_scalar else { return };
+    let object_first = supplied[..first_scalar].iter()
+        .any(|(param_index, source_index)| object_checked(ctx, *param_index, *source_index, source_values[*source_index]));
+    if !throwing_default && !object_first {
         return;
     }
     // Every owned source is rooted before the first check can throw: the regular parameters'
@@ -313,6 +341,21 @@ fn check_supplied_scalar_params_before_defaults(
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     for (param_index, source_index) in supplied {
+        if object_checked(ctx, param_index, source_index, source_values[source_index]) {
+            // PHP checks each parameter in order: an earlier object parameter refuses its
+            // argument before a later scalar is checked or converted.
+            super::call_arg_coercion::emit_property_type_guards_before(ctx, param_index);
+            let expr = value_expr(source_index).expect("object-checked source has an expression");
+            let lowered = lowered_value_from_id(ctx, source_values[source_index]);
+            if let Some(object) = super::call_arg_coercion::guard_object_param_argument(
+                ctx, sig, param_index, lowered, &expr,
+            ) {
+                source_values[source_index] =
+                    super::call_operand_owners::root_evaluated_call_argument(ctx, object, Span::dummy()).value;
+                object_guarded[param_index] = true;
+            }
+            continue;
+        }
         let value = source_values[source_index];
         if super::scalar_param_guards::guarded_scalar_param(ctx, sig, param_index, value, GuardSource::Unrecorded).is_none() {
             continue;
