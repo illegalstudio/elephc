@@ -622,6 +622,7 @@ pub(super) fn append_eval_trait_method_aliases(
             method,
             alias: Some(alias),
             visibility,
+            is_final,
         } = adaptation
         else {
             continue;
@@ -650,6 +651,9 @@ pub(super) fn append_eval_trait_method_aliases(
             .renamed(alias.clone());
         if let Some(visibility) = visibility {
             alias_method = alias_method.with_visibility_override(*visibility);
+        }
+        if *is_final {
+            alias_method = alias_method.with_final_override();
         }
         let key = alias_method.name().to_ascii_lowercase();
         if class_method_names.contains(&key) {
@@ -694,7 +698,8 @@ pub(super) fn trait_method_suppressed_by_insteadof(
     })
 }
 
-/// Applies visibility-only `as` adaptations to an imported trait method.
+/// Applies the `as` adaptations without an alias (a visibility change or `as final`) to an
+/// imported trait method.
 pub(super) fn apply_trait_visibility_adaptations(
     trait_name: &str,
     method: &EvalClassMethod,
@@ -706,7 +711,8 @@ pub(super) fn apply_trait_visibility_adaptations(
             trait_name: target_trait,
             method: target_method,
             alias: None,
-            visibility: Some(visibility),
+            visibility,
+            is_final,
         } = adaptation
         else {
             continue;
@@ -717,7 +723,12 @@ pub(super) fn apply_trait_visibility_adaptations(
             trait_name,
             method.name(),
         ) {
-            method = method.with_visibility_override(*visibility);
+            if let Some(visibility) = visibility {
+                method = method.with_visibility_override(*visibility);
+            }
+            if *is_final {
+                method = method.with_final_override();
+            }
         }
     }
     method

@@ -539,3 +539,26 @@ echo (new Refs())->take($a, $b), "\n";
     );
     assert_eq!(out, "2\n");
 }
+
+/// `foo as final;` (PHP 8.3+) imports the trait method as final and `foo as final bar;` adds a
+/// final alias while the original stays overridable, as reflection reports (#2352).
+#[test]
+fn test_trait_alias_as_final_marks_the_method_final() {
+    let out = compile_and_run(
+        r#"<?php
+trait T {
+    public function foo() { return "foo"; }
+    public function baz() { return "baz"; }
+}
+class C {
+    use T { foo as final; baz as final bar; }
+}
+$c = new C();
+echo $c->foo(), $c->bar(), $c->baz(), "\n";
+var_dump((new ReflectionMethod('C', 'foo'))->isFinal());
+var_dump((new ReflectionMethod('C', 'bar'))->isFinal());
+var_dump((new ReflectionMethod('C', 'baz'))->isFinal());
+"#,
+    );
+    assert_eq!(out, "foobazbaz\nbool(true)\nbool(true)\nbool(false)\n");
+}

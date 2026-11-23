@@ -186,6 +186,7 @@ pub(super) fn resolve_trait_uses(
 
         let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
         let mut visibility_overrides: HashMap<(String, String), Visibility> = HashMap::new();
+        let mut final_overrides: HashSet<(String, String)> = HashSet::new();
         let mut alias_methods: Vec<ImportedMethod> = Vec::new();
 
         for adaptation in &trait_use.adaptations {
@@ -231,6 +232,7 @@ pub(super) fn resolve_trait_uses(
                     method,
                     alias,
                     visibility,
+                    is_final,
                 } => {
                     let selected_trait = resolve_adaptation_source(
                         trait_name.as_ref().map(|name| name.as_str()),
@@ -263,14 +265,21 @@ pub(super) fn resolve_trait_uses(
                         if let Some(visibility) = visibility {
                             alias_decl.visibility = visibility.clone();
                         }
+                        // `foo as final bar` makes only the alias final (PHP 8.3+).
+                        alias_decl.is_final |= *is_final;
                         alias_methods.push(ImportedMethod {
                             source_trait: selected_trait,
                             origin: imported.origin.clone(),
                             decl: alias_decl,
                         });
-                    } else if let Some(visibility) = visibility {
-                        visibility_overrides
-                            .insert((selected_trait, php_symbol_key(method)), visibility.clone());
+                    } else {
+                        let key = (selected_trait, php_symbol_key(method));
+                        if *is_final {
+                            final_overrides.insert(key.clone());
+                        }
+                        if let Some(visibility) = visibility {
+                            visibility_overrides.insert(key, visibility.clone());
+                        }
                     }
                 }
             }
@@ -281,6 +290,7 @@ pub(super) fn resolve_trait_uses(
             method_order,
             suppressed,
             visibility_overrides,
+            final_overrides,
             alias_methods,
             trait_use.span,
             owner_label,
@@ -310,8 +320,9 @@ pub(super) fn resolve_trait_uses(
 }
 
 /// Filters `candidates` using `suppressed` trait-of-origin, applies visibility
-/// overrides from `visibility_overrides`, appends aliased methods from
-/// `alias_methods`, and returns the final selected method list.
+/// overrides from `visibility_overrides` and the `as final` adaptations in
+/// `final_overrides`, appends aliased methods from `alias_methods`, and returns the
+/// final selected method list.
 ///
 /// Two concrete candidates for the same method key are a fatal collision (the caller must use
 /// insteadof to choose), unless they are the same trait method reached along two `use` paths
@@ -321,6 +332,7 @@ fn select_methods(
     method_order: Vec<String>,
     suppressed: HashMap<String, HashSet<String>>,
     visibility_overrides: HashMap<(String, String), Visibility>,
+    final_overrides: HashSet<(String, String)>,
     alias_methods: Vec<ImportedMethod>,
     span: Span,
     owner_label: &str,
@@ -343,6 +355,11 @@ fn select_methods(
                     .get(&(candidate.source_trait.clone(), method_name.clone()))
                 {
                     candidate.decl.visibility = visibility.clone();
+                }
+                if final_overrides
+                    .contains(&(candidate.source_trait.clone(), method_name.clone()))
+                {
+                    candidate.decl.is_final = true;
                 }
                 candidate
             })

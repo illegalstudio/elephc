@@ -370,7 +370,7 @@ impl<'t, 'a> RequirementWalk<'t, 'a> {
             // flattening does: `use P, Q { P::foo insteadof Q; Q::foo as bar; }` keeps `bar`.
             let mut aliases: [Vec<(String, DeclaredMethod)>; 2] = [Vec::new(), Vec::new()];
             for adaptation in &usage.adaptations {
-                let TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } = adaptation else {
+                let TraitAdaptation::Alias { trait_name, method, alias, visibility, is_final } = adaptation else {
                     continue;
                 };
                 for (methods, aliases) in [&mut required, &mut provided].into_iter().zip(aliases.iter_mut()) {
@@ -382,9 +382,13 @@ impl<'t, 'a> RequirementWalk<'t, 'a> {
                             let mut adapted = declared.clone();
                             adapted.method.name = alias.clone();
                             if let Some(visibility) = visibility { adapted.method.visibility = visibility.clone(); }
+                            adapted.method.is_final |= *is_final;
                             aliases.push((via.clone(), adapted));
-                        } else if let Some(visibility) = visibility {
-                            declared.method.visibility = visibility.clone();
+                        } else {
+                            if let Some(visibility) = visibility {
+                                declared.method.visibility = visibility.clone();
+                            }
+                            declared.method.is_final |= *is_final;
                         }
                     }
                 }

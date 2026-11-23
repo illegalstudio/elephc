@@ -474,3 +474,45 @@ class EvalTraitPropConflictBox {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies `as final` (PHP 8.3+) makes the imported eval trait method final, so a subclass
+/// override is a fatal, while an `as final` alias leaves the original overridable (#2352).
+#[test]
+fn execute_program_applies_eval_trait_final_adaptation() {
+    let program = parse_fragment(
+        br#"trait EvalAdaptFinal {
+    public function foo() { return "foo"; }
+}
+class EvalAdaptFinalBox {
+    use EvalAdaptFinal { foo as final bar; }
+}
+class EvalAdaptFinalChild extends EvalAdaptFinalBox {
+    public function foo() { return "child"; }
+}
+$box = new EvalAdaptFinalChild();
+return $box->foo() . $box->bar();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::String("childfoo".to_string()));
+
+    let program = parse_fragment(
+        br#"trait EvalAdaptFinalOwn {
+    public function foo() { return "foo"; }
+}
+class EvalAdaptFinalOwnBox {
+    use EvalAdaptFinalOwn { foo as final; }
+}
+class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
+    public function foo() { return "child"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding an `as final` trait method should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}

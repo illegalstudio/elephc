@@ -630,6 +630,7 @@ pub(super) fn resolve_trait_use(
                     method,
                     alias,
                     visibility,
+                    is_final,
                 } => Ok(TraitAdaptation::Alias {
                     trait_name: trait_name.as_ref().map(|name| {
                         resolved_name(resolved_class_name(
@@ -642,6 +643,7 @@ pub(super) fn resolve_trait_use(
                     method: php_symbol_key(method),
                     alias: alias.clone(),
                     visibility: visibility.clone(),
+                    is_final: *is_final,
                 }),
                 TraitAdaptation::InsteadOf {
                     trait_name,

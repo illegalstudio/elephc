@@ -413,6 +413,7 @@ fn adapted_methods(
             method: target,
             alias,
             visibility,
+            is_final,
         } = adaptation
         else {
             continue;
@@ -429,12 +430,14 @@ fn adapted_methods(
                 if let Some(visibility) = visibility {
                     copy.visibility = visibility.clone();
                 }
+                copy.is_final |= *is_final;
                 aliases.push(copy);
             }
             None => {
                 if let Some(visibility) = visibility {
                     original.visibility = visibility.clone();
                 }
+                original.is_final |= *is_final;
             }
         }
     }

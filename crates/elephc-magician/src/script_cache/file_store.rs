@@ -106,7 +106,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// `strict_types` mode, which changes the serialized callable layout.
 /// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
 /// Format 33 reparses cached scripts and parse failures with the shared Chopper frontend.
-pub(crate) const FORMAT_VERSION: u32 = 33;
+/// Format 34 records the `as final` flag of a trait alias adaptation.
+pub(crate) const FORMAT_VERSION: u32 = 34;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

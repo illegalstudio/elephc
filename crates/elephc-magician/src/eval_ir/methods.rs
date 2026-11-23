@@ -280,6 +280,13 @@ impl EvalClassMethod {
         method
     }
 
+    /// Returns a copy of this method declared final, as a trait `as final` adaptation does.
+    pub fn with_final_override(&self) -> Self {
+        let mut method = self.clone();
+        method.is_final = true;
+        method
+    }
+
     /// Returns the PHP visibility declared for this method.
     pub const fn visibility(&self) -> EvalVisibility {
         self.visibility

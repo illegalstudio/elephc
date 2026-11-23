@@ -634,18 +634,25 @@ fn test_error_trait_final_property_cannot_be_overridden_by_subclass() {
     );
 }
 
-/// Verifies that a member modifier right after `as` is read as a visibility change, never as an
-/// alias: `foo as static;` is rejected (PHP: "Cannot use 'static' as method modifier"), while
-/// `foo as protected static;` (modifier after a visibility) is a valid alias.
+/// Verifies that a member modifier right after `as` is read as the alias modifier, never as an
+/// alias name: `foo as static;` and `foo as abstract;` get PHP's trait alias errors and
+/// `foo as readonly;` its method modifier error, while `foo as protected static;` (a word after
+/// the modifier) is a valid alias.
 #[test]
 fn test_error_trait_alias_modifier_without_visibility_is_not_an_alias() {
-    expect_error(
-        r#"<?php
-trait T { public function foo() { return 1; } }
-class C { use T { foo as static; } }
-"#,
-        "Trait alias adaptation requires a visibility and/or alias name",
-    );
+    for (modifier, message) in [
+        ("static", "Cannot use \"static\" as method modifier in trait alias"),
+        ("static bar", "Cannot use \"static\" as method modifier in trait alias"),
+        ("abstract", "Cannot use \"abstract\" as method modifier in trait alias"),
+        ("readonly", "Cannot use the readonly modifier on a method"),
+    ] {
+        expect_error(
+            &format!(
+                "<?php\ntrait T {{ public function foo() {{ return 1; }} }}\nclass C {{ use T {{ foo as {modifier}; }} }}\n"
+            ),
+            message,
+        );
+    }
 }
 
 /// Verifies that a `Trait::` method reference needs a word after `::`: a variable
@@ -1493,5 +1500,35 @@ fn test_error_cannot_override_final_error_methods() {
     expect_error(
         "<?php class AppTypeError extends TypeError { public function getPrevious(): ?Throwable { return null; } }",
         "Cannot override final method Error::getPrevious",
+    );
+}
+
+/// A trait method imported with `as final` cannot be overridden by a subclass, as in PHP 8.3+
+/// (`Cannot override final method C::foo()`); an `as final` alias leaves the original
+/// overridable (#2352).
+#[test]
+fn test_error_trait_alias_as_final_method_cannot_be_overridden() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final; } }
+class D extends C { public function foo() { return 2; } }
+"#,
+        "Cannot override final method C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final bar; } }
+class D extends C { public function bar() { return 2; } }
+"#,
+        "Cannot override final method C::bar",
+    );
+    expect_no_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final bar; } }
+class D extends C { public function foo() { return 2; } }
+"#,
     );
 }

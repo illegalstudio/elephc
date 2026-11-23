@@ -171,11 +171,13 @@ pub(super) fn walk_trait_uses<P: Pass>(
                         method,
                         alias,
                         visibility,
+                        is_final,
                     } => TraitAdaptation::Alias {
                         trait_name: trait_name.map(&renamed),
                         method,
                         alias,
                         visibility,
+                        is_final,
                     },
                     TraitAdaptation::InsteadOf {
                         trait_name,

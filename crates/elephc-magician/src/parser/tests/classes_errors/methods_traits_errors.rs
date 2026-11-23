@@ -310,6 +310,7 @@ trait DynEvalOuterTrait {
             method: "read".to_string(),
             alias: Some("hiddenRead".to_string()),
             visibility: Some(EvalVisibility::Private),
+            is_final: false,
         }]
     );
 }
