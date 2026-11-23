@@ -270,13 +270,13 @@ fn test_error_pure_enum_case_cannot_have_backing_value() {
 }
 
 /// Verifies that a backed enum with two cases sharing the same backing value
-/// (e.g., `case Red = 1; case Crimson = 1`) reports
-/// "Duplicate enum backing value".
+/// (e.g., `case Red = 1; case Crimson = 1`) reports PHP's
+/// "Duplicate value in enum Color for cases Red and Crimson".
 #[test]
 fn test_error_enum_duplicate_backing_value() {
     expect_error(
         "<?php enum Color: int { case Red = 1; case Crimson = 1; }",
-        "Duplicate enum backing value",
+        "Duplicate value in enum Color for cases Red and Crimson",
     );
 }
 

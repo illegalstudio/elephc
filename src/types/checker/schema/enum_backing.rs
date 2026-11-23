@@ -14,8 +14,10 @@
 //!   string literals, so a concatenation with an int operand is joined here, bottom-up, and the
 //!   enclosing operators and array reads are folded again (`('n' . C::ONE) === 'n1' ? 'yes' :
 //!   'no'`, `['n' . C::ONE][0]`).
-//! - A value that does not fold to an int or string literal is left to the caller, which reports
-//!   the existing diagnostic. The enum's own constants (`self::X`) are not built yet at this point.
+//! - A value that folds to a literal of another type is reported by the caller with PHP's case
+//!   type mismatch message. A value that does not fold is left to the caller too, which reports
+//!   that it cannot evaluate it. The enum's own constants (`self::X`) are not built yet at this
+//!   point.
 
 use std::collections::HashMap;
 
@@ -30,10 +32,13 @@ use super::property_default_selectors::bind_constants;
 pub(super) enum FoldedBacking {
     Int(i64),
     Str(String),
+    /// A literal of a type no enum can be backed by, named as PHP's `zend_zval_type_name`
+    /// prints it (`float`, `bool`, `null`, `array`), for the case type mismatch error.
+    OtherType(&'static str),
 }
 
-/// Folds `expr`, declared in enum `owner`, to an integer or string literal, or returns `None`
-/// when it is not a constant expression this pass can evaluate.
+/// Folds `expr`, declared in enum `owner`, to a literal, or returns `None` when it is not a
+/// constant expression this pass can evaluate.
 pub(super) fn fold_backing_value(
     checker: &Checker,
     global_constants: &HashMap<String, Expr>,
@@ -49,6 +54,19 @@ pub(super) fn fold_backing_value(
     match value.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value)),
+        ExprKind::FloatLiteral(_) => Some(FoldedBacking::OtherType("float")),
+        ExprKind::BoolLiteral(_) => Some(FoldedBacking::OtherType("bool")),
+        ExprKind::Null => Some(FoldedBacking::OtherType("null")),
+        // A keyed literal can hold a key PHP refuses before the type check, so only a list of
+        // scalar literals is known to be an array value.
+        ExprKind::ArrayLiteral(values) if values.iter().all(|value| matches!(
+            value.kind,
+            ExprKind::IntLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::BoolLiteral(_)
+                | ExprKind::Null
+        )) => Some(FoldedBacking::OtherType("array")),
         _ => None,
     }
 }

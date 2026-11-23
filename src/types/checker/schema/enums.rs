@@ -205,8 +205,10 @@ pub(crate) fn build_enum_info(
             return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
         }
     }
-    let mut seen_int_values = HashSet::new();
-    let mut seen_string_values = HashSet::new();
+    // Each backing value maps to the first case that declared it, for PHP's
+    // "Duplicate value in enum E for cases A and B".
+    let mut seen_int_values: HashMap<i64, String> = HashMap::new();
+    let mut seen_string_values: HashMap<String, String> = HashMap::new();
     let mut enum_cases = Vec::new();
     for case in cases {
         if !seen_case_names.insert(case.name.clone()) {
@@ -240,11 +242,8 @@ pub(crate) fn build_enum_info(
             {
                 // php-src accepts the deprecated constant as an int backing value and
                 // raises `E_DEPRECATED` when the case is first fetched.
-                if !seen_int_values.insert(1) {
-                    return Err(CompileError::new(
-                        case.span,
-                        &format!("Duplicate enum backing value in {}: 1", name),
-                    ));
+                if let Some(first) = seen_int_values.insert(1, case.name.clone()) {
+                    return Err(duplicate_backing_value(name, &first, case));
                 }
                 deprecated_mt_rand_php = true;
                 Some(EnumCaseValue::Int(1))
@@ -253,39 +252,23 @@ pub(crate) fn build_enum_info(
                 checker, global_constants, name, expr,
             ) {
                 Some(FoldedBacking::Int(value)) => {
-                    if !seen_int_values.insert(value) {
-                        return Err(CompileError::new(
-                            case.span,
-                            &format!("Duplicate enum backing value in {}: {}", name, value),
-                        ));
+                    if let Some(first) = seen_int_values.insert(value, case.name.clone()) {
+                        return Err(duplicate_backing_value(name, &first, case));
                     }
                     Some(EnumCaseValue::Int(value))
                 }
-                _ => {
-                    return Err(CompileError::new(
-                        case.span,
-                        "Enum int backing values must be integer literals",
-                    ))
-                }
+                folded => return Err(mismatched_backing_value(name, case, folded, "int")),
             },
             (Some(PhpType::Str), Some(expr)) => match fold_backing_value(
                 checker, global_constants, name, expr,
             ) {
                 Some(FoldedBacking::Str(value)) => {
-                    if !seen_string_values.insert(value.clone()) {
-                        return Err(CompileError::new(
-                            case.span,
-                            &format!("Duplicate enum backing value in {}: {:?}", name, value),
-                        ));
+                    if let Some(first) = seen_string_values.insert(value.clone(), case.name.clone()) {
+                        return Err(duplicate_backing_value(name, &first, case));
                     }
                     Some(EnumCaseValue::Str(value))
                 }
-                _ => {
-                    return Err(CompileError::new(
-                        case.span,
-                        "Enum string backing values must be string literals",
-                    ))
-                }
+                folded => return Err(mismatched_backing_value(name, case, folded, "string")),
             },
             _ => unreachable!("enum backing type already validated"),
         };
@@ -346,6 +329,49 @@ pub(crate) fn build_enum_info(
         class_info.attribute_args = collect_attribute_args(attributes);
     }
     Ok(())
+}
+
+/// Builds PHP's error for a backed case that repeats the value of the earlier case `first`:
+/// "Duplicate value in enum E for cases A and B".
+fn duplicate_backing_value(
+    enum_name: &str,
+    first: &str,
+    case: &crate::parser::ast::EnumCaseDecl,
+) -> CompileError {
+    CompileError::new(
+        case.span,
+        &format!("Duplicate value in enum {} for cases {} and {}", enum_name, first, case.name),
+    )
+}
+
+/// Builds the error for a backed case whose value is not of the enum's `backing` type
+/// (`int` or `string`). A value folded to a literal of another type gets PHP's "Enum case type
+/// string does not match enum backing type int". A constant expression this pass cannot fold
+/// (see `enum_backing`) is reported as such, since its type is not known.
+fn mismatched_backing_value(
+    enum_name: &str,
+    case: &crate::parser::ast::EnumCaseDecl,
+    folded: Option<FoldedBacking>,
+    backing: &str,
+) -> CompileError {
+    let actual = match folded {
+        Some(FoldedBacking::Int(_)) => "int",
+        Some(FoldedBacking::Str(_)) => "string",
+        Some(FoldedBacking::OtherType(type_name)) => type_name,
+        None => {
+            return CompileError::new(
+                case.span,
+                &format!(
+                    "Enum case value {}::{} cannot be evaluated at compile time",
+                    enum_name, case.name
+                ),
+            )
+        }
+    };
+    CompileError::new(
+        case.span,
+        &format!("Enum case type {} does not match enum backing type {}", actual, backing),
+    )
 }
 
 /// Inserts validated enum metadata and its parallel final readonly class metadata.
