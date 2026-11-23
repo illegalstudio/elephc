@@ -780,7 +780,22 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = stored_ty.clone();
+                            // A DECLARED property does not accumulate the argument types (its own
+                            // type is the contract), so the parameter used to keep whatever the
+                            // LAST `new` walked passed. A later pass replays only the bodies whose
+                            // dependencies moved, so "last" changed from pass to pass and the
+                            // constructor signature flipped between two call sites for ever
+                            // (Twig's `Markup::__construct($content, $charset)`). The first site
+                            // replaces the seed and every later one joins, across passes too, so
+                            // the parameter only grows.
+                            let first_site = self
+                                .constructor_param_sites_seen
+                                .insert((sharer.clone(), param_index));
+                            if declared && !first_site {
+                                *param_ty = Self::union_param_type(param_ty, &stored_ty);
+                            } else {
+                                *param_ty = stored_ty.clone();
+                            }
                         }
                     }
                 }

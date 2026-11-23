@@ -696,6 +696,9 @@ impl Checker {
                 continue;
             }
             if stabilized || cycling || out_of_passes {
+                #[cfg(test)]
+                super::METHOD_FIXPOINT_RUNS
+                    .with(|runs| runs.borrow_mut().push((passes, stabilized, cycling)));
                 errors.extend(pass_errors);
                 // Every unit is in the last pass, checked or replayed, so it alone answers.
                 self.tolerated_runtime_faults = std::mem::take(&mut pass_tolerated);

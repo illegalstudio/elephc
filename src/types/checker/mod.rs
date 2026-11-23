@@ -58,6 +58,10 @@ thread_local! {
     /// size: scanning every class per constructor argument is quadratic in the class count.
     pub(crate) static SHARED_PROPERTY_CLASSES_VISITED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+    /// Every method-body fixpoint this thread ran, as `(passes, stabilized, cycling)`, so a test
+    /// can pin convergence by pass count instead of by seconds.
+    pub(crate) static METHOD_FIXPOINT_RUNS: std::cell::RefCell<Vec<(usize, bool, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Owner classes `subtype_dispatch_owners` examined, so a test can pin its cost to the program
     /// size: re-walking every declarer's parent chain per call site is quadratic.
     pub(crate) static SUBTYPE_DISPATCH_OWNERS_EXAMINED: std::cell::Cell<u64> =
@@ -218,6 +222,9 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Constructor parameters (class, index) a `new` site has already typed. The first site
+    /// replaces the seed, later ones join; see `propagate_constructor_arg_type`.
+    pub constructor_param_sites_seen: HashSet<(String, usize)>,
     /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
     /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
     ///

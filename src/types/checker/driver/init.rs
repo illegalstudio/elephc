@@ -74,6 +74,7 @@ impl Checker {
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::default(),
+            constructor_param_sites_seen: HashSet::default(),
             class_children_index: None,
             method_impl_users_index: None,
             property_sharers_index: None,

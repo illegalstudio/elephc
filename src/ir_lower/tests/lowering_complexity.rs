@@ -1449,3 +1449,47 @@ fn untyped_calls_walk_the_class_table_once_per_program() {
     assert!(small > 0, "the fixture no longer asks about the class table");
     assert_eq!(small, large, "class table walks grew with the call sites: {small} vs {large}");
 }
+
+/// Method-body fixpoint runs `(passes, stabilized, cycling)` while checking `source`.
+fn method_fixpoint_runs(source: &str) -> Vec<(usize, bool, bool)> {
+    crate::types::checker::METHOD_FIXPOINT_RUNS.with(|runs| runs.borrow_mut().clear());
+    let _module = lower_source(source);
+    crate::types::checker::METHOD_FIXPOINT_RUNS.with(|runs| runs.borrow().clone())
+}
+
+/// A constructor whose untyped parameter feeds a DECLARED property keeps no accumulated type on
+/// that property, so the parameter used to take whatever the last `new` walked passed, and a pass
+/// that replayed only some of the bodies flipped it. Twig's `Markup` kept the Symfony Demo's
+/// fixpoint cycling (`stabilized=false cycling=true`) for that reason. Every run must settle
+/// within a fixed pass bound, whatever the order and kind of the call sites.
+#[test]
+fn constructor_param_over_declared_property_converges_across_call_sites() {
+    let source = r#"<?php
+class Markup {
+    private ?string $charset;
+    private $content;
+    public function __construct($content, $charset) {
+        $this->content = (string) $content;
+        $this->charset = $charset;
+    }
+    public function getContent() { return $this->content; }
+    public function getCharset() { return $this->charset; }
+}
+class A { public function make($x) { return new Markup($x, "A"); } }
+class B { public function make(Markup $m) { return new Markup($m->getContent(), $m->getCharset()); } }
+class C { public function make($x, Markup $m) { return new Markup($x + 1, $m->getContent()); } }
+class D { public function make(Markup $m) { return new Markup([$m->getContent()], null); } }
+class E { public function make() { return new Markup(true, "e"); } }
+$m = (new A())->make(1);
+$m = (new B())->make($m);
+$m = (new C())->make(2.5, $m);
+$m = (new D())->make($m);
+echo (new E())->make()->getContent(), $m->getCharset();
+"#;
+    let runs = method_fixpoint_runs(source);
+    assert!(!runs.is_empty(), "the fixture no longer reaches the method fixpoint");
+    for (passes, stabilized, cycling) in runs {
+        assert!(stabilized && !cycling, "fixpoint did not converge: passes={passes}");
+        assert!(passes <= 4, "fixpoint needed {passes} passes");
+    }
+}
