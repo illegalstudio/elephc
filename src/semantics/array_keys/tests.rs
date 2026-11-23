@@ -154,6 +154,14 @@ fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
         "<?php $values = [(($key = -2)) => [], 'ab']; $values[-1][false] = 'x';";
     crate::semantics::validate_source(&parse(runtime, SourceMode::Php), profile())
         .unwrap_or_else(|error| panic!("{runtime}: {error:?}"));
+
+    let strict = "<?php $values = [+\"-2\" => [], 'ab']; $values[0][false] = 'x';";
+    let error = crate::semantics::validate_source(
+        &parse(strict, SourceMode::Php),
+        SemanticProfile::all(),
+    )
+    .expect_err("strict arithmetic must reject the unary string conversion after key planning");
+    assert!(error.message.contains("strict-arithmetic"), "{strict}: {error:?}");
 }
 
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.

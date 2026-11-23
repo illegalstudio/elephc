@@ -4648,7 +4648,7 @@ fn planned_mixed_array_fact(
                 value,
             ),
             ArrayEntry::Keyed(key, value) => {
-                let folded = crate::optimize::fold_scalar_literal_for_source(key, profile)?;
+                let folded = crate::optimize::fold_array_key_for_source(key, profile)?;
                 let key = match crate::types::literal_array_key(&folded, profile)? {
                     StringKey::Integer(value) => ArrayKeyFact::Integer(value),
                     StringKey::String(value) => {
