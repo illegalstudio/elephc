@@ -472,9 +472,19 @@ function consume(string $line, int &$cursor): bool
 $c = 0;
 var_dump(consume("   x", $c), $c);
 "#;
-    let first = print_module(&lower_source(source));
+    // A fresh thread per run, as each compile is a fresh process: the synthetic source identities
+    // the preludes take are numbered per thread, and a second run on the same one continues them.
+    let run = || {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || print_module(&lower_source(source)))
+            .expect("lowering thread")
+            .join()
+            .expect("lowering run")
+    };
+    let first = run();
     for _ in 0..3 {
-        assert_eq!(print_module(&lower_source(source)), first);
+        assert_eq!(run(), first);
     }
 }
 
