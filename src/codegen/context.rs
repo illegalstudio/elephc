@@ -1152,11 +1152,14 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn needs_borrowed_container_lease(
         &self, slot: LocalSlotId, value: ValueId,
     ) -> Result<bool> {
-        let ref_load = self.function.value(value).and_then(|value| match value.def {
+        let borrowed_load = self.function.value(value).and_then(|value| match value.def {
             ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
             _ => None,
-        }).is_some_and(|inst| inst.op == Op::LoadRefCell);
-        Ok(ref_load
+        }).is_some_and(|inst| {
+            inst.op == Op::LoadRefCell
+                || (inst.op == Op::LoadLocal && inst.result_ownership == Ownership::Borrowed)
+        });
+        Ok(borrowed_load
             && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && matches!(self.value_php_type(value)?.codegen_repr(),
