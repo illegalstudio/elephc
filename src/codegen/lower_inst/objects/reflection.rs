@@ -133,7 +133,6 @@ struct ReflectionOwnerMetadata {
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
     default_property_members: Vec<ReflectionDefaultPropertyMember>,
-    static_property_members: Vec<ReflectionStaticPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
     enum_case_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
@@ -348,15 +347,6 @@ struct ReflectionConstantMember {
 struct ReflectionDefaultPropertyMember {
     name: String,
     value: ReflectionParameterDefaultValue,
-}
-
-/// Metadata for one live static-property value exposed by ReflectionClass.
-#[derive(Debug, PartialEq)]
-struct ReflectionStaticPropertyMember {
-    name: String,
-    declaring_class_name: String,
-    php_type: PhpType,
-    is_declared: bool,
 }
 
 /// Compile-time value forms supported by Reflection constant metadata emission.

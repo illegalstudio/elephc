@@ -288,32 +288,3 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-
-/// Replaces a ReflectionClass-like private slot with current static-property values.
-pub(super) fn emit_reflection_static_property_array_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    owner_class_name: &str,
-    property_name: &str,
-    members: &[ReflectionStaticPropertyMember],
-) -> Result<()> {
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(owner_class_name)
-        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let low_offset = reflection_property_offset(class_info, property_name)?;
-    let high_offset = low_offset + 8;
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-    emit_reflection_static_property_array(ctx, members);
-    abi::emit_pop_reg(ctx.emitter, object_reg);
-    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
-    abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    Ok(())
-}

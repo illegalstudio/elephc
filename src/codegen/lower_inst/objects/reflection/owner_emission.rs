@@ -216,12 +216,6 @@ fn emit_reflection_owner_metadata_with_members(
             }) {
                 emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
             }
-            emit_reflection_static_property_array_property_by_name(
-                ctx,
-                class_name,
-                "__static_properties",
-                &metadata.static_property_members,
-            )?;
         }
         // `ReflectionFunction`'s `__short_name` is written by `emit_reflection_function_name_parts`
         // below; a second store here overwrote a persisted copy without releasing it.
@@ -961,14 +955,6 @@ pub(super) fn emit_reflection_class_extras(
             &metadata.default_property_members,
         )?;
     }
-    if !metadata.static_property_members.is_empty() {
-        emit_reflection_static_property_array_property_by_name(
-            ctx,
-            class_name,
-            "__static_properties",
-            &metadata.static_property_members,
-        )?;
-    }
     if class_name == "ReflectionEnum" && metadata.type_metadata.is_some() {
         emit_reflection_owner_type_property_by_name(
             ctx,
@@ -994,7 +980,6 @@ pub(super) fn reflection_class_extras_are_needed(
         || !metadata.trait_aliases.is_empty()
         || (!in_table.constants && !metadata.constant_members.is_empty())
         || (!in_table.defaults && !metadata.default_property_members.is_empty())
-        || !metadata.static_property_members.is_empty()
         || (class_name == "ReflectionEnum" && metadata.type_metadata.is_some())
         || lazy_members
 }
