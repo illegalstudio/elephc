@@ -462,12 +462,12 @@ fn target_classes(checker: &Checker, targets: &ScopeDynamicMutationTargets) -> V
 
 /// Each class name's direct children, by the parent `Checker::is_subclass_of` follows: the
 /// complete class's parent when it has one, else the declared one.
-struct ClassChildren<'c> {
+pub(in crate::types::checker) struct ClassChildren<'c> {
     children: crate::fast_hash::FastMap<&'c str, Vec<&'c str>>,
 }
 
 impl<'c> ClassChildren<'c> {
-    fn of(checker: &'c Checker) -> Self {
+    pub(in crate::types::checker) fn of(checker: &'c Checker) -> Self {
         #[cfg(test)]
         CLASS_CHILDREN_INDEXES.with(|count| count.set(count.get() + 1));
         let mut children: crate::fast_hash::FastMap<&'c str, Vec<&'c str>> = Default::default();
@@ -490,7 +490,7 @@ impl<'c> ClassChildren<'c> {
 
     /// The complete classes that are `root` or inherit from it: what filtering `classes` by
     /// `== root || is_subclass_of(_, root)` keeps, in `classes` iteration order.
-    fn family(&self, checker: &'c Checker, root: &str) -> Vec<&'c String> {
+    pub(in crate::types::checker) fn family(&self, checker: &'c Checker, root: &str) -> Vec<&'c String> {
         let mut reached = crate::fast_hash::FastSet::default();
         let mut stack = vec![root];
         while let Some(name) = stack.pop() {

@@ -536,15 +536,18 @@ fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
 /// Expands the recorded destinations into the exact set of classes to widen.
 fn destination_classes(checker: &Checker, destinations: &CloneOverrideDestinations) -> Vec<String> {
     let mut names = BTreeSet::new();
-    for (candidate, _) in checker.classes.iter() {
-        if destinations.any_class
-            || destinations.classes.contains(candidate)
-            || destinations
-                .classes
-                .iter()
-                .any(|destination| checker.is_subclass_of(candidate, destination))
-        {
-            names.insert(candidate.clone());
+    if destinations.any_class {
+        names.extend(checker.classes.keys().cloned());
+        return names.into_iter().collect();
+    }
+    // Each destination's family (the class and its subclasses) comes from a children index built
+    // once, instead of asking `is_subclass_of` of every class against every destination: with a
+    // destination per class that was quadratic in the class count (the top checker frame of
+    // `lowering_complexity::receiver_families_do_not_ask_every_class_per_receiver`).
+    if !destinations.classes.is_empty() {
+        let index = super::scope_dynamic_storage::ClassChildren::of(checker);
+        for destination in &destinations.classes {
+            names.extend(index.family(checker, destination).into_iter().cloned());
         }
     }
     names.into_iter().collect()
