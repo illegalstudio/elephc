@@ -90,8 +90,9 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
             }
             if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
-                function.callable_default.as_ref().is_some_and(|value|
-                    value.same_value_producer(&bound_default))
+                !crate::ir_lower::is_reflection_default_helper(&function.name)
+                    && function.callable_default.as_ref().is_some_and(|value|
+                        value.same_value_producer(&bound_default))
                     && function.lexical_class.as_deref() == current_class) {
                 return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }

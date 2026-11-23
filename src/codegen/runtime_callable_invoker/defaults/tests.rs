@@ -127,6 +127,13 @@ fn nested_deferred_default_resolves_to_native_helper() {
         Expr::new(ExprKind::Throw(Box::new(exception)), Span::dummy()),
     ]), Span::dummy());
     let sig = signature(vec![("items".into(), PhpType::php_array())], vec![Some(default)], vec![true], None);
+    let mut reflection = crate::ir::Function::new(
+        "__elephc_reflection_default\\native_default".into(),
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed),
+        PhpType::Mixed,
+    );
+    reflection.callable_default = sig.default_value(0);
+    module.add_closure(reflection);
     let mut helper = crate::ir::Function::new("native_default".into(), crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed);
     helper.callable_default = Some(sig.default_value(0).expect("present helper default"));
     module.add_closure(helper);
