@@ -148,7 +148,8 @@ impl ProjectMonitoring {
         let mut matched = false;
         let mut missing = Vec::new();
         for (path, table) in &self.entries {
-            let Ok(file) = root.join(path).canonicalize() else {
+            // A directory names no entry file either: `[entry."bin"]` matches no build.
+            let Some(file) = root.join(path).canonicalize().ok().filter(|file| file.is_file()) else {
                 missing.push(path);
                 continue;
             };
@@ -419,18 +420,23 @@ mod tests {
 
             [entry."bin/consolle".apm]
             exclude = ["CLI console cache:*"]
+
+            [entry."bin".apm]
+            exclude = ["CLI console about"]
             "#,
         )
         .unwrap();
         let (_, console, warnings) = settings.for_entry(&root, &root.join("bin/console"));
         assert_eq!(console.exclude, Some(vec!["GET /health".to_string()]), "the typo's table is not applied");
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("[entry.\"bin/consolle\"] names no file"), "{warnings:?}");
-        assert!(warnings[0].contains("top-level [monitoring] and [apm]"), "{warnings:?}");
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("[entry.\"bin\"] names no file")), "a directory is no entry file: {warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("[entry.\"bin/consolle\"] names no file")), "{warnings:?}");
+        assert!(warnings.iter().all(|warning| warning.contains("top-level [monitoring] and [apm]")), "{warnings:?}");
         let (_, web, warnings) = settings.for_entry(&root, &root.join("index.php"));
         assert_eq!(web.exclude, Some(vec!["GET /ping".to_string()]));
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("bin/consolle") && !warnings[0].contains("top-level"), "{warnings:?}");
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("bin/consolle")), "{warnings:?}");
+        assert!(warnings.iter().all(|warning| !warning.contains("top-level")), "a matched build says nothing of it: {warnings:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

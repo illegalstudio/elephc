@@ -266,7 +266,20 @@ impl Search<'_> {
             })
         };
         for used in owner.traits.iter().filter(|used| !excluded(used)) {
-            if let Some(found) = self.resolve_in(used, method, &mut seen.clone()) {
+            if let Some(mut found) = self.resolve_in(used, method, &mut seen.clone()) {
+                // `run as private` (or `T::run as protected`) changes the imported
+                // method's visibility on this class without renaming it.
+                if let Some(visibility) = owner.adaptations.iter().find_map(|adaptation| match adaptation {
+                    TraitAdaptation::Alias { trait_name, method: changed, alias: None, visibility: Some(visibility) }
+                        if same_name(changed, method)
+                            && trait_name.as_ref().is_none_or(|name| owner_key(name.as_str()) == *used) =>
+                    {
+                        Some(visibility)
+                    }
+                    _ => None,
+                }) {
+                    found.private = matches!(visibility, crate::parser::ast::Visibility::Private);
+                }
                 return Some(found);
             }
         }
@@ -720,7 +733,8 @@ mod tests {
     /// or taken from a trait, is not inherited; `insteadof` picks the other
     /// trait, at the class or at its parent; an alias names the trait's
     /// method by its declared name; a private trait method used by the class
-    /// itself is still its own (review of #2534).
+    /// itself is still its own; a visibility-only `as` narrows or widens what a
+    /// subclass inherits (review of #2534).
     #[test]
     fn an_inherited_target_follows_visibility_and_trait_adaptations() {
         let source = "<?php
@@ -733,7 +747,11 @@ mod tests {
             class ChosenBase { use A, B { B::run insteadof A; } }
             class ChosenChild extends ChosenBase {}
             class Aliased { use A { run as again; } }
-            class UsesHidden { use Hidden; }";
+            class UsesHidden { use Hidden; }
+            class NarrowBase { use A { run as private; } }
+            class NarrowChild extends NarrowBase {}
+            class WideBase { use Hidden { hidden as protected; } }
+            class WideChild extends WideBase {}";
         let warnings = not_found_warnings(
             source,
             &[
@@ -743,6 +761,8 @@ mod tests {
                 "ChosenChild::run",
                 "Aliased::again",
                 "UsesHidden::hidden",
+                "NarrowChild::run",
+                "WideChild::hidden",
             ],
         );
         assert!(warnings[0].starts_with("no such method"), "a private parent method: {}", warnings[0]);
@@ -751,6 +771,8 @@ mod tests {
         assert!(warnings[3].contains("name B::run"), "insteadof on the parent: {}", warnings[3]);
         assert!(warnings[4].contains("runs the body of A::run: name A::run"), "an alias: {}", warnings[4]);
         assert!(warnings[5].contains("name Hidden::hidden"), "a private trait method of the class: {}", warnings[5]);
+        assert!(warnings[6].starts_with("no such method"), "`as private` on the parent: {}", warnings[6]);
+        assert!(warnings[7].contains("name Hidden::hidden"), "`as protected` on the parent: {}", warnings[7]);
     }
 
     /// The wrap's locals are compiler-generated, so `get_defined_vars()`,
