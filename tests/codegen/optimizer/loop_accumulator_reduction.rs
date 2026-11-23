@@ -436,3 +436,25 @@ echo $sum, "\n";
 "#;
     assert_eq!(compile_and_run(source), "10\n");
 }
+
+/// A warning array addend keeps the loop so PHP emits one warning per iteration.
+#[test]
+fn test_loop_accumulator_repeats_addend_warnings_per_iteration() {
+    let source = r#"<?php
+$values = [];
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $sum = $sum + $values['x'] * 1;
+}
+echo $sum, "\n";
+"#;
+    let out = compile_and_run_capture(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0\n");
+    assert_eq!(
+        out.stderr.matches("Undefined array key \"x\"").count(),
+        3,
+        "{}",
+        out.stderr
+    );
+}

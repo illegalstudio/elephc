@@ -32,9 +32,19 @@ pub(crate) fn cache_loop_invariant_map_sums(
     env: &TypeEnv,
     by_ref_params: &HashSet<String>,
     aliased: &HashSet<String>,
+    entry_defined: &HashSet<String>,
+    in_main: bool,
 ) {
     let mut counter = 0usize;
-    cache_block(body, env, by_ref_params, aliased, &mut counter);
+    cache_block(
+        body,
+        env,
+        by_ref_params,
+        aliased,
+        entry_defined,
+        in_main,
+        &mut counter,
+    );
 }
 
 /// Recurse into nested statement blocks and cache each supported loop.
@@ -43,6 +53,8 @@ fn cache_block(
     env: &TypeEnv,
     by_ref_params: &HashSet<String>,
     aliased: &HashSet<String>,
+    entry_defined: &HashSet<String>,
+    in_main: bool,
     counter: &mut usize,
 ) {
     let mut index = 0;
@@ -59,15 +71,14 @@ fn cache_block(
             env,
             by_ref_params,
             aliased,
+            entry_defined,
+            in_main,
             *counter,
         ) {
             let used_elsewhere = body
                 .iter()
                 .enumerate()
                 .any(|(other, stmt)| other != index && stmt_mentions(stmt, &mapped));
-            if std::env::var_os("ELEPHC_DEBUG_MAP_CACHE").is_some() {
-                eprintln!("map_sum_cache: candidate mapped={} used_elsewhere={}", mapped, used_elsewhere);
-            }
             if used_elsewhere {
                 body[index] = original;
             } else {
@@ -77,7 +88,15 @@ fn cache_block(
                 index += inserted;
             }
         } else {
-            recurse_blocks(&mut body[index], env, by_ref_params, aliased, counter);
+            recurse_blocks(
+                &mut body[index],
+                env,
+                by_ref_params,
+                aliased,
+                entry_defined,
+                in_main,
+                counter,
+            );
         }
         index += 1;
     }
@@ -89,6 +108,8 @@ fn recurse_blocks(
     env: &TypeEnv,
     by_ref_params: &HashSet<String>,
     aliased: &HashSet<String>,
+    entry_defined: &HashSet<String>,
+    in_main: bool,
     counter: &mut usize,
 ) {
     match &mut stmt.kind {
@@ -98,12 +119,12 @@ fn recurse_blocks(
             else_body,
             ..
         } => {
-            cache_block(then_body, env, by_ref_params, aliased, counter);
+            cache_block(then_body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             for (_, body) in elseif_clauses {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
             if let Some(body) = else_body {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
         }
         StmtKind::IfDef {
@@ -111,9 +132,9 @@ fn recurse_blocks(
             else_body,
             ..
         } => {
-            cache_block(then_body, env, by_ref_params, aliased, counter);
+            cache_block(then_body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             if let Some(body) = else_body {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
         }
         StmtKind::While { body, .. }
@@ -122,14 +143,14 @@ fn recurse_blocks(
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::Synthetic(body) => {
-            cache_block(body, env, by_ref_params, aliased, counter);
+            cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
             if let Some(body) = default {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
         }
         StmtKind::Try {
@@ -137,12 +158,20 @@ fn recurse_blocks(
             catches,
             finally_body,
         } => {
-            cache_block(try_body, env, by_ref_params, aliased, counter);
+            cache_block(try_body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             for catch in catches {
-                cache_block(&mut catch.body, env, by_ref_params, aliased, counter);
+                cache_block(
+                    &mut catch.body,
+                    env,
+                    by_ref_params,
+                    aliased,
+                    entry_defined,
+                    in_main,
+                    counter,
+                );
             }
             if let Some(body) = finally_body {
-                cache_block(body, env, by_ref_params, aliased, counter);
+                cache_block(body, env, by_ref_params, aliased, entry_defined, in_main, counter);
             }
         }
         _ => {}
@@ -157,8 +186,11 @@ fn try_cache_loop(
     env: &TypeEnv,
     by_ref_params: &HashSet<String>,
     aliased: &HashSet<String>,
+    entry_defined: &HashSet<String>,
+    in_main: bool,
     counter: usize,
 ) -> Option<(Vec<Stmt>, String)> {
+    let span = stmt.span;
     let StmtKind::For {
         init,
         condition,
@@ -168,9 +200,11 @@ fn try_cache_loop(
     else {
         return None;
     };
-    let Some(loop_counter) = positive_bound(init.as_deref(), condition.as_ref()?) else {
+    let (loop_counter, bound) = positive_bound(init.as_deref(), condition.as_ref()?)?;
+    if !bound_locals_defined(bound, previous, entry_defined, in_main) {
         return None;
-    };
+    }
+    let guard = loop_entry_guard(init.as_deref(), condition.as_ref()?, span)?;
     if init
         .as_deref()
         .is_some_and(|stmt| stmt_has_foreign_write(stmt, loop_counter) || stmt_has_call(stmt))
@@ -194,7 +228,7 @@ fn try_cache_loop(
         stmt.span,
     );
     if let Some(prelude) = foreach {
-        return Some((prelude, String::new()));
+        return Some((guarded_prelude(prelude, &guard, span), String::new()));
     }
     let pair = match find_map_sum_pair(body, by_ref_params, aliased) {
         Some(pair) => pair,
@@ -209,7 +243,7 @@ fn try_cache_loop(
                 counter,
                 stmt.span,
             ) {
-                return Some((prelude, String::new()));
+                return Some((guarded_prelude(prelude, &guard, span), String::new()));
             }
             if let Some(prelude) = try_hoist_invariant_reduce(
                 body,
@@ -221,7 +255,7 @@ fn try_cache_loop(
                 counter,
                 stmt.span,
             ) {
-                return Some((prelude, String::new()));
+                return Some((guarded_prelude(prelude, &guard, span), String::new()));
             }
             let prelude = try_hoist_direct_map_read(
                 body,
@@ -233,7 +267,7 @@ fn try_cache_loop(
                 counter,
                 stmt.span,
             )?;
-            return Some((prelude, String::new()));
+            return Some((guarded_prelude(prelude, &guard, span), String::new()));
         }
     };
     let mapped = pair.mapped;
@@ -306,7 +340,7 @@ fn try_cache_loop(
         },
         stmt.span,
     ));
-    Some((prelude, mapped))
+    Some((guarded_prelude(prelude, &guard, span), mapped))
 }
 
 /// Hoists `$mapped = array_map(...)` out of a loop whose accumulator reads constant keys.
@@ -362,6 +396,13 @@ fn try_hoist_map_assignment(
         return None;
     }
     let source = args[1].clone();
+    if let ExprKind::Variable(source_name) = &source.kind {
+        if source_name == mapped
+            || body.iter().any(|stmt| stmt_writes_local(stmt, source_name))
+        {
+            return None;
+        }
+    }
     let mut prelude = Vec::new();
     let map_call = match &source.kind {
         ExprKind::Variable(source)
@@ -828,7 +869,7 @@ fn accumulation_addend_mut<'a>(value: &'a mut Expr, accumulator: &str) -> Option
 }
 
 /// Returns whether `expr` is a capture-free two-parameter pure reduce callback.
-fn pure_reduce_callback(expr: &Expr) -> bool {
+pub(super) fn pure_reduce_callback(expr: &Expr) -> bool {
     let ExprKind::Closure {
         params,
         variadic,
@@ -1126,7 +1167,7 @@ fn source_is_int_array(
 }
 
 /// Returns whether the loop body writes a local `expr` reads.
-fn expr_reads_loop_written_local(expr: &Expr, loop_body: &[Stmt]) -> bool {
+pub(super) fn expr_reads_loop_written_local(expr: &Expr, loop_body: &[Stmt]) -> bool {
     let mut locals = Vec::new();
     read_locals(expr, &mut locals);
     locals
@@ -1262,8 +1303,89 @@ fn replace_map_source(map_call: Expr, source: &str) -> Expr {
     Expr::new(ExprKind::FunctionCall { name, args }, map_call.span)
 }
 
-/// Returns whether a `for` loop starts at a non-negative counter and has a positive bound.
-fn positive_bound<'a>(init: Option<&'a Stmt>, condition: &Expr) -> Option<&'a str> {
+/// Returns the loop-entry guard that keeps the hoisted prelude on the same zero-trip path.
+fn loop_entry_guard(init: Option<&Stmt>, condition: &Expr, span: Span) -> Option<Expr> {
+    let Stmt {
+        kind: StmtKind::Assign { value, .. },
+        ..
+    } = init?
+    else {
+        return None;
+    };
+    let ExprKind::IntLiteral(seed) = value.kind else {
+        return None;
+    };
+    let ExprKind::BinaryOp { op, right, .. } = &condition.kind else {
+        return None;
+    };
+    if !matches!(op, BinOp::Lt | BinOp::LtEq) {
+        return None;
+    }
+    Some(binary(int(seed, span), op.clone(), (**right).clone(), span))
+}
+
+/// Wraps a hoisted prelude so it runs only when the loop's first condition is true.
+fn guarded_prelude(prelude: Vec<Stmt>, guard: &Expr, span: Span) -> Vec<Stmt> {
+    if prelude.is_empty() {
+        return prelude;
+    }
+    let mut stmt = Stmt::new(
+        StmtKind::If {
+            condition: guard.clone(),
+            then_body: prelude,
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    );
+    // The later accumulator pass needs to know this guard defines the prelude locals when
+    // the loop runs; its condition is pure and the assignments are the hoisted prelude.
+    stmt.attributes.push(crate::parser::ast::AttributeGroup {
+        attributes: vec![crate::parser::ast::Attribute {
+            name: Name::unqualified("__elephc_prelude_guard"),
+            args: Vec::new(),
+            span,
+        }],
+        span,
+    });
+    vec![stmt]
+}
+
+/// Returns whether every local the bound reads is defined and stable before the loop.
+fn bound_locals_defined(
+    bound: &Expr,
+    previous: &[Stmt],
+    entry_defined: &HashSet<String>,
+    in_main: bool,
+) -> bool {
+    let mut locals = Vec::new();
+    read_locals(bound, &mut locals);
+    locals.into_iter().all(|name| {
+        if entry_defined.contains(&name)
+            || (in_main && matches!(name.as_str(), "argc" | "argv"))
+        {
+            return true;
+        }
+        let Some(index) = previous
+            .iter()
+            .rposition(|stmt| stmt_writes_local(stmt, &name))
+        else {
+            return false;
+        };
+        !previous[index + 1..].iter().any(stmt_has_call)
+    })
+}
+
+/// Builds an integer literal expression.
+fn int(value: i64, span: Span) -> Expr {
+    Expr::new(ExprKind::IntLiteral(value), span)
+}
+
+/// Returns the counter and positive bound of a `for` loop that starts at a non-negative seed.
+fn positive_bound<'a>(
+    init: Option<&'a Stmt>,
+    condition: &'a Expr,
+) -> Option<(&'a str, &'a Expr)> {
     let Some(Stmt {
         kind: StmtKind::Assign { name: counter, value },
         ..
@@ -1282,10 +1404,12 @@ fn positive_bound<'a>(init: Option<&'a Stmt>, condition: &Expr) -> Option<&'a st
     else {
         return None;
     };
-    if !matches!(&left.kind, ExprKind::Variable(name) if name == counter) {
+    if !matches!(&left.kind, ExprKind::Variable(name) if name == counter)
+        || expr_mentions(right, counter)
+    {
         return None;
     }
-    positive_expr(right).then_some(counter.as_str())
+    positive_expr(right).then_some((counter.as_str(), right))
 }
 
 /// Returns whether an expression is a positive runtime bound independent of loop progress.

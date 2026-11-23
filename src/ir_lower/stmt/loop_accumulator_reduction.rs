@@ -25,7 +25,7 @@ use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::map_read_fusion::{expr_mentions, stmt_mentions};
-use super::map_sum_cache::stmt_writes_local;
+use super::map_sum_cache::{expr_reads_loop_written_local, pure_reduce_callback, stmt_writes_local};
 
 /// Rewrites every reducible counted accumulator loop in one function body.
 pub(crate) fn reduce_loop_accumulators(
@@ -33,9 +33,16 @@ pub(crate) fn reduce_loop_accumulators(
     env: &crate::types::TypeEnv,
     aliased: &std::collections::HashSet<String>,
     entry_defined: &std::collections::HashSet<String>,
+    in_main: bool,
 ) {
+    let mut entry_defined = entry_defined.clone();
+    if in_main {
+        // The CLI always populates both predefined variables before main runs.
+        entry_defined.insert("argc".to_string());
+        entry_defined.insert("argv".to_string());
+    }
     let mut counter = 0usize;
-    reduce_block(body, env, aliased, entry_defined, &mut counter);
+    reduce_block(body, env, aliased, &entry_defined, &mut counter);
 }
 
 /// Recurse into nested blocks and reduce each counted accumulator loop.
@@ -227,6 +234,26 @@ fn try_reduce(
         n_gt_zero,
         span,
     );
+    // The fast path evaluates the invariant bound and addend once. PHP evaluates both on
+    // every iteration, so only values with no diagnostic or user-code effect may be reduced;
+    // an array read, undefined local, nullable strlen/ord or cast keeps the original loop.
+    let Some(mut defined) = proven_defined_before(previous, entry_defined) else {
+        return None;
+    };
+    let mut string_locals = std::collections::HashSet::new();
+    if let Some((produced, _)) = &producer {
+        defined.insert(produced.clone());
+        string_locals.insert(produced.clone());
+    }
+    // `is_increment` above proves the update writes only the counter, so the bound must not
+    // depend on it. The body must not rewrite any local the bound reads.
+    if expr_mentions(bound, loop_counter)
+        || !repeatable_expr(bound, &defined, &string_locals, env)
+        || !repeatable_expr(addend, &defined, &string_locals, env)
+        || expr_reads_loop_written_local(bound, body)
+    {
+        return None;
+    }
     let mut then_body = Vec::new();
     if let Some((produced, producer_value)) = producer {
         then_body.push(assign(&produced, producer_value, span));
@@ -234,13 +261,8 @@ fn try_reduce(
     // A local read from a successor block loses the codegen frame-cell proof, which turns an
     // invariant integer/float division into a boxed Mixed helper call. Re-evaluate a division
     // addend (and its product) at each guarded step instead: the guard and the fast path run
-    // once per loop. Only a warning-free addend may be repeated; an array read, cast or call
-    // keeps the single preheader evaluation so its exact warning count and user-code effects
-    // are unchanged.
-    let defined = proven_defined_before(previous, entry_defined);
-    let add_expr = if contains_division(addend)
-        && defined.as_ref().is_some_and(|defined| repeatable_expr(addend, defined))
-    {
+    // once per loop.
+    let add_expr = if contains_division(addend) {
         addend.clone()
     } else {
         then_body.push(assign(&add_hidden, addend.clone(), span));
@@ -430,7 +452,12 @@ fn float_product_branch(
 /// key, an undefined variable warns, casts can warn on an object, and calls can warn or run user
 /// code, so only proven locals, superglobals and ordinary arithmetic shapes are repeatable.
 /// Everything else keeps one evaluation in a preheader local.
-fn repeatable_expr(expr: &Expr, defined: &std::collections::HashSet<String>) -> bool {
+fn repeatable_expr(
+    expr: &Expr,
+    defined: &std::collections::HashSet<String>,
+    string_locals: &std::collections::HashSet<String>,
+    env: &crate::types::TypeEnv,
+) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -441,34 +468,78 @@ fn repeatable_expr(expr: &Expr, defined: &std::collections::HashSet<String>) -> 
             defined.contains(name)
                 || name == "GLOBALS"
                 || crate::superglobals::is_superglobal(name)
+                || env.get(name).map(crate::types::PhpType::codegen_repr)
+                    == Some(crate::types::PhpType::Str)
         }
+        ExprKind::FunctionCall { name, args } => match name.as_str().trim_start_matches('\\') {
+            "intval" | "floatval" | "abs" => args
+                .iter()
+                .all(|arg| repeatable_expr(arg, defined, string_locals, env)),
+            "strlen" => {
+                args.len() == 1
+                    && (matches!(&args[0].kind, ExprKind::StringLiteral(_))
+                        || matches!(
+                            &args[0].kind,
+                            ExprKind::Variable(local) if string_locals.contains(local)
+                        ))
+            }
+            "ord" => args.len() == 1 && string_char_arg(&args[0], string_locals),
+            "array_reduce" => {
+                args.len() == 3
+                    && repeatable_expr(&args[0], defined, string_locals, env)
+                    && pure_reduce_callback(&args[1])
+                    && repeatable_expr(&args[2], defined, string_locals, env)
+            }
+            _ => false,
+        },
         ExprKind::BinaryOp { left, right, .. } => {
-            repeatable_expr(left, defined) && repeatable_expr(right, defined)
+            repeatable_expr(left, defined, string_locals, env)
+                && repeatable_expr(right, defined, string_locals, env)
         }
         ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
-            repeatable_expr(inner, defined)
+            repeatable_expr(inner, defined, string_locals, env)
         }
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
-            repeatable_expr(value, defined) && repeatable_expr(default, defined)
+            repeatable_expr(value, defined, string_locals, env)
+                && repeatable_expr(default, defined, string_locals, env)
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            repeatable_expr(condition, defined)
-                && repeatable_expr(then_expr, defined)
-                && repeatable_expr(else_expr, defined)
+            repeatable_expr(condition, defined, string_locals, env)
+                && repeatable_expr(then_expr, defined, string_locals, env)
+                && repeatable_expr(else_expr, defined, string_locals, env)
         }
-        ExprKind::ArrayLiteral(items) => items.iter().all(|item| repeatable_expr(item, defined)),
-        ExprKind::ArrayLiteralAssoc(items) => items
+        ExprKind::ArrayLiteral(items) => items
             .iter()
-            .all(|(key, value)| repeatable_expr(key, defined) && repeatable_expr(value, defined)),
+            .all(|item| repeatable_expr(item, defined, string_locals, env)),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
+            repeatable_expr(key, defined, string_locals, env)
+                && repeatable_expr(value, defined, string_locals, env)
+        }),
         ExprKind::ArrayLiteralMixed(items) => items
             .iter()
             .flat_map(|entry| entry.exprs())
-            .all(|item| repeatable_expr(item, defined)),
+            .all(|item| repeatable_expr(item, defined, string_locals, env)),
+        _ => false,
+    }
+}
+
+/// Reports whether `expr` is a non-null string (or one of its characters) for strlen/ord.
+fn string_char_arg(
+    expr: &Expr,
+    string_locals: &std::collections::HashSet<String>,
+) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::Variable(local) => string_locals.contains(local),
+        ExprKind::ArrayAccess { array, index } => {
+            matches!(index.kind, ExprKind::IntLiteral(_))
+                && matches!(&array.kind, ExprKind::Variable(local) if string_locals.contains(local))
+        }
         _ => false,
     }
 }
@@ -509,6 +580,23 @@ fn proven_defined_before(
                     return None;
                 }
                 defined.insert(name.clone());
+            }
+            // The map-sum cache guards its hoisted prelude with an `if` whose condition is
+            // pure and whose body is exactly the prelude it generated. When the loop runs,
+            // that guard has already run, so its assignments count as definite.
+            StmtKind::If { then_body, .. }
+                if stmt.attributes.iter().flat_map(|group| &group.attributes).any(
+                    |attribute| attribute.name.as_str() == "__elephc_prelude_guard"
+                ) =>
+            {
+                for inner in then_body {
+                    match &inner.kind {
+                        StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } => {
+                            defined.insert(name.clone());
+                        }
+                        _ => return None,
+                    }
+                }
             }
             _ => return None,
         }
@@ -552,6 +640,24 @@ fn simple_definition_value(expr: &Expr) -> bool {
             .iter()
             .flat_map(|entry| entry.exprs())
             .all(simple_definition_value),
+        ExprKind::FunctionCall { name, args } => match name.as_str().trim_start_matches('\\') {
+            "array_reduce" => {
+                args.len() == 3
+                    && simple_definition_value(&args[0])
+                    && pure_reduce_callback(&args[1])
+                    && simple_definition_value(&args[2])
+            }
+            "range"
+            | "array_fill"
+            | "array_values"
+            | "array_reverse"
+            | "array_slice"
+            | "array_merge"
+            | "intval"
+            | "floatval"
+            | "abs" => args.iter().all(simple_definition_value),
+            _ => false,
+        },
         _ => false,
     }
 }

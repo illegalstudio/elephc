@@ -39,6 +39,7 @@ pub(crate) fn fuse_map_reads(
     env: &TypeEnv,
     by_ref_params: &std::collections::HashSet<String>,
     functions: &std::collections::HashMap<String, FunctionSig>,
+    in_main: bool,
 ) {
     // A user function may not redeclare `array_map()` (the checker rejects it), but the
     // fusion sites stay fail-closed on their own rather than relying on that check.
@@ -51,7 +52,14 @@ pub(crate) fn fuse_map_reads(
     let mut fresh_foreach = 0usize;
     let initialized = by_ref_params.clone();
     fuse_direct_stmts(body, env, &aliased, &mut fresh_foreach, &initialized);
-    fuse_block(body, env, &aliased);
+    fuse_block(
+        body,
+        env,
+        &aliased,
+        &std::collections::HashSet::new(),
+        functions,
+        in_main,
+    );
 }
 
 /// Collects locals whose storage another binding can mutate.
@@ -482,9 +490,38 @@ fn direct_map_read(expr: &Expr, env: &TypeEnv) -> Option<Expr> {
 }
 
 /// Recurses into nested scopes and then fuses candidates in this block.
-fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv, aliased: &std::collections::HashSet<String>) {
-    for stmt in stmts.iter_mut() {
-        recurse_stmt(stmt, env, aliased);
+///
+/// `escaping` names the temporaries assigned inside this block whose value is observed
+/// outside it. Removing such an assignment would leave the outer read unbound.
+fn fuse_block(
+    stmts: &mut Vec<Stmt>,
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+    escaping: &std::collections::HashSet<String>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+    in_main: bool,
+) {
+    for index in 0..stmts.len() {
+        let mut child_escaping = escaping.clone();
+        let mut assigned = std::collections::HashSet::new();
+        collect_assigned_names(&stmts[index], &mut assigned);
+        for name in assigned {
+            if stmts[..index]
+                .iter()
+                .chain(stmts[index + 1..].iter())
+                .any(|stmt| stmt_mentions(stmt, &name))
+            {
+                child_escaping.insert(name);
+            }
+        }
+        recurse_stmt(
+            &mut stmts[index],
+            env,
+            aliased,
+            &child_escaping,
+            functions,
+            in_main,
+        );
     }
     let mut index = 0;
     while index < stmts.len() {
@@ -492,10 +529,12 @@ fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv, aliased: &std::collections::
             index += 1;
             continue;
         };
-        // A previous value of the temporary may survive across loop iterations.
-        if stmts[..index]
-            .iter()
-            .any(|stmt| stmt_mentions(stmt, &candidate.mapped))
+        // A previous value of the temporary may survive across loop iterations, and a read
+        // outside this block keeps the assignment in place.
+        if escaping.contains(&candidate.mapped)
+            || stmts[..index]
+                .iter()
+                .any(|stmt| stmt_mentions(stmt, &candidate.mapped))
         {
             index += 1;
             continue;
@@ -503,7 +542,19 @@ fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv, aliased: &std::collections::
         let mut trial = stmts.clone();
         trial.remove(index);
         let mut supported = true;
+        let mut user_code_ran = false;
         for stmt in trial.iter_mut().skip(index) {
+            if in_main {
+                let mentions = stmt_mentions(stmt, &candidate.mapped);
+                let user_call = stmt_has_user_call(stmt, functions);
+                if (user_call && (user_code_ran || mentions))
+                    || (user_code_ran && mentions)
+                {
+                    supported = false;
+                    break;
+                }
+                user_code_ran |= user_call;
+            }
             if rewrite_stmt(stmt, &candidate).is_err() {
                 supported = false;
                 break;
@@ -517,35 +568,107 @@ fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv, aliased: &std::collections::
     }
 }
 
-/// Recurses into the bodies of nested control-flow statements.
-fn recurse_stmt(stmt: &mut Stmt, env: &TypeEnv, aliased: &std::collections::HashSet<String>) {
+/// Recurses into loop bodies and synthetic statement lists.
+///
+/// Branch and exception blocks deliberately keep their map assignments: a read after the
+/// block observes the local PHP keeps alive, and proving that trace-safe for every arm is
+/// not worth losing the fusion on straight-line loops.
+fn recurse_stmt(
+    stmt: &mut Stmt,
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+    escaping: &std::collections::HashSet<String>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+    in_main: bool,
+) {
     match &mut stmt.kind {
         StmtKind::For { body, .. }
         | StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::Foreach { body, .. }
+        | StmtKind::Synthetic(body) => {
+            fuse_block(body, env, aliased, escaping, functions, in_main)
+        }
+        _ => {}
+    }
+}
+
+/// Collects the locals this statement assigns anywhere in its nested bodies.
+fn collect_assigned_names(stmt: &Stmt, out: &mut std::collections::HashSet<String>) {
+    match &stmt.kind {
+        StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } => {
+            out.insert(name.clone());
+        }
+        StmtKind::For {
+            init,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_assigned_names(init, out);
+            }
+            if let Some(update) = update {
+                collect_assigned_names(update, out);
+            }
+            for stmt in body {
+                collect_assigned_names(stmt, out);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => fuse_block(body, env, aliased),
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => {
+            for stmt in body {
+                collect_assigned_names(stmt, out);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for stmt in then_body {
+                collect_assigned_names(stmt, out);
+            }
+            if let Some(body) = else_body {
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
+            }
+        }
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
         } => {
-            fuse_block(then_body, env, aliased);
+            for stmt in then_body {
+                collect_assigned_names(stmt, out);
+            }
             for (_, body) in elseif_clauses {
-                fuse_block(body, env, aliased);
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
             }
             if let Some(body) = else_body {
-                fuse_block(body, env, aliased);
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
             }
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                fuse_block(body, env, aliased);
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
             }
             if let Some(body) = default {
-                fuse_block(body, env, aliased);
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
             }
         }
         StmtKind::Try {
@@ -553,16 +676,127 @@ fn recurse_stmt(stmt: &mut Stmt, env: &TypeEnv, aliased: &std::collections::Hash
             catches,
             finally_body,
         } => {
-            fuse_block(try_body, env, aliased);
+            for stmt in try_body {
+                collect_assigned_names(stmt, out);
+            }
             for catch in catches {
-                fuse_block(&mut catch.body, env, aliased);
+                for stmt in &catch.body {
+                    collect_assigned_names(stmt, out);
+                }
             }
             if let Some(body) = finally_body {
-                fuse_block(body, env, aliased);
+                for stmt in body {
+                    collect_assigned_names(stmt, out);
+                }
             }
         }
-        StmtKind::Synthetic(body) => fuse_block(body, env, aliased),
         _ => {}
+    }
+}
+
+/// Reports whether a statement can run user code before its deferred map read.
+fn stmt_has_user_call(
+    stmt: &Stmt,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+) -> bool {
+    match &stmt.kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ExprStmt(value)
+        | StmtKind::Echo(value)
+        | StmtKind::Return(Some(value)) => expr_has_user_call(value, functions),
+        StmtKind::ArrayAssign { index, value, .. } => {
+            expr_has_user_call(index, functions) || expr_has_user_call(value, functions)
+        }
+        StmtKind::ArrayPush { value, .. } => expr_has_user_call(value, functions),
+        StmtKind::Synthetic(body) => body.iter().any(|stmt| stmt_has_user_call(stmt, functions)),
+        _ => false,
+    }
+}
+
+/// Reports whether an expression can call a user function or execute a dynamic callee.
+fn expr_has_user_call(
+    expr: &Expr,
+    functions: &std::collections::HashMap<String, FunctionSig>,
+) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => {
+            let raw = name.as_str();
+            let trimmed = raw.trim_start_matches('\\');
+            functions.contains_key(raw)
+                || functions.contains_key(trimmed)
+                || args.iter().any(|arg| expr_has_user_call(arg, functions))
+        }
+        ExprKind::NewObject { .. } => true,
+        ExprKind::ExprCall { .. } | ExprKind::ClosureCall { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            expr_has_user_call(array, functions) || expr_has_user_call(index, functions)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_has_user_call(left, functions) || expr_has_user_call(right, functions)
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Spread(inner)
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::InstanceOf { value: inner, .. }
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner) => expr_has_user_call(inner, functions),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_has_user_call(condition, functions)
+                || expr_has_user_call(then_expr, functions)
+                || expr_has_user_call(else_expr, functions)
+        }
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => {
+            expr_has_user_call(value, functions) || expr_has_user_call(default, functions)
+        }
+        ExprKind::ArrayLiteral(items) => {
+            items.iter().any(|item| expr_has_user_call(item, functions))
+        }
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+            expr_has_user_call(key, functions) || expr_has_user_call(value, functions)
+        }),
+        ExprKind::ArrayLiteralMixed(items) => items
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|item| expr_has_user_call(item, functions)),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_has_user_call(subject, functions)
+                || arms.iter().any(|(conditions, value)| {
+                    conditions
+                        .iter()
+                        .any(|condition| expr_has_user_call(condition, functions))
+                        || expr_has_user_call(value, functions)
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|value| expr_has_user_call(value, functions))
+        }
+        ExprKind::Closure { .. }
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(..) => false,
+        _ => true,
     }
 }
 

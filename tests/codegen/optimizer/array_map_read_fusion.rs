@@ -488,3 +488,37 @@ echo $mapped[1], "|", $values[1], "\n";
     let main = main_ir(source);
     assert!(!main.contains("array_isset"), "the map read was deferred:\n{main}");
 }
+
+/// A map assigned inside a branch remains bound for a read after that branch.
+#[test]
+fn test_map_read_inside_branch_keeps_definition_for_later_read() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+if ($argc > 0) {
+    $mapped = array_map(fn($v) => $v * 2, $values);
+    echo $mapped[0], "\n";
+}
+echo $mapped[2], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2\n6\n");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
+}
+
+/// A user function that mutates the source through `global` keeps the eager map snapshot.
+#[test]
+fn test_map_read_user_call_between_map_and_read_keeps_generic_map() {
+    let source = r#"<?php
+function bump(): void {
+    global $values;
+    $values[0] = 100;
+}
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * 2, $values);
+bump();
+echo $mapped[0], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2\n");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
+}

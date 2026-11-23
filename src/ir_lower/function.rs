@@ -1953,6 +1953,11 @@ fn lower_body_into_function(
             &fused_body,
             &by_ref_param_names,
         );
+        let entry_defined = function
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<std::collections::HashSet<_>>();
         crate::ir_lower::stmt::fill_sum_reduction::reduce_fill_sums(
             &mut fused_body,
             &aliased,
@@ -1962,23 +1967,22 @@ fn lower_body_into_function(
             &env,
             &by_ref_param_names,
             &aliased,
+            &entry_defined,
+            in_main,
         );
-        let entry_defined = function
-            .params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<std::collections::HashSet<_>>();
         crate::ir_lower::stmt::loop_accumulator_reduction::reduce_loop_accumulators(
             &mut fused_body,
             &env,
             &aliased,
             &entry_defined,
+            in_main,
         );
         crate::ir_lower::stmt::map_read_fusion::fuse_map_reads(
             &mut fused_body,
             &env,
             &by_ref_param_names,
             functions,
+            in_main,
         );
         crate::ir_lower::stmt::stored_numeric_map::mark_stored_numeric_maps(
             &mut fused_body,

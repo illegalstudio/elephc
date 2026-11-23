@@ -532,3 +532,54 @@ echo $sum, "\n";
 "#;
     assert_eq!(compile_and_run(source), "24\n");
 }
+
+/// A map whose source is the mapped local itself must stay inside the loop.
+///
+/// PHP rebuilds `$a` from its previous value on every iteration; hoisting the assignment
+/// once would turn the doubling sequence into a single doubling.
+#[test]
+fn test_map_sum_cache_keeps_self_mapped_source() {
+    let source = r#"<?php
+$a = [1, 2, 3];
+$acc = 0;
+for ($i = 0; $i < 3; $i++) {
+    $a = array_map(fn($v) => $v * 2, $a);
+    $acc = $acc + $a[0];
+}
+echo $acc, " ", implode(",", $a), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "14 8,16,24\n");
+    let body = first_loop_body(&optimized_ir(source)).to_string();
+    assert!(body.contains("runtime.array_map"), "{body}");
+}
+
+/// A prelude producer that can throw must not run when the loop is already zero-trip.
+#[test]
+fn test_map_sum_cache_guards_throwing_prelude_for_zero_trip_loop() {
+    let source = r#"<?php
+$k = -1;
+$n = $argc - 1;
+$sum = 0;
+for ($i = 0; $i < $n + 0; $i++) {
+    $mapped = array_map(fn($v) => $v * 2, array_fill(0, $k, 1));
+    $sum = $sum + array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "0\n");
+}
+
+/// A seed past the bound also keeps the hoisted prelude behind the loop-entry guard.
+#[test]
+fn test_map_sum_cache_guards_prelude_when_seed_exceeds_bound() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$sum = 0;
+for ($i = 100; $i < 3 + $argc; $i++) {
+    $mapped = array_map(fn($v) => $v * 2, $values);
+    $sum = $sum + array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "0\n");
+}
