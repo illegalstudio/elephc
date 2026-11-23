@@ -25,6 +25,9 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> Option<LoweredValue> {
+    // The compiler's own helper methods are declared by native classes only. No user class can
+    // declare one and no `__call` may ever receive one, so there is nothing to select.
+    if method.starts_with("__elephc_") { return None; }
     let object_ty = ctx.builder.value_php_type(object.value);
     // A nullable concrete receiver already has its own argument plan and dispatch target.
     // Unrelated classes with the same method name must not force a global class ladder.

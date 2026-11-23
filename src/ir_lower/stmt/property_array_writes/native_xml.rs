@@ -86,7 +86,9 @@ fn call_fetch(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, propert
         if class.is_empty() || ctx.interfaces.contains_key(&class))
     { ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span)) } else { object };
     let expr = Expr::new(ExprKind::StringLiteral(property.into()), span);
-    crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, object, property, &expr)
+    // Selecting the child is receiver work: only the written value can be a borrowed operand.
+    ctx.with_independent_write_receiver(|ctx|
+        crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, object, property, &expr))
 }
 
 /// Retires a native parent after publishing its child, or keeps an ordinary parent for writeback.

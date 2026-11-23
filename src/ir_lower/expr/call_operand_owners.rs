@@ -779,7 +779,9 @@ pub(super) fn publish_constructed_container(
     container: LoweredValue,
     span: Span,
 ) -> crate::ir::LocalSlotId {
-    let (_, owner) = root_owned_call_operand(ctx, container, span);
+    // Fresh by construction: a `??=` write whose operand is borrowed may be lowering around it.
+    let (_, owner) = ctx.with_independent_write_receiver(|ctx|
+        root_owned_call_operand(ctx, container, span));
     owner.expect("a fresh container must have a managed owner")
 }
 
