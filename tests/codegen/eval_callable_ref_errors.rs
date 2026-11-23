@@ -70,13 +70,8 @@ try {
     );
 }
 
-/// Checks one catchable AOT callable argument error through the uncaught reporter.
-fn assert_aot_arg_prep_type_error(label: &str, source: &str) {
-    assert_uncaught_arg_prep_type_error(label, "Value does not satisfy ", source);
-}
-
-/// Checks the PHP argument diagnostic when the AOT function signature is available.
-fn assert_aot_function_arg_prep_type_error(
+/// Checks the PHP argument diagnostic for the selected AOT callable signature.
+fn assert_aot_arg_prep_type_error(
     label: &str,
     callee: &str,
     expected_type: &str,
@@ -109,7 +104,7 @@ fn assert_uncaught_arg_prep_type_error(label: &str, message: &str, source: &str)
 /// Verifies string callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_string_callable() {
-    assert_aot_function_arg_prep_type_error(
+    assert_aot_arg_prep_type_error(
         "string callable",
         "eval_aot_function_string_prep_fatal_bridge",
         "EvalAotFunctionStringPrepFatalNeed",
@@ -131,7 +126,7 @@ echo "bad";');
 /// Verifies first-class callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_first_class_callable() {
-    assert_aot_function_arg_prep_type_error(
+    assert_aot_arg_prep_type_error(
         "first-class callable",
         "eval_aot_function_first_prep_fatal_bridge",
         "EvalAotFunctionFirstPrepFatalNeed",
@@ -153,7 +148,7 @@ echo "bad";');
 /// Verifies Closure::fromCallable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_closure_from_callable() {
-    assert_aot_function_arg_prep_type_error(
+    assert_aot_arg_prep_type_error(
         "Closure::fromCallable",
         "eval_aot_function_closure_prep_fatal_bridge",
         "EvalAotFunctionClosurePrepFatalNeed",
@@ -175,7 +170,7 @@ echo "bad";');
 /// Verifies call_user_func_array argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_call_user_func_array() {
-    assert_aot_function_arg_prep_type_error(
+    assert_aot_arg_prep_type_error(
         "call_user_func_array",
         "eval_aot_function_array_prep_fatal_bridge",
         "EvalAotFunctionArrayPrepFatalNeed",
@@ -334,6 +329,8 @@ try {
 fn test_eval_aot_instance_method_by_ref_arg_prep_fatal_cleans_up_stack() {
     assert_aot_arg_prep_type_error(
         "instance method",
+        "EvalAotInstancePrepFatalBridge::bump",
+        "EvalAotInstancePrepFatalNeed",
         r#"<?php
 class EvalAotInstancePrepFatalNeed {}
 class EvalAotInstancePrepFatalBridge {
@@ -357,6 +354,8 @@ echo "bad";');
 fn test_eval_aot_static_method_by_ref_arg_prep_fatal_cleans_up_stack() {
     assert_aot_arg_prep_type_error(
         "static method",
+        "EvalAotStaticPrepFatalBridge::bump",
+        "EvalAotStaticPrepFatalNeed",
         r#"<?php
 class EvalAotStaticPrepFatalNeed {}
 class EvalAotStaticPrepFatalBridge {
@@ -380,6 +379,8 @@ fn test_eval_aot_static_method_callable_variants_by_ref_arg_prep_fatal_clean_up_
     let cases = [
         (
             "array callable",
+            "EvalAotStaticVariantArrayPrepFatalBridge::bump",
+            "EvalAotStaticVariantArrayPrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantArrayPrepFatalNeed {}
 class EvalAotStaticVariantArrayPrepFatalBridge {
@@ -397,6 +398,8 @@ echo "bad";');
         ),
         (
             "first-class callable",
+            "EvalAotStaticVariantFirstClassPrepFatalBridge::bump",
+            "EvalAotStaticVariantFirstClassPrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantFirstClassPrepFatalNeed {}
 class EvalAotStaticVariantFirstClassPrepFatalBridge {
@@ -414,6 +417,8 @@ echo "bad";');
         ),
         (
             "Closure::fromCallable array",
+            "EvalAotStaticVariantFromCallablePrepFatalBridge::bump",
+            "EvalAotStaticVariantFromCallablePrepFatalNeed",
             r#"<?php
 class EvalAotStaticVariantFromCallablePrepFatalNeed {}
 class EvalAotStaticVariantFromCallablePrepFatalBridge {
@@ -431,8 +436,8 @@ echo "bad";');
         ),
     ];
 
-    for (label, source) in cases {
-        assert_aot_arg_prep_type_error(label, source);
+    for (label, callee, expected_type, source) in cases {
+        assert_aot_arg_prep_type_error(label, callee, expected_type, source);
     }
 }
 
@@ -441,6 +446,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_instance_array_callable() {
     assert_aot_arg_prep_type_error(
         "instance array callable",
+        "EvalAotNamedRefArrayFatalBridge::bump",
+        "EvalAotNamedRefArrayFatalNeed",
         r#"<?php
 class EvalAotNamedRefArrayFatalNeed {}
 class EvalAotNamedRefArrayFatalBridge {
@@ -464,6 +471,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_first_class_instance_callable() {
     assert_aot_arg_prep_type_error(
         "first-class instance callable",
+        "EvalAotNamedRefFirstFatalBridge::bump",
+        "EvalAotNamedRefFirstFatalNeed",
         r#"<?php
 class EvalAotNamedRefFirstFatalNeed {}
 class EvalAotNamedRefFirstFatalBridge {
@@ -487,6 +496,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_closure_from_callable_instance() {
     assert_aot_arg_prep_type_error(
         "Closure::fromCallable instance",
+        "EvalAotNamedRefClosureFatalBridge::bump",
+        "EvalAotNamedRefClosureFatalNeed",
         r#"<?php
 class EvalAotNamedRefClosureFatalNeed {}
 class EvalAotNamedRefClosureFatalBridge {
@@ -510,6 +521,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_static_string_callable() {
     assert_aot_arg_prep_type_error(
         "static string callable",
+        "EvalAotNamedRefStringFatalBridge::bump",
+        "EvalAotNamedRefStringFatalNeed",
         r#"<?php
 class EvalAotNamedRefStringFatalNeed {}
 class EvalAotNamedRefStringFatalBridge {
@@ -532,6 +545,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_first_class_static_callable() {
     assert_aot_arg_prep_type_error(
         "first-class static callable",
+        "EvalAotNamedRefStaticFatalBridge::bump",
+        "EvalAotNamedRefStaticFatalNeed",
         r#"<?php
 class EvalAotNamedRefStaticFatalNeed {}
 class EvalAotNamedRefStaticFatalBridge {
@@ -554,6 +569,8 @@ echo "bad";');
 fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack_invokable_object_callable() {
     assert_aot_arg_prep_type_error(
         "invokable object callable",
+        "EvalAotNamedRefInvokeFatalBridge::__invoke",
+        "EvalAotNamedRefInvokeFatalNeed",
         r#"<?php
 class EvalAotNamedRefInvokeFatalNeed {}
 class EvalAotNamedRefInvokeFatalBridge {
@@ -576,6 +593,8 @@ echo "bad";');
 fn test_eval_aot_first_class_method_by_ref_arg_prep_fatal_cleans_up_stack() {
     assert_aot_arg_prep_type_error(
         "first-class instance method",
+        "EvalAotFirstClassPrepFatalBridge::bump",
+        "EvalAotFirstClassPrepFatalNeed",
         r#"<?php
 class EvalAotFirstClassPrepFatalNeed {}
 class EvalAotFirstClassPrepFatalBridge {
@@ -599,6 +618,8 @@ echo "bad";');
 fn test_eval_aot_closure_from_callable_method_by_ref_arg_prep_fatal_cleans_up_stack() {
     assert_aot_arg_prep_type_error(
         "Closure::fromCallable instance method",
+        "EvalAotFromCallablePrepFatalBridge::bump",
+        "EvalAotFromCallablePrepFatalNeed",
         r#"<?php
 class EvalAotFromCallablePrepFatalNeed {}
 class EvalAotFromCallablePrepFatalBridge {
