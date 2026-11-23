@@ -398,6 +398,8 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         &mut prelude_inventory,
     );
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used_with_web(resolved, false, 8_388_608, false, &mut prelude_inventory);
     let resolved = elephc::pcre_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);

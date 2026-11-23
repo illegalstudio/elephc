@@ -190,8 +190,17 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
+            // Before planning: the plan rewrites a literal unpack into spread-element
+            // projections that the resolved binding loop leaves to runtime.
+            self.require_strict_types_static_spread_bindings(
+                validation_sig,
+                args,
+                span,
+                caller_env,
+                &format!("Function '{}'", name),
+            )?;
             let plan = self.plan_named_call_args(
                 validation_sig,
                 args,
@@ -240,8 +249,8 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,

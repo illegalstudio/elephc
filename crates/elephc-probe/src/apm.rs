@@ -63,8 +63,36 @@ const SUB_BITS: u32 = 3;
 /// Words of fixed counters before a route's histogram: `[count, 1xx, 2xx,
 /// 3xx, 4xx, 5xx, sum_ns, db_ops, db_wait_ns, net_ops, net_wait_ns, reserved]`.
 pub const HEADER_WORDS: usize = 12;
+/// Buckets of a route's per-request memory histogram: powers of two from
+/// `MEM_BUCKET0_BYTES` (bucket 0 holds everything up to it) to 2 GiB.
+pub const MEM_BUCKETS: usize = 16;
+/// The upper edge of memory bucket 0, bytes.
+pub const MEM_BUCKET0_BYTES: u64 = 64 * 1024;
+/// Words of a route's memory counters, after its latency histogram: the requests
+/// measured, their summed peak bytes, then the memory histogram.
+pub const MEM_WORDS: usize = 2 + MEM_BUCKETS;
+/// Word index of the requests whose memory was measured.
+pub const WORD_MEM_N: usize = HEADER_WORDS + HIST_BUCKETS;
+/// Word index of their summed peak memory, bytes.
+pub const WORD_MEM_SUM: usize = WORD_MEM_N + 1;
+/// Word index of the first memory bucket.
+pub const WORD_MEM_HIST0: usize = WORD_MEM_N + 2;
 /// Words one route occupies in the shared transaction table.
-pub const ROUTE_WORDS: usize = HEADER_WORDS + HIST_BUCKETS;
+pub const ROUTE_WORDS: usize = HEADER_WORDS + HIST_BUCKETS + MEM_WORDS;
+
+/// The memory bucket a request's peak of `bytes` falls in.
+pub fn mem_bucket_of(bytes: u64) -> usize {
+    let mut bucket = 0;
+    while bucket + 1 < MEM_BUCKETS && bytes > mem_bucket_upper(bucket) {
+        bucket += 1;
+    }
+    bucket
+}
+
+/// The upper edge of memory bucket `bucket`, bytes.
+pub fn mem_bucket_upper(bucket: usize) -> u64 {
+    MEM_BUCKET0_BYTES << bucket.min(MEM_BUCKETS - 1)
+}
 /// Word index of the request count.
 pub const WORD_COUNT: usize = 0;
 /// Word index of the first status-class counter (1xx).
@@ -167,6 +195,9 @@ pub struct RouteStats {
     pub io: [u64; IO_KINDS],
     /// Requests per latency bucket; always `HIST_BUCKETS` long.
     pub hist: Vec<u64>,
+    /// Peak memory per request: `[measured, summed bytes, histogram…]` (`MEM_WORDS`).
+    /// Only requests whose PHP ran in a `--web` worker or handler are measured.
+    pub mem: [u64; MEM_WORDS],
 }
 
 impl RouteStats {
@@ -179,7 +210,32 @@ impl RouteStats {
             sum_ns: 0,
             io: [0; IO_KINDS],
             hist: vec![0; HIST_BUCKETS],
+            mem: [0; MEM_WORDS],
         }
+    }
+
+    /// Mean peak memory of the measured requests, bytes, or `None` without any.
+    pub fn mem_mean(&self) -> Option<u64> {
+        (self.mem[0] > 0).then(|| self.mem[1] / self.mem[0])
+    }
+
+    /// The nearest-rank `p`-th percentile of the requests' peak memory, as the upper
+    /// edge of its bucket, or `None` without measured requests.
+    pub fn mem_percentile(&self, p: f64) -> Option<u64> {
+        let hist = &self.mem[2..];
+        let total: u64 = hist.iter().sum();
+        if total == 0 {
+            return None;
+        }
+        let rank = ((p / 100.0) * total as f64).ceil().clamp(1.0, total as f64) as u64;
+        let mut seen = 0u64;
+        for (bucket, n) in hist.iter().enumerate() {
+            seen += n;
+            if seen >= rank {
+                return Some(mem_bucket_upper(bucket));
+            }
+        }
+        Some(mem_bucket_upper(MEM_BUCKETS - 1))
     }
 
     /// What happened between `earlier` and `self`.
@@ -212,6 +268,7 @@ impl RouteStats {
                 .zip(earlier.hist.iter())
                 .map(|(now, before)| now.saturating_sub(*before))
                 .collect(),
+            mem: std::array::from_fn(|index| self.mem[index].saturating_sub(earlier.mem[index])),
         }
     }
 
@@ -229,6 +286,9 @@ impl RouteStats {
             self.io[index] = self.io[index].saturating_add(other.io[index]);
         }
         for (mine, theirs) in self.hist.iter_mut().zip(other.hist.iter()) {
+            *mine = mine.saturating_add(*theirs);
+        }
+        for (mine, theirs) in self.mem.iter_mut().zip(other.mem.iter()) {
             *mine = mine.saturating_add(*theirs);
         }
     }
@@ -299,9 +359,58 @@ pub struct Snapshot {
     pub routes: Vec<RouteStats>,
     /// The service's CPU and memory, when it measured them.
     pub resources: Option<Resources>,
+    /// The build serving, `<unix seconds> <label>` (when it was built, then its version
+    /// or commit), when the build carries one: a new one is a deploy.
+    pub build: Option<String>,
+    /// The errors failed transactions ended with, grouped (`apm_errors`).
+    pub errors: Vec<ErrorStats>,
+    /// The runs this process ended, each with its transaction and the exact code it exited
+    /// with: a program sending to a collector reports its run in its last send, so the
+    /// page can say `exit 255` and not only that it failed.
+    pub exits: Vec<(String, i32)>,
+}
+
+/// How many failed transactions of one transaction ended with one error: an exception
+/// class, thrown from one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorStats {
+    /// The transaction's name, as its row in the routes.
+    pub route: String,
+    /// The exception's class.
+    pub class: String,
+    /// Where it was thrown, `file:line`.
+    pub location: String,
+    /// How many times, since the run of the counters started.
+    pub count: u64,
+    /// The W3C trace id of its last occurrence, 32 hex digits; empty without one.
+    pub trace: String,
+}
+
+impl ErrorStats {
+    /// Whether two rows are the same error of the same transaction.
+    pub fn same(&self, other: &ErrorStats) -> bool {
+        self.route == other.route && self.class == other.class && self.location == other.location
+    }
 }
 
 impl Snapshot {
+    /// The errors counted between `earlier` and `self`; all of them when the two belong to
+    /// different runs of the service, whose counters started from zero.
+    pub fn errors_since(&self, earlier: &Snapshot) -> Vec<ErrorStats> {
+        self.errors
+            .iter()
+            .filter_map(|error| {
+                let before = if self.epoch == earlier.epoch {
+                    earlier.errors.iter().find(|e| e.same(error)).map_or(0, |e| e.count)
+                } else {
+                    0
+                };
+                let count = error.count.saturating_sub(before);
+                (count > 0).then(|| ErrorStats { count, ..error.clone() })
+            })
+            .collect()
+    }
+
     /// The window between `earlier` and `self`, route by route.
     ///
     /// `None` when the two belong to different runs of the service: counters
@@ -327,6 +436,10 @@ impl Snapshot {
                         || route.status.iter().any(|n| *n > 0)
                         || route.hist.iter().any(|n| *n > 0)
                         || route.io.iter().any(|n| *n > 0)
+                        // And memory, published before the count: a poll between the two
+                        // saw a memory-only change, dropped the row, and the next poll
+                        // took those counters as its baseline (review).
+                        || route.mem.iter().any(|n| *n > 0)
                 })
                 .collect(),
         )
@@ -346,6 +459,22 @@ pub fn encode(snapshot: &Snapshot) -> String {
     out.push_str(&format!("time_ms {}\n", snapshot.time_ms));
     if let Some(res) = snapshot.resources {
         out.push_str(&format!("resources {} {} {} {}\n", res.cpu_ns, res.memory_bytes, res.processes, res.cores));
+    }
+    if let Some(build) = &snapshot.build {
+        out.push_str(&format!("build {build}\n"));
+    }
+    // A run's exit code, then its transaction: `exit <code>\t<route>`.
+    for (route, code) in &snapshot.exits {
+        out.push_str(&format!("exit {code}\t{route}\n"));
+    }
+    // Tab-separated: a route, a class and a path can all hold spaces, never a tab.
+    for error in &snapshot.errors {
+        out.push_str(&format!("error {}\t{}\t{}\t{}", error.count, error.route, error.class, error.location));
+        // The trace id of its last occurrence, when there is one, as a fifth field.
+        if !error.trace.is_empty() {
+            out.push_str(&format!("\t{}", error.trace));
+        }
+        out.push('\n');
     }
     for route in &snapshot.routes {
         out.push_str(&format!("route {}", route.count));
@@ -374,8 +503,54 @@ pub fn encode(snapshot: &Snapshot) -> String {
         out.push(' ');
         out.push_str(&route.name);
         out.push('\n');
+        // The route's memory, on a line of its own after it: a reader that does not know
+        // the line skips it. Sent as soon as any word moved: bytes and bucket are published
+        // before the count.
+        if route.mem.iter().any(|word| *word > 0) {
+            out.push_str(&format!("mem {} {} {} {}\n", route.mem[0], route.mem[1], sparse(&route.mem[2..]), route.name));
+        }
     }
     out
+}
+
+/// A histogram as `bucket:n,…`, or `-` when it is empty.
+fn sparse(hist: &[u64]) -> String {
+    let cells: Vec<String> =
+        hist.iter().enumerate().filter(|(_, n)| **n > 0).map(|(bucket, n)| format!("{bucket}:{n}")).collect();
+    if cells.is_empty() {
+        "-".to_string()
+    } else {
+        cells.join(",")
+    }
+}
+
+/// Reads a `bucket:n,…` histogram into `hist`; false on a cell that does not read.
+fn read_sparse(text: &str, hist: &mut [u64]) -> bool {
+    if text == "-" {
+        return true;
+    }
+    text.split(',').all(|cell| {
+        let Some((bucket, n)) = cell.split_once(':') else { return false };
+        match (bucket.parse::<usize>(), n.parse::<u64>()) {
+            (Ok(bucket), Ok(n)) if bucket < hist.len() => {
+                hist[bucket] = n;
+                true
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Parses the fields after `mem `: measured, summed bytes, histogram, then the route's name.
+fn decode_mem(rest: &str) -> Option<(String, [u64; MEM_WORDS])> {
+    let mut fields = rest.splitn(4, ' ');
+    let mut mem = [0; MEM_WORDS];
+    mem[0] = fields.next()?.parse().ok()?;
+    mem[1] = fields.next()?.parse().ok()?;
+    if !read_sparse(fields.next()?, &mut mem[2..]) {
+        return None;
+    }
+    Some((fields.next()?.to_string(), mem))
 }
 
 /// Why a snapshot could not be read.
@@ -408,6 +583,9 @@ pub fn decode(text: &str) -> Result<Snapshot, DecodeError> {
     let mut time_ms = None;
     let mut routes = Vec::new();
     let mut resources = None;
+    let mut build = None;
+    let mut errors = Vec::new();
+    let mut exits = Vec::new();
     for line in lines {
         if line.is_empty() {
             continue;
@@ -430,6 +608,30 @@ pub fn decode(text: &str) -> Result<Snapshot, DecodeError> {
             }
         } else if let Some(rest) = line.strip_prefix("route ") {
             routes.push(decode_route(rest).ok_or_else(|| malformed(line))?);
+        } else if let Some(rest) = line.strip_prefix("mem ") {
+            let (name, mem) = decode_mem(rest).ok_or_else(|| malformed(line))?;
+            if let Some(route) = routes.iter_mut().find(|route: &&mut RouteStats| route.name == name) {
+                route.mem = mem;
+            }
+        } else if let Some(rest) = line.strip_prefix("exit ") {
+            match rest.split_once('\t') {
+                Some((code, route)) if code.parse::<i32>().is_ok() => exits.push((route.to_string(), code.parse::<i32>().unwrap_or(0))),
+                _ => return Err(malformed(line)),
+            }
+        } else if let Some(rest) = line.strip_prefix("build ") {
+            build = Some(rest.trim().to_string()).filter(|build| !build.is_empty());
+        } else if let Some(rest) = line.strip_prefix("error ") {
+            let mut fields = rest.splitn(5, '\t');
+            match (fields.next().and_then(|n| n.parse().ok()), fields.next(), fields.next(), fields.next()) {
+                (Some(count), Some(route), Some(class), Some(location)) => errors.push(ErrorStats {
+                    route: route.to_string(),
+                    class: class.to_string(),
+                    location: location.to_string(),
+                    count,
+                    trace: fields.next().unwrap_or("").to_string(),
+                }),
+                _ => return Err(malformed(line)),
+            }
         }
         // Unknown lines are skipped: a newer server may add fields an older
         // client does not render, and refusing the whole answer for them would
@@ -440,6 +642,9 @@ pub fn decode(text: &str) -> Result<Snapshot, DecodeError> {
         time_ms: time_ms.ok_or_else(|| DecodeError::Malformed("missing time_ms".into()))?,
         routes,
         resources,
+        build,
+        errors,
+        exits,
     })
 }
 
@@ -467,7 +672,7 @@ fn decode_route(rest: &str) -> Option<RouteStats> {
             *hist.get_mut(bucket)? = n.parse().ok()?;
         }
     }
-    Some(RouteStats { name, count, status, sum_ns, io, hist })
+    Some(RouteStats { name, count, status, sum_ns, io, hist, mem: [0; MEM_WORDS] })
 }
 
 #[cfg(test)]
@@ -539,15 +744,18 @@ mod tests {
             epoch: 1_731_000_000_123_456_789,
             time_ms: 1_731_000_000_999,
             routes: vec![
-                RouteStats { io: [12, 3_400_000, 2, 9_000_000], ..route("GET /users/{id}", &[120, 450, 3_000, 9], &[200, 200, 500, 404]) },
+                RouteStats { io: [12, 3_400_000, 2, 9_000_000], mem: { let mut mem = [0; MEM_WORDS]; mem[0] = 4; mem[1] = 9_000_000; mem[2 + mem_bucket_of(2_000_000)] = 3; mem[2] = 1; mem }, ..route("GET /users/{id}", &[120, 450, 3_000, 9], &[200, 200, 500, 404]) },
                 RouteStats::empty("<untagged>"),
             ],
             resources: Some(Resources { cpu_ns: 12_345_678_901, memory_bytes: 187_654_321, processes: 3, cores: 10 }),
+            build: Some("1731000000 v1.2.0 3f2a9c1".into()),
+            errors: vec![ErrorStats { route: "GET /users/{id}".into(), class: "App\\Gone".into(), location: "/srv/my app/User.php:12".into(), count: 3, trace: "4bf92f3577b34da6a3ce929d0e0e4736".into() }],
+            exits: vec![("CLI console app:import".into(), 255)],
         };
         let text = encode(&snapshot);
         assert_eq!(decode(&text), Ok(snapshot.clone()));
         // A service that measured nothing sends no line, and reads back as such.
-        let bare = Snapshot { resources: None, ..snapshot };
+        let bare = Snapshot { resources: None, build: None, errors: Vec::new(), ..snapshot };
         assert_eq!(decode(&encode(&bare)), Ok(bare));
         // A service from before the core count sends three figures: read, with
         // its cores unknown (0), rather than refused.
@@ -589,6 +797,21 @@ mod tests {
         assert_eq!(RouteStats::empty("x").percentile_ns(50.0), None);
     }
 
+    /// A poll between a request's memory and its count sees only the memory: the row
+    /// is kept, or the next poll took those counters as its baseline and the
+    /// measurement was lost (review).
+    #[test]
+    fn a_memory_only_change_keeps_its_row() {
+        let before = Snapshot { epoch: 7, time_ms: 1_000, routes: vec![route("GET /a", &[100], &[200])], resources: None, build: None, errors: Vec::new(), exits: Vec::new() };
+        let mut after = before.clone();
+        after.time_ms = 2_000;
+        after.routes[0].mem[0] += 1;
+        after.routes[0].mem[1] += 4_000_000;
+        let window = after.since(&before).unwrap();
+        assert_eq!(window.len(), 1, "the memory-only change is kept");
+        assert_eq!((window[0].count, window[0].mem[0]), (0, 1));
+    }
+
     /// Two snapshots of one run subtract into the window between them; two runs
     /// do not subtract at all.
     #[test]
@@ -598,6 +821,9 @@ mod tests {
             time_ms: 1_000,
             routes: vec![route("GET /a", &[100, 200], &[200, 200])],
             resources: None,
+            build: None,
+            errors: Vec::new(),
+            exits: Vec::new(),
         };
         let mut after = before.clone();
         after.time_ms = 2_000;
@@ -637,7 +863,7 @@ mod tests {
         let mut caught = before.clone();
         caught.status[status_class(500)] += 1;
         caught.sum_ns += 2_000_000;
-        let snapshot = |row: RouteStats| Snapshot { epoch: 1, time_ms: 0, routes: vec![row], resources: None };
+        let snapshot = |row: RouteStats| Snapshot { epoch: 1, time_ms: 0, routes: vec![row], resources: None, build: None, errors: Vec::new(), exits: Vec::new() };
         let window = snapshot(caught).since(&snapshot(before)).unwrap();
         assert_eq!(window.len(), 1, "the row is kept");
         assert_eq!((window[0].count, window[0].status[status_class(500)], window[0].sum_ns), (0, 1, 2_000_000));

@@ -98,7 +98,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Hosting PHP Extensions](beyond-php/php-extensions.md) — `elephc extension add` builds a real PECL/PIE or in-house C extension from source and links it, functions and classes included, on Elephc's own Rust implementation of the extension API
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 - [Transaction monitoring](beyond-php/apm.md) - `--apm` counts every `--web` request per route from startup, and every run of a script launched through `monitor`; `elephc monitor --apm` shows throughput, latency percentiles and error rates as a table, live terminal trends and histograms, a daily on-disk history, and a Transactions view on the monitor page next to the profile, with Prometheus `/metrics`
-- [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
+- [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `elephc.toml` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals
 
@@ -118,6 +118,8 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64
 - [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
+- [Profiling internals](internals/profiling.md) — how the sampler and the exact instrumentation measure a program, and why
+- [Transaction monitoring internals](internals/apm.md) — how transaction monitoring counts, stores and serves what it measures, and why
 
 For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings, including the optimizer phases, and `--source-map` to emit a sidecar `.map` file next to generated assembly.
 

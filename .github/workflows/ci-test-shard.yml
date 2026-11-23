@@ -40,6 +40,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: '1.98'
   RUST_MIN_STACK: '33554432'
+  # The Linux images and the macOS runners ship de_DE locales, so a locale-dependent test
+  # fails here instead of returning early as it does on hosts without them.
+  ELEPHC_REQUIRE_TEST_LOCALES: '1'
 jobs:
   primary:
     name: primary runner

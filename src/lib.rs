@@ -177,6 +177,8 @@ pub(crate) mod pprof_encode;
 pub(crate) mod probe_key;
 /// The `[ini]` table of the project's `elephc.toml`.
 pub(crate) mod project_ini;
+/// The `[monitoring]` and `[apm]` tables of the project's `elephc.toml`.
+pub(crate) mod project_monitoring;
 /// `elephc repl`: an eval-backed PHP session from a cached native host.
 pub(crate) mod repl;
 /// The cached runtime object linked beside generated user code.

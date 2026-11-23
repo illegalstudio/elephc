@@ -171,6 +171,8 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         with_crates,
         apm_collector,
         apm_transactions,
+        apm_include,
+        apm_exclude,
         quiet,
         ini_overrides,
     } = config;
@@ -922,6 +924,10 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("object-cast-prelude", phase_started);
 
+    // A namespaced `--web` program gets its catch-all here, its namespaces flattened and
+    // its autoloaded classes in: the injection could not wrap it across namespace blocks.
+    let ast = if web && !web_application { web_prelude::wrap_resolved_catch_all(ast) } else { ast };
+
     // Transaction boundaries outside HTTP (Messenger's messages, the methods
     // `--apm-transaction` names), in a build that counts transactions. After
     // `autoload::run`, because the boundaries are mostly vendor classes.
@@ -1313,6 +1319,21 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     }
 
     ir_module.apm_collector = apm_collector;
+    // What the probe reads at start: the project's `[apm]` patterns (`+` includes, `-`
+    // excludes) and the build's identity (`@`), which its snapshots carry so a collector
+    // marks deploys.
+    if with_crates.contains("probe") {
+        let mut rules = String::new();
+        for pattern in &apm_include {
+            rules.push_str(&format!("+{pattern}\n"));
+        }
+        for pattern in &apm_exclude {
+            rules.push_str(&format!("-{pattern}\n"));
+        }
+        let build = crate::project_monitoring::build_identity(std::path::Path::new(filename));
+        rules.push_str(&format!("@{build}\n"));
+        ir_module.apm_rules = Some(rules);
+    }
     backend::emit_and_link(backend::BackendInputs {
         repl_build: entry.is_repl_host(),
         announce_success: !entry.is_test_suite(),

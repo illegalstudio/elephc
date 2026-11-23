@@ -171,6 +171,13 @@ pub(super) fn emit_module(
         } else {
             shared.apm_only = true;
         }
+        if let Some(rules) = &module.apm_rules {
+            let mut text = rules.as_bytes().to_vec();
+            text.push(0);
+            let symbol = emitter.target.extern_symbol(crate::codegen_support::apm_init::APM_RULES_SYMBOL);
+            data.add_named_symbol(symbol, &text);
+            shared.apm_rules = true;
+        }
         if let Some(collector) = &module.apm_collector {
             let mut text = collector.as_bytes().to_vec();
             text.push(0);

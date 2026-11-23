@@ -892,6 +892,11 @@ fn install_german_latin1_locale() -> Option<LocaleGuard> {
 fn eval_ctype_byte_matches_follow_the_active_libc_locale() {
     let _lock = LOCALE_LOCK.lock().unwrap();
     let Some(_guard) = install_german_latin1_locale() else {
+        // CI provides the locale and sets this variable, so a missing one fails there.
+        assert!(
+            std::env::var_os("ELEPHC_REQUIRE_TEST_LOCALES").is_none_or(|value| value != "1"),
+            "ELEPHC_REQUIRE_TEST_LOCALES is set but no German Latin-1 locale is installed"
+        );
         return;
     };
     assert!(eval_ctype_byte_matches("ctype_lower", 0xe4).unwrap());

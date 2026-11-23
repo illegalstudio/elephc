@@ -179,7 +179,9 @@ pub fn valid_traceparent(value: &str) -> bool {
     if bytes.len() != 55 || bytes[2] != b'-' || bytes[35] != b'-' || bytes[52] != b'-' {
         return false;
     }
-    if &bytes[..2] != b"00" || &bytes[53..] == b"00" {
+    // Any flags: an unsampled context (`-00`) is still the caller's trace, and the next hop
+    // must continue it rather than start one of its own (review).
+    if &bytes[..2] != b"00" {
         return false;
     }
     let trace_id = &bytes[3..35];
@@ -317,6 +319,9 @@ mod tests {
         assert!(valid_traceparent(
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         ));
+        assert!(valid_traceparent(
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        ), "an unsampled context is propagated too");
         assert!(!valid_traceparent(
             "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"
         ));

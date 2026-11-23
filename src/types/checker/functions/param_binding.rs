@@ -21,7 +21,8 @@
 //!   parameter boundary.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::names::Name;
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, TypeExpr};
 use crate::span::Span;
 use crate::types::param_binding::{
     classify_param_binding, strict_param_binding_rejection, ParamBinding,
@@ -317,14 +318,90 @@ impl Checker {
         }
     }
 
-    /// Returns the strict-call validation signature for Tidy's deliberately widened adapters.
+    /// Applies `declare(strict_types=1)` to the elements of fully static positional unpacks.
     ///
-    /// The injected prelude declares `$config` and `$encoding` as `mixed` so its runtime
-    /// adapters can reproduce internal Tidy's weak scalar coercion and TypeError ordering.
-    /// Under `declare(strict_types=1)` PHP's internal parameter parser still rejects scalars
-    /// against `array|string|null` and `?string`; restore those contract types for the
+    /// The planned-argument loops keep `...[0]` as one spread node and skip it, so without this
+    /// pass a literal unpack bypassed the strict check that the same value passed directly gets.
+    /// Only literal indexed arrays are flattened (`expand_planned_positional_spreads`); dynamic
+    /// unpacks keep their runtime binding. Each element is checked against the parameter it
+    /// binds, or against the declared variadic element type past the regular parameters.
+    ///
+    /// # Errors
+    /// Returns the strict binding mismatch for the first rejected element.
+    pub(crate) fn require_strict_types_static_spread_bindings(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        if !self.strict_types || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            return Ok(());
+        }
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(
+            args,
+            self.semantic_profile,
+        ) else {
+            return Ok(());
+        };
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let variadic_index = crate::types::signatures::variadic_param_index(sig);
+        let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
+        for (position, arg) in expanded.iter().enumerate() {
+            let (index, expected, context) = if position < regular_param_count {
+                let (name, ty) = &sig.params[position];
+                (position, ty.clone(), format!("{} parameter ${}", callee_desc, name))
+            } else if let (Some(index), Some(elem_ty)) = (variadic_index, variadic_elem_ty.as_ref()) {
+                let name = &sig.params[index].0;
+                (index, elem_ty.clone(), format!("{} variadic parameter ${}", callee_desc, name))
+            } else {
+                break;
+            };
+            if !sig.declared_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let actual = self.infer_type(arg, caller_env)?;
+            self.require_strict_types_param_binding(&expected, &actual, arg.span, &context)?;
+            // The scalar rule above only judges scalar-to-scalar pairs. A scalar, `false` or
+            // `null` element unpacked into a declared type with no compatible member (`int` or
+            // `false` into `array|string|null`, `null` into `string`) is a TypeError too.
+            // Callable slots keep their own string binding rules and are left to the planned
+            // binding.
+            let scalar_actual = matches!(
+                actual,
+                PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Str
+                    | PhpType::Void
+            );
+            if scalar_actual && !Self::type_has_callable_member(&expected) {
+                self.require_compatible_arg_type(&expected, &actual, arg.span, &context)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether `ty` is `callable` or a union with a `callable` member.
+    fn type_has_callable_member(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Union(members) => members.iter().any(Self::type_has_callable_member),
+            other => other.codegen_repr() == PhpType::Callable,
+        }
+    }
+
+    /// Returns the strict-call validation signature for prelude functions whose PHP-visible
+    /// parameters are deliberately widened to `mixed`.
+    ///
+    /// The injected Tidy prelude declares `$config` and `$encoding` as `mixed`, and the locale
+    /// prelude declares `setlocale()`'s `$locales` and `...$rest` as `mixed`, so their runtime
+    /// adapters can reproduce the internal functions' weak scalar coercion and TypeError
+    /// ordering. Under `declare(strict_types=1)` PHP's internal parameter parser still rejects
+    /// scalars against `array|string|null` and `?string`; restore those contract types for the
     /// checker's strict validation only, leaving weak-mode runtime behavior untouched.
-    pub(crate) fn tidy_strict_adapter_signature(
+    pub(crate) fn prelude_strict_adapter_signature(
         &self,
         function: Option<&str>,
         owner: Option<&str>,
@@ -334,16 +411,22 @@ impl Checker {
         if !self.strict_types {
             return None;
         }
-        let tidy_function = function.is_some_and(|name| {
+        let function_key = function.map(|name| name.trim_start_matches('\\').to_ascii_lowercase());
+        let tidy_function = function_key.as_deref().is_some_and(|name| {
             matches!(
-                name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+                name,
                 "tidy_parse_string" | "tidy_parse_file" | "tidy_repair_string" | "tidy_repair_file"
             )
         });
+        // A program's own global `setlocale()` replaces the prelude and keeps its declared types.
+        let setlocale_function = function_key.as_deref() == Some("setlocale")
+            && function
+                .and_then(|name| self.fn_decls.get(name))
+                .is_some_and(|decl| decl.internal_prelude);
         let tidy_method = owner
             .zip(callee_desc)
             .is_some_and(|(owner, callee_desc)| self.tidy_prelude_declares_method(owner, callee_desc));
-        if !tidy_function && !tidy_method {
+        if !tidy_function && !tidy_method && !setlocale_function {
             return None;
         }
         let mut adjusted = sig.clone();
@@ -352,19 +435,60 @@ impl Checker {
             if *ty != PhpType::Mixed {
                 continue;
             }
-            if name.eq_ignore_ascii_case("config") {
+            let array_string_or_null = if setlocale_function {
+                name.eq_ignore_ascii_case("locales")
+            } else {
+                name.eq_ignore_ascii_case("config")
+            };
+            if array_string_or_null {
                 *ty = self.normalize_union_type(vec![
                     PhpType::php_array(),
                     PhpType::Str,
                     PhpType::Void,
                 ]);
                 changed = true;
-            } else if name.eq_ignore_ascii_case("encoding") {
+            } else if !setlocale_function && name.eq_ignore_ascii_case("encoding") {
                 *ty = self.normalize_union_type(vec![PhpType::Str, PhpType::Void]);
                 changed = true;
             }
         }
+        // Call validation reads a declared variadic's element type from its source type
+        // expression, so `...$rest` is narrowed there rather than in its collector storage type.
+        if setlocale_function {
+            if let Some(slot) = crate::types::signatures::variadic_param_index(&adjusted)
+                .and_then(|index| adjusted.param_type_exprs.get_mut(index))
+                .filter(|slot| slot.as_ref().is_some_and(Self::is_mixed_type_expr))
+            {
+                *slot = Some(TypeExpr::Union(vec![
+                    TypeExpr::Named(Name::unqualified("array")),
+                    TypeExpr::Str,
+                    TypeExpr::Named(Name::unqualified("null")),
+                ]));
+                changed = true;
+            }
+        }
         changed.then_some(adjusted)
+    }
+
+    /// Returns the strict-call validation signature for a first-class callable whose target
+    /// is a prelude function with widened `mixed` parameters, or `None` for any other target.
+    pub(crate) fn first_class_prelude_strict_adapter_signature(
+        &self,
+        target: &CallableTarget,
+        sig: &FunctionSig,
+    ) -> Option<FunctionSig> {
+        let CallableTarget::Function(name) = target else {
+            return None;
+        };
+        let function = self
+            .canonical_function_name_folded(name.as_str())
+            .unwrap_or_else(|| name.as_str().to_string());
+        self.prelude_strict_adapter_signature(Some(&function), None, None, sig)
+    }
+
+    /// Returns whether `type_expr` is the bare `mixed` a prelude adapter declares.
+    fn is_mixed_type_expr(type_expr: &TypeExpr) -> bool {
+        matches!(type_expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed"))
     }
 
     /// Returns whether `callee_desc` names a method declared by the injected `tidy` class.

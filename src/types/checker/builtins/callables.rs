@@ -1507,8 +1507,9 @@ pub(crate) fn check_call_user_func_array(
             &arg_array_ty,
         )?;
         if let Some(elems) = static_args.as_deref() {
+            let strict_sig = checker.first_class_prelude_strict_adapter_signature(target, &sig);
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-                &sig,
+                strict_sig.as_ref().unwrap_or(&sig),
                 elems,
                 span,
                 env,
@@ -1564,8 +1565,10 @@ pub(crate) fn check_call_user_func_array(
                 &arg_array_ty,
             )?;
             if let Some(elems) = static_args.as_deref() {
+                let strict_sig =
+                    checker.first_class_prelude_strict_adapter_signature(&target, &sig);
                 let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-                    &sig,
+                    strict_sig.as_ref().unwrap_or(&sig),
                     elems,
                     span,
                     env,
@@ -1651,8 +1654,10 @@ pub(crate) fn check_call_user_func_array(
                 )?;
             }
             if let Some(elems) = static_args.as_deref() {
+                let strict_sig =
+                    checker.prelude_strict_adapter_signature(Some(&cb_name), None, None, &sig);
                 let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-                    &sig,
+                    strict_sig.as_ref().unwrap_or(&sig),
                     elems,
                     span,
                     env,
@@ -1808,8 +1813,9 @@ pub(crate) fn check_call_user_func(
                 env,
             )?
         };
+        let strict_sig = checker.first_class_prelude_strict_adapter_signature(target, &sig);
         let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-            &sig,
+            strict_sig.as_ref().unwrap_or(&sig),
             &args[1..],
             span,
             env,
@@ -1850,8 +1856,9 @@ pub(crate) fn check_call_user_func(
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
+            let strict_sig = checker.first_class_prelude_strict_adapter_signature(&target, &sig);
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-                &sig,
+                strict_sig.as_ref().unwrap_or(&sig),
                 &args[1..],
                 span,
                 env,
@@ -1906,8 +1913,10 @@ pub(crate) fn check_call_user_func(
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
+            let strict_sig =
+                checker.prelude_strict_adapter_signature(Some(&cb_name), None, None, &sig);
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
-                &sig,
+                strict_sig.as_ref().unwrap_or(&sig),
                 &args[1..],
                 span,
                 env,

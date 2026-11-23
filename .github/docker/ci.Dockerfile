@@ -34,8 +34,14 @@ RUN ! pkg-config --exists libpcre2-8 && ! test -f /usr/include/pcre2.h \
 FROM toolchain AS ci-base
 RUN elephc-ci-apt-install --no-install-recommends \
         freetds-dev krb5-user libaio1t64 libc6-dbg libpcre2-dev libpq-dev \
-        libssl-dev odbc-postgresql unixodbc-dev unzip valgrind \
+        libssl-dev locales odbc-postgresql unixodbc-dev unzip valgrind \
     && gdb --version && valgrind --version
+# Locale-dependent tests (ctype, setlocale, PCRE character tables, SORT_LOCALE_STRING)
+# need a real non-C locale; shards set ELEPHC_REQUIRE_TEST_LOCALES so a missing one fails.
+RUN localedef -i de_DE -f ISO-8859-1 de_DE \
+    && localedef -i de_DE -f ISO-8859-1 de_DE.ISO-8859-1 \
+    && localedef -i de_DE -f UTF-8 de_DE.UTF-8 \
+    && locale -a | grep -qx de_DE.iso88591 && locale -a | grep -qx de_DE.utf8
 RUN rm -rf /var/lib/apt/lists/*
 
 FROM ci-base AS php
