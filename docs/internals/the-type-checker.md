@@ -1256,6 +1256,22 @@ Methods declared to return PHP's late-bound `static` type (alone, nullable, or i
 
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
 
+### Backed enum case values
+
+Since PHP 8.2 a backed case's value may be a constant expression, not only a literal: `case Focused = Glyphs::BAR;`, `case Ns = PREFIX . 'ns';`, `case Big = 1 << K::SHIFT;`. `build_enum_info` (`src/types/checker/schema/enums.rs`) reduces each value to an int or string literal in three steps, and only then checks it against the backing type and for duplicates.
+
+1. **Forbidden forms first.** `validate_constant_expression` (`src/types/checker/schema/const_expr_forms.rs`) walks the expression as written, before any constant is bound. It goes pre-order and left to right, like php-src's `zend_compile_const_expr`, and reports PHP's own messages:
+   - "Constant expression contains invalid operations" for variables, calls, `match`, assignments, `instanceof` and other non-constant nodes;
+   - "New expressions are not supported in this context";
+   - `"static::" is not allowed in compile-time constants` and "static::class cannot be used for compile-time class name resolution";
+   - "Object casts are not supported in this context";
+   - "Closures in constant expressions must be static".
+
+   This check must run before folding. Folding prunes the branch a bound constant decides, and that would hide a forbidden form PHP rejects.
+2. **Which branches the check skips.** A branch of `?:`, short `?:`, `??`, `&&` or `||` is skipped only when PHP itself decides it at compile time. That is the case when the deciding operand folds from literals and predefined (persistent) constants alone, operators, casts, array reads and int/string concatenation included, and a literal array (list or keyed) counts as known, truthy when non-empty, as long as every key is an int, string, bool or integral float (an array key is PHP's fatal "Illegal offset type", a fractional float or `null` key a deprecation, and an unkeyed entry after the `PHP_INT_MAX` key throws "Cannot add element to the array as the next element is already occupied", so those arrays stay undecided), under `!`, `(bool)`, `&&` and `||` too: `true ? 1 : $x`, `['k' => 1] ? 1 : $x`, `('n' . 1) ? 1 : $x`, `PHP_INT_SIZE ? 2 : strlen('b')`. User `const`/`define()` constants never decide a branch. Class constants don't either, which matches php-src with opcache enabled (`ZEND_COMPILE_NO_CONSTANT_SUBSTITUTION`). Without opcache, php-src substitutes a class constant only when the class was declared earlier in the same file, so the result would depend on declaration order. elephc follows the order-independent rule, so `C::YES ? 1 : $x` is rejected.
+3. **Constant lookup.** `fold_backing_value` (`src/types/checker/schema/enum_backing.rs`) binds constants through the shared `property_default_selectors::bind_constants` pass that property defaults also use. That covers class and interface constants (inherited ones included), source `const` declarations collected by the driver (`collect_global_constants`, which also walks namespace blocks and `require_once` include guards), and predefined constants. Classes and interfaces are built before enums, so their constants exist at this point. The enum's own constants (`self::X`) do not exist yet.
+4. **Folding order.** `bind_constants` folds each node with the optimizer's PHP-equivalent constant folder and prunes literal branches. That folder joins only string literals, so `join_int_concats` then joins `.` concatenations with an int operand, bottom-up, and refolds each enclosing operator and array read (`['n' . C::ONE][0]`). Branches are pruned once more, because a just-joined condition can decide a ternary whose other branch is not a literal: `('n' . 1) ? 6 : $v`. A value that does not end as an int or string literal is rejected with "Enum int/string backing values must be integer/string literals". The literal then goes through the duplicate-value check.
+
 ### Built-in coroutine and iterator classes
 
 `Throwable`, `Error`, `Exception`, `Fiber`, and `FiberError` are registered as built-in class-like types before user code is checked. `FiberError` extends `Error`, matching PHP's throwable hierarchy. `Fiber` method bodies are placeholders in `ClassInfo`: their signatures make calls type-checkable, while codegen intercepts construction, instance methods, `Fiber::suspend()`, and `Fiber::getCurrent()` and routes them to `__rt_fiber_*` helpers.
