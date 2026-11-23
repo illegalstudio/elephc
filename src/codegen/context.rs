@@ -1250,12 +1250,10 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<()> {
         let source_ty = self.value_php_type(value)?;
         let target_ty = self.local_php_type(slot)?;
-        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
-            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+        if matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
             && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
         {
-            let offset = self.local_offset(slot)?;
-            super::frame::emit_owned_local_cleanup(self, slot, offset, &target_ty);
+            self.release_local_before_refcounted_writeback(slot)?;
         }
         Ok(())
     }
@@ -1426,6 +1424,16 @@ impl<'a> FunctionContext<'a> {
             .any(|inst| inst.op == Op::Release && inst.operands == [value])
     }
 
+    /// Returns whether cleanup after the current instruction already owns this SSA lease.
+    ///
+    /// Consumers with a conditional ownership path, such as static initialization, use this
+    /// independently of `Ownership::Owned`: a transient string can be `MaybeOwned` and still
+    /// require immediate retirement when neither EIR nor a published operand slot will do it.
+    pub(super) fn value_cleanup_is_deferred(&self, value: ValueId) -> bool {
+        self.value_is_released_later(value)
+            || operand_owners::has_scoped_cleanup(self.function, value, self.current_inst)
+    }
+
     /// Stores the current result register(s) directly into an addressable local slot.
     pub(super) fn store_current_result_to_local(&mut self, slot: LocalSlotId) -> Result<()> {
         let target_ty = self.local_php_type(slot)?;
@@ -1524,6 +1532,33 @@ impl<'a> FunctionContext<'a> {
         let cell_reg = abi::symbol_scratch_reg(self.emitter);
         let result_reg = abi::int_result_reg(self.emitter);
         abi::load_at_offset(self.emitter, cell_reg, offset);
+        if *ty == PhpType::Mixed {
+            let raw = self.next_label("refcounted_writeback_release_raw_mixed");
+            let followed = self.next_label("refcounted_writeback_release_followed_mixed");
+            let payload = self.next_label("refcounted_writeback_release_mixed_payload");
+            abi::emit_push_reg(self.emitter, cell_reg);
+            abi::emit_reg_move(self.emitter, result_reg, cell_reg);
+            abi::emit_call_label(self.emitter, "__rt_reference_cell_mixed_payload_address");
+            abi::emit_branch_if_int_result_zero(self.emitter, &raw);
+            abi::emit_reg_move(self.emitter, cell_reg, result_reg);
+            let marker_reg = abi::secondary_scratch_reg(self.emitter);
+            crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+                self.emitter,
+                cell_reg,
+                result_reg,
+                marker_reg,
+                &followed,
+            );
+            self.emit_branch(&payload);
+            self.emitter.label(&raw);
+            abi::emit_load_temporary_stack_slot(self.emitter, cell_reg, 0);
+            self.emitter.label(&payload);
+            abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+            abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
+            abi::emit_release_temporary_stack(self.emitter, 16);
+            abi::emit_decref_if_refcounted(self.emitter, ty);
+            return Ok(());
+        }
         abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
         abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
         if *ty == PhpType::Str {

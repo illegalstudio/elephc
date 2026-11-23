@@ -501,7 +501,7 @@ fn lower_array_assign_from_value(
     }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =
-            prepare_indexed_array_local_set(ctx, array_value, value_value, span);
+            prepare_indexed_array_local_set(ctx, array, array_value, value_value, span);
         ctx.emit_void(
             op,
             vec![array_value.value, index_value.value, value_value.value],
@@ -800,7 +800,10 @@ fn lower_promotable_array_local_set(
             let array_ty = ctx.builder.value_php_type(array_value.value);
             let value_value =
                 coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value_span));
-            (value_value, prepare_indexed_array_local_set(ctx, array_value, value_value, span))
+            (
+                value_value,
+                prepare_indexed_array_local_set(ctx, array, array_value, value_value, span),
+            )
         };
     ctx.emit_void(
         Op::ArraySet,

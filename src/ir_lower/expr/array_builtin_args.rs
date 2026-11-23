@@ -113,6 +113,7 @@ pub(super) fn try_append_indexed_array_local_value(
         } else {
             crate::ir_lower::stmt::prepare_indexed_array_local_write(
                 ctx,
+                array_name,
                 array_value,
                 value,
                 span,

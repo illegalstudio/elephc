@@ -11,6 +11,51 @@ use std::path::Path;
 
 use crate::codegen::platform::Target;
 
+/// Ref-bound indexed widening owns its borrowed source before consuming it on every target.
+#[test]
+fn ref_bound_heterogeneous_append_acquires_conversion_source_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+function buildHeterogeneousAppend(): void {
+    $items = [];
+    $alias =& $items;
+    $items[] = 1;
+    $items[] = "x";
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "buildHeterogeneousAppend")
+            .expect("heterogeneous append fixture function");
+        let conversions = function
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.op == Op::ArrayToMixed)
+            .collect::<Vec<_>>();
+        assert!(!conversions.is_empty(), "{name}: heterogeneous append must widen indexed storage");
+        assert!(
+            conversions.iter().any(|conversion| {
+                let Some(source) = function.value(conversion.operands[0]) else { return false; };
+                let ValueDef::Instruction { inst, .. } = source.def else { return false; };
+                function.instruction(inst).is_some_and(|acquire| {
+                    acquire.op == Op::Acquire && acquire.operands.len() == 1
+                })
+            }),
+            "{name}: the ref-bound conversion must acquire its borrowed source"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Final storage normalization selects boxed or native append coherently on every target.
 #[test]
 fn ref_local_append_uses_final_storage_on_all_targets() {

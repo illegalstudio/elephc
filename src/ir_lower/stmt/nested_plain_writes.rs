@@ -30,7 +30,10 @@ fn lower_store_selected(
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
-    let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    // The RHS is a storage candidate, not a receiver. Keep its owned SSA value visible so a
+    // consuming container write can adopt it when normal cleanup transfers the published slot;
+    // the scoped-owner query still forces a retain when that slot is released instead.
+    let (value, value_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
     if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
         lower_captured_store(ctx, target, value, span);
     }) {
@@ -110,7 +113,10 @@ fn lower_append_selected(
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
-    let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    // Preserve the rooted owner's transfer contract through the final append. Borrowing this
+    // value made Mixed boxing retain the payload even when cleanup ended with `UnsetLocal`,
+    // leaking one RHS array for every successful append.
+    let (value, value_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
     if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
         lower_captured_append(ctx, target, value, span);
     }) {
@@ -247,11 +253,39 @@ fn emit_append(
     ctx.builder.position_at_end(array_append);
     ctx.restore_initialized_slots(initialized.clone());
     let parent = super::array_write_core::direct_published_boxed_receiver(ctx, parent);
+    let value = restore_owned_array_append_operand(ctx, value);
     ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
         Op::MixedArrayAppend.default_effects(), Some(span));
     branch_to(ctx, done);
     ctx.builder.position_at_end(done);
     ctx.restore_initialized_slots(initialized);
+}
+
+/// Restores an owned RHS hidden behind an object-dispatch borrow on the array-only branch.
+///
+/// Native-dimension dispatch borrows its fallback operands because an object method must keep
+/// the caller's cleanup owner. Once this branch has proved the receiver is an array, the
+/// consuming Mixed append may adopt an owning temporary instead. Its published unwind slot is
+/// cleared with `UnsetLocal` on success, while backend scoped-cleanup analysis still forces a
+/// retain if any normal path releases that slot.
+fn restore_owned_array_append_operand(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> LoweredValue {
+    let Some(instruction) = ctx.builder.value_defining_instruction(value.value) else {
+        return value;
+    };
+    if instruction.op != Op::Borrow {
+        return value;
+    }
+    let Some(&source) = instruction.operands.first() else {
+        return value;
+    };
+    let source = LoweredValue {
+        value: source,
+        ir_type: ctx.builder.value_type(source),
+    };
+    ctx.value_is_owning_temporary(source).then_some(source).unwrap_or(value)
 }
 
 /// Uses ArrayAccess::offsetSet(null, value), preserving the normal error for other objects.

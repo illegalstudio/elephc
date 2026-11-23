@@ -121,7 +121,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
             if ref_bound_mixed_indexed_array_write(ctx, array, value) {
                 (array_value, Some(ctx.local_type(array)), true)
             } else {
-                prepare_indexed_array_local_write(ctx, array_value, value, span)
+                prepare_indexed_array_local_write(ctx, array, array_value, value, span)
             };
         // A promotable `array<int>` local may already be hash storage: its append keeps the raw
         // integer under its own tag, as the typed reads of the promoted hash expect.
@@ -200,6 +200,7 @@ fn coerce_declared_array_append(
 /// Prepares an indexed-array local for an offset assignment.
 pub(super) fn prepare_indexed_array_local_set(
     ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
     array_value: LoweredValue,
     value: LoweredValue,
     span: Span,
@@ -211,6 +212,7 @@ pub(super) fn prepare_indexed_array_local_set(
     }
     if indexed_array_refcounted_set_needs_mixed_conversion(&current_ty, &value_ty) {
         let updated_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let array_value = own_indexed_array_conversion_source(ctx, array, array_value, span);
         let converted = ctx.emit_value(
             Op::ArrayToMixed,
             vec![array_value.value],
@@ -221,7 +223,7 @@ pub(super) fn prepare_indexed_array_local_set(
         );
         return (converted, Some(updated_ty), true);
     }
-    prepare_indexed_array_local_write(ctx, array_value, value, span)
+    prepare_indexed_array_local_write(ctx, array, array_value, value, span)
 }
 
 /// Coerces miss-capable scalar reads before writing them into a concrete indexed-array slot.
@@ -264,6 +266,7 @@ pub(super) fn indexed_array_refcounted_set_needs_mixed_conversion(
 /// Converts typed indexed arrays to Mixed when a local write would make them heterogeneous.
 pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
     ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
     array_value: LoweredValue,
     value: LoweredValue,
     span: Span,
@@ -279,6 +282,7 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
     if !indexed_array_write_needs_mixed_conversion(&current_ty, &updated_ty) {
         return (array_value, Some(updated_ty), false);
     }
+    let array_value = own_indexed_array_conversion_source(ctx, array, array_value, span);
     let converted = ctx.emit_value(
         Op::ArrayToMixed,
         vec![array_value.value],
@@ -288,6 +292,20 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
         Some(span),
     );
     (converted, Some(updated_ty), true)
+}
+
+/// Gives a consuming indexed-to-Mixed conversion ownership for a borrowed ref-cell load.
+fn own_indexed_array_conversion_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.is_ref_bound_local(array) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, array_value, Some(span))
+    } else {
+        array_value
+    }
 }
 
 /// Returns whether an object write keeps an indexed array's declared object element type.

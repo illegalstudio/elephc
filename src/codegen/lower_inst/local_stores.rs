@@ -128,13 +128,26 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
     Ok(())
 }
 
-/// Detects the independent destination owner acquired by a mixed-key ref-cell write.
+/// Detects a ref-cell mutation whose result carries an independent destination owner.
+///
+/// Mixed-key writes acquire inside their runtime helper. Indexed-to-Mixed widening makes the
+/// ownership transfer explicit as `ArrayToMixed(Acquire(LoadRefCell))`. Both must bypass the
+/// canonical assignment publisher and retire the previous pointee even when the returned pointer
+/// is unchanged, because the new owner is distinct from the cell's existing owner.
 fn value_is_retained_mutation_of_ref_cell(
     ctx: &FunctionContext<'_>, value: ValueId, slot: LocalSlotId,
 ) -> Result<bool> {
     let Some(mutation) = instruction_for_value(ctx, value)? else { return Ok(false); };
-    if mutation.op != Op::ArraySetMixedKey { return Ok(false); }
     let Some(source) = mutation.operands.first().copied() else { return Ok(false); };
+    if mutation.op == Op::ArrayToMixed {
+        let Some(acquire) = instruction_for_value(ctx, source)? else { return Ok(false); };
+        if acquire.op != Op::Acquire { return Ok(false); }
+        let Some(source) = acquire.operands.first().copied() else { return Ok(false); };
+        return Ok(instruction_for_value(ctx, source)?.is_some_and(|source|
+            source.op == Op::LoadRefCell
+                && source.immediate == Some(Immediate::LocalSlot(slot))));
+    }
+    if mutation.op != Op::ArraySetMixedKey { return Ok(false); }
     Ok(instruction_for_value(ctx, source)?.is_some_and(|source|
         source.op == Op::LoadRefCell && source.immediate == Some(Immediate::LocalSlot(slot))))
 }
