@@ -76,13 +76,13 @@ echo $b->count(), " ", $b->count(7), "\n";
 echo Box::make(), " ", Box::make(2), "\n";
 $cl = function (int $i = null) { return $i === null ? "null" : $i * 2; };
 $ar = fn(string $s = null) => $s ?? "dflt";
-echo $cl(), " ", $cl(null), " ", $cl(21), "\n";
+echo $cl(), " ", $cl(null), " ", $cl(21), " ", gettype($cl(21)), "\n";
 echo $ar(), " ", $ar("v"), "\n";
 "#,
     );
     assert_eq!(
         out,
-        "NULL\nstring(3) \"lbl\"\nanon n\nnone c=7\nunsized size 2\nnull null 42\ndflt v\n"
+        "NULL\nstring(3) \"lbl\"\nanon n\nnone c=7\nunsized size 2\nnull null 42 integer\ndflt v\n"
     );
 }
 

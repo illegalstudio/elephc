@@ -2814,6 +2814,12 @@ fn direct_closure_return_expr_type(
     if let Some(storage) = crate::ir_lower::expr::nullsafe_chain_result_storage_type(expr) {
         return storage;
     }
+    if let ExprKind::Ternary { then_expr, else_expr, .. } = &expr.kind {
+        let then_type = direct_closure_return_expr_type(then_expr, captures, params, ctx);
+        let else_type = direct_closure_return_expr_type(else_expr, captures, params, ctx);
+        // A closure without a return declaration must retain the selected arm's PHP kind.
+        return if then_type == else_type { then_type } else { PhpType::Mixed };
+    }
     if let ExprKind::FunctionCall { name, .. } = &expr.kind {
         if let Some(ty) = ctx.builtin_call_types.get(&expr.span) {
             return ty.clone();
