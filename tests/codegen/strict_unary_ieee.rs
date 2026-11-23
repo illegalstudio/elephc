@@ -148,6 +148,7 @@ restore_error_handler(); free($input); free($bytes); free($output); free($error)
 fn test_strict_unary_ieee_plus_domains_warning_effects_and_temporary_owners() {
     let source = r#"<?php
 function exactUnaryPlus(mixed $value): mixed { return +$value; }
+function discardUnaryPlus(mixed $value): void { +$value; }
 function unaryPlusArray(): mixed { return ['owned', str_repeat('x', 20)]; }
 foreach ([false, null, '9007199254740993'] as $input) {
     try { $result = exactUnaryPlus($input); echo gettype($result), ':', $result, '|'; }
@@ -157,10 +158,10 @@ try { exactUnaryPlus(unaryPlusArray()); } catch (TypeError $error) { echo 'A|'; 
 $prefix = $argc > 0 ? '5x' : '0';
 set_error_handler(function (int $severity, string $message): bool { global $unaryPlusState; $unaryPlusState = 9; echo 'W'; return true; });
 $unaryPlusState = 1;
-try { +$prefix; } catch (TypeError $error) { echo 'T'; }
+try { discardUnaryPlus($prefix); } catch (TypeError $error) { echo 'T'; }
 echo ':', $unaryPlusState, '|'; restore_error_handler();
 set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('unary warning'); });
-try { +str_repeat('5x', 2); } catch (RuntimeException $error) { echo 'Q'; } catch (TypeError $error) { echo 'T'; }
+try { discardUnaryPlus(str_repeat('5x', 2)); } catch (RuntimeException $error) { echo 'Q'; } catch (TypeError $error) { echo 'T'; }
 restore_error_handler();
 "#;
     for feature in [None, Some(StrictFeature::Overflow), Some(StrictFeature::Arithmetic), Some(StrictFeature::Coercions)] {
