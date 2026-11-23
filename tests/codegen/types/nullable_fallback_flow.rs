@@ -44,7 +44,9 @@ fn test_nullable_fallback_flow_r57_instanceof_ternary_runtime() {
         "button\nwidget\nrenderable\nnot missing\ndynamic class\ndynamic interface\ndynamic object\nnot late\nlate\nrule accepts button\nrule rejects widget\n", true);
 }
 
-/// Nullable boxing alone cannot admit object iteration by reference through the production CLI.
+/// A nullable `iterable` iterated by reference compiles through the production CLI and, like php, throws
+/// "An iterator cannot be used with foreach by reference" at run time for an Iterator object
+/// (`php -n` prints `Fatal error: Uncaught Error: An iterator cannot be used with foreach by reference`).
 #[test]
 fn test_nullable_fallback_flow_r55_nullable_iterable_cli_refusal() {
     /// Owns this diagnostic fixture and every compiler artifact on assertion failure too.
@@ -71,10 +73,11 @@ run(new R55Items());"#).unwrap();
     for mode in ["on", "off"] {
         let output = elephc_cli_command(&directory.0).arg(format!("--ir-opt={mode}"))
             .arg(&path).output().unwrap();
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success(), "nullable Iterator reference iteration was accepted");
-        assert!(error.contains("by-reference foreach") && error.contains("not supported"), "{error}");
-        assert!(!path.with_extension("").exists(), "rejected source produced an executable");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let run = std::process::Command::new(path.with_extension("")).output().unwrap();
+        assert!(!run.status.success(), "the by-reference iterator loop must throw");
+        let text = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+        assert!(text.contains("Uncaught Error: An iterator cannot be used with foreach by reference"), "{text}");
     }
 }
 
