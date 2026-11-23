@@ -256,6 +256,17 @@ where
         let (with_clones, clone_added) =
             promotable_clones::splice_promotable_clones(program, clone_work);
         program = with_clones;
+        if stats::enabled() {
+            // Which of the four kinds of work asks for another whole check, and a few names.
+            eprintln!(
+                "[elephc-generics] round work: functions={added} methods={method_added} \
+                 clones={clone_added} classes={} requested: functions={:?} methods={:?} classes={:?}",
+                inferred.requested.len(),
+                result.requested_instantiations.iter().take(8).collect::<Vec<_>>(),
+                method_work.instantiations.iter().take(8).collect::<Vec<_>>(),
+                inferred.requested.iter().take(8).collect::<Vec<_>>(),
+            );
+        }
         if added == 0 && method_added == 0 && !class_work {
             // Typed clones alone do not make another round. The checker published, resolved and
             // checked each clone under the very declaration the splice adds (same name, positions

@@ -25,9 +25,6 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> Option<LoweredValue> {
-    // The compiler's own helper methods are declared by native classes only. No user class can
-    // declare one and no `__call` may ever receive one, so there is nothing to select.
-    if method.starts_with("__elephc_") { return None; }
     let object_ty = ctx.builder.value_php_type(object.value);
     // A nullable concrete receiver already has its own argument plan and dispatch target.
     // Unrelated classes with the same method name must not force a global class ladder.
@@ -97,13 +94,15 @@ fn candidates(
             info.method_visibilities.get(key).is_none_or(|visibility|
                 ir_can_access_member(ctx, declaring, visibility))
         };
-        let magic = info.methods.contains_key("__call")
+        // The compiler's own helpers are declared by native classes only: `__call` never sees one.
+        let helper = method.starts_with("__elephc_");
+        let magic = !helper && info.methods.contains_key("__call")
             && (!info.methods.contains_key(&key) || !accessible(&key));
         let selected_key = if magic { "__call" } else { key.as_str() };
         let Some(signature) = class_method_signature(ctx, &name, selected_key) else { continue; };
         let own_plan = (signature.variadic.is_some()
             && !crate::func_args::sig_collects_surplus_args(signature))
-            || (select_all && (magic || key == "__invoke"
+            || (select_all && (magic || helper || key == "__invoke"
                 || (signature.variadic.is_none() && arg_count > signature.params.len())));
         if !own_plan || !receiver_admits(ctx, object_ty, &name) { continue; }
         if !accessible(selected_key) { continue; }
