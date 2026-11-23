@@ -499,9 +499,38 @@ pub(super) fn fallback(
     let mut roots = Vec::new();
     let object = box_opaque_receiver(ctx, object, span, &mut roots);
     let data = ctx.intern_string(property);
+    // A property that holds an `ArrayAccess` object (`object $slots = new ArrayObject()` behind a
+    // bare `object` or boxed receiver) is mutated in place through `offsetSet`: the runtime
+    // property writer only understands array and stdClass storage and drops the element. This
+    // was the read/modify/write `lower_generic_object_mixed_property_array_write` of the
+    // pre-merge branch.
+    let name = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+        Op::ConstStr.default_effects(), Some(span));
+    let current = ctx.emit_value(Op::DynamicPropGet, vec![object.value, name.value],
+        Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::Probe)), PhpType::Mixed,
+        Op::DynamicPropGet.default_effects(), Some(span));
+    let is_object = ctx.emit_value(Op::TypePredicate, vec![current.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let container = ctx.builder.create_named_block("property.array.container_object", vec![]);
+    let plain = ctx.builder.create_named_block("property.array.container_plain", vec![]);
+    let done = ctx.builder.create_named_block("property.array.container_done", vec![]);
+    let slots = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
+        then_target: container, then_args: vec![], else_target: plain, else_args: vec![] });
+    ctx.builder.position_at_end(container);
+    super::super::array_write_core::lower_boxed_array_set_values(ctx, current, index, value, span, false);
+    ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+    ctx.builder.position_at_end(plain);
+    ctx.restore_initialized_slots(slots.clone());
+    crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
     ctx.emit_void(Op::RuntimeCall, vec![object.value, index.value, value.value],
         Some(Immediate::Data(data)), effects_lookup::runtime_effects(), Some(span));
+    ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(slots);
     retire_property_write_roots(ctx, roots, span);
+
 }
 
 /// Boxes erased object handles once and roots the box across the ordinary runtime fallback.
