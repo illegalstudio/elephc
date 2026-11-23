@@ -1250,12 +1250,17 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<()> {
         let source_ty = self.value_php_type(value)?;
         let target_ty = self.local_php_type(slot)?;
-        if matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
-        {
-            self.release_local_before_refcounted_writeback(slot)?;
+        if target_ty.codegen_repr() != PhpType::Mixed || source_ty.codegen_repr() == PhpType::Mixed {
+            return Ok(());
         }
-        Ok(())
+        // A synthetic alias can have a Mixed frame slot and point into a native array binding.
+        // In that case the consuming mutation owns the array itself and must retire it once.
+        if self.local_stores_ref_cell_pointer(slot)
+            && self.ref_cell_payload_type(slot)?.codegen_repr() != PhpType::Mixed
+        {
+            return Ok(());
+        }
+        self.release_local_before_refcounted_writeback(slot)
     }
 
     /// Stores an SSA value into a slot known to contain its raw frame representation.
