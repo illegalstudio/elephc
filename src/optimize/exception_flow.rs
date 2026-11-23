@@ -1682,7 +1682,8 @@ pub(super) fn call_args(expr: &Expr) -> &[Expr] {
         | ExprKind::MethodCall { args, .. }
         | ExprKind::NullsafeMethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
-        | ExprKind::NewObject { args, .. } => args.as_slice(),
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => args.as_slice(),
         _ => &[],
     }
 }

@@ -38,3 +38,31 @@ try { pure($null); } catch (TypeError $e) { echo 'caught'; }
     // forgot to install them by hand used to get.
     assert!(!keeps_catch(&Default::default()));
 }
+
+/// `new self($v)`, `new parent($v)` and `new static($v)` bind a `mixed` null to the selected
+/// constructor's `string` parameter through the same runtime check, so the optimizer keeps their
+/// `catch (TypeError)` even when the constructor body cannot throw (`new self` lost it: the
+/// guarded-argument lookup ignored scoped construction).
+#[test]
+fn test_metadata_optimizer_keeps_the_catch_of_a_guarded_scoped_construction() {
+    for (label, body) in [
+        ("self", "try { new self($v); } catch (TypeError $e) { echo 'caught'; }"),
+        ("parent", "try { new parent($v); } catch (TypeError $e) { echo 'caught'; }"),
+        ("static", "try { new static($v); } catch (TypeError $e) { echo 'caught'; }"),
+    ] {
+        let source = format!(
+            "<?php\nclass P {{ public function __construct(string $s) {{}} }}\n\
+             class A extends P {{ public function __construct(string $s) {{}}\n\
+             public static function m(mixed $v): void {{ {body} }} }}\nA::m(null);\n"
+        );
+        let tokens = crate::lexer::tokenize(&source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let checked = crate::types::check(&program).unwrap();
+        assert!(!checked.scalar_guard_arg_sites.is_empty(), "{label}: the checker records the guarded argument");
+        let optimizer = PostTypecheckOptimizer::new_with_type_metadata(
+            &program, &checked.functions, &checked.classes, &checked.interfaces, &checked.scalar_guard_arg_sites,
+        );
+        let result = optimizer.eliminate_dead_code(program.clone(), checked.local_binding_decision_spans());
+        assert!(format!("{result:?}").contains("\"TypeError\""), "{label}: the catch (TypeError) was removed");
+    }
+}
