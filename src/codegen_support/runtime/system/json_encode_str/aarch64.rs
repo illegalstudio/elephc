@@ -113,14 +113,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11], #1");                                 // write the opening quote and advance
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer after the reservation
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length after the reservation
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
     emitter.instruction("mov x12, #0");                                         // initialize the source index
     emitter.label("__rt_json_str_fast_loop");
     emitter.instruction("cmp x12, x2");                                         // has every source byte been copied?
     emitter.instruction("b.ge __rt_json_str_fast_close");                       // yes: append the closing quote
-    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next source byte
-    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
-    emitter.instruction("cbz w14, __rt_json_str_size_slow");                    // escaping or validation needs the general encoder
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next already-classified source byte
     emitter.instruction("strb w13, [x11, x12]");                                // copy the plain byte into the reserved slice
     emitter.instruction("add x12, x12, #1");                                    // advance the copy index
     emitter.instruction("b __rt_json_str_fast_loop");                           // copy the remaining bytes
