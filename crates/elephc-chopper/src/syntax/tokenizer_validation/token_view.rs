@@ -123,16 +123,13 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
                 parens.last().copied(),
                 braces.last().copied(),
                 |arrow| {
+                    let pairs = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
                     if arrow.is_some_and(|arrow| {
-                        arrow_starts_function_body(
-                            tokens,
-                            arrow,
-                            reference_delimiters.get_or_init(|| delimiter_pairs(tokens)),
-                        )
+                        arrow_starts_function_body(tokens, arrow, pairs)
                     }) {
                         return false;
                     }
-                    reference_target_safe(tokens, index)
+                    reference_target_safe(tokens, index, pairs)
                 },
             );
             if remove {
@@ -403,15 +400,92 @@ fn reference_context(previous_significant: i64) -> bool {
         || previous_significant == tok::T_USE
 }
 
-/// Accepts only a plain variable target followed by a list/statement terminator.
-fn reference_target_safe<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+/// Accepts a reference target chain followed by a list/statement terminator.
+fn reference_target_safe<T: SourceToken>(
+    tokens: &[T],
+    index: usize,
+    pairs: &[Option<usize>],
+) -> bool {
     let Some(target) = next_significant_index(tokens, index) else {
         return false;
     };
-    if tokens[target].id() != tok::T_VARIABLE {
-        return false;
+    let target_id = tokens[target].id();
+    let mut cursor = target;
+    match target_id {
+        tok::T_VARIABLE => {}
+        tok::T_STATIC => {
+            let Some(next) = next_significant_index(tokens, target) else {
+                return false;
+            };
+            if tokens[next].id() != tok::T_DOUBLE_COLON {
+                return false;
+            }
+        }
+        tok::T_STRING | tok::T_IDENTIFIER | tok::T_NAME_FULLY_QUALIFIED
+        | tok::T_NAME_QUALIFIED | tok::T_NAME_RELATIVE => {
+            let Some(next) = next_significant_index(tokens, target) else {
+                return false;
+            };
+            if !matches!(
+                tokens[next].id(),
+                id if id == i64::from(b'(')
+                    || id == i64::from(b'[')
+                    || id == tok::T_DOUBLE_COLON
+                    || id == tok::T_OBJECT_OPERATOR
+                    || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+            ) {
+                return false;
+            }
+        }
+        _ => return false,
     }
-    let Some(after) = next_significant_index(tokens, target) else {
+
+    loop {
+        let Some(next) = next_significant_index(tokens, cursor) else {
+            return false;
+        };
+        match tokens[next].id() {
+            id if id == i64::from(b'[')
+                || id == i64::from(b'(')
+                || id == i64::from(b'{') =>
+            {
+                let Some(close) = pairs[next] else {
+                    return false;
+                };
+                if contains_ampersand(tokens, next + 1, close) {
+                    return false;
+                }
+                cursor = close;
+            }
+            id if id == tok::T_OBJECT_OPERATOR
+                || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+                || id == tok::T_DOUBLE_COLON =>
+            {
+                let Some(member) = next_significant_index(tokens, next) else {
+                    return false;
+                };
+                if tokens[member].id() == i64::from(b'{') {
+                    let Some(close) = pairs[member] else {
+                        return false;
+                    };
+                    if contains_ampersand(tokens, member + 1, close) {
+                        return false;
+                    }
+                    cursor = close;
+                } else if matches!(
+                    tokens[member].id(),
+                    tok::T_VARIABLE | tok::T_STRING | tok::T_IDENTIFIER
+                ) {
+                    cursor = member;
+                } else {
+                    return false;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    let Some(after) = next_significant_index(tokens, cursor) else {
         return false;
     };
     matches!(
@@ -422,6 +496,17 @@ fn reference_target_safe<T: SourceToken>(tokens: &[T], index: usize) -> bool {
             || id == i64::from(b']')
             || id == i64::from(b'}')
     )
+}
+
+/// Returns whether a token range contains another reference ampersand.
+fn contains_ampersand<T: SourceToken>(tokens: &[T], start: usize, end: usize) -> bool {
+    tokens[start..end].iter().any(|token| {
+        matches!(
+            token.id(),
+            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+        )
+    })
 }
 
 /// Returns whether a native token is a cast form.
