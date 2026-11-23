@@ -160,6 +160,13 @@ pub(crate) fn compile_cli_file_and_run_with_managed_pcre2(
     compile_cli_file_and_run_with_native(source, defines, true)
 }
 
+/// Runs a CLI fixture with explicit compiler flags and a verified managed PCRE2 artifact.
+pub(crate) fn compile_cli_file_and_run_with_managed_pcre2_and_flags(
+    source: &str, flags: &[&str],
+) -> String {
+    compile_cli_file_and_run_with_native_and_flags(source, &[], true, flags)
+}
+
 /// Compiles and runs a CLI fixture with arbitrary compiler FLAGS.
 ///
 /// The only way a test can exercise a flag the library fixtures do not thread — `--strict-locals`

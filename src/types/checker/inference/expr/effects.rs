@@ -311,6 +311,8 @@ impl Checker {
                 let reference_sources = prepared.reference_sources;
                 let expanded_args = prepared.args;
                 let builtin_name = name.trim_start_matches('\\');
+                let preg_extended = php_symbol_key(builtin_name) == "preg_match"
+                    && crate::builtins::preg_match_uses_extended_capture(args, self.semantic_profile);
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -377,7 +379,7 @@ impl Checker {
                             }
                             continue;
                         }
-                        if preg_output_type(builtin_name, arg, idx).is_some()
+                        if preg_output_type(builtin_name, arg, idx, preg_extended).is_some()
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
@@ -411,7 +413,7 @@ impl Checker {
                 // narrowing survives: no call can reassign it.
                 self.purge_property_narrowings_after_call(env);
                 for (idx, arg) in expanded_args.iter().enumerate() {
-                    if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
+                    if let Some(output_ty) = preg_output_type(builtin_name, arg, idx, preg_extended) {
                         if let Some(name) = output_variable(arg) {
                             self.record_local_storage_effect(name, &output_ty);
                             self.definitely_bound_locals.insert(name.clone());
@@ -865,8 +867,12 @@ fn output_variable(arg: &Expr) -> Option<&String> {
 }
 
 /// Identifies regex output parameters independently of named-argument source order.
-fn preg_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+///
+/// `extended` is `uses_extended_capture()` for the whole call: a `preg_match()` that
+/// passes `$flags` or `$offset` fills `$matches` with boxed Mixed cells.
+fn preg_output_type(builtin: &str, arg: &Expr, index: usize, extended: bool) -> Option<PhpType> {
     let element = match php_symbol_key(builtin).as_str() {
+        "preg_match" if extended => PhpType::Mixed,
         "preg_match" => PhpType::Str,
         "preg_match_all" => PhpType::Mixed,
         _ => return None,
