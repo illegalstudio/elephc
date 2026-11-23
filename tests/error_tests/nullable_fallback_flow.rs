@@ -77,16 +77,19 @@ fn test_nullable_fallback_flow_r57_instanceof_ternary_binding_views() {
     expect_error_strict("<?php interface Flag {} class Base {} function replace(?Base $item): Base { $item instanceof Flag ? ($item = null) : ($item = new Base()); return $item; }", "return type expects Base");
 }
 
-/// A boxed reference-local retains dynamic foreach dispatch behind an Iterable read view.
+/// A by-reference foreach over an `iterable` is accepted: php binds an array by reference and raises
+/// "An iterator cannot be used with foreach by reference" at run time for an object, so the
+/// checker cannot refuse it (the codegen tests compare both outcomes with `php -n`). A static
+/// `--strict-locals` refusal has nothing to prove here: the source is `array|Traversable` by type.
 #[test]
 fn test_nullable_fallback_flow_ci_boxed_iterable_foreach_admission() {
     let source = "<?php function keepBoxedIterable(iterable $items): iterable { return $items; } function touchBoxedIterable(&$items): void { $items = 123; } function run(iterable $input, int $flag): void { $items = keepBoxedIterable($input); if ($flag < 0) { touchBoxedIterable($items); return; } foreach ($items as &$value) { $value = 1; } unset($value); }";
     check_source(source).unwrap();
     for replacement in ["unset($items); $items = keepBoxedIterable($input);", "unset($items); $items =& $input;"] {
-        expect_error(&source.replace("foreach ($items", &format!("{replacement} foreach ($items")), "by-reference foreach");
+        expect_php_accepts(&source.replace("foreach ($items", &format!("{replacement} foreach ($items")), "by-reference foreach");
     }
-    expect_error("<?php function run(iterable $items): void { foreach ($items as &$value) {} }", "by-reference foreach");
-    expect_error(r#"<?php
+    expect_php_accepts("<?php function run(iterable $items): void { foreach ($items as &$value) {} }", "by-reference foreach");
+    expect_php_accepts(r#"<?php
 class R55Items implements Iterator {
     public function rewind(): void {}
     public function valid(): bool { return false; }

@@ -615,6 +615,10 @@ fn initialize_dynamic_iterable_iterator(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
+    if by_ref {
+        // php raises this at `ZEND_FE_RESET_RW`, before any element, so an empty iterator throws too.
+        super::exceptions::emit_error(ctx, "An iterator cannot be used with foreach by reference");
+    }
     store_iterator_cursor(ctx, offset, 0);
     resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
@@ -668,6 +672,11 @@ fn initialize_dynamic_mixed_iterator(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
+    if by_ref {
+        // Drop the saved box pointer before the throw leaves this sequence.
+        abi::emit_pop_reg(ctx.emitter, abi::temp_int_reg(ctx.emitter.target));
+        super::exceptions::emit_error(ctx, "An iterator cannot be used with foreach by reference");
+    }
     store_mixed_payload_low_as_iterator_source(ctx, offset);
     store_iterator_cursor(ctx, offset, 0);
     resolve_dynamic_object_iterator_source(ctx, offset, owner)?;

@@ -47,6 +47,17 @@ pub(super) enum AssignedValue<'a> {
     Increment(&'a str),
 }
 
+/// Whether two collected writes of one local are the same source write (or an identical value).
+pub(super) fn same_assigned_value(left: &AssignedValue<'_>, right: &AssignedValue<'_>) -> bool {
+    match (left, right) {
+        (AssignedValue::Expr(left), AssignedValue::Expr(right)) => std::ptr::eq(*left, *right),
+        (AssignedValue::Known(left), AssignedValue::Known(right)) => left == right,
+        (AssignedValue::Opaque, AssignedValue::Opaque) => true,
+        (AssignedValue::Increment(left), AssignedValue::Increment(right)) => left == right,
+        _ => false,
+    }
+}
+
 /// One local array write, including an optional explicit key expression.
 struct ArrayWrite<'a> {
     /// Local receiving the element.
@@ -80,7 +91,7 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter, None,
-        tagged_integer_locals, &Default::default(), infer_value, &|_, _| false).contracts
+        tagged_integer_locals, &Default::default(), &|_, _| true, infer_value, &|_, _| false).contracts
 }
 
 /// Assignment values and executable calls collected without entering nested function bodies.
@@ -120,6 +131,7 @@ pub(super) fn analyze_loop_storage<'a>(
     entry: &TypeEnv, packed_counter: Option<&str>, ref_value_binding: Option<(&'a str, &'a str)>,
     tagged_integer_locals: &HashSet<String>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
+    reaches_backedge: &dyn Fn(&str, &AssignedValue<'_>) -> bool,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     object_is_a: &dyn Fn(&str, &str) -> bool,
 ) -> LoopStorageAnalysis {
@@ -147,6 +159,7 @@ pub(super) fn analyze_loop_storage<'a>(
             infer_value,
             &mut whole_representation_sources,
             tagged_integer_locals,
+            reaches_backedge,
         );
         apply_ref_value_binding_evidence(
             ref_value_binding,
@@ -293,6 +306,7 @@ fn apply_assignment_evidence(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     whole_representation_sources: &mut HashSet<String>,
     tagged_integer_locals: &HashSet<String>,
+    reaches_backedge: &dyn Fn(&str, &AssignedValue<'_>) -> bool,
 ) {
     for (name, source) in assignments {
         // `typed` is false when the value's type is only the `mixed` fallback: that is the
@@ -381,7 +395,10 @@ fn apply_assignment_evidence(
                             && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
                 }
             });
-        if proves_whole_representation_change {
+        // The header contract exists for the value a later iteration reads: a write that no back
+        // edge carries (it is followed by a `break` or a `return`) leaves the loop with the
+        // ordinary flow join, so it does not retype the slot the header reads.
+        if proves_whole_representation_change && reaches_backedge(name, source) {
             whole_representation_sources.insert((*name).to_string());
         }
         let merged = env
@@ -2199,7 +2216,7 @@ mod tests {
             class == ancestor || (class == "Player" && ancestor == "Actor")
         };
         super::analyze_loop_storage(&body, None, None, &entry, None, None,
-            &crate::fast_hash::FastSet::default(), &Default::default(), &mut infer, &object_is_a)
+            &crate::fast_hash::FastSet::default(), &Default::default(), &|_, _| true, &mut infer, &object_is_a)
             .contracts
     }
 

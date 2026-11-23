@@ -590,8 +590,6 @@ impl Checker {
                 // `typed_foreach` keeps alive across the whole loop (and past it, as PHP
                 // leaves it bound to the last element), and the iterable holds the elements
                 // those cells point into. Neither slot may be re-represented by a widening.
-                let source_had_reference = matches!(&array.kind, ExprKind::Variable(name)
-                    if self.ref_aliased_locals.contains(name));
                 if *value_by_ref {
                     self.record_ref_bound_alias_root(array);
                 }
@@ -611,10 +609,6 @@ impl Checker {
                 let arr_ty = arr_ty?;
                 let warning_site = (self.current_loop_storage_scope.clone(), stmt.span);
                 self.foreach_warnings.remove(&warning_site);
-                // A refined Iterable view can still occupy a boxed reference-local, which
-                // already uses runtime dispatch for by-reference indexed and hash payloads.
-                let boxed_iterable_source = arr_ty == PhpType::Iterable
-                    && source_had_reference && self.boxed_reference_layout_precedes(array);
                 self.record_foreach_entry_exception_flow(stmt, &arr_ty, env);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
@@ -793,11 +787,10 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
-                if *value_by_ref && (matches!(arr_ty, PhpType::Object(_))
-                    || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
+                if *value_by_ref && matches!(arr_ty, PhpType::Object(_)) {
                     return Err(CompileError::new(
                         stmt.span,
-                        "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
+                        "by-reference foreach over Iterator/IteratorAggregate objects is not supported; use an array source or remove &",
                     ));
                 }
                 // A by-REFERENCE value variable is a cell INTO the iterated array, so every

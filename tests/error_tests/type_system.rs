@@ -261,14 +261,12 @@ fn test_error_non_int_key_on_declared_packed_array_property() {
     }
 }
 
-/// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
+/// By-reference foreach over a parameter typed `iterable` compiles: php binds an array by reference and
+/// throws "An iterator cannot be used with foreach by reference" at run time for an object.
 /// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
 #[test]
-fn test_error_by_reference_foreach_rejects_iterable_type() {
-    expect_error(
-        "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
+fn test_by_reference_foreach_accepts_iterable_type() {
+    expect_no_error("<?php function f(iterable $items) { foreach ($items as &$value) {} }");
 }
 
 /// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.

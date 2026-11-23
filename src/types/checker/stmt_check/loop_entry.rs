@@ -111,9 +111,13 @@ pub(super) fn stabilize_loop_storage(
         Some(inferred)
     };
     let object_is_a = |class: &str, ancestor: &str| shared.borrow().object_is_a(class, ancestor);
+    let reaches_backedge = |name: &str, value: &super::super::loop_storage::AssignedValue<'_>| {
+        backedges.values.iter().any(|(written, carried)| *written == name
+            && super::super::loop_storage::same_assigned_value(value, carried))
+    };
     let analysis = super::super::loop_storage::analyze_loop_storage(body, update, condition,
         &snapshot, packed_counter, ref_value_binding, &tagged_integer_locals,
-        &promotable_candidates, &mut infer, &object_is_a);
+        &promotable_candidates, &reaches_backedge, &mut infer, &object_is_a);
     let mut incoming = Vec::new();
     for name in &backedges.references {
         if !narrowed.contains(*name) { continue; }

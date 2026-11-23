@@ -2341,6 +2341,11 @@ fn lower_body_into_function(
     // Symfony's generated `Container::load()` the stale slot fed `$class::do($this, $lazyLoad)` a
     // dangling reference that crashed `--web` workers depending on memory layout.
     let exposes_scope = crate::ir_lower::body_contains_eval_call(body);
+    // An `iterable` parameter is not owned by its callee (see `FunctionSig::param_is_callee_owned`), but
+    // `foreach ($items as &$v)` rebuilds an array argument in place: the loop would free or rewrite the
+    // caller's array. Such a parameter takes the same owning shadow as an array parameter, so the
+    // conversion splits at refcount two and the caller keeps its value (php passes arrays by value).
+    let by_ref_iterated = by_ref_foreach_sources(body);
     for (index, (name, php_type)) in params.iter().enumerate() {
         if exposes_scope {
             continue;
@@ -2348,9 +2353,11 @@ fn lower_body_into_function(
         if name == "this" {
             continue;
         }
-        if !FunctionSig::parameter_needs_owned_shadow(
-            php_type, by_ref_params.get(index).copied().unwrap_or(false),
-        ) {
+        let by_ref_param = by_ref_params.get(index).copied().unwrap_or(false);
+        let iterated_by_ref = php_type.codegen_repr() == PhpType::Iterable
+            && !by_ref_param
+            && by_ref_iterated.contains(name.as_str());
+        if !FunctionSig::parameter_needs_owned_shadow(php_type, by_ref_param) && !iterated_by_ref {
             continue;
         }
         ctx.privatize_container_param(name, php_type, None);
@@ -2407,6 +2414,21 @@ fn lower_body_into_function(
     let mut closures = ctx.into_closures();
     closures.extend(eager_validators);
     closures
+}
+
+/// The plain locals a `foreach (... as &$v)` in `body` iterates by reference, at any depth.
+fn by_ref_foreach_sources(body: &[Stmt]) -> crate::fast_hash::FastSet<&str> {
+    let mut sources = crate::fast_hash::FastSet::default();
+    crate::parser::ast::visit::walk_nodes(body, &mut |node| {
+        if let crate::parser::ast::visit::Node::Stmt(stmt) = node {
+            if let StmtKind::Foreach { array, value_by_ref: true, .. } = &stmt.kind {
+                if let ExprKind::Variable(name) = &array.kind {
+                    sources.insert(name.as_str());
+                }
+            }
+        }
+    });
+    sources
 }
 
 /// Stores an empty array into every local this scope CREATES with an array element write.

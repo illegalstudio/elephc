@@ -10,5 +10,6 @@
 use super::*;
 
 mod foreach;
+mod foreach_by_reference;
 mod foreach_property_receivers;
 mod builtins_and_casts;
