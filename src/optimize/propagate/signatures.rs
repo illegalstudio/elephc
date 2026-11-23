@@ -19,7 +19,7 @@ use super::*;
 
 thread_local! {
     /// The by-ref signature scan for the program currently being propagated.
-    static ACTIVE_BY_REF_SIGNATURES: RefCell<Option<ByRefSignatures>> = const { RefCell::new(None) };
+    static ACTIVE_BY_REF_SIGNATURES: RefCell<Option<std::rc::Rc<ByRefSignatures>>> = const { RefCell::new(None) };
 }
 
 /// Per-program by-ref parameter summaries feeding targeted call invalidation.
@@ -57,9 +57,12 @@ pub(crate) fn collect_by_ref_signatures(program: &[Stmt]) -> ByRefSignatures {
 
 /// Installs `sigs` as the active scan for the duration of `f`, restoring the
 /// previous scan afterwards.
-pub(crate) fn with_by_ref_signatures<R>(sigs: ByRefSignatures, f: impl FnOnce() -> R) -> R {
+pub(crate) fn with_by_ref_signatures<R>(
+    sigs: impl Into<std::rc::Rc<ByRefSignatures>>,
+    f: impl FnOnce() -> R,
+) -> R {
     ACTIVE_BY_REF_SIGNATURES.with(|slot| {
-        let previous = slot.replace(Some(sigs));
+        let previous = slot.replace(Some(sigs.into()));
         let result = f();
         slot.replace(previous);
         result

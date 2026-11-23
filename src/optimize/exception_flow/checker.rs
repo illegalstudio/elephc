@@ -16,7 +16,7 @@ use super::*;
 pub(crate) struct CheckerExceptionAnalysis {
     effects: CallableEffectAnalysis,
     analysis: ExceptionFlowAnalysis,
-    signatures: ByRefSignatures,
+    signatures: Rc<ByRefSignatures>,
 }
 
 /// Exact classes and constrained unknown domains crossing one control-flow edge.
@@ -36,7 +36,7 @@ impl CheckerExceptionAnalysis {
         let effects = CallableEffectAnalysis::from_program(program);
         let analysis = with_callable_effect_analysis(&effects, ||
             ExceptionFlowAnalysis::from_program_with_registered_parents(program, None, registered_parents));
-        Self { effects, analysis, signatures: collect_by_ref_signatures(program) }
+        Self { effects, analysis, signatures: Rc::new(collect_by_ref_signatures(program)) }
     }
 
     /// Reports throws from this operation after its operands have already been evaluated.
@@ -83,15 +83,17 @@ impl CheckerExceptionAnalysis {
 
     /// Creates an isolated query with loop-wide upper bounds for local retirement.
     pub(crate) fn catch_query(&self, types: crate::types::TypeEnv) -> CheckerCatchAnalysis<'_> {
-        let mut analysis = self.analysis.clone();
-        analysis.checker_retirement_types = Some(Rc::new(types));
-        CheckerCatchAnalysis { effects: &self.effects, analysis }
+        CheckerCatchAnalysis {
+            effects: &self.effects,
+            analysis: &self.analysis,
+            retirement_types: Rc::new(types),
+        }
     }
 
     /// Batches caller writes under shared signatures, including named and spread references.
     pub(crate) fn caller_writes(&self, expressions: &[&Expr], function_scope: bool) -> Option<HashSet<String>> {
         let collect = || with_callable_effect_analysis(&self.effects, ||
-            with_by_ref_signatures(self.signatures.clone(), || {
+            with_by_ref_signatures(Rc::clone(&self.signatures), || {
                 let mut written = HashSet::default();
                 for expr in expressions {
                     // Deletion cannot introduce a destructible value. Nested operand calls
@@ -122,7 +124,8 @@ impl CheckerExceptionAnalysis {
 /// A frame-local exception query whose retirement bounds never affect shared summaries.
 pub(crate) struct CheckerCatchAnalysis<'a> {
     effects: &'a CallableEffectAnalysis,
-    analysis: ExceptionFlowAnalysis,
+    analysis: &'a ExceptionFlowAnalysis,
+    retirement_types: Rc<crate::types::TypeEnv>,
 }
 
 impl CheckerCatchAnalysis<'_> {
@@ -134,19 +137,36 @@ impl CheckerCatchAnalysis<'_> {
             class_name: name.to_string(),
             parent_name: self.analysis.hierarchy.parents.get(&php_symbol_key(name)).cloned(),
         });
-        with_callable_effect_analysis(self.effects, || {
+        let types = Some(Rc::clone(&self.retirement_types));
+        with_callable_effect_analysis(self.effects, || self.analysis.with_retirement_types(types, || {
             let thrown = self.analysis.block_throws(body, &HashMap::default(), context.as_ref());
             let (routes, _) = self.analysis.route_catches(thrown, catches, context.as_ref());
             routes.into_iter().map(|route| !route.incoming.is_empty()).collect()
-        })
+        }))
     }
 }
 
 impl ExceptionFlowAnalysis {
+    /// Returns the local upper bounds installed for the running query, if any.
+    pub(super) fn retirement_types(&self) -> Option<Rc<crate::types::TypeEnv>> {
+        self.checker_retirement_types.borrow().clone()
+    }
+
+    /// Runs `query` under `types`, restoring the bounds of the enclosing query afterwards.
+    pub(super) fn with_retirement_types<R>(
+        &self, types: Option<Rc<crate::types::TypeEnv>>, query: impl FnOnce() -> R,
+    ) -> R {
+        let previous = self.checker_retirement_types.replace(types);
+        let result = query();
+        self.checker_retirement_types.replace(previous);
+        result
+    }
+
     /// Uses a proven local upper bound, retaining unknown cleanup for other target shapes.
     pub(super) fn local_retirement_throws(&self, target: &Expr) -> ThrownTypes {
+        let types = self.retirement_types();
         let ty = match &target.kind {
-            ExprKind::Variable(name) => self.checker_retirement_types.as_ref()
+            ExprKind::Variable(name) => types.as_ref()
                 .and_then(|types| types.get(name)),
             _ => None,
         };

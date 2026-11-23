@@ -119,7 +119,10 @@ pub(super) struct ExceptionFlowAnalysis {
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
     /// Checker-proven upper bounds for local retirement within one lexical frame.
-    checker_retirement_types: Option<Rc<crate::types::TypeEnv>>,
+    ///
+    /// A cell, not a field of a per-query copy: the summaries cover the whole program, and the
+    /// checker queries them once per loop that contains a `catch`.
+    checker_retirement_types: std::cell::RefCell<Option<Rc<crate::types::TypeEnv>>>,
     /// While one body is summarized, the summary keys it reads (see [`SummaryKind`]); `None`
     /// outside summarization, where reads are not recorded.
     summary_reads: RefCell<Option<Vec<SummaryKey>>>,
@@ -634,7 +637,7 @@ impl ExceptionFlowAnalysis {
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
         let mut analysis = Self {
-            checker_retirement_types: None,
+            checker_retirement_types: std::cell::RefCell::new(None),
             reference_parameters,
             has_internal_object_operators: class_contexts.keys().any(|name|
                 elephc_builtin_contract::is_operator_class_name(name)),
@@ -941,9 +944,10 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
+        let types = self.retirement_types();
         let retired = match &stmt.kind {
             StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } =>
-                self.checker_retirement_types.as_ref().and_then(|types| types.get(name)),
+                types.as_ref().and_then(|types| types.get(name)),
             _ => None,
         };
         self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired, None)
@@ -1572,15 +1576,10 @@ impl ExceptionFlowAnalysis {
                 let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                     params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
                 // The callee owns different locals even when their spellings match the caller.
-                let mut callee_analysis;
-                let analysis = if self.checker_retirement_types.is_some() {
-                    callee_analysis = self.clone();
-                    callee_analysis.checker_retirement_types = None;
-                    &callee_analysis
-                } else { self };
-                with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
-                    with_reference_parameter_scope(*by_ref_return, references, ||
-                        analysis.block_throws(body, bindings, class_context))))
+                self.with_retirement_types(None, || with_return_boundary_facts(Some(&facts), ||
+                    with_reference_value_scope(values, ||
+                        with_reference_parameter_scope(*by_ref_return, references, ||
+                            self.block_throws(body, bindings, class_context)))))
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_summary(self.canonical_exception_function_name(name.as_str()))
