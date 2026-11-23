@@ -235,8 +235,6 @@ pub(super) fn layout_for_function(
             callee_saved_offsets.push((reg, offset));
         }
     }
-    offset += 8;
-    let concat_base_offset = offset;
     let return_cleanup_skip_offset = if function.blocks.iter().filter(|block|
         matches!(block.terminator, Some(Terminator::Return { .. }))).take(2).count() > 1
     {
