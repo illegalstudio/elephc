@@ -204,3 +204,49 @@ fclose($rd);
     );
     assert_eq!(out, "seeked|reset-ok");
 }
+
+/// String, convert and iconv write filters record the same seekability rule.
+#[test]
+fn test_stream_filter_write_seek_mode_string_convert_iconv_php86() {
+    let out = run86(
+        r#"<?php
+$f = fopen("str.bin", "w+");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_WRITE, ['write_seek_mode' => 'strict']);
+fwrite($f, "abc");
+echo @fseek($f, 0, 0), "|";
+fclose($f);
+$g = fopen("conv.bin", "w+");
+stream_filter_append($g, "convert.base64-encode", STREAM_FILTER_WRITE, ['write_seek_mode' => 'reset']);
+fwrite($g, "abc");
+echo @fseek($g, 5, 0), "|";
+echo @fseek($g, 0, 0), "|";
+fclose($g);
+$h = fopen("iconv.bin", "w+");
+stream_filter_append($h, "convert.iconv.UTF-8/UTF-16LE", STREAM_FILTER_WRITE, ['write_seek_mode' => 'strict']);
+fwrite($h, "abc");
+echo @fseek($h, 0, 0);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "-1|-1|0|-1");
+}
+
+/// `rewind()` consults the mode too: strict rejects it, reset allows it.
+#[test]
+fn test_stream_filter_write_seek_mode_rewind_php86() {
+    let out = run86(
+        r#"<?php
+$f = fopen("rw.bin", "w+");
+stream_filter_append($f, "zlib.deflate", STREAM_FILTER_WRITE, ['write_seek_mode' => 'strict']);
+fwrite($f, "abc");
+echo @rewind($f) ? "true" : "false", "|";
+fclose($f);
+$g = fopen("rw2.bin", "w+");
+stream_filter_append($g, "zlib.deflate", STREAM_FILTER_WRITE, ['write_seek_mode' => 'reset']);
+fwrite($g, "abc");
+echo @rewind($g) ? "true" : "false";
+fclose($g);
+"#,
+    );
+    assert_eq!(out, "false|true");
+}

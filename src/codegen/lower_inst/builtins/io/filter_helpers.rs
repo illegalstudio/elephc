@@ -174,6 +174,15 @@ pub(super) fn finish_builtin_stream_filter_attach(
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }
     }
+    if stream_filter_write_direction_enabled(ctx, inst)? {
+        let mode = stream_filter_seek_mode(ctx, inst)?;
+        store_stream_filter_write_seek_mode(
+            ctx,
+            abi::int_result_reg(ctx.emitter),
+            mode,
+            stream_filter_seek_label(id),
+        );
+    }
     emit_boxed_stream_resource(ctx);
     store_if_result(ctx, inst)
 }
@@ -323,6 +332,35 @@ pub(super) fn store_stream_filter_write_seek_mode(
             ctx.emitter.instruction(&format!("mov QWORD PTR [r9 + {}*8], r10", fd_reg)); // record the php-src filter label length
             ctx.emitter.label(&skip);
         }
+    }
+}
+
+/// Returns php-src's filter label for the fseek diagnostic of a builtin filter id.
+pub(super) fn stream_filter_seek_label(id: u8) -> &'static str {
+    match id {
+        // The convert.* factories publish one shared `convert.*` label.
+        6..=9 => "convert.*",
+        _ => BUILTIN_STREAM_FILTERS
+            .iter()
+            .find_map(|(name, candidate)| (*candidate == id).then_some(*name))
+            .unwrap_or("stream filter"),
+    }
+}
+
+/// Returns whether a statically-known `$mode` enables the write direction.
+///
+/// A dynamic mode cannot be reflected in the per-descriptor seek table at lowering time;
+/// the write-seek rule is then left unregistered instead of guessed.
+pub(super) fn stream_filter_write_direction_enabled(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    if stream_filter_argument_count(inst) < 3 {
+        return Ok(true);
+    }
+    match optional_const_i64_operand(ctx, inst.operands[2])? {
+        Some(mode) => Ok(mode & 2 != 0),
+        None => Ok(false),
     }
 }
 

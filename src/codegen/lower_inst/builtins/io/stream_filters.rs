@@ -558,6 +558,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
     let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());
     let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());
     let option_bits = crate::codegen::stream_filters::iconv_write::iconv_target_option_bits(to);
+    let seek_mode = stream_filter_seek_mode(ctx, inst)?;
     let write_label = ctx.next_label("iconv_mode_write");
     let after_label = ctx.next_label("iconv_mode_done");
     match ctx.emitter.target.arch {
@@ -571,6 +572,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("b {}", after_label));             // skip the write-filter attach path
             ctx.emitter.label(&write_label);
+            store_stream_filter_write_seek_mode(ctx, abi::int_result_reg(ctx.emitter), seek_mode, "convert.iconv.*");
             emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym, option_bits);
             ctx.emitter.label(&after_label);
         }
@@ -584,6 +586,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("jmp {}", after_label));           // skip the write-filter attach path
             ctx.emitter.label(&write_label);
+            store_stream_filter_write_seek_mode(ctx, abi::int_result_reg(ctx.emitter), seek_mode, "convert.iconv.*");
             emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym, option_bits);
             ctx.emitter.label(&after_label);
         }
