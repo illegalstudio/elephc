@@ -43,7 +43,17 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         return None;
     }
     let text = std::str::from_utf8(source).ok()?;
+    if text.as_bytes().contains(&b'\r') {
+        return None;
+    }
+    let fast_spans = text.is_ascii();
+    let line_starts = if fast_spans {
+        super::line_starts(text)
+    } else {
+        Vec::new()
+    };
     let mut cursor = Cursor::new_in_source(text, 0);
+    let mut literal_cursor = Cursor::new_in_source(text, 0);
     let mut projected = Vec::with_capacity(tokens.len() + 2);
     let mut previous_significant = 0i64;
     let mut pending_label = false;
@@ -55,7 +65,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     let mut index = 0;
     while index < tokens.len() {
         let token = &tokens[index];
-        if token.pos() < cursor.position() {
+        if !fast_spans && token.pos() < cursor.position() {
             return None;
         }
         if token.id() == tok::T_DOUBLE_COLON && next_significant_is_brace(tokens, index) {
@@ -70,9 +80,13 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         if token.id() == tok::T_STRING && label_boundary(previous_significant) {
             pending_label = true;
         }
-        cursor.skip_bytes(token.pos() - cursor.position());
-        let start = cursor.span();
         let id = token.id();
+        let start = if fast_spans {
+            span_start(token, &line_starts)?
+        } else {
+            cursor.skip_bytes(token.pos() - cursor.position());
+            cursor.span()
+        };
         if matches!(
             id,
             tok::T_OPEN_TAG
@@ -81,7 +95,9 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
                 | tok::T_COMMENT
                 | tok::T_DOC_COMMENT
         ) {
-            cursor.skip_bytes(token.len());
+            if !fast_spans {
+                cursor.skip_bytes(token.len());
+            }
             index += 1;
             continue;
         }
@@ -91,9 +107,16 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             || id == i64::from(b'"')
             || id == i64::from(b'`')
         {
-            let parts = project_literal(id, token_text, &mut cursor, start)?;
+            let decoder_cursor = if fast_spans {
+                literal_cursor.skip_bytes(token.pos() - literal_cursor.position());
+                &mut literal_cursor
+            } else {
+                &mut cursor
+            };
+            let parts = project_literal(id, token_text, decoder_cursor, start)?;
             projected.extend(parts);
-            while index < tokens.len() && tokens[index].pos() < cursor.position() {
+            let end_pos = decoder_cursor.position();
+            while index < tokens.len() && tokens[index].pos() < end_pos {
                 index += 1;
             }
             previous_significant = tok::T_STRING;
@@ -103,16 +126,23 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             id,
             tok::T_NAME_FULLY_QUALIFIED | tok::T_NAME_QUALIFIED | tok::T_NAME_RELATIVE
         ) {
-            let parts = project_qualified_name(id, token_text, &mut cursor)?;
+            let parts = if fast_spans {
+                project_qualified_name_fast(id, token_text, start)?
+            } else {
+                project_qualified_name(id, token_text, &mut cursor)?
+            };
             projected.extend(parts);
             previous_significant = tok::T_STRING;
             index += 1;
             continue;
         }
         let projected_token = project(id, token_text, start)?;
-        cursor.skip_bytes(token.len());
-        let end = cursor.span();
-        let span = Span::with_end_from(start, end);
+        let span = if fast_spans {
+            span_for_text(token_text, start)?
+        } else {
+            cursor.skip_bytes(token.len());
+            Span::with_end_from(start, cursor.span())
+        };
         match projected_token {
             Projected::Skip => {}
             Projected::Token(token, spelling) => {
@@ -130,14 +160,131 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         index += 1;
     }
 
-    if cursor.position() < text.len() {
-        cursor.skip_bytes(text.len() - cursor.position());
-    }
-    projected.push((Token::Eof, TokenMetadata::new(cursor.span())));
+    let eof_span = if fast_spans {
+        eof_span(text, &line_starts)?
+    } else {
+        if cursor.position() < text.len() {
+            cursor.skip_bytes(text.len() - cursor.position());
+        }
+        cursor.span()
+    };
+    projected.push((Token::Eof, TokenMetadata::new(eof_span)));
     Some(TokenProjection {
         tokens: projected,
         reference_error: None,
     })
+}
+
+/// Returns the source span at a token start using its native line and a line index.
+fn span_start<T: SourceToken>(token: &T, line_starts: &[usize]) -> Option<Span> {
+    let line = token.line();
+    if line == 0 {
+        return None;
+    }
+    let line_start = *line_starts.get(line - 1)?;
+    let col = u32::try_from(token.pos().checked_sub(line_start)?.checked_add(1)?).ok()?;
+    Some(Span::new_in_source(u32::try_from(line).ok()?, col, 0))
+}
+
+/// Extends a start span through ASCII token text, counting CR/LF as line breaks.
+fn span_for_text(text: &str, start: Span) -> Option<Span> {
+    let mut line = start.line;
+    let mut col = start.col;
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => {
+                line = line.checked_add(1)?;
+                col = 1;
+            }
+            b'\r' => {
+                line = line.checked_add(1)?;
+                col = 1;
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+            }
+            _ => col = col.checked_add(1)?,
+        }
+        index += 1;
+    }
+    Some(Span::with_end_from(
+        start,
+        Span::new_in_source(line, col, 0),
+    ))
+}
+
+/// Returns the EOF span from the source line index.
+fn eof_span(text: &str, line_starts: &[usize]) -> Option<Span> {
+    let line = u32::try_from(line_starts.len()).ok()?;
+    let last_start = *line_starts.last()?;
+    let col = u32::try_from(text.len().checked_sub(last_start)?.checked_add(1)?).ok()?;
+    Some(Span::new_in_source(line, col, 0))
+}
+
+/// Splits a qualified name using the token-start span and byte offsets.
+fn project_qualified_name_fast(id: i64, text: &str, start: Span) -> Option<Vec<SpannedToken>> {
+    let mut parts = Vec::new();
+    let mut offset = 0usize;
+    if id == tok::T_NAME_FULLY_QUALIFIED {
+        if text.as_bytes().first() != Some(&b'\\') {
+            return None;
+        }
+        parts.push((
+            Token::Backslash,
+            TokenMetadata::new(offset_span(start, 0, 1)?),
+        ));
+        offset = 1;
+    }
+    let mut first = true;
+    while offset < text.len() {
+        let rest = &text[offset..];
+        let segment_end = rest.find('\\').map_or(text.len(), |position| offset + position);
+        let segment = &text[offset..segment_end];
+        if segment.is_empty() {
+            return None;
+        }
+        let segment_span = offset_span(start, offset, segment.len())?;
+        let relative_prefix = id == tok::T_NAME_RELATIVE && first;
+        let token = if relative_prefix {
+            if !segment.eq_ignore_ascii_case("namespace") {
+                return None;
+            }
+            Token::Namespace
+        } else {
+            Token::Identifier(segment.to_owned())
+        };
+        let metadata = if relative_prefix && token.canonical_word_spelling() != Some(segment) {
+            TokenMetadata::with_source_spelling(segment_span, segment)
+        } else {
+            TokenMetadata::new(segment_span)
+        };
+        parts.push((token, metadata));
+        first = false;
+        offset = segment_end;
+        if offset < text.len() {
+            if text.as_bytes()[offset] != b'\\' {
+                return None;
+            }
+            parts.push((
+                Token::Backslash,
+                TokenMetadata::new(offset_span(start, offset, 1)?),
+            ));
+            offset += 1;
+        }
+    }
+    Some(parts)
+}
+
+/// Returns a span for a byte range starting at `start + offset` on one line.
+fn offset_span(start: Span, offset: usize, len: usize) -> Option<Span> {
+    let col = start.col.checked_add(u32::try_from(offset).ok()?)?;
+    let end = col.checked_add(u32::try_from(len).ok()?)?;
+    Some(Span::with_end_from(
+        Span::new_in_source(start.line, col, 0),
+        Span::new_in_source(start.line, end, 0),
+    ))
 }
 
 /// Projects one native token, or returns `None` when it is outside the prototype.

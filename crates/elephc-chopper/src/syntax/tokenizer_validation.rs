@@ -221,6 +221,10 @@ pub trait SourceToken {
     fn pos(&self) -> usize;
     /// Returns the byte length in the original source.
     fn len(&self) -> usize;
+    /// Returns the one-based source line when the embedder retains it.
+    fn line(&self) -> usize {
+        0
+    }
 }
 
 /// One tokenizer token reduced to the metadata this validator needs.
@@ -263,6 +267,8 @@ pub struct TokenView {
     pub pos: usize,
     /// Byte length in the original source.
     pub len: usize,
+    /// One-based source line.
+    pub line: usize,
 }
 
 impl SourceToken for TokenView {
@@ -272,6 +278,8 @@ impl SourceToken for TokenView {
     fn pos(&self) -> usize { self.pos }
     /// Returns the byte length in the original source.
     fn len(&self) -> usize { self.len }
+    /// Returns the one-based source line.
+    fn line(&self) -> usize { self.line }
 }
 
 /// Validates a token view without monomorphizing the parser in the engine's opt-level crate.
@@ -989,7 +997,7 @@ fn view_offsets(view: &str, lines: &[usize], positions: &[(u32, u32)]) -> Vec<us
 }
 
 /// Precomputes the byte offset of every one-based parser-view line.
-fn line_starts(view: &str) -> Vec<usize> {
+pub(super) fn line_starts(view: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(view.bytes().enumerate().filter_map(|(index, byte)| {
         (byte == b'\n').then_some(index + 1)
@@ -1016,6 +1024,7 @@ mod tests {
                 id: token.id,
                 pos: token.pos,
                 len: token.len,
+                line: token.line,
             })
             .collect()
     }
@@ -1043,10 +1052,12 @@ mod tests {
             b"<?php $a = 'it\\'s';",
             b"<?php $a = true; $b = false; $c = null;",
             b"<?php $a = 1.5; $b = 1e3;",
+            b"<?php $a = \"h\xc3\xa9llo\";",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
             b"<?php if (1) done: echo 1;",
+            b"<?php\r\n$a = 1;\r\n",
         ] {
             let tokens = scan_tokens(source);
             assert!(

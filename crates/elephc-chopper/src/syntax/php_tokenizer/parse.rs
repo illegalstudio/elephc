@@ -27,6 +27,7 @@ pub(super) fn validate(
             id: token.id,
             pos: token.pos,
             len: token.len,
+            line: token.line,
         })
         .collect();
     let feedback = validate_tokens(source, &views);
