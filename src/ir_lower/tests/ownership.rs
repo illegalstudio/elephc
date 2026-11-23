@@ -547,7 +547,7 @@ fn promoted_object_local_uses_exception_safe_cell_retirement_on_all_targets() {
     }
 }
 
-/// Nested Mixed writes detach local/reference roots and borrow separated property cells on every target.
+/// Nested Mixed writes separate shared reference payloads and borrow separated property cells.
 #[test]
 fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {
     let source = r#"<?php
@@ -579,10 +579,27 @@ fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {
             Ownership::Borrowed,
             "{target}",
         );
-        assert!(
-            !function.instructions.iter().any(|inst| inst.op == Op::StoreRefCell),
-            "{target}: the stable published cell must be mutated in place",
-        );
+        let owner_check = function.instructions.iter().find(|inst| {
+            inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedCellHasOtherOwner,
+            )) && inst.operands == [published.result.unwrap()]
+        }).expect("the published payload must be checked for sharing");
+        let entry = function.block(function.entry).unwrap();
+        let Some(crate::ir::Terminator::CondBr { cond, then_target, else_target, .. }) =
+            &entry.terminator else { panic!("{target}: reference separation must be conditional"); };
+        assert_eq!(Some(*cond), owner_check.result, "{target}");
+        let separate = function.block(*then_target).unwrap();
+        let done = function.block(*else_target).unwrap();
+        assert!(separate.instructions.iter().any(|id| {
+            let inst = function.instruction(*id).unwrap();
+            inst.op == Op::StoreRefCell && inst.immediate == published.immediate
+        }), "{target}: publish the separated payload through the same cell");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::StoreRefCell).count(),
+            1, "{target}: only separation can replace the reference payload");
+        assert!(done.instructions.iter().any(|id| {
+            let inst = function.instruction(*id).unwrap();
+            inst.op == Op::LoadRefCell && inst.immediate == published.immediate
+        }), "{target}: mutate the current payload after the two paths rejoin");
         assert_eq!(detached.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
         let mut property_fetches = 0;
         for function in &module.functions {
