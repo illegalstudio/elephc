@@ -162,9 +162,17 @@ pub(super) fn whatwg_declaration() -> Stmt {
                         s_assign("handle", e_call("\\elephc_uri_parse", vec![e_int(1), e_call("\\bin2hex", vec![e_var("uri")]), e_var("base")])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
-                            vec![
-                                s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])),
-                            ],
+                            {
+                                // PHP 8.6 resets the caller's `$softErrors` on failure; the
+                                // validation errors remain on the thrown exception instead.
+                                // Earlier profiles leave the caller's value untouched.
+                                let mut failure = Vec::new();
+                                if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+                                    failure.push(s_assign("softErrors", e_array(vec![])));
+                                }
+                                failure.push(s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])));
+                                failure
+                            },
                             vec![],
                             None,
                         ),
@@ -562,10 +570,7 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .body(vec![
                         s_assign("errors", e_array(vec![])),
                         s_assign("count", e_call("\\elephc_uri_error_count", vec![])),
-                        s_for(Some(s_assign("index", e_int(0))), Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("index"))), vec![
-                            s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
-                            s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
-                        ]),
+                        error_loop(),
                         s_return(e_var("errors")),
                     ]),
             )
@@ -851,6 +856,23 @@ pub(super) fn whatwg_declaration() -> Stmt {
 }
 
 /// Builds one unit-enum declaration with the given case names.
+/// Builds the `UrlValidationError` collection loop for the active PHP profile.
+///
+/// PHP 8.6 reports the validation errors in the order they are detected. PHP 8.5 and
+/// earlier exposed the same list reversed, so the pre-8.6 profile walks the bridge's
+/// detection-ordered list backwards.
+fn error_loop() -> Stmt {
+    let body = vec![
+        s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
+        s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
+    ];
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        s_for(Some(s_assign("index", e_int(0))), Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("index"))), body)
+    } else {
+        s_for(Some(s_assign("index", e_binop(e_var("count"), BinOp::Sub, e_int(1)))), Some(e_binop(e_var("index"), BinOp::GtEq, e_int(0))), Some(s_expr(e_post_dec("index"))), body)
+    }
+}
+
 fn enum_declaration(name: &str, cases: &[&str]) -> Stmt {
     Stmt::new(
         crate::parser::ast::StmtKind::EnumDecl {

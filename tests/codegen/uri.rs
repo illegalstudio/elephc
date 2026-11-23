@@ -844,3 +844,28 @@ Domain\n\
 special\n"
     );
 }
+
+/// Verifies PHP 8.6 resets `$softErrors` when the WHATWG constructor throws.
+#[test]
+fn test_uri_whatwg_soft_errors_reset_php86() {
+    let source = r#"<?php
+$soft = ["kept"];
+try {
+    new Uri\WhatWg\Url("http://exa mple.com", null, $soft);
+    echo "parsed";
+} catch (Uri\WhatWg\InvalidUrlException $e) {
+    echo "threw:", count($e->errors), "|";
+}
+echo json_encode($soft);
+"#;
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php86),
+        "threw:1|[]",
+        "PHP 8.6 resets the caller's softErrors"
+    );
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
+        "threw:1|[\"kept\"]",
+        "PHP 8.5 preserves the caller's softErrors"
+    );
+}
