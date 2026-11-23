@@ -240,17 +240,6 @@ fn emit_stream_filter_warning(ctx: &mut FunctionContext<'_>, message: &str) {
         }
         abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
     }
-    abi::emit_symbol_address(
-        ctx.emitter,
-        if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" },
-        "_rt_diag_newline",
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        if ctx.emitter.target.arch == Arch::AArch64 { "x2" } else { "rsi" },
-        1,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
     // The handler receives the message without the producer's display newline: the
     // shared dispatcher uses this length (full buffer minus the terminator) when it
     // builds `$message`, and still emits the complete line for default display.
@@ -266,6 +255,18 @@ fn emit_stream_filter_warning(ctx: &mut FunctionContext<'_>, message: &str) {
         abi::int_result_reg(ctx.emitter),
         "_rt_diag_warning_message_len",
         0,
+    );
+    // The completing entry appends the final fragment: pass the newline here instead of
+    // a separate `_fragment` call, which would append it twice.
+    abi::emit_symbol_address(
+        ctx.emitter,
+        if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" },
+        "_rt_diag_newline",
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        if ctx.emitter.target.arch == Arch::AArch64 { "x2" } else { "rsi" },
+        1,
     );
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
@@ -284,6 +285,45 @@ pub(super) fn emit_rejected_stream_filter(
     emit_stream_filter_warning(ctx, &format!("Unable to create or locate filter \"{name}\""));
     emit_boxed_bool(ctx, false);
     store_if_result(ctx, inst)
+}
+
+/// Records a write-direction filter's PHP 8.6 `write_seek_mode` and php-src filter label
+/// for the descriptor in `fd_reg`, so `fseek()` can apply the mode's seekability rule.
+pub(super) fn store_stream_filter_write_seek_mode(
+    ctx: &mut FunctionContext<'_>,
+    fd_reg: &str,
+    mode: i64,
+    label: &str,
+) {
+    let (label_symbol, label_len) = ctx.data.add_string(label.as_bytes());
+    let skip = ctx.next_label("sf_seek_mode_skip");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, fd_reg, &skip);
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_modes");
+            ctx.emitter.instruction(&format!("mov w10, #{}", mode));             // materialize the write-seek mode code
+            ctx.emitter.instruction(&format!("strb w10, [x9, {}]", fd_reg));    // record the mode for this descriptor
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+            abi::emit_symbol_address(ctx.emitter, "x10", &label_symbol);
+            ctx.emitter.instruction(&format!("str x10, [x9, {}, lsl #3]", fd_reg)); // record the php-src filter label pointer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_lens");
+            abi::emit_load_int_immediate(ctx.emitter, "x10", label_len as i64);
+            ctx.emitter.instruction(&format!("str x10, [x9, {}, lsl #3]", fd_reg)); // record the php-src filter label length
+            ctx.emitter.label(&skip);
+        }
+        Arch::X86_64 => {
+            abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, fd_reg, &skip);
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_modes");
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + {}], {}", fd_reg, mode)); // record the mode for this descriptor
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+            abi::emit_symbol_address(ctx.emitter, "r10", &label_symbol);
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r9 + {}*8], r10", fd_reg)); // record the php-src filter label pointer
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_lens");
+            abi::emit_load_int_immediate(ctx.emitter, "r10", label_len as i64);
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r9 + {}*8], r10", fd_reg)); // record the php-src filter label length
+            ctx.emitter.label(&skip);
+        }
+    }
 }
 
 /// Attaches a user-defined stream filter through the runtime registry.

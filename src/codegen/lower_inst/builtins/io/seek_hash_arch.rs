@@ -24,6 +24,23 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("lsl w9, w9, #16");                                 // form the synthetic wrapper fd base 0x40000000
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("b.ge {}", wrapper_label));                // dispatch synthetic handles to stream_seek
+    let allow = ctx.next_label("fseek_seek_mode_allow");
+    let never = ctx.next_label("fseek_seek_mode_never");
+    let only_start = ctx.next_label("fseek_seek_mode_start");
+    abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "x0", &allow);
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_modes");
+    ctx.emitter.instruction("ldrb w10, [x9, x0]");                              // load this descriptor's write-seek mode
+    ctx.emitter.instruction(&format!("cbz w10, {allow}"));                      // preserve: the seek is allowed
+    ctx.emitter.instruction("cmp w10, #2");                                     // strict mode?
+    ctx.emitter.instruction(&format!("b.eq {never}"));                          // strict: every write-chain seek fails
+    ctx.emitter.instruction(&format!("cbnz x1, {only_start}"));                 // reset: offset 0 is required
+    ctx.emitter.instruction(&format!("cbnz x2, {only_start}"));                 // reset: SEEK_SET is required
+    ctx.emitter.instruction(&format!("b {allow}"));                             // reset to the start position: allowed
+    ctx.emitter.label(&never);
+    emit_fseek_seek_warning_arm64(ctx, " is never seekable", done_label);
+    ctx.emitter.label(&only_start);
+    emit_fseek_seek_warning_arm64(ctx, " is seekable only to start position", done_label);
+    ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.emitter.syscall(199);
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
@@ -61,6 +78,26 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov r9d, 0x40000000");                             // materialize USER_WRAPPER_FD_BASE for synthetic handles
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("jge {}", wrapper_label));                 // dispatch synthetic handles to stream_seek
+    let allow = ctx.next_label("fseek_seek_mode_allow");
+    let never = ctx.next_label("fseek_seek_mode_never");
+    let only_start = ctx.next_label("fseek_seek_mode_start");
+    abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "rdi", &allow);
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_modes");
+    ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rdi]");                 // load this descriptor's write-seek mode
+    ctx.emitter.instruction(&format!("test r10d, r10d"));                       // preserve mode?
+    ctx.emitter.instruction(&format!("jz {allow}"));                            // preserve: the seek is allowed
+    ctx.emitter.instruction("cmp r10d, 2");                                     // strict mode?
+    ctx.emitter.instruction(&format!("je {never}"));                            // strict: every write-chain seek fails
+    ctx.emitter.instruction(&format!("test rsi, rsi"));                         // reset: offset 0 is required
+    ctx.emitter.instruction(&format!("jnz {only_start}"));                      // reset: non-start offset fails
+    ctx.emitter.instruction(&format!("test rdx, rdx"));                         // reset: SEEK_SET is required
+    ctx.emitter.instruction(&format!("jnz {only_start}"));                      // reset: non-SEEK_SET fails
+    ctx.emitter.instruction(&format!("jmp {allow}"));                           // reset to the start position: allowed
+    ctx.emitter.label(&never);
+    emit_fseek_seek_warning_x86_64(ctx, " is never seekable", done_label);
+    ctx.emitter.label(&only_start);
+    emit_fseek_seek_warning_x86_64(ctx, " is seekable only to start position", done_label);
+    ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("call lseek");                                      // reposition the stream through libc lseek()
     ctx.emitter.instruction("cmp rax, 0");                                      // test whether lseek returned a non-negative offset
@@ -286,3 +323,88 @@ pub(super) fn lower_hash_file_x86_64(
     Ok(())
 }
 
+/// Emits PHP 8.6's `fseek()` write-seek-mode warning on AArch64 and fails the seek.
+///
+/// `x0` holds the descriptor; the stored label pointer/length name the php-src filter and
+/// the message is built through the shared diagnostic fragment channel.
+fn emit_fseek_seek_warning_arm64(
+    ctx: &mut FunctionContext<'_>,
+    suffix: &str,
+    done_label: &str,
+) {
+    let (fseek_filter, fseek_filter_len) = ctx.data.add_string(b"fseek(): Stream filter ");
+    let (suffix_symbol, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("ldr x11, [x9, x0, lsl #3]");                       // label pointer for this descriptor
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_lens");
+    ctx.emitter.instruction("ldr x12, [x9, x0, lsl #3]");                       // label length for this descriptor
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "x11", 0);
+    abi::emit_store_to_sp(ctx.emitter, "x12", 8);
+    abi::emit_symbol_address(ctx.emitter, "x1", "_rt_warning_prefix");
+    abi::emit_load_int_immediate(ctx.emitter, "x2", 9);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(ctx.emitter, "x1", &fseek_filter);
+    abi::emit_load_int_immediate(ctx.emitter, "x2", fseek_filter_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(ctx.emitter, "x1", &suffix_symbol);
+    abi::emit_load_int_immediate(ctx.emitter, "x2", suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 8);
+    abi::emit_load_int_immediate(ctx.emitter, "x9", (9 + fseek_filter_len + suffix_len) as i64);
+    ctx.emitter.instruction("add x10, x10, x9");                                // full buffer length without the newline
+    abi::emit_store_reg_to_symbol(ctx.emitter, "x10", "_rt_diag_warning_message_len", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    // The completing entry appends the final fragment: pass the newline here.
+    abi::emit_symbol_address(ctx.emitter, "x1", "_rt_diag_newline");
+    abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    ctx.emitter.instruction("mov x0, #-1");                                     // fseek fails the seek
+    ctx.emitter.instruction(&format!("b {}", done_label));
+}
+
+/// Emits PHP 8.6's `fseek()` write-seek-mode warning on x86_64 and fails the seek.
+///
+/// `rdi` holds the descriptor; the stored label pointer/length name the php-src filter and
+/// the message is built through the shared diagnostic fragment channel.
+fn emit_fseek_seek_warning_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    suffix: &str,
+    done_label: &str,
+) {
+    let (fseek_filter, fseek_filter_len) = ctx.data.add_string(b"fseek(): Stream filter ");
+    let (suffix_symbol, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("mov r11, QWORD PTR [r9 + rdi*8]");                  // label pointer for this descriptor
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_lens");
+    ctx.emitter.instruction("mov r12, QWORD PTR [r9 + rdi*8]");                  // label length for this descriptor
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "r11", 0);
+    abi::emit_store_to_sp(ctx.emitter, "r12", 8);
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_rt_warning_prefix");
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", 9);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(ctx.emitter, "rdi", &fseek_filter);
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", fseek_filter_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(ctx.emitter, "rdi", &suffix_symbol);
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
+    abi::emit_load_int_immediate(ctx.emitter, "r9", (9 + fseek_filter_len + suffix_len) as i64);
+    ctx.emitter.instruction("add r10, r9");                                     // full buffer length without the newline
+    abi::emit_store_reg_to_symbol(ctx.emitter, "r10", "_rt_diag_warning_message_len", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    // The completing entry appends the final fragment: pass the newline here.
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_rt_diag_newline");
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", 1);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    ctx.emitter.instruction("mov rax, -1");                                     // fseek fails the seek
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+}

@@ -246,6 +246,11 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    let seek_mode = stream_filter_seek_mode(ctx, inst)?;
+    // The inline emitter re-boxes the descriptor, so park the fd and the boxed result
+    // around it to record the PHP 8.6 write_seek_mode once the filter is installed.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     let level = const_int_filter_param(ctx, inst, "level", true, -1, 9)?.unwrap_or(-1);
     let fwrite_label = ctx.next_label("zlib_deflate_fwrite");
     let close_label = ctx.next_label("zlib_deflate_close");
@@ -266,6 +271,22 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
             level,
         ),
     }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);                          // park the boxed filter result
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);            // reload the descriptor for the seek registration
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);                         // park the boxed filter result
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);           // reload the descriptor for the seek registration
+        }
+    }
+    store_stream_filter_write_seek_mode(ctx, abi::int_result_reg(ctx.emitter), seek_mode, "zlib.deflate");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8),
+        Arch::X86_64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 
@@ -325,6 +346,9 @@ pub(super) fn lower_bzip2_compress_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    let seek_mode = stream_filter_seek_mode(ctx, inst)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     let block_size = const_int_filter_param(ctx, inst, "blocks", true, 1, 9)?.unwrap_or(9);
     let work_factor = const_int_filter_param(ctx, inst, "work", false, 0, 250)?.unwrap_or(0);
     let fwrite_label = ctx.next_label("bz2_compress_fwrite");
@@ -348,6 +372,22 @@ pub(super) fn lower_bzip2_compress_stream_filter_attach(
             work_factor,
         ),
     }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);                          // park the boxed filter result
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);            // reload the descriptor for the seek registration
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);                         // park the boxed filter result
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);           // reload the descriptor for the seek registration
+        }
+    }
+    store_stream_filter_write_seek_mode(ctx, abi::int_result_reg(ctx.emitter), seek_mode, "bzip2.compress");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8),
+        Arch::X86_64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 
