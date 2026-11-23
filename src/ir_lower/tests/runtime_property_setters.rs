@@ -130,11 +130,17 @@ unset($capability);
     for name in ["dynamicHookUpdate", "namedHookUpdate"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         for method in ["__propget_value", "__propset_value"] {
-            assert!(function.instructions.iter().any(|instruction| instruction.op == Op::MethodCall
+            assert!(super::any_with_erased_writes(&module, function, |instruction| instruction.op == Op::MethodCall
                 && matches!(instruction.immediate, Some(Immediate::Data(id))
                     if module.data.strings[id.as_raw() as usize] == method)),
                 "{target}: runtime property names must invoke {method}\n{}", crate::ir::print_function(function));
         }
+        // The setter call sits in the function, or in the shared helper of the write it belongs to.
+        let function = super::with_erased_write_helpers(&module, function).into_iter().find(|body|
+            body.instructions.iter().any(|instruction| instruction.op == Op::MethodCall
+                && matches!(instruction.immediate, Some(Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == "__propset_value")))
+            .unwrap();
         let (position, setter) = function.instructions.iter().enumerate().find(|(_, instruction)|
             instruction.op == Op::MethodCall && matches!(instruction.immediate,
                 Some(Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] == "__propset_value"))
