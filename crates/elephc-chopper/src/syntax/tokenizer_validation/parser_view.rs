@@ -504,7 +504,11 @@ pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], next: usi
             next_significant_index(tokens, next).is_some_and(|after| {
                 matches!(
                     tokens[after].id(),
-                    id if id == i64::from(b'(') || id == tok::T_DOUBLE_COLON
+                    id if id == i64::from(b'(')
+                        || id == i64::from(b'[')
+                        || id == tok::T_DOUBLE_COLON
+                        || id == tok::T_OBJECT_OPERATOR
+                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
                 )
             })
         }

@@ -2828,3 +2828,47 @@ fn tokenizer_validation_preserves_compiler_declaration_rules() {
         assert!(parser::parse_test_source(source).is_err(), "compiler accepted {source}");
     }
 }
+
+/// Padded cast spellings like `( int )` are valid PHP and must use the same parser path.
+#[test]
+fn tokenizer_padded_casts_are_valid() {
+    for source in [
+        b"<?php echo ( int )$x;".as_slice(),
+        b"<?php $a = ( integer )$b;",
+        b"<?php $a = ( string )$b;",
+        b"<?php ( void )$a;",
+        b"<?php $a = ( array )$b;",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+}
+
+/// A delimiter mismatch stops before the later tokens and drops their warnings.
+#[test]
+fn tokenizer_mismatched_delimiter_drops_later_warnings() {
+    let error = tokenize_with_warnings(b"<?php echo \"${a[0}\"; (integer)$x;", TOKEN_PARSE)
+        .expect_err("mismatched delimiter");
+    assert_eq!(error.message, "Unclosed '[' does not match '}'");
+    assert!(
+        error.warnings.iter().all(|warning| !warning.message.contains("Non-canonical cast")),
+        "{:?}",
+        error.warnings
+    );
+}
+
+/// Qualified names are valid reference targets through indexes and members.
+#[test]
+fn tokenizer_namespaced_reference_targets_are_valid() {
+    for source in [
+        b"<?php $a = &\\Foo\\Bar[0];".as_slice(),
+        b"<?php $a = &\\Foo\\Bar->x;",
+        b"<?php $a = &\\Foo\\Bar?->x;",
+        b"<?php $a = &namespace\\Foo\\Bar[0];",
+        b"<?php $a = &\\Foo\\Bar[0]->x;",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+    assert!(tokenize(b"<?php $a = &\\Foo\\Bar{0};", TOKEN_PARSE).is_err());
+}

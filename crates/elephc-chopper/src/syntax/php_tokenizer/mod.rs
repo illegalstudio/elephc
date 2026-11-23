@@ -27,7 +27,7 @@ pub fn tokenize(source: &[u8], flags: i64) -> Result<Vec<Token>, ParseError> {
 /// end of input; warnings reached before that stop must survive, so those failures use the
 /// full source length as the cutoff. Every other failure reports the position it stopped at.
 fn warning_cutoff(message: &str, pos: usize, source_len: usize) -> usize {
-    if message.starts_with("Unclosed '") {
+    if message.starts_with("Unclosed '") && !message.contains(" does not match ") {
         source_len
     } else {
         pos

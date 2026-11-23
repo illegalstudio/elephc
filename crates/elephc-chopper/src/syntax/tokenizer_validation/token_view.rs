@@ -2,14 +2,14 @@
 //! Builds a normalized compiler token stream directly from native scanner tokens.
 //!
 //! Called from:
-//! - `crate::syntax::tokenizer_validation::validate_in_scope` behind the
-//!   `ELEPHC_TOKEN_VIEW` prototype switch.
+//! - `crate::syntax::tokenizer_validation::validate_in_scope` on the default
+//!   `TOKEN_PARSE` path, with the text parser view as automatic fallback.
 //!
 //! Key details:
-//! - This is the prototype path for code tokens only; unsupported tokens fall back
-//!   to the text parser view.
+//! - Supported native tokens are projected directly into source-spanned compiler tokens.
+//! - Normalization-sensitive shapes fall back without allocating a second parser view.
 //! - Tokens keep source spans, so no view byte map is needed.
-//! - Literal and normalization-sensitive tokens are deliberately unsupported here.
+//! - Both views feed the same AST parser; this module never owns a second grammar.
 
 use std::cell::OnceCell;
 
@@ -26,14 +26,12 @@ use super::parser_view::{
 };
 use super::prechecks::delimiter_pairs;
 use super::prechecks::matching_brace_end;
-use super::{tok, ReferenceError, SourceToken};
+use super::{tok, SourceToken};
 
 /// A normalized token stream ready for the shared AST parser.
 pub(super) struct TokenProjection {
     /// Compiler tokens with source spans.
     pub(super) tokens: Vec<SpannedToken>,
-    /// Reference diagnostics found while projecting; none in the code-token prototype.
-    pub(super) reference_error: Option<ReferenceError>,
 }
 
 /// One projected native token: skipped, emitted, or unsupported.
@@ -46,7 +44,11 @@ enum Projected {
 
 /// Builds a source-spanned compiler token stream, or returns `None` when a token
 /// needs the text parser view.
-pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<TokenProjection> {
+pub(super) fn build<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
+) -> Option<TokenProjection> {
     if !early_supported(tokens) {
         return None;
     }
@@ -68,7 +70,6 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     let mut parens: Vec<usize> = Vec::new();
     let mut brackets: Vec<usize> = Vec::new();
     let mut braces: Vec<usize> = Vec::new();
-    let reference_delimiters = OnceCell::new();
     projected.push((
         Token::OpenTag,
         TokenMetadata::new(Span::new_in_source(1, 1, 0)),
@@ -278,10 +279,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         cursor.span()
     };
     projected.push((Token::Eof, TokenMetadata::new(eof_span)));
-    Some(TokenProjection {
-        tokens: projected,
-        reference_error: None,
-    })
+    Some(TokenProjection { tokens: projected })
 }
 
 /// Returns the source span at a token start using its native line and a line index.
@@ -306,13 +304,6 @@ fn span_for_text(text: &str, start: Span) -> Option<Span> {
             b'\n' => {
                 line = line.checked_add(1)?;
                 col = 1;
-            }
-            b'\r' => {
-                line = line.checked_add(1)?;
-                col = 1;
-                if bytes.get(index + 1) == Some(&b'\n') {
-                    index += 1;
-                }
             }
             _ => col = col.checked_add(1)?,
         }
@@ -513,7 +504,10 @@ fn reference_target_safe<T: SourceToken>(
 
 /// Returns whether a reference target continuation is not a write operator.
 fn reference_continuation_is_valid<T: SourceToken>(source: &[u8], token: &T) -> bool {
-    let Ok(text) = std::str::from_utf8(&source[token.pos()..token.pos() + token.len()]) else {
+    let Some(bytes) = source.get(token.pos()..token.pos() + token.len()) else {
+        return false;
+    };
+    let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
     !matches!(
@@ -538,8 +532,9 @@ fn reference_continuation_is_valid<T: SourceToken>(source: &[u8], token: &T) -> 
 
 /// Returns whether one native token's source text is a word.
 fn is_word_token<T: SourceToken>(source: &[u8], token: &T) -> bool {
-    std::str::from_utf8(&source[token.pos()..token.pos() + token.len()])
-        .ok()
+    source
+        .get(token.pos()..token.pos() + token.len())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
         .is_some_and(is_word)
 }
 
@@ -579,19 +574,23 @@ fn project_cast<T: SourceToken>(
     previous_significant: i64,
 ) -> Option<Vec<SpannedToken>> {
     let inner = text.strip_prefix('(')?.strip_suffix(')')?;
-    if inner.is_empty() {
+    let trimmed = inner.trim_matches(|byte: char| byte == ' ' || byte == '\t');
+    if trimmed.is_empty() {
         return None;
     }
-    let normalized = match id {
-        tok::T_STRING_CAST | tok::T_UNSET_CAST => "int",
+    let leading = inner.len() - inner.trim_start_matches(|byte: char| byte == ' ' || byte == '\t').len();
+    let (normalized, identifier_offset, identifier_len, rparen_offset) = match id {
+        // The text view rewrites these casts to `(int)`, so their emitted offsets follow
+        // that five-byte normalized token rather than the source spelling.
+        tok::T_STRING_CAST | tok::T_UNSET_CAST => ("int", 1, 3, 4),
         tok::T_VOID_CAST => {
             if void_cast_starts_statement(tokens, index, previous_significant) {
-                "int"
+                ("int", 1, 3, 4)
             } else {
                 return None;
             }
         }
-        _ => inner,
+        _ => (trimmed, 1 + leading, trimmed.len(), text.len() - 1),
     };
     let mut parts = Vec::with_capacity(3);
     parts.push((
@@ -600,11 +599,11 @@ fn project_cast<T: SourceToken>(
     ));
     parts.push((
         Token::Identifier(normalized.to_owned()),
-        TokenMetadata::new(offset_span(start, 1, normalized.len())?),
+        TokenMetadata::new(offset_span(start, identifier_offset, identifier_len)?),
     ));
     parts.push((
         Token::RParen,
-        TokenMetadata::new(offset_span(start, 1 + normalized.len(), 1)?),
+        TokenMetadata::new(offset_span(start, rparen_offset, 1)?),
     ));
     Some(parts)
 }
@@ -791,12 +790,13 @@ fn project_qualified_name(
     Some(parts)
 }
 
-/// Rejects an early unsupported token before allocating the full projection.
+/// Rejects unsupported tokens before allocating the full projection.
 ///
-/// A string-heavy source usually exposes a quote in its first statement; sampling the
-/// prefix keeps the fallback cheap without scanning the complete source or token stream.
+/// This is an ID-only pass over the complete token stream: an unsupported token late in a
+/// large source must not pay the source scan, line index and projection allocation before
+/// falling back to the text view.
 fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
-    tokens.iter().take(32).all(|token| {
+    tokens.iter().all(|token| {
         let id = token.id();
         if id < 256 {
             let byte = u8::try_from(id).unwrap_or(0);

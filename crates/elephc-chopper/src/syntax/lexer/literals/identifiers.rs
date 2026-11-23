@@ -168,6 +168,12 @@ mod tests {
     fn word_token_classifies_case_insensitively() {
         assert_eq!(word_token("CLASS"), Token::Class);
         assert_eq!(word_token("__DIR__"), Token::DunderDir);
+        assert_eq!(word_token("DIRECTORY_SEPARATOR"), Token::DirectorySeparator);
+        let longer_than_vocabulary = "DIRECTORY_SEPARATORX";
+        assert_eq!(
+            word_token(longer_than_vocabulary),
+            Token::Identifier(longer_than_vocabulary.to_owned())
+        );
         let long = "x".repeat(64);
         assert_eq!(word_token(&long), Token::Identifier(long));
     }

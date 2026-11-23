@@ -258,7 +258,7 @@ impl SourceToken for SyntaxToken {
 }
 
 /// One TOKEN_PARSE failure with PHP-compatible text and a source byte offset.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationError {
     /// PHP-style parser message without a filename suffix.
     pub message: String,
@@ -310,7 +310,7 @@ pub struct ValidationWarning {
 }
 
 /// The result of validating one source for TOKEN_PARSE.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ValidationFeedback {
     /// Byte offsets of keyword tokens Zend must rewrite to T_STRING.
     pub names: Vec<usize>,
@@ -343,6 +343,15 @@ pub fn validate<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedba
 
 /// Runs the prechecks and validates the normalized view under the tokenizer grammar.
 fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedback {
+    validate_in_scope_with(source, tokens, token_view_enabled())
+}
+
+/// Runs validation with an explicit token-view selection for differential tests.
+fn validate_in_scope_with<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    use_token_view: bool,
+) -> ValidationFeedback {
     let presence = TokenPresence::scan(tokens);
     // `declare(encoding=...)` is emitted while that statement is compiled, so it survives a
     // later parse failure. The caller drops the warnings that follow the failure position.
@@ -364,8 +373,8 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     );
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
-    if token_view_enabled() {
-        if let Some(view) = token_view::build(source, tokens) {
+    if use_token_view {
+        if let Some(view) = token_view::build(source, tokens, &reference_delimiters) {
             return validate_token_view(
                 source,
                 tokens,
@@ -476,10 +485,8 @@ fn validate_token_view<T: SourceToken>(
     precheck_names: Vec<usize>,
     encoding_warnings: Vec<ValidationWarning>,
 ) -> ValidationFeedback {
-    let token_view::TokenProjection {
-        tokens: view_tokens,
-        reference_error,
-    } = view;
+    let token_view::TokenProjection { tokens: view_tokens } = view;
+    let reference_error: Option<ReferenceError> = None;
     let (result, names) = crate::syntax::parser::parse_with_tokenizer_feedback(&view_tokens);
     match result {
         Ok(_) => {
@@ -1042,6 +1049,36 @@ mod tests {
             .collect()
     }
 
+    /// Verifies both validation paths produce the same diagnostics and identifier feedback.
+    #[test]
+    fn token_view_feedback_matches_text_view() {
+        let sources: &[&[u8]] = &[
+            b"<?php $a = 1; $b = $a + 2;",
+            b"<?php class C { public int $x = 0 { get => $this->x; set => $value; } }",
+            b"<?php $a = \"hello $name\";",
+            b"<?php $a = &\\Foo\\Bar[0];",
+            b"<?php echo ( int )$x;",
+            b"<?php echo \"${a[0}\"; (integer)$x;",
+            b"<?php function f() { (integer)$x;",
+            b"<?php $a = &$b + 1;",
+        ];
+        for source in sources {
+            let tokens = scan_tokens(source);
+            let old = crate::syntax::parser::with_tokenizer_validation(|| {
+                validate_in_scope_with(source, &tokens, false)
+            });
+            let new = crate::syntax::parser::with_tokenizer_validation(|| {
+                validate_in_scope_with(source, &tokens, true)
+            });
+            assert_eq!(
+                old,
+                new,
+                "feedback differs for {}",
+                String::from_utf8_lossy(source)
+            );
+        }
+    }
+
     /// Verifies the source-spanned token view matches the text parser view for supported code.
     #[test]
     fn token_view_matches_text_view_on_code_sources() {
@@ -1070,6 +1107,9 @@ mod tests {
             b"<?php $a = (integer) $b; $c = (boolean) $d; $e = (double) $f;",
             b"<?php $a = (binary) $b; $c = (unset) $d;",
             b"<?php (void) $a;",
+            b"<?php echo ( int )$x;",
+            b"<?php $a = ( integer )$b; $c = ( string )$d;",
+            b"<?php ( void )$a;",
             b"<?php echo C::{foo()}::BAR;",
             b"<?php $a::{ $b + 1 };",
             b"<?php function f(&$x) {}",
@@ -1118,11 +1158,21 @@ mod tests {
         ] {
             let tokens = scan_tokens(source);
             assert!(
-                token_view::build(source, &tokens).is_none(),
+                token_view::build(source, &tokens, &OnceCell::new()).is_none(),
                 "label source must fall back: {}",
                 String::from_utf8_lossy(source)
             );
         }
+        let mut late_fallback = String::from("<?php ");
+        for index in 0..40 {
+            late_fallback.push_str(&format!("$x{index} = 1; "));
+        }
+        late_fallback.push_str("goto done;");
+        let late_tokens = scan_tokens(late_fallback.as_bytes());
+        assert!(
+            token_view::build(late_fallback.as_bytes(), &late_tokens, &OnceCell::new()).is_none(),
+            "unsupported token beyond the old 32-token sample must fall back"
+        );
         for source in sources {
             let tokens = scan_tokens(source);
             let (view, map, _) =
@@ -1142,7 +1192,7 @@ mod tests {
                         .unwrap_or(source.len() as u32) as usize
                 })
                 .collect();
-            let new = token_view::build(source, &tokens)
+            let new = token_view::build(source, &tokens, &OnceCell::new())
                 .unwrap_or_else(|| panic!("code source supported: {}", String::from_utf8_lossy(source)));
             assert_eq!(
                 old.len(),
