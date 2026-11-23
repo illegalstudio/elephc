@@ -878,6 +878,18 @@ fn lower_array_access_offset_exists_coalesce(
     index: &Expr,
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    // A declared string or array property can never hold an `ArrayAccess` object, so php has no
+    // `offsetExists` to call. Decide that before the receiver is lowered: the silent receiver read
+    // boxes a property through the initialization probe, which would erase the declared type the
+    // guarded property read (`lower_guarded_property_array_access`) keeps for the plain `??` read.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if property_access_expr_type_for_ir(ctx, object, property).is_some_and(|ty| matches!(
+            ty.codegen_repr(),
+            PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }
+        )) {
+            return None;
+        }
+    }
     let receiver = lower_subscript_receiver_silently(ctx, array);
     // An offset with side effects (`$a[$i++] ?? $d`) is evaluated ONCE, after the receiver as php
     // does, and both `offsetExists` and `offsetGet` read it from a hidden temp.
