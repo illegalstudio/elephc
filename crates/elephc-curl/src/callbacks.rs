@@ -72,6 +72,8 @@ pub(crate) const SLOT_COUNT: usize = 6;
 /// `CURL_READFUNC_ABORT`: returned by a read callback to fail the transfer with
 /// `CURLE_ABORTED_BY_CALLBACK` (libcurl 8.21.0, `include/curl/curl.h`).
 const CURL_READFUNC_ABORT: usize = 0x1000_0000;
+/// `CURL_READFUNC_PAUSE`: returned by a read callback to pause the transfer.
+const CURL_READFUNC_PAUSE: usize = 0x1000_0001;
 
 /// `CURLOPT_HEADERFUNCTION` (20079) / `CURLOPT_HEADERDATA` (10029).
 const CURLOPT_HEADERFUNCTION: c_int = 20079;
@@ -96,6 +98,9 @@ const RESULT_INT: i64 = 0;
 /// `result_kind`: the PHP return value is read as a string and copied into
 /// `CallSpec::out_buf`, capped at `out_cap` (php-src's `MIN(size * nmemb, len)`).
 const RESULT_STRING: i64 = 1;
+/// `result_kind`: a string is copied into `out_buf`; an integer is returned raw so the
+/// read trampoline can honour PHP 8.6's `CURL_READFUNC_ABORT`/`CURL_READFUNC_PAUSE`.
+const RESULT_STRING_OR_INT: i64 = 2;
 
 /// Runtime value tags shared with `__rt_mixed_from_value`. Only the four the
 /// callback surface needs are named here.
@@ -424,15 +429,24 @@ unsafe extern "C" fn read_callback(
                 hi: 0,
             },
         ];
-        let (_, out_len, threw) = invoke(
+        let (result, out_len, threw) = invoke(
             slot,
             &args,
-            RESULT_STRING,
+            RESULT_STRING_OR_INT,
             buffer as *mut u8,
             total as i64,
         );
         if threw {
             mark_threw(id);
+            return CURL_READFUNC_ABORT;
+        }
+        // PHP 8.6 read callbacks may return the integer control codes directly.
+        if result == CURL_READFUNC_ABORT as i64 || result == CURL_READFUNC_PAUSE as i64 {
+            return result as usize;
+        }
+        if result != 0 {
+            // Any other integer is rejected by the prelude dispatcher (ValueError); abort
+            // defensively so it is never mistaken for uploaded data.
             return CURL_READFUNC_ABORT;
         }
         out_len.max(0) as usize

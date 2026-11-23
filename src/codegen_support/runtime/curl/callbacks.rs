@@ -199,7 +199,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     // -- decode the return according to spec.result_kind --
     emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
     emitter.instruction("ldr x11, [x11, #16]");                                 // spec.result_kind
-    emitter.instruction("cbnz x11, __rt_curl_invoke_cb_string");                // 1 = string-into-buffer
+    emitter.instruction("cbnz x11, __rt_curl_invoke_cb_nonzero");               // kind != 0 → string or string-or-int
 
     // result_kind 0: PHP's own `zval_get_long` of the return value.
     emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
@@ -207,12 +207,30 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #280]");                                  // publish it as this adapter's result
     emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned integer-return cell
 
+    // result_kind 2: a STRING is copied into the buffer, an INTEGER is published raw
+    // (CURLOPT_READFUNCTION's 0 / CURL_READFUNC_ABORT / CURL_READFUNC_PAUSE codes).
+    emitter.label("__rt_curl_invoke_cb_nonzero");
+    emitter.instruction("cmp x11, #2");                                         // 2 = string-or-int
+    emitter.instruction("b.eq __rt_curl_invoke_cb_string_or_int");              // decode a mixed string/int return
+    emitter.instruction("b __rt_curl_invoke_cb_string");                        // 1 = string-into-buffer
+    emitter.label("__rt_curl_invoke_cb_string_or_int");
+    emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi
+    emitter.instruction("cmp x0, #1");                                          // is the return a PHP string?
+    emitter.instruction("b.eq __rt_curl_invoke_cb_copy_string");                // strings use the byte-copy path
+    emitter.instruction("cmp x0, #0");                                          // is the return a PHP int?
+    emitter.instruction("b.ne __rt_curl_invoke_cb_release_return");             // other types → end-of-data
+    emitter.instruction("str x1, [sp, #280]");                                  // publish the int return (0/ABORT/PAUSE)
+    emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned return cell
+
     // result_kind 1: copy a STRING return into the bridge's buffer, capped at out_cap.
     emitter.label("__rt_curl_invoke_cb_string");
     emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi
     emitter.instruction("cmp x0, #1");                                          // is the return a PHP string?
-    emitter.instruction("b.ne __rt_curl_invoke_cb_release_return");             // no → out_len stays 0 (EOF)
+    emitter.instruction("b.eq __rt_curl_invoke_cb_copy_string");                // strings are copied into libcurl's buffer
+    emitter.instruction("b __rt_curl_invoke_cb_release_return");                // no → out_len stays 0 (EOF)
+    emitter.label("__rt_curl_invoke_cb_copy_string");
     emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
     emitter.instruction("ldr x12, [x11, #24]");                                 // spec.out_buf
     emitter.instruction("cbz x12, __rt_curl_invoke_cb_release_return");         // no buffer → nothing to copy
@@ -385,8 +403,8 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     // -- decode the return according to spec.result_kind --
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
     emitter.instruction("mov r11, QWORD PTR [r11 + 16]");                       // spec.result_kind
-    emitter.instruction("test r11, r11");                                       // 0 = integer, 1 = string-into-buffer
-    emitter.instruction("jnz __rt_curl_invoke_cb_string_x86");                  // decode the boxed return as a string
+    emitter.instruction("test r11, r11");                                       // 0 = integer, 1 = string, 2 = string-or-int
+    emitter.instruction("jnz __rt_curl_invoke_cb_nonzero_x86");                 // kind != 0 → check 1/2
 
     // result_kind 0: PHP's own `zval_get_long` of the return value.
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // boxed return (cast reads rax)
@@ -394,12 +412,27 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // publish it as this adapter's result
     emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned integer-return cell
 
-    // result_kind 1: copy a STRING return into the bridge's buffer, capped at out_cap.
+    // result_kind 2: a STRING is copied into the buffer, an INTEGER is published raw
+    // (CURLOPT_READFUNCTION's 0 / CURL_READFUNC_ABORT / CURL_READFUNC_PAUSE codes).
+    emitter.label("__rt_curl_invoke_cb_nonzero_x86");
+    emitter.instruction("cmp r11, 2");                                          // 2 = string-or-int
+    emitter.instruction("je __rt_curl_invoke_cb_string_or_int_x86");            // decode a mixed string/int return
     emitter.label("__rt_curl_invoke_cb_string_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // boxed return (unbox reads rax)
     emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = lo, rdx = hi
     emitter.instruction("cmp rax, 1");                                          // is the return a PHP string?
-    emitter.instruction("jne __rt_curl_invoke_cb_release_return_x86");          // no → out_len stays 0
+    emitter.instruction("je __rt_curl_invoke_cb_copy_string_x86");              // strings are copied into libcurl's buffer
+    emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // no → out_len stays 0
+    emitter.label("__rt_curl_invoke_cb_string_or_int_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // boxed return (unbox reads rax)
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = lo, rdx = hi
+    emitter.instruction("cmp rax, 1");                                          // is the return a PHP string?
+    emitter.instruction("je __rt_curl_invoke_cb_copy_string_x86");              // strings use the byte-copy path
+    emitter.instruction("cmp rax, 0");                                          // is the return a PHP int?
+    emitter.instruction("jne __rt_curl_invoke_cb_release_return_x86");          // other types → end-of-data
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // publish the int return (0/ABORT/PAUSE)
+    emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned return cell
+    emitter.label("__rt_curl_invoke_cb_copy_string_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
     emitter.instruction("mov r8, QWORD PTR [r11 + 24]");                        // spec.out_buf
     emitter.instruction("test r8, r8");                                         // is there a destination buffer?

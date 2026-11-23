@@ -774,7 +774,7 @@ function __elephc_curl_sync_read_slot(CurlHandle $handle): bool {
     // so it does not read as an oversight): the bridge has no way to marshal a PHP
     // resource, so it always passes null there. The stream a user callback should see is
     // the CURLOPT_INFILE one, which this dispatcher reads off `$ch` and substitutes.
-    return __elephc_curl_install_internal_callback($handle, 2, function (CurlHandle $ch, mixed $_fd, int $length): string {
+    return __elephc_curl_install_internal_callback($handle, 2, function (CurlHandle $ch, mixed $_fd, int $length): mixed {
         $user = $ch->__elephc_read_user;
         $source = $ch->__elephc_infile;
         if ($user !== null) {
@@ -782,14 +782,15 @@ function __elephc_curl_sync_read_slot(CurlHandle $handle): bool {
             // NOT the `$fd` libcurl handed the trampoline.
             $produced = call_user_func($user, $ch, $source, $length);
             if (is_int($produced)) {
-                // PHP 8.6 validates the integer return: only 0, CURL_READFUNC_ABORT and
-                // CURL_READFUNC_PAUSE are meaningful. The string-only bridge adapter still
-                // maps 0 to end-of-data; every other integer raises php-src's ValueError
-                // (the abort/pause codes are carried by the string path for now).
-                if (PHP_VERSION_ID >= 80600 && $produced !== 0
-                    && $produced !== 268435456 && $produced !== 268435457) {
+                if (PHP_VERSION_ID >= 80600) {
+                    // PHP 8.6 forwards 0, CURL_READFUNC_ABORT and CURL_READFUNC_PAUSE to
+                    // libcurl and rejects every other integer with a ValueError.
+                    if ($produced === 0 || $produced === 268435456 || $produced === 268435457) {
+                        return $produced;
+                    }
                     throw new ValueError("The CURLOPT_READFUNCTION callback must return a string or CURL_READFUNC_ABORT or CURL_READFUNC_PAUSE");
                 }
+                // Earlier profiles treat every non-string return as end-of-data.
                 return "";
             }
             if (!is_string($produced)) {
