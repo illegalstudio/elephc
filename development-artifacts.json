@@ -18,7 +18,10 @@
     },
     "577a768fee35e786bb04b25b7d5fcc3da25ec49a": {
       "first_seen": 1795447612,
-      "attempts": 0
+      "attempts": 1,
+      "last_observed": 1795447612,
+      "runs": [],
+      "last_dispatch": 1795447612
     },
     "3190a3b35cb0de2225ed96f49be9c2d9d6e10da9": {
       "first_seen": 1795447612,
