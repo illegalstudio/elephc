@@ -51,6 +51,8 @@ pub(super) fn build<T: SourceToken>(
     if text.as_bytes().contains(&b'\r') {
         return None;
     }
+    // ASCII source makes byte offsets equal character columns, so one line index derives every
+    // token span. Non-ASCII source keeps the cursor path, which counts characters for PHP columns.
     let fast_spans = text.is_ascii();
     let line_starts = if fast_spans {
         super::line_starts(text)
