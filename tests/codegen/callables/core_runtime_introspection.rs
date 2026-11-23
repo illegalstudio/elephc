@@ -828,3 +828,18 @@ fn test_core_at_error_reporting_intersects_the_active_mask() {
     assert_eq!(out, "4437:30719:0:1:0:0");
 }
 
+/// A fatal-only level set inside `@` restores the mask active before the expression.
+#[test]
+fn test_core_at_restores_the_outer_mask_after_a_fatal_only_level() {
+    let out = compile_and_run(
+        r#"<?php
+        error_reporting(E_ALL);
+        $ignored = @(error_reporting(E_ERROR));
+        echo error_reporting(), ":";
+        error_reporting(0);
+        $ignored = @(error_reporting(E_ALL));
+        echo error_reporting();
+        "#,
+    );
+    assert_eq!(out, "30719:30719");
+}

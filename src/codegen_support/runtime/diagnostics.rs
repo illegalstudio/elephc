@@ -74,13 +74,11 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.instruction("b.hs __rt_diag_pop_mask_restored");                    // only an impossible overflow can skip restoration
     abi::emit_symbol_address(emitter, "x12", "_php_error_reporting");
     emitter.instruction("ldr x13, [x12]");                                      // current reporting mask on leaving the @ expression
+    abi::emit_load_int_immediate(emitter, "x15", 4437);                         // PHP's fatal-only @ mask
+    emitter.instruction("bic x13, x13, x15");                                   // any remaining bit is a non-fatal level set inside @
     abi::emit_symbol_address(emitter, "x11", "_rt_diag_mask_stack");
-    emitter.instruction("ldr x14, [x11, x10, lsl #3]");                         // reload the mask active before this @ expression
-    abi::emit_load_int_immediate(emitter, "x15", 4437);                         // PHP's @ mask
-    emitter.instruction("and x14, x14, x15");                                   // the reduced mask installed by push
-    emitter.instruction("cmp x13, x14");                                        // did the expression change error_reporting() itself?
-    emitter.instruction("b.ne __rt_diag_pop_mask_restored");                    // PHP keeps a level the expression changed explicitly
-    emitter.instruction("ldr x13, [x11, x10, lsl #3]");                         // reload the original mask for restoration
+    emitter.instruction("cbnz x13, __rt_diag_pop_mask_restored");               // a non-fatal level set inside @ stays
+    emitter.instruction("ldr x13, [x11, x10, lsl #3]");                         // a fatal-only level restores the original mask
     emitter.instruction("str x13, [x12]");                                      // restore the caller-visible reporting level
     emitter.label("__rt_diag_pop_mask_restored");
     emitter.instruction("str x10, [x9]");                                       // publish the decremented diagnostic-suppression depth
@@ -138,13 +136,12 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_diag_pop_mask_restored_linux_x86_64");        // only an impossible overflow can skip restoration
     abi::emit_symbol_address(emitter, "r8", "_php_error_reporting");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // current reporting mask on leaving the @ expression
+    abi::emit_load_int_immediate(emitter, "rax", 4437);                         // PHP's fatal-only @ mask
+    emitter.instruction("not rax");                                             // non-fatal bits are everything outside the @ mask
+    emitter.instruction("test r9, rax");                                        // did the expression install a non-fatal level?
     abi::emit_symbol_address(emitter, "r11", "_rt_diag_mask_stack");
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10 * 8]");                  // reload the mask active before this @ expression
-    abi::emit_load_int_immediate(emitter, "rax", 4437);                         // PHP's @ mask
-    emitter.instruction("and rdx, rax");                                        // the reduced mask installed by push
-    emitter.instruction("cmp r9, rdx");                                         // did the expression change error_reporting() itself?
-    emitter.instruction("jne __rt_diag_pop_mask_restored_linux_x86_64");        // PHP keeps a level the expression changed explicitly
-    emitter.instruction("mov r9, QWORD PTR [r11 + r10 * 8]");                   // reload the original mask for restoration
+    emitter.instruction("jnz __rt_diag_pop_mask_restored_linux_x86_64");        // a non-fatal level set inside @ stays
+    emitter.instruction("mov r9, QWORD PTR [r11 + r10 * 8]");                   // a fatal-only level restores the original mask
     emitter.instruction("mov QWORD PTR [r8], r9");                              // restore the caller-visible reporting level
     emitter.label("__rt_diag_pop_mask_restored_linux_x86_64");
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the decremented diagnostic-suppression depth
