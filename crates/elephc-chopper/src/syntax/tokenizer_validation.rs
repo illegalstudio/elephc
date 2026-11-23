@@ -1075,16 +1075,24 @@ mod tests {
             b"<?php function f(&$x) {}",
             b"<?php function &f() {}",
             b"<?php foreach ($a as &$v) {}",
+            b"<?php $a = &$b;",
+            b"<?php $a = [&$b];",
+            b"<?php $a = array(&$b);",
+            b"<?php $f = function () use (&$x) {};",
+            b"<?php $f = fn&($x) => $x;",
+            b"<?php foreach ($a as $k => &$v) {}",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
             b"<?php if (1) done: echo 1;",
             b"<?php\r\n$a = 1;\r\n",
             b"<?php $a = (void) $b;",
-            b"<?php $a = &$b;",
-            b"<?php $a = [&$b];",
-            b"<?php function () use (&$x) {};",
-            b"<?php $f = fn&($x) => $x;",
+            b"<?php $a = &$b[0];",
+            b"<?php $a = &foo();",
+            b"<?php $a = &1;",
+            b"<?php $a = [&$b + 1];",
+            b"<?php foo(&$x);",
+            b"<?php function f($a = &$b) {}",
         ] {
             let tokens = scan_tokens(source);
             assert!(

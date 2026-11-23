@@ -762,7 +762,7 @@ fn is_reference_marker(id: i64) -> bool {
 ///
 /// Only the adjacent header is inspected. A parenthesized return type is skipped through
 /// the delimiter map, so nested groups do not make repeated arrow checks rescan the body.
-fn arrow_starts_function_body<T: SourceToken>(
+pub(crate) fn arrow_starts_function_body<T: SourceToken>(
     tokens: &[T],
     arrow: usize,
     pairs: &[Option<usize>],

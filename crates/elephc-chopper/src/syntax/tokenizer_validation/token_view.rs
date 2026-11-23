@@ -11,6 +11,8 @@
 //! - Tokens keep source spans, so no view byte map is needed.
 //! - Literal and normalization-sensitive tokens are deliberately unsupported here.
 
+use std::cell::OnceCell;
+
 use crate::scanner::operator;
 use crate::syntax::lexer::{
     byte_token, decode_backtick_body, decode_double_quoted_body, operator_token, scan_heredoc,
@@ -18,7 +20,11 @@ use crate::syntax::lexer::{
 };
 use crate::syntax::span::Span;
 
-use super::parser_view::{paren_is_declaration_parameters, void_cast_starts_statement};
+use super::next_significant_index;
+use super::parser_view::{
+    arrow_starts_function_body, is_reference_ampersand, void_cast_starts_statement,
+};
+use super::prechecks::delimiter_pairs;
 use super::prechecks::matching_brace_end;
 use super::{tok, ReferenceError, SourceToken};
 
@@ -60,6 +66,9 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     let mut previous_significant = tok::T_OPEN_TAG;
     let mut pending_label = false;
     let mut parens: Vec<usize> = Vec::new();
+    let mut brackets: Vec<usize> = Vec::new();
+    let mut braces: Vec<usize> = Vec::new();
+    let reference_delimiters = OnceCell::new();
     projected.push((
         Token::OpenTag,
         TokenMetadata::new(Span::new_in_source(1, 1, 0)),
@@ -85,20 +94,14 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             parens.push(index);
         } else if id == i64::from(b')') {
             parens.pop();
-        }
-        if matches!(
-            id,
-            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
-                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
-        ) {
-            if !reference_ampersand_supported(tokens, previous_significant, &parens) {
-                return None;
-            }
-            if !fast_spans {
-                cursor.skip_bytes(token.len());
-            }
-            index += 1;
-            continue;
+        } else if id == i64::from(b'[') || id == tok::T_ATTRIBUTE {
+            brackets.push(index);
+        } else if id == i64::from(b']') {
+            brackets.pop();
+        } else if id == i64::from(b'{') {
+            braces.push(index);
+        } else if id == i64::from(b'}') {
+            braces.pop();
         }
         let start = if fast_spans {
             span_start(token, &line_starts)?
@@ -106,6 +109,55 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             cursor.skip_bytes(token.pos() - cursor.position());
             cursor.span()
         };
+        if matches!(
+            id,
+            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+        ) {
+            let remove = is_reference_ampersand(
+                tokens,
+                index,
+                id,
+                previous_significant,
+                brackets.last().copied(),
+                parens.last().copied(),
+                braces.last().copied(),
+                |arrow| {
+                    if arrow.is_some_and(|arrow| {
+                        arrow_starts_function_body(
+                            tokens,
+                            arrow,
+                            reference_delimiters.get_or_init(|| delimiter_pairs(tokens)),
+                        )
+                    }) {
+                        return false;
+                    }
+                    reference_target_safe(tokens, index)
+                },
+            );
+            if remove {
+                if !fast_spans {
+                    cursor.skip_bytes(token.len());
+                }
+                index += 1;
+                continue;
+            }
+            if previous_significant != tok::T_FN
+                && reference_context(previous_significant)
+            {
+                return None;
+            }
+            let span = if fast_spans {
+                span_for_text("&", start)?
+            } else {
+                cursor.skip_bytes(token.len());
+                Span::with_end_from(start, cursor.span())
+            };
+            projected.push((Token::Ampersand, TokenMetadata::new(span)));
+            previous_significant = id;
+            index += 1;
+            continue;
+        }
         if matches!(
             id,
             tok::T_OPEN_TAG
@@ -133,6 +185,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
                 let end = tokens[close].pos() + tokens[close].len();
                 cursor.skip_bytes(end - cursor.position());
             }
+            braces.pop();
             previous_significant = tok::T_STRING;
             index = close + 1;
             continue;
@@ -340,19 +393,35 @@ fn offset_span(start: Span, offset: usize, len: usize) -> Option<Span> {
     ))
 }
 
-/// Returns whether an ampersand is a declaration/capture marker we can omit.
-fn reference_ampersand_supported<T: SourceToken>(
-    tokens: &[T],
-    previous_significant: i64,
-    parens: &[usize],
-) -> bool {
-    match previous_significant {
-        tok::T_FUNCTION | tok::T_AS => true,
-        id if id == i64::from(b'(') || id == i64::from(b',') => parens
-            .last()
-            .is_some_and(|open| paren_is_declaration_parameters(tokens, *open)),
-        _ => false,
+/// Returns whether an ampersand must stay on the text-view fallback.
+fn reference_context(previous_significant: i64) -> bool {
+    previous_significant == i64::from(b'=')
+        || previous_significant == i64::from(b'[')
+        || previous_significant == i64::from(b',')
+        || previous_significant == i64::from(b'(')
+        || previous_significant == tok::T_DOUBLE_ARROW
+        || previous_significant == tok::T_USE
+}
+
+/// Accepts only a plain variable target followed by a list/statement terminator.
+fn reference_target_safe<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let Some(target) = next_significant_index(tokens, index) else {
+        return false;
+    };
+    if tokens[target].id() != tok::T_VARIABLE {
+        return false;
     }
+    let Some(after) = next_significant_index(tokens, target) else {
+        return false;
+    };
+    matches!(
+        tokens[after].id(),
+        id if id == i64::from(b';')
+            || id == i64::from(b',')
+            || id == i64::from(b')')
+            || id == i64::from(b']')
+            || id == i64::from(b'}')
+    )
 }
 
 /// Returns whether a native token is a cast form.
