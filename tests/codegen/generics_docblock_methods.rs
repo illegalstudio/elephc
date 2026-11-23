@@ -1844,3 +1844,30 @@ run(new Liar());
     assert_eq!(output.stdout, "foo\nint(8)\nTypeError\n");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// A method's PHPDoc bound a call breaks is still only a warning, and it names the method as
+/// written (not the hidden twin the annotation is read from).
+#[test]
+fn test_docblock_method_bound_warning_names_the_written_method() {
+    let source = r#"<?php
+class Entity {}
+class Other {}
+class Gate {
+    /**
+     * @template E of Entity
+     * @param E $entity
+     * @return E
+     */
+    public function accept($entity) { return $entity; }
+}
+$g = new Gate();
+echo get_class($g->accept(new Other()));
+"#;
+    let warnings = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(
+        warnings.contains("Call to generic method 'Gate::accept' binds type parameter <E> to Other"),
+        "{warnings}"
+    );
+    assert!(!warnings.contains("__elephc_doc_template"), "{warnings}");
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Other");
+}

@@ -35,3 +35,4 @@ touches:
 - The single body takes boxed `mixed` for an untyped parameter that two call sites feed with different types: a benchmark that used to specialize `id<int>` now boxes (see the bead comment for the measurement). That is the price of "one body".
 - PHPDoc FUNCTION templates still instantiate: the twin function is a real template spliced per call. Same change, but needs the function-call lowering hook too; the Demo showed functions=0, so it was not done.
 - A `continue` inside a block moved into a function became `return` through a textual replace; check moved loops by reading them.
+- Demo `--check` (release, LTO off): checks 3 -> 1, `rounds=0`, instructions 2.42T -> 0.96T, check phase 1536 s -> 469 s wall under load (128 s user). 65 -> 63 warnings: the two `TypeFactoryTrait::intersection` PHPDoc-bound warnings no longer appear (the call is read without erroring), the `TableEditor::renameColumnInConstraints` ones stay, named by the written method.

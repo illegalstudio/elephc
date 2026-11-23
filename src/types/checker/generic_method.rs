@@ -96,7 +96,11 @@ impl Checker {
                         "Call to generic method '{}::{}' binds type parameter <{}> to {}, which \
                          does not satisfy its bound {}",
                         template.declared_class,
-                        template.declared_method,
+                        // A PHPDoc twin is reported under the method's written name.
+                        template
+                            .declared_method
+                            .strip_suffix(generics::DOC_TWIN_SUFFIX)
+                            .unwrap_or(&template.declared_method),
                         param.name,
                         argument_ty,
                         bound_ty
