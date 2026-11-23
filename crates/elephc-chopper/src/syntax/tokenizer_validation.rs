@@ -113,6 +113,11 @@ mod tok {
     pub const T_STATIC: i64 = id("T_STATIC");
     pub const T_NAMESPACE: i64 = id("T_NAMESPACE");
     pub const T_STRING: i64 = id("T_STRING");
+    pub const T_INT_CAST: i64 = id("T_INT_CAST");
+    pub const T_DOUBLE_CAST: i64 = id("T_DOUBLE_CAST");
+    pub const T_BOOL_CAST: i64 = id("T_BOOL_CAST");
+    pub const T_ARRAY_CAST: i64 = id("T_ARRAY_CAST");
+    pub const T_OBJECT_CAST: i64 = id("T_OBJECT_CAST");
     pub const T_STRING_CAST: i64 = id("T_STRING_CAST");
     pub const T_STRING_VARNAME: i64 = id("T_STRING_VARNAME");
     pub const T_TRAIT: i64 = id("T_TRAIT");
@@ -200,6 +205,11 @@ const _: () = {
     assert!(tok::T_START_HEREDOC != -1, "T_START_HEREDOC missing from the tokenizer catalog");
     assert!(tok::T_STATIC != -1, "T_STATIC missing from the tokenizer catalog");
     assert!(tok::T_STRING != -1, "T_STRING missing from the tokenizer catalog");
+    assert!(tok::T_INT_CAST != -1, "T_INT_CAST missing from the tokenizer catalog");
+    assert!(tok::T_DOUBLE_CAST != -1, "T_DOUBLE_CAST missing from the tokenizer catalog");
+    assert!(tok::T_BOOL_CAST != -1, "T_BOOL_CAST missing from the tokenizer catalog");
+    assert!(tok::T_ARRAY_CAST != -1, "T_ARRAY_CAST missing from the tokenizer catalog");
+    assert!(tok::T_OBJECT_CAST != -1, "T_OBJECT_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_CAST != -1, "T_STRING_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_VARNAME != -1, "T_STRING_VARNAME missing from the tokenizer catalog");
     assert!(tok::T_TRAIT != -1, "T_TRAIT missing from the tokenizer catalog");
@@ -1056,11 +1066,18 @@ mod tests {
             b"<?php $a = true; $b = false; $c = null;",
             b"<?php $a = 1.5; $b = 1e3;",
             b"<?php $a = \"h\xc3\xa9llo\";",
+            b"<?php $a = (int) $b; $c = (string) $d; $e = (array) $f;",
+            b"<?php $a = (integer) $b; $c = (boolean) $d; $e = (double) $f;",
+            b"<?php $a = (binary) $b; $c = (unset) $d;",
+            b"<?php (void) $a;",
+            b"<?php echo C::{foo()}::BAR;",
+            b"<?php $a::{ $b + 1 };",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
             b"<?php if (1) done: echo 1;",
             b"<?php\r\n$a = 1;\r\n",
+            b"<?php $a = (void) $b;",
         ] {
             let tokens = scan_tokens(source);
             assert!(

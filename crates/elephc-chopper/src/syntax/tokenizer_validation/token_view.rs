@@ -18,6 +18,8 @@ use crate::syntax::lexer::{
 };
 use crate::syntax::span::Span;
 
+use super::parser_view::void_cast_starts_statement;
+use super::prechecks::matching_brace_end;
 use super::{tok, ReferenceError, SourceToken};
 
 /// A normalized token stream ready for the shared AST parser.
@@ -55,7 +57,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     let mut cursor = Cursor::new_in_source(text, 0);
     let mut literal_cursor = Cursor::new_in_source(text, 0);
     let mut projected = Vec::with_capacity(tokens.len() + 2);
-    let mut previous_significant = 0i64;
+    let mut previous_significant = tok::T_OPEN_TAG;
     let mut pending_label = false;
     projected.push((
         Token::OpenTag,
@@ -66,9 +68,6 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     while index < tokens.len() {
         let token = &tokens[index];
         if !fast_spans && token.pos() < cursor.position() {
-            return None;
-        }
-        if token.id() == tok::T_DOUBLE_COLON && next_significant_is_brace(tokens, index) {
             return None;
         }
         if pending_label {
@@ -98,10 +97,44 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             if !fast_spans {
                 cursor.skip_bytes(token.len());
             }
+            if matches!(id, tok::T_OPEN_TAG | tok::T_INLINE_HTML) {
+                previous_significant = id;
+            }
             index += 1;
             continue;
         }
+        if id == i64::from(b'{') && previous_significant == tok::T_DOUBLE_COLON {
+            let close = matching_brace_end(tokens, index + 1, tokens.len())?;
+            projected.push((
+                Token::Identifier("x".to_owned()),
+                TokenMetadata::new(start),
+            ));
+            if !fast_spans {
+                let end = tokens[close].pos() + tokens[close].len();
+                cursor.skip_bytes(end - cursor.position());
+            }
+            previous_significant = tok::T_STRING;
+            index = close + 1;
+            continue;
+        }
         let token_text = text.get(token.pos()..token.pos() + token.len())?;
+        if is_cast_token(id) {
+            let parts = project_cast(
+                id,
+                token_text,
+                start,
+                tokens,
+                index,
+                previous_significant,
+            )?;
+            projected.extend(parts);
+            if !fast_spans {
+                cursor.skip_bytes(token.len());
+            }
+            previous_significant = id;
+            index += 1;
+            continue;
+        }
         if id == tok::T_CONSTANT_ENCAPSED_STRING
             || id == tok::T_START_HEREDOC
             || id == i64::from(b'"')
@@ -287,6 +320,61 @@ fn offset_span(start: Span, offset: usize, len: usize) -> Option<Span> {
     ))
 }
 
+/// Returns whether a native token is a cast form.
+fn is_cast_token(id: i64) -> bool {
+    matches!(
+        id,
+        tok::T_INT_CAST
+            | tok::T_DOUBLE_CAST
+            | tok::T_BOOL_CAST
+            | tok::T_ARRAY_CAST
+            | tok::T_OBJECT_CAST
+            | tok::T_STRING_CAST
+            | tok::T_UNSET_CAST
+            | tok::T_VOID_CAST
+    )
+}
+
+/// Projects a cast token as `(` + normalized type identifier + `)`.
+fn project_cast<T: SourceToken>(
+    id: i64,
+    text: &str,
+    start: Span,
+    tokens: &[T],
+    index: usize,
+    previous_significant: i64,
+) -> Option<Vec<SpannedToken>> {
+    let inner = text.strip_prefix('(')?.strip_suffix(')')?;
+    if inner.is_empty() {
+        return None;
+    }
+    let normalized = match id {
+        tok::T_STRING_CAST | tok::T_UNSET_CAST => "int",
+        tok::T_VOID_CAST => {
+            if void_cast_starts_statement(tokens, index, previous_significant) {
+                "int"
+            } else {
+                return None;
+            }
+        }
+        _ => inner,
+    };
+    let mut parts = Vec::with_capacity(3);
+    parts.push((
+        Token::LParen,
+        TokenMetadata::new(offset_span(start, 0, 1)?),
+    ));
+    parts.push((
+        Token::Identifier(normalized.to_owned()),
+        TokenMetadata::new(offset_span(start, 1, normalized.len())?),
+    ));
+    parts.push((
+        Token::RParen,
+        TokenMetadata::new(offset_span(start, 1 + normalized.len(), 1)?),
+    ));
+    Some(parts)
+}
+
 /// Projects one native token, or returns `None` when it is outside the prototype.
 fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
     match id {
@@ -341,10 +429,7 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
         | tok::T_GOTO
         | tok::T_ELLIPSIS
         | tok::T_HALT_COMPILER
-        | tok::T_NS_SEPARATOR
-        | tok::T_STRING_CAST
-        | tok::T_UNSET_CAST
-        | tok::T_VOID_CAST => return None,
+        | tok::T_NS_SEPARATOR => return None,
         _ => {}
     }
 
@@ -493,9 +578,6 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
                 | tok::T_ELLIPSIS
                 | tok::T_HALT_COMPILER
                 | tok::T_NS_SEPARATOR
-                | tok::T_STRING_CAST
-                | tok::T_UNSET_CAST
-                | tok::T_VOID_CAST
         )
     })
 }
@@ -514,22 +596,6 @@ fn label_boundary(id: i64) -> bool {
         || id == tok::T_DO
         || id == tok::T_TRY
         || id == tok::T_FINALLY
-}
-
-/// Returns whether the next significant token after `index` is `{`.
-fn next_significant_is_brace<T: SourceToken>(tokens: &[T], index: usize) -> bool {
-    let mut next = index + 1;
-    while tokens.get(next).is_some_and(|token| {
-        matches!(
-            token.id(),
-            tok::T_WHITESPACE | tok::T_COMMENT | tok::T_DOC_COMMENT
-        )
-    }) {
-        next += 1;
-    }
-    tokens
-        .get(next)
-        .is_some_and(|token| token.id() == i64::from(b'{'))
 }
 
 /// Returns whether `text` is a PHP label-shaped word.
