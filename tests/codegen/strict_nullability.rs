@@ -78,18 +78,34 @@ fn test_strict_nullability_public_lfc_and_example() {
 }
 
 /// Registered borrowed builtins keep interpreter dispatch and the caller's independent profile.
-#[test]
-fn test_strict_reflection_registry_builtin_dispatch_profiles() {
+fn verify_reflection_registry_builtin_dispatch(flags: &[&str], expected: &str) {
     let fragment = "$reflection=new ReflectionFunction('strlen');echo $reflection->invoke('abc'),':',$reflection->invokeArgs(['d']),':'; \
         $keys=new ReflectionFunction('array_key_exists');echo (int)$keys->invoke('1',[1=>'value']);";
     let fragment = fragment.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $fragment=$argc>0?'{fragment}':'';eval($fragment);");
     let fixture = StrictFixture::new(&source);
-    for (flags, expected) in [(&[][..], "3:1:1"),
-        (&["--strict-nullability"][..], "3:1:1"), (&["--strict-array-keys"][..], "3:1:0")] {
-        let mut args = vec!["--php-only", "--heap-debug"]; args.extend(flags);
-        let output = fixture.capture(&args); let errors = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {errors}");
-        assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
-    }
+    let mut args = vec!["--php-only", "--heap-debug"];
+    args.extend_from_slice(flags);
+    let output = fixture.capture(&args);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {errors}");
+    assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
+}
+
+/// Checks Reflection builtin dispatch under ordinary PHP semantics.
+#[test]
+fn test_reflection_registry_builtin_dispatch_permissive() {
+    verify_reflection_registry_builtin_dispatch(&[], "3:1:1");
+}
+
+/// Checks Reflection builtin dispatch with standalone nullability checks.
+#[test]
+fn test_reflection_registry_builtin_dispatch_strict_nullability() {
+    verify_reflection_registry_builtin_dispatch(&["--strict-nullability"], "3:1:1");
+}
+
+/// Checks Reflection builtin dispatch with standalone exact array keys.
+#[test]
+fn test_reflection_registry_builtin_dispatch_strict_array_keys() {
+    verify_reflection_registry_builtin_dispatch(&["--strict-array-keys"], "3:1:0");
 }

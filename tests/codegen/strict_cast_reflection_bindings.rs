@@ -47,8 +47,7 @@ fn test_strict_cast_reflection_binding_identity_and_retirement_bundle() {
 }
 
 /// A physical static rebind detaches the old native alias and preserves both live source groups.
-#[test]
-fn test_checked_native_static_reference_rebinding_alias_owners() {
+fn verify_checked_native_static_reference_rebinding(feature: StrictFeature, optimized: bool) {
     let source = r#"<?php
 class StaticAliasOwner { public static string $text = 'old'; }
 $first =& StaticAliasOwner::$text; $second = 'second';
@@ -59,14 +58,34 @@ $first = 'first'; echo $first, ':', $second, ':', StaticAliasOwner::$text, '|';
 StaticAliasOwner::$text = 'third'; echo $first, ':', $second, ':', StaticAliasOwner::$text;
 gc_collect_cycles();
 "#;
-    for feature in [StrictFeature::Casts, StrictFeature::Coercions] {
-        for optimized in [false, true] {
-            let output = StrictFixture::new(source).capture_staged_eval_runtime(
-                SemanticProfile::PERMISSIVE.with(feature, true), optimized);
-            assert!(output.success, "{feature:?} opt={optimized}: {} {}", output.stdout, output.stderr);
-            assert_eq!(output.stdout, "old:second:second|first:second:second|first:third:third",
-                "{feature:?} opt={optimized}: {}", output.stderr);
-            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
-        }
-    }
+    let output = StrictFixture::new(source).capture_staged_eval_runtime(
+        SemanticProfile::PERMISSIVE.with(feature, true), optimized);
+    assert!(output.success, "{feature:?} opt={optimized}: {} {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "old:second:second|first:second:second|first:third:third",
+        "{feature:?} opt={optimized}: {}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Checks standalone casts with the optimizer disabled.
+#[test]
+fn test_static_reference_rebinding_strict_casts_unoptimized() {
+    verify_checked_native_static_reference_rebinding(StrictFeature::Casts, false);
+}
+
+/// Checks standalone casts with the optimizer enabled.
+#[test]
+fn test_static_reference_rebinding_strict_casts_optimized() {
+    verify_checked_native_static_reference_rebinding(StrictFeature::Casts, true);
+}
+
+/// Checks standalone coercions with the optimizer disabled.
+#[test]
+fn test_static_reference_rebinding_strict_coercions_unoptimized() {
+    verify_checked_native_static_reference_rebinding(StrictFeature::Coercions, false);
+}
+
+/// Checks standalone coercions with the optimizer enabled.
+#[test]
+fn test_static_reference_rebinding_strict_coercions_optimized() {
+    verify_checked_native_static_reference_rebinding(StrictFeature::Coercions, true);
 }
