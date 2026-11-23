@@ -228,6 +228,39 @@ fn strict_array_key_source_validation_stops_after_selected_match_arm() {
     }
 }
 
+/// A decided short ternary folds its selected key before PHP 8.2 advances the cursor.
+#[test]
+fn strict_array_key_source_validation_folds_selected_short_ternary_key() {
+    let _profile = select_php_version(PhpVersion::Php82);
+    for key in [
+        "(-2) ?: $unused",
+        "match (1) { 1 => ((-2) ?: $unused), default => 0 }",
+    ] {
+        let accepted = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[0][false] = 'x';"
+        );
+        crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+        let rejected = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[-1][false] = 'x';"
+        );
+        let error = crate::semantics::validate_source(
+            &parse(&rejected, SourceMode::Php),
+            profile(),
+        )
+        .expect_err("PHP 8.2 leaves the missing -1 slot as an array write parent");
+        assert!(
+            error.message.contains("strict-array-keys"),
+            "{rejected}: {error:?}"
+        );
+    }
+
+    let runtime = "<?php $values = [((false ?: [-2])[0]) => [], 'ab']; $values[-1][false] = 'x';";
+    crate::semantics::validate_source(&parse(runtime, SourceMode::Php), profile())
+        .expect("a non-scalar short-ternary fallback must not create a literal-key proof");
+}
+
 /// Pre-resolution source facts leave magic constants and imported class names unresolved.
 #[test]
 fn strict_array_key_source_validation_defers_unresolved_literal_keys() {

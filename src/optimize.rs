@@ -95,10 +95,17 @@ fn prepare_source_array_key_for_fold(
             then_expr: Box::new(prepare_source_array_key_for_fold(then_expr, profile)?),
             else_expr: Box::new(prepare_source_array_key_for_fold(else_expr, profile)?),
         },
-        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
-            value: Box::new(prepare_source_array_key_for_fold(value, profile)?),
-            default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
-        },
+        ExprKind::ShortTernary { value, default } => {
+            let _profile = scoped_semantic_profile(profile);
+            let value = fold::expr::fold_expr(prepare_source_array_key_for_fold(value, profile)?);
+            if condition_scalar_value(&value).is_some_and(|value| value.truthy()) {
+                return Some(value);
+            }
+            ExprKind::ShortTernary {
+                value: Box::new(value),
+                default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
+            }
+        }
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(prepare_source_array_key_for_fold(value, profile)?),
             default: Box::new(prepare_source_array_key_for_fold(default, profile)?),
