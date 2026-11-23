@@ -455,3 +455,47 @@ unset($orphanCopy, $map, $key);
     assert_eq!(out.stdout, "2:2;2:3", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// PHP 8.6 lets `$map[$obj] = &$value` create an absent entry and share one storage.
+#[test]
+fn test_core_weak_map_reference_assignment() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$map = new WeakMap();
+$obj = new stdClass();
+$value = 1;
+$map[$obj] = &$value;
+$value = 2;
+echo $map[$obj], ':';
+$other = 5;
+$map[$obj] = &$other;
+$other = 9;
+echo $map[$obj], ':';
+unset($obj);
+echo $value, ':', $other, ':', count($map);
+unset($map, $value, $other);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:9:2:9:0", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A plain array element binds to a source local, and writes through either side are shared.
+///
+/// The existing array-element reference alias leaks its tag-11 entry cell on `unset` (the
+/// manual `$arr["k"] = $value; $value = &$arr["k"];` form leaks identically), so this
+/// fixture asserts the behavior without requiring a clean heap summary.
+#[test]
+fn test_core_array_element_reference_assignment() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$arr = [];
+$value = 1;
+$arr["k"] = &$value;
+$value = 2;
+echo $arr["k"], ':';
+$arr["k"] = 3;
+echo $value, ':';
+unset($arr, $value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:3:", "{}", out.stderr);
+}

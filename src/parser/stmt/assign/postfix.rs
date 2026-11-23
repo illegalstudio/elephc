@@ -101,6 +101,37 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    // PHP's `$container[$index] = &$source` makes the entry and the source share one
+    // storage. For a plain-variable source this is exactly a value store (which creates
+    // the entry, including the PHP 8.6 absent WeakMap entry) followed by the existing
+    // `$source = &$container[$index]` alias. Other source shapes still need a
+    // container reference-store primitive.
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+        && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+    {
+        *pos += 1;
+        let source = parse_expr(tokens, pos)?;
+        let ExprKind::Variable(source_name) = &source.kind else {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment to an array element requires a plain variable source",
+            ));
+        };
+        expect_semicolon(tokens, pos)?;
+        let mut hoisted = EffectfulTargetLowerer::new(span);
+        let target = hoisted.stabilize_array_base(lhs_expr);
+        let value_stmt = array_element_value_assignment(target.clone(), source.clone(), span);
+        let bind_stmt = Stmt::new(
+            StmtKind::RefAssign {
+                target: source_name.clone(),
+                source: target,
+            },
+            span,
+        );
+        let final_stmt = StmtKind::Synthetic(vec![value_stmt, bind_stmt]);
+        return Ok(Some(hoisted.finish_if_used(final_stmt, span)));
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     if computed_indexed_update && matches!(tokens.get(*pos).map(|(token, _)| token),
         Some(Token::And | Token::Or | Token::Xor))
@@ -224,6 +255,33 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     };
 
     Ok(Some(hoisted.finish_if_used(stmt, span)))
+}
+
+/// Builds the value-assignment statement for an array-element target.
+///
+/// Mirrors the ordinary `$container[$index] = $value` lowering so a reference binding can
+/// create the entry through the same ArrayAssign/PropertyArrayAssign/NestedArrayAssign path.
+fn array_element_value_assignment(target: Expr, value: Expr, span: Span) -> Stmt {
+    let ExprKind::ArrayAccess { array, index } = target.kind else {
+        unreachable!("array-element reference assignment target")
+    };
+    match array.kind.clone() {
+        ExprKind::Variable(array) => Stmt::new(
+            StmtKind::ArrayAssign { array, index: *index, value },
+            span,
+        ),
+        ExprKind::PropertyAccess { object, property } => Stmt::new(
+            StmtKind::PropertyArrayAssign { object, property, index: *index, value },
+            span,
+        ),
+        _ => Stmt::new(
+            StmtKind::NestedArrayAssign {
+                target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                value,
+            },
+            span,
+        ),
+    }
 }
 
 /// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign
