@@ -21,10 +21,16 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
-# ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
+# These XML fixtures spend most of their existing deadlines compiling one program.
+# Reserve the shard pool while retaining their deadlines and assertions.
+[[profile.ci.overrides]]
+filter = 'test(=codegen::simplexml_php_src::cases::test_php_src_simplexml_027) or test(/^codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_(aot|eval)_bundle$/)'
+threads-required = "num-test-threads"
+
+# ARM shard 11 lost its runner while these catalog-sized XML bundles ran together.
 # Serialize only their scheduling, preserving their assertions and existing bundle budget.
 [[profile.ci.overrides]]
-filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_(aot|eval)_bundle$/) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
 test-group = 'simplexml-large-bundles'
 
 # These two single-compile XML catalog probes each reached 360s twice while

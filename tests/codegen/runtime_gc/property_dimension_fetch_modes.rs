@@ -12,17 +12,32 @@ use crate::support::*;
 
 /// Write and compound fetches preserve declarations, access order and every temporary owner.
 #[test]
-fn test_property_dimension_fetch_modes_bundle() { verify_fetch_modes(false); }
+fn test_property_dimension_fetch_modes_bundle() { verify_fetch_modes(FetchModeFixtures::Ordinary); }
 
-/// XML capability must preserve ordinary append diagnostics in both execution paths.
+/// XML capability preserves ordinary dimension diagnostics in compiled PHP.
 #[test]
-fn test_property_dimension_xml_fetch_modes_bundle() {
-    if skip_without_xml_native("test_property_dimension_xml_fetch_modes_bundle") { return; }
-    verify_fetch_modes(true);
+fn test_property_dimension_xml_fetch_modes_aot_bundle() {
+    if skip_without_xml_native("test_property_dimension_xml_fetch_modes_aot_bundle") { return; }
+    verify_fetch_modes(FetchModeFixtures::XmlAot);
 }
 
-/// Compiles independent capability variants so XML detection cannot mask the ordinary path.
-fn verify_fetch_modes(xml: bool) {
+/// XML capability preserves ordinary dimension diagnostics in opaque eval.
+#[test]
+fn test_property_dimension_xml_fetch_modes_eval_bundle() {
+    if skip_without_xml_native("test_property_dimension_xml_fetch_modes_eval_bundle") { return; }
+    verify_fetch_modes(FetchModeFixtures::XmlEval);
+}
+
+/// Keeps the two XML-capable compiles independent under the existing test deadline.
+enum FetchModeFixtures {
+    Ordinary,
+    XmlAot,
+    XmlEval,
+}
+
+/// Exercises shared property assertions after selecting the requested execution paths.
+fn verify_fetch_modes(fixtures: FetchModeFixtures) {
+    let xml = !matches!(fixtures, FetchModeFixtures::Ordinary);
     let source = r#"<?php
 set_error_handler(function(int $level, string $message): bool { echo 'unexpected-warning|'; return true; });
 class GuardFetchNull { public ?ArrayObject $items = null; }
@@ -120,10 +135,16 @@ restore_error_handler();
     let capability = if xml { "function FetchModeNativeXmlCapability(): void { simplexml_load_string('<r/>'); }" } else { "" };
     let eval = format!("<?php {capability} $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let eval_expected = expected.replace("GuardFetch", "EvalGuardFetch");
-    assert_bundle_with(&[
+    let cases = [
         BundleCase { name: "property_fetch_modes_aot", source: &source, expected: &expected },
         BundleCase { name: "property_fetch_modes_eval", source: &eval, expected: &eval_expected },
-    ], |source| {
+    ];
+    let selected = match fixtures {
+        FetchModeFixtures::Ordinary => &cases[..],
+        FetchModeFixtures::XmlAot => &cases[..1],
+        FetchModeFixtures::XmlEval => &cases[1..],
+    };
+    assert_bundle_with(selected, |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
