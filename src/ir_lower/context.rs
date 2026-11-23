@@ -4344,6 +4344,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Retains canonical persistent storage without changing an earlier raw frame payload ABI.
     pub(crate) fn bind_persistent_ref_cell_ptr(&mut self, target: &str, cell_ptr: LoweredValue, span: Span) {
+        if self.ref_cell_owner_slot(target).is_none() {
+            // The first declaration in source order can execute again on a loop backedge.
+            // Predeclare its zeroed owner so rebinding retires the previous activation lease.
+            self.declare_local(target, PhpType::Mixed);
+            self.declare_ref_cell_owner(target, PhpType::Mixed);
+        }
         self.bind_ref_cell_ptr_impl(target, cell_ptr, PhpType::Mixed, true, false, true, Some(span));
     }
 
