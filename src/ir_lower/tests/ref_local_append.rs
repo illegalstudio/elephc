@@ -11,6 +11,59 @@ use std::path::Path;
 
 use crate::codegen::platform::Target;
 
+/// A ref-parameter boxed append retires its fresh object owner on every target.
+#[test]
+fn ref_parameter_object_append_retires_borrowed_operand_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+class RefAppendPayload {}
+function appendRefPayload(array &$items): void {
+    $items[] = new RefAppendPayload();
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "appendRefPayload")
+            .expect("reference append fixture function");
+        let append = function
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == Op::MixedArrayAppend)
+            .expect("boxed reference append");
+        let borrowed = append.operands[1];
+        let ValueDef::Instruction { inst, .. } = function.value(borrowed).unwrap().def else {
+            panic!("{name}: append value must have an instruction producer");
+        };
+        let borrow = function.instruction(inst).unwrap();
+        assert_eq!(
+            borrow.op,
+            Op::Borrow,
+            "{name}: the boxed append must retain an independent owner",
+        );
+        let source = borrow.operands[0];
+        let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
+            panic!("{name}: borrowed append value must have an instruction producer");
+        };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::ObjectNew, "{name}");
+        assert!(
+            function.instructions.iter().any(|instruction| {
+                instruction.op == Op::Release && instruction.operands == [source]
+            }),
+            "{name}: the caller's fresh object owner must retire after the boxed append",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Ref-bound indexed widening owns its borrowed source before consuming it on every target.
 #[test]
 fn ref_bound_heterogeneous_append_acquires_conversion_source_on_all_targets() {
