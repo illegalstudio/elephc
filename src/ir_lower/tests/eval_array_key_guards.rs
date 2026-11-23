@@ -36,17 +36,16 @@ fn source(exact: bool) -> (String, String) {
 }
 
 /// Profiled runtime eval source emits with the complete bridge on all five supported targets.
-#[test]
-fn eval_array_key_guards_emit_on_every_target() {
+fn verify_eval_array_key_guards_emission(name: &str) {
     let (source, _) = source(true);
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, true);
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::semantic_sources::lower_capturing_arguments(&source,
-            Target::parse(name).unwrap(), profile, false, SourceMode::Php);
-        crate::ir::validate_module(&module).unwrap();
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    }
+    let module = super::semantic_sources::lower_capturing_arguments(&source,
+        Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(eval_array_key_guards_emit_by_target, verify_eval_array_key_guards_emission);
 
 /// Native permissive eval keeps its values and owners alongside the independent exact profile.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),

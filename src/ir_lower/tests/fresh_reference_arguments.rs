@@ -49,23 +49,22 @@ fn fresh_reference_arguments_native_values_and_owners() {
 /// Opaque runtime source preserves the same binding identity and balances native heap owners.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn fresh_reference_arguments_opaque_eval_values_and_owners() {
+fn verify_opaque_eval_values_and_owners(locals: bool, optimize: bool) {
     let body = SOURCE.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $text=$argc > 0 ? '{body}' : ''; eval($text);");
-    for locals in [false, true] {
-        for optimize in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
-            let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(), profile, optimize, SourceMode::Php);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "locals={locals} opt={optimize}: {:?}; {stderr}", output.status);
-            assert_eq!(String::from_utf8_lossy(&output.stdout), if locals { CHECKED } else { PERMISSIVE }, "{stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
-            assert!(!stderr.contains("Undefined variable"), "{stderr}");
-        }
-    }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
+    let module = super::semantic_sources::lower_capturing_arguments(
+        &source, Target::detect_host(), profile, optimize, SourceMode::Php,
+    );
+    let output = super::native_module::run(&module);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "locals={locals} opt={optimize}: {:?}; {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), if locals { CHECKED } else { PERMISSIVE }, "{stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    assert!(!stderr.contains("Undefined variable"), "{stderr}");
 }
+
+opaque_eval_profile_cases!(fresh_reference_arguments_opaque_eval, verify_opaque_eval_values_and_owners);
 
 /// Planning cannot initialize a later reference before an earlier ordinary argument reads that name.
 #[test]
