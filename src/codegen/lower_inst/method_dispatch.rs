@@ -1210,7 +1210,12 @@ fn method_candidates(
         // Compiler-runtime classes expose synthetic checker declarations whose
         // methods are lowered by dedicated intrinsics and have no ordinary EIR
         // method entry symbol. They must never enter generic Mixed dispatch.
-        if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber" {
+        // The state predicates are the exception: the matched Fiber branch calls the runtime
+        // predicate (`lower_mixed_method_candidate_call`), so a Fiber held in a `mixed` slot
+        // answers `isSuspended()` instead of "Call to undefined method Fiber::isSuspended()".
+        if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+            && fiber_state_predicate(class_name, method_name).is_none()
+        {
             continue;
         }
         let Some(signature) = class_info.methods.get(&method_key) else {
