@@ -163,7 +163,10 @@ pub(super) fn parser_view<T: SourceToken>(
                 continue;
             }
         }
-        let previous_closes_control_header = previous_significant == i64::from(b')')
+        // Only a T_STRING can start a label. Avoid walking back over a comment run after a
+        // control header for every trivia token; the label check rejects them immediately.
+        let previous_closes_control_header = token.id() == tok::T_STRING
+            && previous_significant == i64::from(b')')
             && previous_significant_index(tokens, index)
                 .is_some_and(|previous| control_close.get(previous).copied().unwrap_or(false));
         if is_label_declaration(

@@ -2609,6 +2609,24 @@ fn tokenizer_nested_reference_targets_stay_linear() {
     }
 }
 
+/// Comments between a control header and its statement must not rescan the comment run for
+/// every trivia token; only a T_STRING candidate can be a label.
+#[test]
+fn tokenizer_comment_after_control_header_stays_linear() {
+    let mut source = String::from("<?php if (1) ");
+    for _ in 0..100_000 {
+        source.push_str("/*x*/");
+    }
+    source.push_str(" echo 1;");
+    let started = std::time::Instant::now();
+    tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid comment run after a control header");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "comment-after-control-header scan took {:?}",
+        started.elapsed()
+    );
+}
+
 /// Repeated computed variables must not walk the same statement prefix for every `$$`.
 #[test]
 fn tokenizer_computed_variable_runs_stay_linear() {
