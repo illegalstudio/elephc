@@ -141,7 +141,7 @@ mod output_values;
 mod reference_arguments;
 mod reference_argument_handoff;
 mod reference_payloads;
-mod runtime_wrappers;
+pub(in crate::codegen) mod runtime_wrappers;
 pub(crate) use runtime_wrappers::builtin_wrapper_result_is_representable;
 mod static_method_calls;
 mod throwable_methods;

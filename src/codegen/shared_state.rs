@@ -78,6 +78,10 @@ pub(crate) struct SharedCodegenState {
     /// The module copy runtime call wrappers intern their missing data into; see
     /// `take_wrapper_module`.
     wrapper_module: Option<Box<Module>>,
+    /// Whether a wrapper holds the copy right now.
+    wrapper_module_held: bool,
+    /// Wrappers that reached for the copy while it was held, in the order they did.
+    pending_wrappers: Vec<super::lower_inst::runtime_wrappers::PendingWrapper>,
     /// The scope-independent callable-array instance candidates; see
     /// `instance_method_target_base`.
     /// Every non-public static method of the module, sorted by class then method: the part of a
@@ -621,6 +625,12 @@ impl EmittedMethods {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-module copies taken for runtime call wrappers.
+    pub(super) static WRAPPER_MODULE_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// An empty state, for emitters built outside a module (unit tests of single helpers).
 impl Default for SharedCodegenState {
     fn default() -> Self {
@@ -655,8 +665,34 @@ impl SharedCodegenState {
     /// Copying the whole module (every body, every class) per wrapper, then dropping it, was a
     /// third of every wrapper's cost on a Symfony build. A wrapper emitted while another holds
     /// the copy (one wrapper reaching another) gets its own.
-    pub(super) fn take_wrapper_module(&mut self, module: &Module) -> Box<Module> {
-        self.wrapper_module.take().unwrap_or_else(|| Box::new(module.clone()))
+    ///
+    /// `None` while another wrapper holds it: a nested wrapper waits (`defer_wrapper`) instead of
+    /// copying the module again, one whole copy per nesting level.
+    pub(super) fn take_wrapper_module(&mut self, module: &Module) -> Option<Box<Module>> {
+        if self.wrapper_module_held {
+            return None;
+        }
+        self.wrapper_module_held = true;
+        #[cfg(test)]
+        if self.wrapper_module.is_none() {
+            WRAPPER_MODULE_COPIES.with(|count| count.set(count.get() + 1));
+        }
+        Some(self.wrapper_module.take().unwrap_or_else(|| Box::new(module.clone())))
+    }
+
+    /// Whether a wrapper holds the module copy.
+    pub(super) fn wrapper_module_held(&self) -> bool {
+        self.wrapper_module_held
+    }
+
+    /// Queues a wrapper that needs the held module copy.
+    pub(super) fn defer_wrapper(&mut self, wrapper: super::lower_inst::runtime_wrappers::PendingWrapper) {
+        self.pending_wrappers.push(wrapper);
+    }
+
+    /// The next wrapper waiting for the module copy.
+    pub(super) fn pop_pending_wrapper(&mut self) -> Option<super::lower_inst::runtime_wrappers::PendingWrapper> {
+        if self.pending_wrappers.is_empty() { None } else { Some(self.pending_wrappers.remove(0)) }
     }
 
     /// The module's emitted instance methods as callable-array candidates, built once by `build`.
@@ -809,6 +845,7 @@ impl SharedCodegenState {
     /// Returns the wrapper module copy for the next wrapper.
     pub(super) fn return_wrapper_module(&mut self, copy: Box<Module>) {
         self.wrapper_module = Some(copy);
+        self.wrapper_module_held = false;
     }
 
     /// Creates private empty storage used only while constructing a module-populated state.
@@ -816,6 +853,8 @@ impl SharedCodegenState {
         Self {
             reflection: SharedReflectionState::empty(),
             wrapper_module: None,
+            wrapper_module_held: false,
+            pending_wrappers: Vec::new(),
             instance_method_target_base: std::cell::OnceCell::new(),
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
@@ -2171,13 +2210,19 @@ mod tests {
     fn wrapper_module_copy_is_reused_across_wrappers() {
         let module = Module::new(Target::parse("macos-aarch64").expect("target"));
         let mut state = SharedCodegenState::for_module(&module);
-        let mut first = state.take_wrapper_module(&module);
+        let copies_before = WRAPPER_MODULE_COPIES.with(|count| count.get());
+        let mut first = state.take_wrapper_module(&module).expect("the first wrapper gets the copy");
         first.data.intern_string("interned by the first wrapper");
         let first_address = &*first as *const Module;
-        let nested = state.take_wrapper_module(&module);
-        assert_ne!(&*nested as *const Module, first_address, "a nested wrapper gets its own copy");
+        // Nested wrappers wait for the copy instead of copying the module again: any nesting depth
+        // and wrapper count costs the one copy.
+        for _ in 0..16 {
+            assert!(state.take_wrapper_module(&module).is_none(), "a nested wrapper waits");
+        }
         state.return_wrapper_module(first);
-        let second = state.take_wrapper_module(&module);
+        let second = state.take_wrapper_module(&module).expect("the next wrapper gets the copy");
+        assert_eq!(WRAPPER_MODULE_COPIES.with(|count| count.get()), copies_before + 1,
+            "module copies do not grow with the wrappers or their nesting");
         assert_eq!(&*second as *const Module, first_address, "the next wrapper reuses the copy");
         assert!(second.data.string_id("interned by the first wrapper").is_some());
     }

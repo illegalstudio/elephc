@@ -355,6 +355,34 @@ fn emit_runtime_call_wrapper_inline(
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
         }
     }
+    emit_runtime_call_wrapper_body(ctx, &key, &label, name, sig, kind)?;
+    // Wrappers reached while another held the module copy waited for it: nothing is copied for them.
+    while !ctx.shared.wrapper_module_held() {
+        let Some(pending) = ctx.shared.pop_pending_wrapper() else { break };
+        emit_runtime_call_wrapper_body(ctx, &pending.key, &pending.label, &pending.name, &pending.sig, pending.kind)?;
+    }
+    Ok(label)
+}
+
+/// A wrapper whose body waits for the module copy another wrapper holds.
+pub(in crate::codegen) struct PendingWrapper {
+    key: String,
+    label: String,
+    name: String,
+    sig: FunctionSig,
+    kind: RuntimeCallWrapperKind,
+}
+
+/// Lowers and emits the body of a wrapper whose label is reserved, or queues it behind the wrapper
+/// that holds the module copy.
+fn emit_runtime_call_wrapper_body(
+    ctx: &mut FunctionContext<'_>,
+    key: &str,
+    label: &str,
+    name: &str,
+    sig: &FunctionSig,
+    kind: RuntimeCallWrapperKind,
+) -> Result<()> {
     // The wrapper is lowered against the module itself whenever every data entry its body names
     // is already interned -- the common case: an extern's own name, a builtin's messages. Only a
     // body that must intern something new, or one of the two builtins whose body is a full
@@ -379,7 +407,15 @@ fn emit_runtime_call_wrapper_inline(
     let wrapper = match read_only {
         Some(wrapper) => wrapper,
         None => {
-            let mut owned = ctx.shared.take_wrapper_module(module);
+            // One copy serves every wrapper in turn; a wrapper reached while another holds it waits
+            // (copying the whole module per nested wrapper was 45 GB on the Symfony Demo).
+            let Some(mut owned) = ctx.shared.take_wrapper_module(module) else {
+                ctx.shared.defer_wrapper(PendingWrapper {
+                    key: key.to_string(), label: label.to_string(), name: name.to_string(),
+                    sig: sig.clone(), kind,
+                });
+                return Ok(());
+            };
             let wrapper = build_runtime_call_wrapper_function(
                 WrapperData::Owned(&mut owned),
                 &label,
@@ -415,7 +451,7 @@ fn emit_runtime_call_wrapper_inline(
     if let Some(copy) = copied_module {
         ctx.shared.return_wrapper_module(copy);
     }
-    Ok(label)
+    Ok(())
 }
 
 /// Where a wrapper body's data entries come from.
