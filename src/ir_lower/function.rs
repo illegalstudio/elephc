@@ -311,7 +311,7 @@ pub(crate) fn lower_user_function(
         None,
         body_return_type.clone(),
         signature.declared_return,
-        &eir_signature.params,
+        &body_signature.params,
         None,
         false,
         crate::fast_hash::FastSet::default(),
