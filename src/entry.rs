@@ -75,7 +75,10 @@ fn apply_project_monitoring(config: &mut cli::CliConfig) {
         let Some(found) = found else {
             return Ok(Vec::new());
         };
-        let (monitoring, apm) = found.settings.for_entry(&found.root, &source);
+        let (monitoring, apm, warnings) = found.settings.for_entry(&found.root, &source);
+        for warning in warnings {
+            eprintln!("warning: {}: {warning}", found.manifest.display());
+        }
         config.apm_include = apm.include.clone().unwrap_or_default();
         config.apm_exclude = apm.exclude.clone().unwrap_or_default();
         project_monitoring::apply_to_build(config, &monitoring, &apm, &found.manifest.display().to_string())
