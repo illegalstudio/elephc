@@ -10,7 +10,8 @@
 use super::*;
 
 /// Detaches a boxed local before a write can replace its array payload or modify shared cells.
-/// Reference locals keep their canonical child so every alias observes the in-place update.
+/// Reference locals publish a detached child through the shared binding when another owner
+/// holds the current value, such as a suspended write in an error handler.
 pub(in crate::ir_lower) fn load_array_local_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -19,23 +20,39 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     ctx.with_independent_write_receiver(|ctx| {
         let value = ctx.load_local_for_mutation(name, Some(span));
         let ty = ctx.builder.value_php_type(value.value);
-        if ty.codegen_repr() != PhpType::Mixed
-            || ctx.is_ref_bound_local(name)
-            || ctx.append_update_cell_aliases.contains(name)
-        {
+        if ty.codegen_repr() != PhpType::Mixed || ctx.append_update_cell_aliases.contains(name) {
             return value;
         }
-        let detached = ctx.emit_owned_value(
-            Op::MixedClone,
-            vec![value.value],
-            None,
-            ty.clone(),
-            Op::MixedClone.default_effects(),
-            Some(span),
-        );
-        ctx.store_call_argument_local(name, detached, ty, Some(span));
+        if ctx.is_ref_bound_local(name) {
+            let shared = ctx.emit_value(Op::RuntimeCall, vec![value.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellHasOtherOwner)),
+                PhpType::Bool, crate::ir::Effects::READS_HEAP, Some(span));
+            let separate = ctx.builder.create_named_block("offset.reference.separate", Vec::new());
+            let done = ctx.builder.create_named_block("offset.reference.separated", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: shared.value, then_target: separate, then_args: Vec::new(),
+                else_target: done, else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(separate);
+            publish_detached_array_cell(ctx, name, value, ty, span);
+            branch_to(ctx, done);
+            ctx.builder.position_at_end(done);
+        } else {
+            publish_detached_array_cell(ctx, name, value, ty, span);
+        }
         ctx.load_local_for_mutation(name, Some(span))
     })
+}
+
+/// Replaces the value at the same addressable place without resetting its array cursor.
+fn publish_detached_array_cell(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue, ty: PhpType, span: Span,
+) {
+    let detached = ctx.emit_owned_value(
+        Op::MixedClone, vec![value.value], None, ty.clone(),
+        Op::MixedClone.default_effects(), Some(span),
+    );
+    ctx.store_local_representation(name, detached, ty, Some(span));
 }
 
 /// Lowers `$array[] = value`.
