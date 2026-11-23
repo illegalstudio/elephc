@@ -389,6 +389,12 @@ pub const ERASED_WRITE_HELPER_PREFIX: &str = "__eir_erased_write@";
 /// other hidden locals.
 pub const ERASED_WRITE_SITE_LOCAL: &str = "__elephc_erased_write_site#gen";
 
+/// Hidden `Int` parameter of an outlined property-write helper of a program that can run eval: the
+/// caller's class id plus one (zero for the helper's own scope), read ONLY where a calling scope
+/// is handed to the interpreter (`emit_effective_scope_name`). Everything compiled resolves from
+/// the helper's lexical scope, which is shared by every scope that sees the name alike.
+pub const ERASED_WRITE_SCOPE_LOCAL: &str = "__elephc_erased_write_scope#gen";
+
 /// Storage name of the eval scope handle threaded into a scope-aware AOT eval fragment.
 ///
 /// A literal `eval()` whose fragment writes a caller variable is lowered as its own EIR function

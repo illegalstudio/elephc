@@ -59,6 +59,10 @@ pub(super) fn lower(
         target.effects(), Some(span));
     crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class_name, span);
     let mut merged = None;
+    // The overloaded and inaccessible reads address the object only through the runtime property
+    // dispatcher, so every class of one of those kinds shares one tail; only the class-name test
+    // (and the class name in the notice, taken from the selected name) is its own.
+    let mut tails: [Option<BlockId>; 2] = [None, None];
     for (class, kind) in classes {
         let matched = ctx.builder.create_named_block("property.index.special", vec![]);
         let next = ctx.builder.create_named_block("property.index.next", vec![]);
@@ -73,6 +77,15 @@ pub(super) fn lower(
         ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
             then_target: matched, then_args: vec![], else_target: next, else_args: vec![] });
         ctx.builder.position_at_end(matched);
+        let flavor = match kind { Kind::Magic { hash: false } => Some(0), Kind::Inaccessible => Some(1), _ => None };
+        if let Some(flavor) = flavor {
+            let tail = *tails[flavor].get_or_insert_with(||
+                ctx.builder.create_named_block("property.index.shared", vec![]));
+            ctx.builder.terminate(Terminator::Br { target: tail, args: vec![] });
+            ctx.builder.position_at_end(next);
+            ctx.restore_initialized_slots(before);
+            continue;
+        }
         let concrete = PhpType::Object(class.clone());
         let receiver = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, concrete.clone(),
             Op::mixed_unbox_effects(&concrete), Some(span));
@@ -83,6 +96,25 @@ pub(super) fn lower(
         ctx.restore_initialized_slots(before);
     }
     ctx.builder.terminate(Terminator::Br { target: regular, args: vec![] });
+    let before_tails = initial.clone();
+    for (flavor, tail) in tails.into_iter().enumerate() {
+        let Some(tail) = tail else { continue };
+        ctx.builder.position_at_end(tail);
+        ctx.restore_initialized_slots(before_tails.clone());
+        let current = ctx.load_local(&name, Some(span));
+        ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+        let notice = if flavor == 0 {
+            let prefix = string(ctx, "Notice: Indirect modification of overloaded property ", span);
+            let head = ctx.emit_value(Op::StrConcat, vec![prefix.value, current.value], None, PhpType::Str,
+                Op::StrConcat.default_effects(), Some(span));
+            let suffix = string(ctx, &format!("::${property} has no effect\n"), span);
+            Some(ctx.emit_value(Op::StrConcat, vec![head.value, suffix.value], None, PhpType::Str,
+                Op::StrConcat.default_effects(), Some(span)))
+        } else { None };
+        let name_value = string(ctx, property, span);
+        fetched(ctx, object, name_value, notice, flavor == 0, index, value, compound, span, diagnosed);
+        merge(ctx, done, &mut merged);
+    }
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial);
     fallback(ctx, object);
@@ -147,12 +179,15 @@ fn write(
         merge(ctx, done, &mut merged);
         ctx.builder.position_at_end(getter);
         ctx.restore_initialized_slots(initial);
-        fetched(ctx, boxed, name, class, property, true, index, value, compound, span, diagnosed);
+        let notice = string(ctx, &format!("Notice: Indirect modification of overloaded property {class}::${property} has no effect\n"), span);
+        fetched(ctx, boxed, name, Some(notice), true, index, value, compound, span, diagnosed);
         merge(ctx, done, &mut merged);
         ctx.builder.position_at_end(done);
         if let Some(merged) = merged { ctx.restore_initialized_slots(merged); }
     } else {
-        fetched(ctx, boxed, name, class, property, matches!(kind, Kind::Magic { .. }),
+        let notice = matches!(kind, Kind::Magic { .. }).then(|| string(ctx, &format!(
+            "Notice: Indirect modification of overloaded property {class}::${property} has no effect\n"), span));
+        fetched(ctx, boxed, name, notice, matches!(kind, Kind::Magic { .. }),
             index, value, compound, span, diagnosed);
     }
 }
@@ -172,7 +207,7 @@ fn attached(
 
 /// Reads inaccessible and magic names through the complete runtime class dispatcher.
 fn fetched(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, class: &str, property: &str,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, notice: Option<LoweredValue>,
     magic: bool, index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
     let current = ctx.emit_owned_value(Op::DynamicPropGet, vec![object.value, name.value],
@@ -193,8 +228,7 @@ fn fetched(
         ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
             then_target: supported, then_args: vec![], else_target: unsupported, else_args: vec![] });
         ctx.builder.position_at_end(unsupported);
-        let notice = string(ctx,
-            &format!("Notice: Indirect modification of overloaded property {class}::${property} has no effect\n"), span);
+        let notice = notice.expect("an overloaded read carries its notice");
         ctx.emit_void(Op::RuntimeCall, vec![notice.value],
             Some(Immediate::RuntimeCall(RuntimeCallTarget::WriteDiagnostic)), crate::ir::Effects::all(), Some(span));
         ctx.builder.terminate(Terminator::Br { target: supported, args: vec![] });

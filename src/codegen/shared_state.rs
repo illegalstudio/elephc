@@ -2203,6 +2203,27 @@ mod tests {
         }
     }
 
+    /// Every wrapper queued behind the held copy comes out exactly once and in order, including
+    /// when the last take of the module is the one that queued them.
+    #[test]
+    fn queued_wrappers_are_popped_once_in_order() {
+        use crate::codegen::lower_inst::runtime_wrappers::PendingWrapper;
+        let module = Module::new(Target::parse("macos-aarch64").expect("target"));
+        let mut state = SharedCodegenState::for_module(&module);
+        let held = state.take_wrapper_module(&module).expect("the first wrapper gets the copy");
+        for label in ["a", "b", "c"] {
+            assert!(state.take_wrapper_module(&module).is_none());
+            state.defer_wrapper(PendingWrapper::named(label));
+        }
+        assert!(state.wrapper_module_held(), "the queue waits while the copy is held");
+        state.return_wrapper_module(held);
+        assert!(!state.wrapper_module_held());
+        let mut popped = Vec::new();
+        while let Some(next) = state.pop_pending_wrapper() { popped.push(next.label().to_string()); }
+        assert_eq!(popped, ["a", "b", "c"]);
+        assert!(state.pop_pending_wrapper().is_none(), "nothing is emitted twice");
+    }
+
     /// Runtime call wrappers share one module copy: a wrapper that hands it back lets the next
     /// one reuse it (with whatever was interned into it) instead of copying the module again,
     /// and a wrapper reached while another holds the copy gets a fresh one.

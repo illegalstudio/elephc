@@ -336,7 +336,7 @@ fn signature(request: &Request) -> FunctionSig {
         params.push((if *form == (Form::Index { diagnosed: true }) { DIAGNOSED_KEY } else { KEY }, repr));
     }
     if let Some(repr) = request.value { params.push((VALUE, repr)); }
-    if request.runtime_scope { params.push((crate::names::CLOSURE_SCOPE_LOCAL, Repr::Int)); }
+    if request.runtime_scope { params.push((crate::names::ERASED_WRITE_SCOPE_LOCAL, Repr::Int)); }
     let count = params.len();
     FunctionSig {
         param_type_exprs: params.iter().map(|(_, repr)| Some(repr.type_expr())).collect(),

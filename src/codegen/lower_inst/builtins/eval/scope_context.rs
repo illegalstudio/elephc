@@ -327,7 +327,9 @@ pub(in crate::codegen) fn emit_effective_scope_name(
     len_reg: &str,
 ) -> Result<()> {
     let (fallback_label, fallback_len) = ctx.data.add_string(fallback.as_bytes());
-    let Some(slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) else {
+    let Some(slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL)
+        .or_else(|| ctx.local_slot_by_name(crate::names::ERASED_WRITE_SCOPE_LOCAL))
+    else {
         abi::emit_symbol_address(ctx.emitter, ptr_reg, &fallback_label);
         abi::emit_load_int_immediate(ctx.emitter, len_reg, fallback_len as i64);
         return Ok(());

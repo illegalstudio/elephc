@@ -373,6 +373,26 @@ pub(in crate::codegen) struct PendingWrapper {
     kind: RuntimeCallWrapperKind,
 }
 
+#[cfg(test)]
+impl PendingWrapper {
+    /// A queue entry that only names its label, for the queue's own tests.
+    pub(in crate::codegen) fn named(label: &str) -> Self {
+        Self {
+            key: label.to_string(), label: label.to_string(), name: label.to_string(),
+            sig: FunctionSig {
+                params: Vec::new(), param_type_exprs: Vec::new(), param_attributes: Vec::new(),
+                defaults: Vec::new(), return_type: PhpType::Void, declared_return: false,
+                by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
+                variadic: None, deprecation: None, is_generator: false,
+            },
+            kind: RuntimeCallWrapperKind::Extern,
+        }
+    }
+
+    /// The label of the wrapper this entry waits to emit.
+    pub(in crate::codegen) fn label(&self) -> &str { &self.label }
+}
+
 /// Lowers and emits the body of a wrapper whose label is reserved, or queues it behind the wrapper
 /// that holds the module copy.
 fn emit_runtime_call_wrapper_body(

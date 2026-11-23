@@ -224,7 +224,15 @@ fn dispatch(
                     SlotAction::InitializeArray => "I".to_string(),
                 }),
             };
-            Some(format!("{declaring}|{shape:?}|{guard}|{writable}"))
+            // Classes that have no wording of their own to raise here (no refusal naming the
+            // declaring class) and keep the slot at the same place with the same storage run the
+            // very same code, whoever declares it: one arm serves them all.
+            let slot = match (&null_error, info.property_offsets.get(property)) {
+                (Some(guard), _) if matches!(guard.action, SlotAction::Reject { .. }) => declaring,
+                (_, Some(offset)) => format!("@{offset}"),
+                _ => declaring,
+            };
+            Some(format!("{slot}|{shape:?}|{guard}|{writable}"))
         };
         match key.as_ref().and_then(|key| by_key.get(key)).copied() {
             Some(at) => groups[at].3.push(class),
@@ -234,7 +242,7 @@ fn dispatch(
             }
         }
     }
-    // The class that declares the slot represents its group.
+    // The class that declares the slot represents its group (any member when several declare it).
     for group in &mut groups {
         let declaring = ctx.classes[&group.0].property_declaring_classes.get(property).cloned();
         if let Some(declaring) = declaring.filter(|declaring| group.3.contains(declaring)) { group.0 = declaring; }

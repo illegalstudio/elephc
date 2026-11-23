@@ -43,3 +43,39 @@ fn container_write_helpers_do_not_grow_by_an_arm_per_inheriting_class() {
         assert!(large < 3_000, "eval={eval}: the helper is {large} instructions");
     }
 }
+
+/// Unrelated classes that declare the name, and classes that overload it (`__get`, ArrayAccess), as
+/// many as a framework holds: `declarers` plain declaring classes, `magic` overloaded ones.
+fn crowd(declarers: usize, magic: usize) -> String {
+    let mut source = String::from("<?php\nclass Svc { public int $n = 1; }\n");
+    for index in 0..declarers {
+        source.push_str(&format!("class Decl{index} {{ public array $privates = []; public array $other{index} = []; }}\n"));
+    }
+    for index in 0..magic {
+        if index % 2 == 0 {
+            source.push_str(&format!("class Magic{index} {{ public function __set($n, $v) {{}} public function __get($n) {{ return []; }} }}\n"));
+        } else {
+            source.push_str(&format!(
+                "class Magic{index} implements ArrayAccess {{ public array $privates = []; public function offsetExists($o): bool {{ return false; }} public function offsetGet($o): mixed {{ return 1; }} public function offsetSet($o, $v): void {{}} public function offsetUnset($o): void {{}} }}\n"));
+        }
+    }
+    source.push_str("function write(mixed $c) { $c->privates['x'] = new Svc; }\nwrite(new Decl0);\n");
+    source
+}
+
+/// The ladder of a write grows by a handful of instructions per overloaded or declaring class, not
+/// by a copy of the write for each: the overloaded kinds share one tail.
+#[test]
+fn write_helpers_share_the_overloaded_tail_and_the_arms_of_unrelated_declarers() {
+    let size = |declarers, magic| {
+        let module = super::lower_source(&crowd(declarers, magic));
+        module.functions.iter()
+            .filter(|function| function.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX)
+                && function.name.ends_with("@privates"))
+            .map(|function| function.instructions.len()).sum::<usize>()
+    };
+    let (small, large) = (size(10, 20), size(60, 220));
+    let per_class = (large - small) / 250;
+    assert!(per_class <= 12, "{per_class} instructions per added class ({small} -> {large})");
+    assert!(large < 6_000, "the helper is {large} instructions");
+}

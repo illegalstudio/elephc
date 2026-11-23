@@ -152,3 +152,428 @@ after
 2000
 "####, "{}", out.stderr);
 }
+
+/// Subclasses that redeclare, shadow, narrow or extend a slot (magic, ArrayAccess, readonly, traits, uninitialized typed, unset) write exactly as php does, through one shared arm per group.
+#[test]
+fn test_inherited_slot_writes_match_php() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+set_error_handler(function($no,$str,$file,$line){ echo "E[$no] $str\n"; return true; });
+function w(mixed $o, $k, $v) { $o->p[$k] = $v; }
+function a(mixed $o, $v) { $o->p[] = $v; }
+function s(mixed $o, $v) { $o->p = $v; }
+function c(mixed $o, $k, $v) { $o->p[$k] .= $v; }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+function show($o) { echo get_class($o), ' ', json_encode($o->p ?? 'unset'), "\n"; }
+function all($o) { t(fn() => w($o, 'k', 1)); t(fn() => a($o, 2)); t(fn() => s($o, [3])); t(fn() => c($o, 'k', 'x')); t(fn() => show($o)); }
+
+class Base { public array $p = ['base']; }
+class Same extends Base {}
+class Deeper extends Same {}
+class OtherDefault extends Base { public array $p = ['other']; }
+class Prot { protected array $p = ['prot']; function open() { return $this->p; } }
+class ProtKid extends Prot {}
+class ProtPublic extends Prot { public array $p = ['widened']; }
+class Priv { private array $p = ['priv']; function dump() { return $this->p; } }
+class PrivKid extends Priv { public array $p = ['kid']; }
+class PrivKid2 extends Priv {}
+class RO { public function __construct(public readonly array $p = ['ro']) {} }
+class ROKid extends RO {}
+class MagicKid extends Base { public function __set($n, $v) { echo "set($n)\n"; } public function __get($n) { echo "get($n)\n"; return []; } }
+class AAKid extends Base implements ArrayAccess {
+  public function offsetExists(mixed $o): bool { return true; } public function offsetGet(mixed $o): mixed { return 1; }
+  public function offsetSet(mixed $o, mixed $v): void { echo "offsetSet\n"; } public function offsetUnset(mixed $o): void {} }
+class UnsetBase { public array $p = ['x']; function drop() { unset($this->p); } }
+class Uninit { public array $p; }
+class UninitKid extends Uninit {}
+trait T { public array $p = ['trait']; }
+class UsesT { use T; }
+class UsesTKid extends UsesT {}
+final class Fin extends Base {}
+abstract class Abs { public array $p = ['abs']; }
+class AbsKid extends Abs {}
+
+$objs = [new Base, new Same, new Deeper, new OtherDefault, new Prot, new ProtKid, new ProtPublic,
+  new Priv, new PrivKid, new PrivKid2, new RO, new ROKid, new MagicKid, new AAKid, new UsesT, new UsesTKid, new Fin, new AbsKid];
+foreach ($objs as $o) { echo "== ", get_class($o), "\n"; all($o); }
+echo "== unset\n";
+$u = new UnsetBase; $u->drop(); t(fn() => w($u, 'a', 1)); t(fn() => show($u));
+echo "== uninit\n";
+foreach ([new Uninit, new UninitKid] as $o) { t(fn() => w($o, 'a', 1)); t(fn() => a($o, 1)); t(fn() => show($o)); }
+echo "== scope\n";
+class ScopeProt extends Prot { function go(mixed $o) { $o->p['x'] = 1; $o->p[] = 2; return $o->p; } }
+$sp = new ScopeProt; echo json_encode($sp->go($sp)), json_encode($sp->go(new ProtKid)), json_encode($sp->go(new Prot)), "\n";
+t(fn() => $sp->go(new Base));
+class ScopePriv extends Priv { function go(mixed $o) { $o->p['x'] = 1; return $o->p; } }
+$sq = new ScopePriv; t(fn() => print(json_encode($sq->go($sq)) . "\n")); t(fn() => print(json_encode($sq->go(new PrivKid)) . "\n")); t(fn() => print(json_encode($sq->go(new Priv)) . "\n"));
+class PrivWriter extends Priv { function go(mixed $o) { $o->p[] = 1; } }
+t(fn() => (new PrivWriter)->go(new PrivKid2));
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"== Base
+E[2] Undefined array key "k"
+Base {"0":3,"k":"x"}
+== Same
+E[2] Undefined array key "k"
+Same {"0":3,"k":"x"}
+== Deeper
+E[2] Undefined array key "k"
+Deeper {"0":3,"k":"x"}
+== OtherDefault
+E[2] Undefined array key "k"
+OtherDefault {"0":3,"k":"x"}
+== Prot
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Prot "unset"
+== ProtKid
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+ProtKid "unset"
+== ProtPublic
+E[2] Undefined array key "k"
+ProtPublic {"0":3,"k":"x"}
+== Priv
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Priv "unset"
+== PrivKid
+E[2] Undefined array key "k"
+PrivKid {"0":3,"k":"x"}
+== PrivKid2
+E[8192] Creation of dynamic property PrivKid2::$p is deprecated
+E[2] Undefined array key "k"
+PrivKid2 {"0":3,"k":"x"}
+== RO
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+RO ["ro"]
+== ROKid
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+ROKid ["ro"]
+== MagicKid
+E[2] Undefined array key "k"
+MagicKid {"0":3,"k":"x"}
+== AAKid
+E[2] Undefined array key "k"
+AAKid {"0":3,"k":"x"}
+== UsesT
+E[2] Undefined array key "k"
+UsesT {"0":3,"k":"x"}
+== UsesTKid
+E[2] Undefined array key "k"
+UsesTKid {"0":3,"k":"x"}
+== Fin
+E[2] Undefined array key "k"
+Fin {"0":3,"k":"x"}
+== AbsKid
+E[2] Undefined array key "k"
+AbsKid {"0":3,"k":"x"}
+== unset
+UnsetBase {"a":1}
+== uninit
+Uninit {"a":1,"0":1}
+UninitKid {"a":1,"0":1}
+== scope
+{"0":"prot","x":1,"1":2}{"0":"prot","x":1,"1":2}{"0":"prot","x":1,"1":2}
+E[8192] Creation of dynamic property ScopePriv::$p is deprecated
+{"x":1}
+{"0":"kid","x":1}
+Error: Cannot access private property Priv::$p
+E[8192] Creation of dynamic property PrivKid2::$p is deprecated
+"####, "{}", out.stderr);
+}
+
+/// The same program with eval linked: the helpers are shared per scope group and the caller's scope reaches the interpreter as an operand.
+#[test]
+fn test_inherited_slot_writes_match_php_with_eval_linked() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+eval($argc > 5 ? "echo 1;" : "");
+set_error_handler(function($no,$str,$file,$line){ echo "E[$no] $str\n"; return true; });
+function w(mixed $o, $k, $v) { $o->p[$k] = $v; }
+function a(mixed $o, $v) { $o->p[] = $v; }
+function s(mixed $o, $v) { $o->p = $v; }
+function c(mixed $o, $k, $v) { $o->p[$k] .= $v; }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+function show($o) { echo get_class($o), ' ', json_encode($o->p ?? 'unset'), "\n"; }
+function all($o) { t(fn() => w($o, 'k', 1)); t(fn() => a($o, 2)); t(fn() => s($o, [3])); t(fn() => c($o, 'k', 'x')); t(fn() => show($o)); }
+
+class Base { public array $p = ['base']; }
+class Same extends Base {}
+class Deeper extends Same {}
+class OtherDefault extends Base { public array $p = ['other']; }
+class Prot { protected array $p = ['prot']; function open() { return $this->p; } }
+class ProtKid extends Prot {}
+class ProtPublic extends Prot { public array $p = ['widened']; }
+class Priv { private array $p = ['priv']; function dump() { return $this->p; } }
+class PrivKid extends Priv { public array $p = ['kid']; }
+class PrivKid2 extends Priv {}
+class RO { public function __construct(public readonly array $p = ['ro']) {} }
+class ROKid extends RO {}
+class MagicKid extends Base { public function __set($n, $v) { echo "set($n)\n"; } public function __get($n) { echo "get($n)\n"; return []; } }
+class AAKid extends Base implements ArrayAccess {
+  public function offsetExists(mixed $o): bool { return true; } public function offsetGet(mixed $o): mixed { return 1; }
+  public function offsetSet(mixed $o, mixed $v): void { echo "offsetSet\n"; } public function offsetUnset(mixed $o): void {} }
+class UnsetBase { public array $p = ['x']; function drop() { unset($this->p); } }
+class Uninit { public array $p; }
+class UninitKid extends Uninit {}
+trait T { public array $p = ['trait']; }
+class UsesT { use T; }
+class UsesTKid extends UsesT {}
+final class Fin extends Base {}
+abstract class Abs { public array $p = ['abs']; }
+class AbsKid extends Abs {}
+
+$objs = [new Base, new Same, new Deeper, new OtherDefault, new Prot, new ProtKid, new ProtPublic,
+  new Priv, new PrivKid, new PrivKid2, new RO, new ROKid, new MagicKid, new AAKid, new UsesT, new UsesTKid, new Fin, new AbsKid];
+foreach ($objs as $o) { echo "== ", get_class($o), "\n"; all($o); }
+echo "== unset\n";
+$u = new UnsetBase; $u->drop(); t(fn() => w($u, 'a', 1)); t(fn() => show($u));
+echo "== uninit\n";
+foreach ([new Uninit, new UninitKid] as $o) { t(fn() => w($o, 'a', 1)); t(fn() => a($o, 1)); t(fn() => show($o)); }
+echo "== scope\n";
+class ScopeProt extends Prot { function go(mixed $o) { $o->p['x'] = 1; $o->p[] = 2; return $o->p; } }
+$sp = new ScopeProt; echo json_encode($sp->go($sp)), json_encode($sp->go(new ProtKid)), json_encode($sp->go(new Prot)), "\n";
+t(fn() => $sp->go(new Base));
+class ScopePriv extends Priv { function go(mixed $o) { $o->p['x'] = 1; return $o->p; } }
+$sq = new ScopePriv; t(fn() => print(json_encode($sq->go($sq)) . "\n")); t(fn() => print(json_encode($sq->go(new PrivKid)) . "\n")); t(fn() => print(json_encode($sq->go(new Priv)) . "\n"));
+class PrivWriter extends Priv { function go(mixed $o) { $o->p[] = 1; } }
+t(fn() => (new PrivWriter)->go(new PrivKid2));
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"== Base
+E[2] Undefined array key "k"
+Base {"0":3,"k":"x"}
+== Same
+E[2] Undefined array key "k"
+Same {"0":3,"k":"x"}
+== Deeper
+E[2] Undefined array key "k"
+Deeper {"0":3,"k":"x"}
+== OtherDefault
+E[2] Undefined array key "k"
+OtherDefault {"0":3,"k":"x"}
+== Prot
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Prot "unset"
+== ProtKid
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+Error: Cannot access protected property ProtKid::$p
+ProtKid "unset"
+== ProtPublic
+E[2] Undefined array key "k"
+ProtPublic {"0":3,"k":"x"}
+== Priv
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Priv "unset"
+== PrivKid
+E[2] Undefined array key "k"
+PrivKid {"0":3,"k":"x"}
+== PrivKid2
+E[8192] Creation of dynamic property PrivKid2::$p is deprecated
+E[2] Undefined array key "k"
+PrivKid2 {"0":3,"k":"x"}
+== RO
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+RO ["ro"]
+== ROKid
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+ROKid ["ro"]
+== MagicKid
+E[2] Undefined array key "k"
+MagicKid {"0":3,"k":"x"}
+== AAKid
+E[2] Undefined array key "k"
+AAKid {"0":3,"k":"x"}
+== UsesT
+E[2] Undefined array key "k"
+UsesT {"0":3,"k":"x"}
+== UsesTKid
+E[2] Undefined array key "k"
+UsesTKid {"0":3,"k":"x"}
+== Fin
+E[2] Undefined array key "k"
+Fin {"0":3,"k":"x"}
+== AbsKid
+E[2] Undefined array key "k"
+AbsKid {"0":3,"k":"x"}
+== unset
+UnsetBase {"a":1}
+== uninit
+Uninit {"a":1,"0":1}
+UninitKid {"a":1,"0":1}
+== scope
+{"0":"prot","x":1,"1":2}{"0":"prot","x":1,"1":2}{"0":"prot","x":1,"1":2}
+E[8192] Creation of dynamic property ScopePriv::$p is deprecated
+{"x":1}
+{"0":"kid","x":1}
+Error: Cannot access private property Priv::$p
+E[8192] Creation of dynamic property PrivKid2::$p is deprecated
+"####, "{}", out.stderr);
+}
+
+/// Classes declared by eval() that extend the scope class or the declaring class (protected, private, readonly, with and without __set): the output is merge-main's, whose differences from php (messages naming the interpreted class, a private slot of an interpreted child) are old gaps.
+#[test]
+fn test_inherited_slot_writes_with_eval_declared_classes_keep_merge_main_behaviour() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+set_error_handler(function($no,$str,$file,$line){ echo "E[$no] $str\n"; return true; });
+function w(mixed $o, $k, $v) { $o->p[$k] = $v; }
+function a(mixed $o, $v) { $o->p[] = $v; }
+function s(mixed $o, $v) { $o->p = $v; }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+function show($o) { echo get_class($o), ' ', json_encode($o->p ?? 'unset'), "\n"; }
+function all($o) { t(fn() => w($o, 'k', 1)); t(fn() => a($o, 2)); t(fn() => s($o, [3])); t(fn() => show($o)); }
+
+class Base { public array $p = ['base']; }
+class Prot { protected array $p = ['prot']; function open() { return $this->p; }
+  function go(mixed $o) { $o->p['x'] = 1; $o->p[] = 2; $o->p = ['set']; return $o->p; } }
+class Priv { private array $p = ['priv']; function go(mixed $o) { $o->p['x'] = 1; return $o->p; } }
+class RO { public function __construct(public readonly array $p = ['ro']) {} }
+class ProtScope extends Prot {}
+class Other { function go(mixed $o) { $o->p['x'] = 1; return $o->p; } }
+eval($argc > 0 ? '
+class EvBase extends Base {}
+class EvProt extends Prot { function evgo(mixed $o) { $o->p["e"] = 1; return $o->p; } }
+class EvProtMagic extends Prot { function __set($n, $v) { echo "evset($n)\n"; } }
+class EvPriv extends Priv {}
+class EvRO extends RO {}
+class EvMagic extends Base { function __set($n, $v) { echo "evset($n)\n"; } function __get($n) { echo "evget($n)\n"; return []; } }
+class EvScope extends ProtScope { function evgo(mixed $o) { $o->p["s"] = 1; return $o->p; } }
+class EvRedeclare extends Base { public array $p = ["evredeclared"]; }
+' : '');
+$objs = [new Base, new EvBase, new Prot, new EvProt, new EvProtMagic, new Priv, new EvPriv, new RO, new EvRO, new EvMagic, new EvRedeclare];
+foreach ($objs as $o) { echo "== ", get_class($o), "\n"; all($o); }
+echo "== scopes\n";
+$ps = new ProtScope; $ev = new EvProt; $evs = new EvScope;
+foreach ([$ps, $ev, new Prot, new EvProtMagic, new Base, new EvBase] as $o) { t(fn() => print(get_class($o) . ' ' . json_encode((new Prot)->go($o)) . "\n")); }
+foreach ([$ps, $ev, new Prot, new EvProtMagic] as $o) { t(fn() => print(get_class($o) . ' ' . json_encode($ps->go($o)) . "\n")); }
+foreach ([$ps, $ev, new Prot, new EvProtMagic] as $o) { t(fn() => print(get_class($o) . ' ' . json_encode($evs->evgo($o)) . "\n")); }
+foreach ([new Priv, new EvPriv] as $o) { t(fn() => print(get_class($o) . ' ' . json_encode((new Priv)->go($o)) . "\n")); }
+foreach ([new Prot, new Priv, new EvProt] as $o) { t(fn() => print(get_class($o) . ' ' . json_encode((new Other)->go($o)) . "\n")); }
+t(fn() => print(json_encode($ev->evgo($ev)) . json_encode($ev->evgo(new Prot)) . "\n"));
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"== Base
+Base [3]
+== EvBase
+EvBase [3]
+== Prot
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Prot "unset"
+== EvProt
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+EvProt "unset"
+== EvProtMagic
+Error: Cannot access protected property Prot::$p
+Error: Cannot access protected property Prot::$p
+evset(p)
+EvProtMagic "unset"
+== Priv
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access private property Priv::$p
+Priv "unset"
+== EvPriv
+E[8192] Creation of dynamic property EvPriv::$p is deprecated
+EvPriv [3]
+== RO
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot indirectly modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+RO ["ro"]
+== EvRO
+Error: Cannot modify readonly property RO::$p
+Error: Cannot modify readonly property RO::$p
+EvRO ["ro"]
+== EvMagic
+EvMagic [3]
+== EvRedeclare
+EvRedeclare [3]
+== scopes
+ProtScope ["set"]
+EvProt ["set"]
+Prot ["set"]
+EvProtMagic ["set"]
+Base ["set"]
+EvBase ["set"]
+ProtScope ["set"]
+EvProt ["set"]
+Prot ["set"]
+EvProtMagic ["set"]
+ProtScope {"0":"set","s":1}
+EvProt {"0":"set","s":1}
+Prot {"0":"prot","s":1}
+EvProtMagic {"0":"prot","s":1}
+Priv {"0":"priv","x":1}
+EvPriv ["priv"]
+Error: Cannot access protected property Prot::$p
+Error: Cannot access private property Priv::$p
+Error: Cannot access protected property Prot::$p
+{"0":"set","s":1,"e":1}{"0":"prot","e":1}
+"####, "{}", out.stderr);
+}
+
+/// Callable arrays inside array_map inside usort, in a generator and in a fiber: every wrapper reached while another is being emitted is queued and emitted once.
+#[test]
+fn test_nested_runtime_call_wrappers_are_all_emitted() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+class K {
+  public static function cmp($a, $b) { return $a <=> $b; }
+  public function dbl($x) { return $x * 2; }
+  public function neg($x) { return -$x; }
+  public static function up($s) { return strtoupper($s); }
+}
+function inner(array $xs) { return array_map([new K, 'dbl'], $xs); }
+function outer(array $xs) { $r = inner($xs); usort($r, ['K', 'cmp']); return $r; }
+echo json_encode(outer([5, 3, 9, 1])), "\n";
+function nested(array $xs) { return array_map('strrev', array_map(['K', 'up'], array_map('trim', $xs))); }
+echo json_encode(nested([' ab ', ' cd'])), "\n";
+$fns = ['strlen', 'strtoupper', ['K', 'up'], [new K, 'neg'], 'abs', 'intdiv', 'max', 'array_sum', 'implode', 'str_repeat'];
+foreach ($fns as $f) { echo is_callable($f) ? 'c' : 'n'; } echo "\n";
+echo json_encode(array_map('array_sum', [[1, 2], [3]])), json_encode(array_filter([1, 0, 2], 'boolval')), json_encode(array_map(null, [1], [2])), "\n";
+function gen() { foreach (array_map([new K, 'dbl'], [1, 2, 3]) as $v) { $t = [3, 1]; usort($t, ["K", "cmp"]); yield $v . $t[0]; } }
+$arr = [3, 1];
+foreach (gen() as $v) echo $v, ",";
+echo "\n";
+$fib = new Fiber(function () { $r = array_map(['K', 'up'], ['a', 'b']); Fiber::suspend(json_encode($r)); $q = [3, 1, 2]; usort($q, ['K', 'cmp']); return json_encode($q); });
+echo $fib->start(), $fib->resume() ?? $fib->getReturn(), "\n";
+echo call_user_func_array([new K, 'dbl'], [21]), call_user_func(["K", "up"], "z"), "\n";
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"[2,6,10,18]
+["BA","DC"]
+cccccccccc
+[3,3]{"0":1,"2":2}[[1,2]]
+21,41,61,
+["A","B"][1,2,3]
+42Z
+"####, "{}", out.stderr);
+}
