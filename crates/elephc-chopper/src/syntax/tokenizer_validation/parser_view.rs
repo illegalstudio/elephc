@@ -758,7 +758,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
 }
 
 /// Identifies either Zend token form of an ampersand.
-fn is_reference_marker(id: i64) -> bool {
+pub(crate) fn is_reference_marker(id: i64) -> bool {
     matches!(id, tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG)
 }
 

@@ -137,6 +137,11 @@ pub(super) fn run_prechecks<T: SourceToken>(
         if let Some(error) = invalid_array_reference_error(source, tokens, reference_delimiters) {
             return Some(error);
         }
+        if let Some(error) =
+            invalid_reference_write_continuation_error(source, tokens, reference_delimiters)
+        {
+            return Some(error);
+        }
     }
     if presence.goto {
         if let Some(error) = goto_statement_error(source, tokens) {
@@ -303,6 +308,119 @@ pub(super) fn delimiter_pairs<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>
         }
     }
     pairs
+}
+
+/// Rejects a write operator after a reference target where PHP expects a value.
+///
+/// Assignment references and `foreach` value targets can be followed by ordinary operators
+/// (`&$b + 1`, `&$b ? 1 : 2`), but never by an assignment or update (`&$b = 1`, `&$b++`).
+/// The precheck runs on native tokens, so it covers both validation views.
+#[inline(never)]
+pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
+) -> Option<ValidationError> {
+    let close_of = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
+    let enclosing = enclosing_delimiters(tokens);
+    for index in 0..tokens.len() {
+        if !super::parser_view::is_reference_marker(tokens[index].id()) {
+            continue;
+        }
+        let Some(previous) = previous_significant_index(tokens, index) else {
+            continue;
+        };
+        let previous_id = tokens[previous].id();
+        let assignment = previous_id == i64::from(b'=');
+        let foreach_value = previous_id == tok::T_AS;
+        let use_capture = previous_id == i64::from(b'(')
+            && enclosing[index] != u32::MAX
+            && previous_significant_index(tokens, enclosing[index] as usize)
+                .is_some_and(|before| tokens[before].id() == tok::T_USE);
+        if !assignment && !foreach_value && !use_capture {
+            continue;
+        }
+        if assignment
+            && enclosing[index] != u32::MAX
+            && paren_is_declaration_parameters(tokens, enclosing[index] as usize)
+        {
+            // A parameter default is an expression, so the ordinary parser reports the `&`.
+            continue;
+        }
+        let Some(target) = next_significant_index(tokens, index) else {
+            continue;
+        };
+        if !reference_target_starts_at(tokens, target) {
+            continue;
+        }
+        let Some(end) = reference_target_end(tokens, target, close_of) else {
+            continue;
+        };
+        let Some(after) = next_significant_index(tokens, end) else {
+            continue;
+        };
+        if !is_write_continuation(source, &tokens[after]) {
+            continue;
+        }
+        let error = if assignment {
+            token_error_at(source, tokens, tokens[after].pos())
+        } else if foreach_value {
+            reference_chain_error(source, tokens, after)
+        } else {
+            with_expectation(token_error_at(source, tokens, tokens[after].pos()), "\")\"")
+        };
+        return Some(error);
+    }
+    None
+}
+
+/// Returns whether a token is a write assignment or update operator.
+fn is_write_continuation<T: SourceToken>(source: &[u8], token: &T) -> bool {
+    let Some(bytes) = source.get(token.pos()..token.pos() + token.len()) else {
+        return false;
+    };
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    matches!(
+        text,
+        "=" | "+=" | "-=" | "*=" | "/=" | ".=" | "%=" | "&=" | "|=" | "^="
+            | "<<=" | ">>=" | "**=" | "??=" | "++" | "--"
+    )
+}
+
+/// Returns the last token of a reference target chain.
+fn reference_target_end<T: SourceToken>(
+    tokens: &[T],
+    target: usize,
+    close_of: &[Option<usize>],
+) -> Option<usize> {
+    let mut cursor = target;
+    loop {
+        let Some(next) = next_significant_index(tokens, cursor) else {
+            return Some(cursor);
+        };
+        match tokens[next].id() {
+            id if id == i64::from(b'[')
+                || id == i64::from(b'(')
+                || id == i64::from(b'{') =>
+            {
+                cursor = close_of[next]?;
+            }
+            id if id == tok::T_OBJECT_OPERATOR
+                || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+                || id == tok::T_DOUBLE_COLON =>
+            {
+                let member = next_significant_index(tokens, next)?;
+                if tokens[member].id() == i64::from(b'{') {
+                    cursor = close_of[member]?;
+                } else {
+                    cursor = member;
+                }
+            }
+            _ => return Some(cursor),
+        }
+    }
 }
 
 /// Rejects a malformed `array(&…)`, `list(&…)` or `[&…]` reference entry.

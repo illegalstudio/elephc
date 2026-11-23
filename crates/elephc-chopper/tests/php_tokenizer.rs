@@ -2872,3 +2872,27 @@ fn tokenizer_namespaced_reference_targets_are_valid() {
     }
     assert!(tokenize(b"<?php $a = &\\Foo\\Bar{0};", TOKEN_PARSE).is_err());
 }
+
+/// A reference target cannot be followed by an assignment or update operator.
+#[test]
+fn tokenizer_reference_write_continuations_are_errors() {
+    for (source, message) in [
+        (b"<?php $a = &$b = 1;".as_slice(), "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &$b += 1;", "syntax error, unexpected token \"+=\""),
+        (b"<?php $a = &$b++;", "syntax error, unexpected token \"++\""),
+        (b"<?php $a = &$b[0] = 1;", "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &$b->c = 1;", "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &foo() = 1;", "syntax error, unexpected token \"=\""),
+        (
+            b"<?php foreach ($a as &$b = 1) {}",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $f = function () use (&$x = 1) {};",
+            "syntax error, unexpected token \"=\", expecting \")\"",
+        ),
+    ] {
+        let error = tokenize(source, TOKEN_PARSE).expect_err("write continuation must fail");
+        assert_eq!(error.message, message, "{}", String::from_utf8_lossy(source));
+    }
+}
