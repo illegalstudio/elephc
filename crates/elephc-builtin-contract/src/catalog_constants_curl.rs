@@ -223,6 +223,7 @@ pub(crate) static CURL_CONSTANTS: &[ConstantContract] = &[
     constant!("CURLINFO_RTSP_SERVER_CSEQ", Curl, ConstValue::Int(2097190)),
     constant!("CURLINFO_RTSP_SESSION_ID", Curl, ConstValue::Int(1048612)),
     constant!("CURLINFO_SCHEME", Curl, ConstValue::Int(1048625)),
+    constant!("CURLINFO_SIZE_DELIVERED", Curl, ConstValue::Int(6291527)),
     constant!("CURLINFO_SIZE_DOWNLOAD", Curl, ConstValue::Int(3145736)),
     constant!("CURLINFO_SIZE_DOWNLOAD_T", Curl, ConstValue::Int(6291464)),
     constant!("CURLINFO_SIZE_UPLOAD", Curl, ConstValue::Int(3145735)),

@@ -24,5 +24,6 @@ mod monitoring;
 mod multi;
 mod multipart;
 mod share;
+mod size_delivered_php86;
 mod streams;
 mod tls_fixture;

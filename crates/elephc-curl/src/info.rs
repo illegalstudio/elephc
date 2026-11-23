@@ -115,6 +115,9 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
 
         pub(super) const SIZE_UPLOAD_T: i32 = 0x60_0000 + 7;
         pub(super) const SIZE_DOWNLOAD_T: i32 = 0x60_0000 + 8;
+        /// `CURLINFO_SIZE_DELIVERED` (`CURLINFO_OFF_T + 71`, libcurl 8.20+): the bytes
+        /// passed to the download write callback.
+        pub(super) const SIZE_DELIVERED: i32 = 0x60_0000 + 71;
         pub(super) const SPEED_DOWNLOAD_T: i32 = 0x60_0000 + 9;
         pub(super) const SPEED_UPLOAD_T: i32 = 0x60_0000 + 10;
         pub(super) const CONTENT_LENGTH_DOWNLOAD_T: i32 = 0x60_0000 + 15;
@@ -219,6 +222,9 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
     };
     off_t_as_double(&mut map, "size_upload", info::SIZE_UPLOAD_T);
     off_t_as_double(&mut map, "size_download", info::SIZE_DOWNLOAD_T);
+    // php-src 8.6 adds `size_delivered` as an INTEGER (its `CAAL` is add_assoc_long),
+    // unlike the six `_T` fields above that keep their historical double type.
+    long_key(&mut map, "size_delivered", info::SIZE_DELIVERED);
     off_t_as_double(&mut map, "speed_download", info::SPEED_DOWNLOAD_T);
     off_t_as_double(&mut map, "speed_upload", info::SPEED_UPLOAD_T);
     off_t_as_double(

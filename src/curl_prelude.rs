@@ -1176,6 +1176,21 @@ function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
         if (!is_array($decoded)) {
             return false;
         }
+        // PHP 8.6 adds `size_delivered` to the array (libcurl 8.20+). The bridge always
+        // reports it, so earlier profiles rebuild the decoded array without it to keep
+        // php-src's 41-key array. (A direct `unset()` is not usable here: the decoded
+        // value is statically a packed array, and the EIR backend refuses an `unset`
+        // that would leave a key hole.)
+        if (PHP_VERSION_ID < 80600 && array_key_exists("size_delivered", $decoded)) {
+            $filtered = [];
+            foreach ($decoded as $key => $value) {
+                if ($key === "size_delivered") {
+                    continue;
+                }
+                $filtered[$key] = $value;
+            }
+            $decoded = $filtered;
+        }
         return $decoded;
     }
     // CURLINFO_PRIVATE (1048597): the arbitrary PHP value CURLOPT_PRIVATE stored on the
