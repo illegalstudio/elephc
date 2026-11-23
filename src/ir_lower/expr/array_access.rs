@@ -649,6 +649,19 @@ fn lower_array_access_from_values_with_receiver_pins(
         super::pending_owners::protect_additional_pending_operands(ctx, &operands,
             &receiver_pins.iter().chain(key_pins.iter()).cloned().collect::<Vec<_>>(), expr.span)
     } else { Vec::new() };
+    let intrinsic_consumes_index = op == Op::RuntimeCall
+        && singular_object_class(&ctx.builder.value_php_type(array_value.value))
+            .and_then(|(class, nullable)| {
+                (!nullable)
+                    .then(|| crate::intrinsics::IntrinsicCall::instance_method(class, "offsetGet"))
+                    .flatten()
+            })
+            .is_some_and(|intrinsic| intrinsic.consumed_mixed_parameters().contains(&0));
+    if intrinsic_consumes_index {
+        if let Some(owner) = index_owner {
+            transfer_owned_call_operand(ctx, owner, index.span);
+        }
+    }
     let result = if let Some(method) = native_method {
         lower_native_dimension_read(ctx, array_value, index_value, method, warn_on_missing,
             result_type, expr)
@@ -679,9 +692,11 @@ fn lower_array_access_from_values_with_receiver_pins(
     // index paths rebound `index_value` to a non-owning raw cast, so the
     // owning-temporary gate makes this a no-op for them.
     if let Some(owner) = index_owner {
-        guard_descriptor_container(ctx, result, expr.span);
-        retire_owned_call_operand(ctx, owner, expr.span);
-        ctx.unguard_call_argument(result.value, expr.span);
+        if !intrinsic_consumes_index {
+            guard_descriptor_container(ctx, result, expr.span);
+            retire_owned_call_operand(ctx, owner, expr.span);
+            ctx.unguard_call_argument(result.value, expr.span);
+        }
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
         let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)

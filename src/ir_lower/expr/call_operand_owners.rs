@@ -952,6 +952,26 @@ pub(crate) fn unregister_owned_call_operand(
     );
 }
 
+/// Transfers a published operand to a consuming runtime call without releasing it.
+///
+/// The unwind record is detached before the call because the callee can consume the value and
+/// then throw. Clearing the slot also prevents frame cleanup from releasing the transferred
+/// owner a second time.
+pub(crate) fn transfer_owned_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    span: Span,
+) {
+    unregister_owned_call_operand(ctx, slot, span);
+    ctx.emit_void(
+        Op::UnsetLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::UnsetLocal.default_effects(),
+        Some(span),
+    );
+}
+
 /// Clears a rooted operand before releasing it, including when its destructor throws.
 pub(crate) fn retire_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
