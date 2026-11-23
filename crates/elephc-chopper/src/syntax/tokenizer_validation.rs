@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 mod diagnostics;
 mod parser_view;
 mod prechecks;
+mod reference_scan;
 mod token_view;
 
 use diagnostics::*;
@@ -475,7 +476,7 @@ fn token_view_enabled() -> bool {
     })
 }
 
-/// Validates one source through the source-spanned token-view prototype.
+/// Validates one source through the source-spanned token view.
 fn validate_token_view<T: SourceToken>(
     source: &[u8],
     tokens: &[T],

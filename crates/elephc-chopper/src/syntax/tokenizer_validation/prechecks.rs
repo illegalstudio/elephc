@@ -11,6 +11,9 @@ use crate::scanner::{newline_count, operator, Operator, HALT_COMPILER_OUTERMOST_
 
 use super::diagnostics::*;
 use super::parser_view::{parser_view, ternary_colon_before_label};
+use super::reference_scan::{
+    is_reference_marker, is_write_continuation, reference_chain_end, reference_target_starts_at,
+};
 use super::*;
 
 /// Token categories whose absence lets validation skip a precheck's full token scan.
@@ -324,7 +327,7 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
     let close_of = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
     let enclosing = enclosing_delimiters(tokens);
     for index in 0..tokens.len() {
-        if !super::parser_view::is_reference_marker(tokens[index].id()) {
+        if !is_reference_marker(tokens[index].id()) {
             continue;
         }
         let Some(previous) = previous_significant_index(tokens, index) else {
@@ -353,7 +356,7 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         if !reference_target_starts_at(tokens, target) {
             continue;
         }
-        let Some(end) = reference_target_end(tokens, target, close_of) else {
+        let Some(end) = reference_chain_end(source, tokens, target, close_of) else {
             continue;
         };
         let Some(after) = next_significant_index(tokens, end) else {
@@ -372,55 +375,6 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         return Some(error);
     }
     None
-}
-
-/// Returns whether a token is a write assignment or update operator.
-fn is_write_continuation<T: SourceToken>(source: &[u8], token: &T) -> bool {
-    let Some(bytes) = source.get(token.pos()..token.pos() + token.len()) else {
-        return false;
-    };
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    matches!(
-        text,
-        "=" | "+=" | "-=" | "*=" | "/=" | ".=" | "%=" | "&=" | "|=" | "^="
-            | "<<=" | ">>=" | "**=" | "??=" | "++" | "--"
-    )
-}
-
-/// Returns the last token of a reference target chain.
-fn reference_target_end<T: SourceToken>(
-    tokens: &[T],
-    target: usize,
-    close_of: &[Option<usize>],
-) -> Option<usize> {
-    let mut cursor = target;
-    loop {
-        let Some(next) = next_significant_index(tokens, cursor) else {
-            return Some(cursor);
-        };
-        match tokens[next].id() {
-            id if id == i64::from(b'[')
-                || id == i64::from(b'(')
-                || id == i64::from(b'{') =>
-            {
-                cursor = close_of[next]?;
-            }
-            id if id == tok::T_OBJECT_OPERATOR
-                || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                || id == tok::T_DOUBLE_COLON =>
-            {
-                let member = next_significant_index(tokens, next)?;
-                if tokens[member].id() == i64::from(b'{') {
-                    cursor = close_of[member]?;
-                } else {
-                    cursor = member;
-                }
-            }
-            _ => return Some(cursor),
-        }
-    }
 }
 
 /// Rejects a malformed `array(&…)`, `list(&…)` or `[&…]` reference entry.

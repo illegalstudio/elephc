@@ -11,35 +11,30 @@
 //! - Tokens keep source spans, so no view byte map is needed.
 //! - Both views feed the same AST parser; this module never owns a second grammar.
 
+mod projection;
+
 use std::cell::OnceCell;
 
-use crate::scanner::operator;
-use crate::syntax::lexer::{
-    byte_token, decode_backtick_body, decode_double_quoted_body, operator_token, scan_heredoc,
-    single_quoted_token, word_token, Cursor, SpannedToken, Token, TokenMetadata,
-};
+use crate::syntax::lexer::{Cursor, SpannedToken, Token, TokenMetadata};
 use crate::syntax::span::Span;
 
 use super::next_significant_index;
-use super::parser_view::{
-    arrow_starts_function_body, is_reference_ampersand, void_cast_starts_statement,
+use self::projection::{
+    is_cast_token, project, project_cast, project_literal, project_qualified_name,
+    project_qualified_name_fast, Projected,
 };
+use super::parser_view::{arrow_starts_function_body, is_reference_ampersand};
 use super::prechecks::delimiter_pairs;
 use super::prechecks::matching_brace_end;
+use super::reference_scan::{
+    reference_chain_end, reference_continuation_is_valid, reference_target_starts_at,
+};
 use super::{tok, SourceToken};
 
 /// A normalized token stream ready for the shared AST parser.
 pub(super) struct TokenProjection {
     /// Compiler tokens with source spans.
     pub(super) tokens: Vec<SpannedToken>,
-}
-
-/// One projected native token: skipped, emitted, or unsupported.
-enum Projected {
-    /// Trivia, tags, or inline HTML with no compiler token.
-    Skip,
-    /// A compiler token plus whether source spelling metadata may be needed.
-    Token(Token, bool),
 }
 
 /// Builds a source-spanned compiler token stream, or returns `None` when a token
@@ -323,70 +318,6 @@ fn eof_span(text: &str, line_starts: &[usize]) -> Option<Span> {
     Some(Span::new_in_source(line, col, 0))
 }
 
-/// Splits a qualified name using the token-start span and byte offsets.
-fn project_qualified_name_fast(id: i64, text: &str, start: Span) -> Option<Vec<SpannedToken>> {
-    let mut parts = Vec::new();
-    let mut offset = 0usize;
-    if id == tok::T_NAME_FULLY_QUALIFIED {
-        if text.as_bytes().first() != Some(&b'\\') {
-            return None;
-        }
-        parts.push((
-            Token::Backslash,
-            TokenMetadata::new(offset_span(start, 0, 1)?),
-        ));
-        offset = 1;
-    }
-    let mut first = true;
-    while offset < text.len() {
-        let rest = &text[offset..];
-        let segment_end = rest.find('\\').map_or(text.len(), |position| offset + position);
-        let segment = &text[offset..segment_end];
-        if segment.is_empty() {
-            return None;
-        }
-        let segment_span = offset_span(start, offset, segment.len())?;
-        let relative_prefix = id == tok::T_NAME_RELATIVE && first;
-        let token = if relative_prefix {
-            if !segment.eq_ignore_ascii_case("namespace") {
-                return None;
-            }
-            Token::Namespace
-        } else {
-            Token::Identifier(segment.to_owned())
-        };
-        let metadata = if relative_prefix && token.canonical_word_spelling() != Some(segment) {
-            TokenMetadata::with_source_spelling(segment_span, segment)
-        } else {
-            TokenMetadata::new(segment_span)
-        };
-        parts.push((token, metadata));
-        first = false;
-        offset = segment_end;
-        if offset < text.len() {
-            if text.as_bytes()[offset] != b'\\' {
-                return None;
-            }
-            parts.push((
-                Token::Backslash,
-                TokenMetadata::new(offset_span(start, offset, 1)?),
-            ));
-            offset += 1;
-        }
-    }
-    Some(parts)
-}
-
-/// Returns a span for a byte range starting at `start + offset` on one line.
-fn offset_span(start: Span, offset: usize, len: usize) -> Option<Span> {
-    let col = start.col.checked_add(u32::try_from(offset).ok()?)?;
-    let end = col.checked_add(u32::try_from(len).ok()?)?;
-    Some(Span::with_end_from(
-        Span::new_in_source(start.line, col, 0),
-        Span::new_in_source(start.line, end, 0),
-    ))
-}
-
 /// Returns whether an ampersand must stay on the text-view fallback.
 fn reference_context(previous_significant: i64) -> bool {
     previous_significant == i64::from(b'=')
@@ -408,84 +339,13 @@ fn reference_target_safe<T: SourceToken>(
     let Some(target) = next_significant_index(tokens, index) else {
         return false;
     };
-    let target_id = tokens[target].id();
-    let mut cursor = target;
-    match target_id {
-        tok::T_VARIABLE => {}
-        tok::T_STATIC => {
-            let Some(next) = next_significant_index(tokens, target) else {
-                return false;
-            };
-            if tokens[next].id() != tok::T_DOUBLE_COLON {
-                return false;
-            }
-        }
-        tok::T_STRING | tok::T_IDENTIFIER | tok::T_NAME_FULLY_QUALIFIED
-        | tok::T_NAME_QUALIFIED | tok::T_NAME_RELATIVE => {
-            let Some(next) = next_significant_index(tokens, target) else {
-                return false;
-            };
-            if !matches!(
-                tokens[next].id(),
-                id if id == i64::from(b'(')
-                    || id == i64::from(b'[')
-                    || id == tok::T_DOUBLE_COLON
-                    || id == tok::T_OBJECT_OPERATOR
-                    || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-            ) {
-                return false;
-            }
-        }
-        _ => return false,
+    if !reference_target_starts_at(tokens, target) {
+        return false;
     }
-
-    loop {
-        let Some(next) = next_significant_index(tokens, cursor) else {
-            return false;
-        };
-        match tokens[next].id() {
-            id if id == i64::from(b'[')
-                || id == i64::from(b'(')
-                || id == i64::from(b'{') =>
-            {
-                let Some(close) = pairs[next] else {
-                    return false;
-                };
-                if contains_ampersand(tokens, next + 1, close) {
-                    return false;
-                }
-                cursor = close;
-            }
-            id if id == tok::T_OBJECT_OPERATOR
-                || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                || id == tok::T_DOUBLE_COLON =>
-            {
-                let Some(member) = next_significant_index(tokens, next) else {
-                    return false;
-                };
-                if tokens[member].id() == i64::from(b'{') {
-                    let Some(close) = pairs[member] else {
-                        return false;
-                    };
-                    if contains_ampersand(tokens, member + 1, close) {
-                        return false;
-                    }
-                    cursor = close;
-                } else if matches!(
-                    tokens[member].id(),
-                    tok::T_VARIABLE | tok::T_STRING | tok::T_IDENTIFIER
-                ) || is_word_token(source, &tokens[member])
-                {
-                    cursor = member;
-                } else {
-                    return false;
-                }
-            }
-            _ => break,
-        }
-    }
-
-    let Some(after) = next_significant_index(tokens, cursor) else {
+    let Some(end) = reference_chain_end(source, tokens, target, pairs) else {
+        return false;
+    };
+    let Some(after) = next_significant_index(tokens, end) else {
         return false;
     };
     if allow_continuation {
@@ -500,294 +360,6 @@ fn reference_target_safe<T: SourceToken>(
                 || id == i64::from(b'}')
         )
     }
-}
-
-/// Returns whether a reference target continuation is not a write operator.
-fn reference_continuation_is_valid<T: SourceToken>(source: &[u8], token: &T) -> bool {
-    let Some(bytes) = source.get(token.pos()..token.pos() + token.len()) else {
-        return false;
-    };
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    !matches!(
-        text,
-        "=" | "+="
-            | "-="
-            | "*="
-            | "/="
-            | ".="
-            | "%="
-            | "&="
-            | "|="
-            | "^="
-            | "<<="
-            | ">>="
-            | "**="
-            | "??="
-            | "++"
-            | "--"
-    )
-}
-
-/// Returns whether one native token's source text is a word.
-fn is_word_token<T: SourceToken>(source: &[u8], token: &T) -> bool {
-    source
-        .get(token.pos()..token.pos() + token.len())
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        .is_some_and(is_word)
-}
-
-/// Returns whether a token range contains another reference ampersand.
-fn contains_ampersand<T: SourceToken>(tokens: &[T], start: usize, end: usize) -> bool {
-    tokens[start..end].iter().any(|token| {
-        matches!(
-            token.id(),
-            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
-                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
-        )
-    })
-}
-
-/// Returns whether a native token is a cast form.
-fn is_cast_token(id: i64) -> bool {
-    matches!(
-        id,
-        tok::T_INT_CAST
-            | tok::T_DOUBLE_CAST
-            | tok::T_BOOL_CAST
-            | tok::T_ARRAY_CAST
-            | tok::T_OBJECT_CAST
-            | tok::T_STRING_CAST
-            | tok::T_UNSET_CAST
-            | tok::T_VOID_CAST
-    )
-}
-
-/// Projects a cast token as `(` + normalized type identifier + `)`.
-fn project_cast<T: SourceToken>(
-    id: i64,
-    text: &str,
-    start: Span,
-    tokens: &[T],
-    index: usize,
-    previous_significant: i64,
-) -> Option<Vec<SpannedToken>> {
-    let inner = text.strip_prefix('(')?.strip_suffix(')')?;
-    let trimmed = inner.trim_matches(|byte: char| byte == ' ' || byte == '\t');
-    if trimmed.is_empty() {
-        return None;
-    }
-    let leading = inner.len() - inner.trim_start_matches(|byte: char| byte == ' ' || byte == '\t').len();
-    let (normalized, identifier_offset, identifier_len, rparen_offset) = match id {
-        // The text view rewrites these casts to `(int)`, so their emitted offsets follow
-        // that five-byte normalized token rather than the source spelling.
-        tok::T_STRING_CAST | tok::T_UNSET_CAST => ("int", 1, 3, 4),
-        tok::T_VOID_CAST => {
-            if void_cast_starts_statement(tokens, index, previous_significant) {
-                ("int", 1, 3, 4)
-            } else {
-                return None;
-            }
-        }
-        _ => (trimmed, 1 + leading, trimmed.len(), text.len() - 1),
-    };
-    let mut parts = Vec::with_capacity(3);
-    parts.push((
-        Token::LParen,
-        TokenMetadata::new(offset_span(start, 0, 1)?),
-    ));
-    parts.push((
-        Token::Identifier(normalized.to_owned()),
-        TokenMetadata::new(offset_span(start, identifier_offset, identifier_len)?),
-    ));
-    parts.push((
-        Token::RParen,
-        TokenMetadata::new(offset_span(start, rparen_offset, 1)?),
-    ));
-    Some(parts)
-}
-
-/// Projects one native token, or returns `None` when it is outside the prototype.
-fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
-    match id {
-        tok::T_OPEN_TAG | tok::T_INLINE_HTML => return Some(Projected::Skip),
-        tok::T_WHITESPACE | tok::T_COMMENT | tok::T_DOC_COMMENT => {
-            return Some(Projected::Skip);
-        }
-        tok::T_CLOSE_TAG => return Some(Projected::Token(Token::Semicolon, false)),
-        tok::T_OPEN_TAG_WITH_ECHO => return Some(Projected::Token(Token::Echo, false)),
-        tok::T_ATTRIBUTE => return Some(Projected::Token(Token::AttrOpen, false)),
-        tok::T_VARIABLE => {
-            let name = text.strip_prefix('$')?;
-            if name.is_empty() {
-                return None;
-            }
-            let token = if name == "this" {
-                Token::This
-            } else {
-                Token::Variable(name.to_owned())
-            };
-            return Some(Projected::Token(token, false));
-        }
-        tok::T_STRING => {
-            return Some(Projected::Token(Token::Identifier(text.to_owned()), false));
-        }
-        tok::T_LNUMBER => {
-            if text.len() > 1 && text.starts_with('0') {
-                return None;
-            }
-            return text
-                .parse::<i64>()
-                .ok()
-                .map(|value| Projected::Token(Token::IntLiteral(value), false));
-        }
-        tok::T_DNUMBER => {
-            return text
-                .replace('_', "")
-                .parse::<f64>()
-                .ok()
-                .map(|value| Projected::Token(Token::FloatLiteral(value), false));
-        }
-        tok::T_CONSTANT_ENCAPSED_STRING
-        | tok::T_START_HEREDOC
-        | tok::T_END_HEREDOC
-        | tok::T_ENCAPSED_AND_WHITESPACE
-        | tok::T_NUM_STRING
-        | tok::T_STRING_VARNAME
-        | tok::T_CURLY_OPEN
-        | tok::T_DOLLAR_OPEN_CURLY_BRACES
-        | tok::T_GOTO
-        | tok::T_ELLIPSIS
-        | tok::T_HALT_COMPILER
-        | tok::T_NS_SEPARATOR => return None,
-        _ => {}
-    }
-
-    if id < 256 {
-        let byte = u8::try_from(id).ok()?;
-        if matches!(byte, b'"' | b'\'' | b'`' | b'$' | b'\\') {
-            return None;
-        }
-        return byte_token(byte, span)
-            .ok()
-            .map(|token| Projected::Token(token, false));
-    }
-
-    if let Some((operator, len)) = operator(text.as_bytes()) {
-        if len == text.len() {
-            return Some(Projected::Token(operator_token(operator), false));
-        }
-    }
-
-    if is_word(text) {
-        return Some(Projected::Token(word_token(text), true));
-    }
-
-    None
-}
-
-/// Projects one supported literal token through the existing literal decoders.
-fn project_literal(
-    id: i64,
-    text: &str,
-    cursor: &mut Cursor,
-    start: Span,
-) -> Option<Vec<SpannedToken>> {
-    if id == tok::T_CONSTANT_ENCAPSED_STRING {
-        if text.starts_with('"') {
-            cursor.skip_bytes(1);
-            return decode_double_quoted_body(cursor, start).ok();
-        }
-        if text.starts_with('\'') {
-            let token = single_quoted_token(text, text.ends_with('\''), start).ok()?;
-            cursor.skip_bytes(text.len());
-            let span = Span::with_end_from(start, cursor.span());
-            return Some(vec![(token, TokenMetadata::new(span))]);
-        }
-        return None;
-    }
-    if id == tok::T_START_HEREDOC {
-        if !text.starts_with("<<<") {
-            return None;
-        }
-        cursor.skip_bytes(3);
-        return scan_heredoc(cursor).ok();
-    }
-    if id == i64::from(b'"') {
-        cursor.skip_bytes(1);
-        return decode_double_quoted_body(cursor, start).ok();
-    }
-    if id == i64::from(b'`') {
-        cursor.skip_bytes(1);
-        return decode_backtick_body(cursor, start).ok();
-    }
-    None
-}
-
-/// Splits a native qualified-name token into Backslash and Identifier tokens.
-fn project_qualified_name(
-    id: i64,
-    text: &str,
-    cursor: &mut Cursor,
-) -> Option<Vec<SpannedToken>> {
-    let mut parts = Vec::new();
-    let mut offset = 0usize;
-    if id == tok::T_NAME_FULLY_QUALIFIED {
-        if text.as_bytes().first() != Some(&b'\\') {
-            return None;
-        }
-        let start = cursor.span();
-        cursor.skip_bytes(1);
-        parts.push((
-            Token::Backslash,
-            TokenMetadata::new(Span::with_end_from(start, cursor.span())),
-        ));
-        offset = 1;
-    }
-
-    let mut first = true;
-    while offset < text.len() {
-        let rest = &text[offset..];
-        let segment_end = rest.find('\\').map_or(text.len(), |position| offset + position);
-        let segment = &text[offset..segment_end];
-        if segment.is_empty() {
-            return None;
-        }
-        let start = cursor.span();
-        cursor.skip_bytes(segment.len());
-        let segment_span = Span::with_end_from(start, cursor.span());
-        let relative_prefix = id == tok::T_NAME_RELATIVE && first;
-        let token = if relative_prefix {
-            if !segment.eq_ignore_ascii_case("namespace") {
-                return None;
-            }
-            Token::Namespace
-        } else {
-            Token::Identifier(segment.to_owned())
-        };
-        let metadata = if relative_prefix && token.canonical_word_spelling() != Some(segment) {
-            TokenMetadata::with_source_spelling(segment_span, segment)
-        } else {
-            TokenMetadata::new(segment_span)
-        };
-        parts.push((token, metadata));
-        first = false;
-        offset = segment_end;
-        if offset < text.len() {
-            if text.as_bytes()[offset] != b'\\' {
-                return None;
-            }
-            let start = cursor.span();
-            cursor.skip_bytes(1);
-            parts.push((
-                Token::Backslash,
-                TokenMetadata::new(Span::with_end_from(start, cursor.span())),
-            ));
-            offset += 1;
-        }
-    }
-    Some(parts)
 }
 
 /// Rejects unsupported tokens before allocating the full projection.
@@ -826,16 +398,4 @@ fn label_boundary(id: i64) -> bool {
         || id == tok::T_DO
         || id == tok::T_TRY
         || id == tok::T_FINALLY
-}
-
-/// Returns whether `text` is a PHP label-shaped word.
-fn is_word(text: &str) -> bool {
-    let mut bytes = text.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == b'_' || first >= 0x80)
-        && bytes.all(|byte| {
-            byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
-        })
 }

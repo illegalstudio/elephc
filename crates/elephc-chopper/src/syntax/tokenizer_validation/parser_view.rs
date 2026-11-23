@@ -9,6 +9,7 @@
 //! - Inline HTML, tags, casts and interpolation are rewritten without changing line numbers.
 
 use super::*;
+use super::reference_scan::{is_reference_marker, reference_target_starts_at};
 
 /// Builds the PHP-only parser view, its source map and any error in a normalized reference.
 pub(super) fn parser_view<T: SourceToken>(
@@ -472,50 +473,6 @@ pub(crate) fn sanitize_invalid_utf8(view: Vec<u8>) -> String {
     out
 }
 
-/// Returns whether an ordinary reference target can start at `next`.
-///
-/// PHP allows `$a = &$b`, `$a = &$b[0]`, and `$a = &foo()`, but not `$a = &1` or
-/// `$a = &new C`. Keeping the ampersand in the view for the latter lets the parser reject it.
-pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], next: usize) -> bool {
-    match tokens[next].id() {
-        id if id == tok::T_VARIABLE => true,
-        // `$$name` / `${$name}`: the variable variable's name is computed at run time.
-        id if id == i64::from(b'$') => true,
-        id if id == tok::T_STATIC => next_significant_index(tokens, next)
-            .is_some_and(|after| tokens[after].id() == tok::T_DOUBLE_COLON),
-        id if id == tok::T_STRING || id == tok::T_IDENTIFIER => {
-            next_significant_index(tokens, next).is_some_and(|after| {
-                matches!(
-                    tokens[after].id(),
-                    id if id == i64::from(b'(')
-                        || id == i64::from(b'[')
-                        || id == i64::from(b'\\')
-                        || id == tok::T_DOUBLE_COLON
-                        || id == tok::T_OBJECT_OPERATOR
-                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                )
-            })
-        }
-        // The native lexer folds `\foo`, `Ns\foo` and `namespace\foo` into one name token.
-        id if id == tok::T_NAME_FULLY_QUALIFIED
-            || id == tok::T_NAME_QUALIFIED
-            || id == tok::T_NAME_RELATIVE =>
-        {
-            next_significant_index(tokens, next).is_some_and(|after| {
-                matches!(
-                    tokens[after].id(),
-                    id if id == i64::from(b'(')
-                        || id == i64::from(b'[')
-                        || id == tok::T_DOUBLE_COLON
-                        || id == tok::T_OBJECT_OPERATOR
-                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                )
-            })
-        }
-        _ => false,
-    }
-}
-
 /// Returns whether the token at `index` is a statement label (`name:`).
 pub(crate) fn is_label_declaration<T: SourceToken>(
     tokens: &[T],
@@ -755,11 +712,6 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
             .is_some_and(|prior| tokens[prior].id() == tok::T_FUNCTION);
     }
     false
-}
-
-/// Identifies either Zend token form of an ampersand.
-pub(crate) fn is_reference_marker(id: i64) -> bool {
-    matches!(id, tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG)
 }
 
 /// Distinguishes a `fn(...) =>` inside an array from the array's key/value separator.
