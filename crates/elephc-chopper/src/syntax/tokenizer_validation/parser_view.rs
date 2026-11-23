@@ -35,7 +35,8 @@ pub(super) fn parser_view<T: SourceToken>(
     let mut reference_error: Option<ReferenceError> = None;
     while index < tokens.len() {
         let token = &tokens[index];
-        match token.id() {
+        let token_id = token.id();
+        match token_id {
             id if id == i64::from(b'(') => {
                 parens.push(index);
                 control_parens.push(is_control_header_keyword(previous_significant));
@@ -76,10 +77,10 @@ pub(super) fn parser_view<T: SourceToken>(
             }
             _ => {}
         }
-        let text = &source[token.pos()..token.pos() + token.len()];
         if is_reference_ampersand(
             tokens,
             index,
+            token_id,
             previous_significant,
             brackets.last().copied(),
             parens.last().copied(),
@@ -125,10 +126,11 @@ pub(super) fn parser_view<T: SourceToken>(
             index += 1;
             continue;
         }
+        let text = &source[token.pos()..token.pos() + token.len()];
         // Zend emits T_GOTO for the keyword, but PHP also allows `goto` as a member,
         // constant, enum-case and named-argument name. A real goto statement is the
         // shape `goto <label> ;` (a close tag also terminates it).
-        if token.id() == tok::T_GOTO {
+        if token_id == tok::T_GOTO {
             let terminator = next_significant_index(tokens, index)
                 .filter(|&label| tokens[label].id() == tok::T_STRING)
                 .and_then(|label| next_significant_index(tokens, label))
@@ -165,13 +167,14 @@ pub(super) fn parser_view<T: SourceToken>(
         }
         // Only a T_STRING can start a label. Avoid walking back over a comment run after a
         // control header for every trivia token; the label check rejects them immediately.
-        let previous_closes_control_header = token.id() == tok::T_STRING
+        let previous_closes_control_header = token_id == tok::T_STRING
             && previous_significant == i64::from(b')')
             && previous_significant_index(tokens, index)
                 .is_some_and(|previous| control_close.get(previous).copied().unwrap_or(false));
         if is_label_declaration(
             tokens,
             index,
+            token_id,
             previous_significant,
             previous_closes_control_header,
         ) {
@@ -196,7 +199,7 @@ pub(super) fn parser_view<T: SourceToken>(
         let declaration_default_started = declaration_default_index
             .and_then(|declaration| paren_defaults.get(declaration))
             .is_some_and(|state| matches!(state, Some((true, _))));
-        if token.id() == i64::from(b'$')
+        if token_id == i64::from(b'$')
             && next_significant_index(tokens, index).is_some_and(|next| {
                 let id = tokens[next].id();
                 id == i64::from(b'$')
@@ -215,7 +218,7 @@ pub(super) fn parser_view<T: SourceToken>(
             index += 1;
             continue;
         }
-        if token.id() == i64::from(b'$')
+        if token_id == i64::from(b'$')
             && next_significant_index(tokens, index).is_some_and(|next| tokens[next].id() == i64::from(b'{'))
             && (declaration_default_started
                 || !dollar_starts_declaration(
@@ -255,7 +258,7 @@ pub(super) fn parser_view<T: SourceToken>(
             index = end.saturating_add(1);
             continue;
         }
-        if token.id() == tok::T_DOLLAR_OPEN_CURLY_BRACES {
+        if token_id == tok::T_DOLLAR_OPEN_CURLY_BRACES {
             append_mapped(&mut view, &mut map, b"$x", token.pos());
             let mut end = index + 1;
             let mut depth = 1usize;
@@ -287,14 +290,14 @@ pub(super) fn parser_view<T: SourceToken>(
         // A first-class callable is `name(...)`: the ellipsis sits directly inside an argument
         // list. `f($a...)`, `f([]...)` and a declaration's `function f(...)` are ParseErrors, so
         // every other shape keeps its marker.
-        if token.id() == tok::T_ELLIPSIS
+        if token_id == tok::T_ELLIPSIS
             && ellipsis_is_first_class_callable(source, tokens, index)
         {
             append_blank(&mut view, &mut map, b"...", token.pos());
             index += 1;
             continue;
         }
-        if token.id() == i64::from(b'{')
+        if token_id == i64::from(b'{')
             && previous_significant == tok::T_DOUBLE_COLON
         {
             // `C::{expr}` computes a member name. The body was validated before the view was
@@ -313,86 +316,123 @@ pub(super) fn parser_view<T: SourceToken>(
             index = end.saturating_add(1);
             continue;
         }
-        if token.id() == i64::from(b'`') {
+        if token_id == i64::from(b'`') {
             index = append_backtick_string(&mut view, &mut map, source, tokens, index);
-            previous_significant = token.id();
+            previous_significant = token_id;
             index += 1;
             continue;
         }
-        if token.id() == tok::T_OPEN_TAG || token.id() == tok::T_INLINE_HTML {
-            append_blank(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_OPEN_TAG_WITH_ECHO {
-            append_mapped(&mut view, &mut map, b"echo ", token.pos());
-        } else if token.id() == tok::T_CLOSE_TAG {
-            append_mapped(&mut view, &mut map, b";", token.pos());
-            append_blank(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_HALT_COMPILER
-            && !halt_compiler_is_name(tokens, index)
-        {
-            index = skip_halt_compiler(&mut view, &mut map, source, tokens, index);
-        } else if matches!(token.id(), tok::T_UNSET_CAST | tok::T_STRING_CAST)
-            || (token.id() == tok::T_VOID_CAST
-                && void_cast_starts_statement(tokens, index, previous_significant))
-        {
-            append_safe_cast(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_CONSTANT_ENCAPSED_STRING {
-            append_string(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_DNUMBER && text.ends_with(b".") {
-            let mut normalized = text.to_vec();
-            if let Some(last) = normalized.last_mut() {
-                *last = b' ';
+        match token_id {
+            tok::T_OPEN_TAG | tok::T_INLINE_HTML => {
+                append_blank(&mut view, &mut map, text, token.pos());
             }
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_START_HEREDOC
-            && text.len() >= 4
-            && matches!(text[0], b'b' | b'B')
-            && &text[1..4] == b"<<<"
-        {
-            let mut normalized = text.to_vec();
-            normalized[0] = b' ';
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_NUM_STRING && !text.iter().all(u8::is_ascii_digit) {
-            let normalized = vec![b'0'; text.len()];
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_STRING && text.eq_ignore_ascii_case(b"enum") {
-            append_mapped(&mut view, &mut map, b"zenum", token.pos());
-        } else if token.id() == tok::T_STRING
-            && [
-                b"packed".as_slice(),
-                b"extern",
-                b"ifdef",
-                b"self",
-                b"parent",
-                b"true",
-                b"false",
-                b"null",
-            ]
-            .iter()
-            .any(|word| text.eq_ignore_ascii_case(word))
-        {
-            // PHP lexes elephc's `packed`/`extern`/`ifdef` and the PHP names `self`, `parent`,
-            // `true`, `false`, `null` as plain T_STRING names. The view must not let the
-            // compiler lexer reserve them, or `packed()`, `self;` and `true()` would fail while
-            // the compiler-only declarations below still must be rejected.
-            let mut normalized = b"z".to_vec();
-            normalized.extend_from_slice(text);
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if text.len() >= 2
-            && matches!(text[0], b'b' | b'B')
-            && matches!(text[1], b'\'' | b'"')
-        {
-            let mut normalized = text.to_vec();
-            normalized[0] = b' ';
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else {
-            append_mapped(&mut view, &mut map, text, token.pos());
+            tok::T_OPEN_TAG_WITH_ECHO => {
+                append_mapped(&mut view, &mut map, b"echo ", token.pos());
+            }
+            tok::T_CLOSE_TAG => {
+                append_mapped(&mut view, &mut map, b";", token.pos());
+                append_blank(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_HALT_COMPILER => {
+                if halt_compiler_is_name(tokens, index) {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                } else {
+                    index = skip_halt_compiler(&mut view, &mut map, source, tokens, index);
+                }
+            }
+            tok::T_UNSET_CAST | tok::T_STRING_CAST => {
+                append_safe_cast(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_VOID_CAST => {
+                if void_cast_starts_statement(tokens, index, previous_significant) {
+                    append_safe_cast(&mut view, &mut map, text, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_CONSTANT_ENCAPSED_STRING => {
+                append_string(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_DNUMBER => {
+                if text.ends_with(b".") {
+                    let mut normalized = text.to_vec();
+                    if let Some(last) = normalized.last_mut() {
+                        *last = b' ';
+                    }
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_START_HEREDOC => {
+                if text.len() >= 4
+                    && matches!(text[0], b'b' | b'B')
+                    && &text[1..4] == b"<<<"
+                {
+                    let mut normalized = text.to_vec();
+                    normalized[0] = b' ';
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_NUM_STRING => {
+                if text.iter().all(u8::is_ascii_digit) {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                } else {
+                    let normalized = vec![b'0'; text.len()];
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                }
+            }
+            tok::T_STRING => {
+                if text.eq_ignore_ascii_case(b"enum") {
+                    append_mapped(&mut view, &mut map, b"zenum", token.pos());
+                } else if [
+                    b"packed".as_slice(),
+                    b"extern",
+                    b"ifdef",
+                    b"self",
+                    b"parent",
+                    b"true",
+                    b"false",
+                    b"null",
+                ]
+                .iter()
+                .any(|word| text.eq_ignore_ascii_case(word))
+                {
+                    // PHP lexes elephc's `packed`/`extern`/`ifdef` and the PHP names `self`,
+                    // `parent`, `true`, `false`, `null` as plain T_STRING names. The view must
+                    // not let the compiler lexer reserve them, or `packed()`, `self;` and
+                    // `true()` would fail while the compiler-only declarations below still must
+                    // be rejected.
+                    let mut normalized = b"z".to_vec();
+                    normalized.extend_from_slice(text);
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            _ => {
+                if text.len() >= 2
+                    && matches!(text[0], b'b' | b'B')
+                    && matches!(text[1], b'\'' | b'"')
+                {
+                    let mut normalized = text.to_vec();
+                    normalized[0] = b' ';
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
         }
-        if !is_trivia_token(token.id()) {
-            previous_significant = token.id();
+        if !is_trivia_token(token_id) {
+            previous_significant = token_id;
         }
         index += 1;
     }
-    normalize_parse_newlines(&mut view);
+    if source.contains(&b'\r') {
+        normalize_parse_newlines(&mut view);
+    }
     (sanitize_view(view), map, reference_error)
 }
 
@@ -476,12 +516,13 @@ pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], next: usi
 pub(crate) fn is_label_declaration<T: SourceToken>(
     tokens: &[T],
     index: usize,
+    token_id: i64,
     previous_significant: i64,
     previous_closes_control_header: bool,
 ) -> bool {
     // Check the current token first: a comment or operator run must not trigger the lookahead
     // scan merely to discover it can never be a label.
-    if tokens[index].id() != tok::T_STRING {
+    if token_id != tok::T_STRING {
         return false;
     }
     let Some(next) = next_significant_index(tokens, index) else {
@@ -627,13 +668,14 @@ pub(crate) fn normalize_parse_newlines(view: &mut [u8]) {
 pub(crate) fn is_reference_ampersand<T: SourceToken>(
     tokens: &[T],
     index: usize,
+    token_id: i64,
     previous_significant: i64,
     enclosing_bracket: Option<usize>,
     enclosing_paren: Option<usize>,
     enclosing_brace: Option<usize>,
     reference_value: impl FnOnce(Option<usize>) -> bool,
 ) -> bool {
-    if !is_reference_marker(tokens[index].id()) {
+    if !is_reference_marker(token_id) {
         return false;
     }
     if previous_significant == i64::from(b'=') {
