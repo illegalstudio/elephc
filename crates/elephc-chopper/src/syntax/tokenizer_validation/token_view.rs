@@ -129,7 +129,13 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
                     }) {
                         return false;
                     }
-                    reference_target_safe(tokens, index, pairs)
+                    reference_target_safe(
+                        tokens,
+                        index,
+                        pairs,
+                        source,
+                        previous_significant == i64::from(b'='),
+                    )
                 },
             );
             if remove {
@@ -405,6 +411,8 @@ fn reference_target_safe<T: SourceToken>(
     tokens: &[T],
     index: usize,
     pairs: &[Option<usize>],
+    source: &[u8],
+    allow_continuation: bool,
 ) -> bool {
     let Some(target) = next_significant_index(tokens, index) else {
         return false;
@@ -475,7 +483,8 @@ fn reference_target_safe<T: SourceToken>(
                 } else if matches!(
                     tokens[member].id(),
                     tok::T_VARIABLE | tok::T_STRING | tok::T_IDENTIFIER
-                ) {
+                ) || is_word_token(source, &tokens[member])
+                {
                     cursor = member;
                 } else {
                     return false;
@@ -488,14 +497,50 @@ fn reference_target_safe<T: SourceToken>(
     let Some(after) = next_significant_index(tokens, cursor) else {
         return false;
     };
-    matches!(
-        tokens[after].id(),
-        id if id == i64::from(b';')
-            || id == i64::from(b',')
-            || id == i64::from(b')')
-            || id == i64::from(b']')
-            || id == i64::from(b'}')
+    if allow_continuation {
+        reference_continuation_is_valid(source, &tokens[after])
+    } else {
+        matches!(
+            tokens[after].id(),
+            id if id == i64::from(b';')
+                || id == i64::from(b',')
+                || id == i64::from(b')')
+                || id == i64::from(b']')
+                || id == i64::from(b'}')
+        )
+    }
+}
+
+/// Returns whether a reference target continuation is not a write operator.
+fn reference_continuation_is_valid<T: SourceToken>(source: &[u8], token: &T) -> bool {
+    let Ok(text) = std::str::from_utf8(&source[token.pos()..token.pos() + token.len()]) else {
+        return false;
+    };
+    !matches!(
+        text,
+        "=" | "+="
+            | "-="
+            | "*="
+            | "/="
+            | ".="
+            | "%="
+            | "&="
+            | "|="
+            | "^="
+            | "<<="
+            | ">>="
+            | "**="
+            | "??="
+            | "++"
+            | "--"
     )
+}
+
+/// Returns whether one native token's source text is a word.
+fn is_word_token<T: SourceToken>(source: &[u8], token: &T) -> bool {
+    std::str::from_utf8(&source[token.pos()..token.pos() + token.len()])
+        .ok()
+        .is_some_and(is_word)
 }
 
 /// Returns whether a token range contains another reference ampersand.

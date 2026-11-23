@@ -1092,6 +1092,11 @@ mod tests {
             b"<?php [$p, &$q] = $arr; foreach ([1] as [$p, &$q]) {}",
             b"<?php foreach ($xs as &$a[0]) {}",
             b"<?php list(\"k\" => &$v) = $arr;",
+            b"<?php $a = &$b + 1;",
+            b"<?php $a = &$b[0] + 1;",
+            b"<?php $a = &$b ? 1 : 2;",
+            b"<?php $a = &$b && $c;",
+            b"<?php $a = [&C::match()]; $b = [&$o->list];",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
@@ -1102,15 +1107,14 @@ mod tests {
             b"<?php $a = [&$b + 1];",
             b"<?php foo(&$x);",
             b"<?php function f($a = &$b) {}",
-            b"<?php $a = &$b + 1;",
-            b"<?php $a = &$b[0] + 1;",
             b"<?php $a = &$b = 1;",
+            b"<?php $a = &$b->c = 1;",
+            b"<?php $a = &foo() = 1;",
             b"<?php $a = &($b + 1);",
             b"<?php $a = &readonly();",
             b"<?php $a[&$b];",
             b"<?php $f = fn() => &$x;",
             b"<?php match(1) { 1 => &$x }",
-            b"<?php $a = [&C::match()]; $b = [&$o->list];",
         ] {
             let tokens = scan_tokens(source);
             assert!(
