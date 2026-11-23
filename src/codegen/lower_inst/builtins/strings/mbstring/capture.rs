@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - An output pointer denotes the managed reference cell, never its previous PHP value.
-//! - Unproven raw, property, parameter, or capture storage fails before machine code executes.
+//! - Unproven raw property or capture storage fails before machine code executes.
 //! - Every accepted local or alias is backed by a tracked Mixed reference owner.
 
 use super::*;
@@ -108,13 +108,22 @@ fn managed_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut Ha
     if local.kind != crate::ir::LocalKind::PhpLocal || local.php_type.codegen_repr() != PhpType::Mixed {
         return false;
     }
-    if ctx.function.params.iter().any(|param| param.by_ref && local.name.as_deref() == Some(param.name.as_str())) {
-        return false;
+    if managed_mixed_reference_parameter(ctx, slot) {
+        visiting.remove(&slot);
+        return true;
     }
     let mut backed = false;
     for inst in &ctx.function.instructions {
-        if inst.op == Op::BindRefCellPtr && inst.immediate == Some(Immediate::LocalSlot(slot)) {
-            return false;
+        if inst.op == Op::BindRefCellPtr {
+            match inst.immediate {
+                Some(Immediate::LocalSlotPair { first, second }) if first == slot => {
+                    if !managed_mixed_owner(ctx, second) { return false; }
+                    backed = true;
+                    continue;
+                }
+                Some(Immediate::LocalSlot(first)) if first == slot => return false,
+                _ => {}
+            }
         }
         let (first, second) = match inst.immediate {
             Some(Immediate::LocalSlotPair { first, second })
@@ -139,4 +148,32 @@ fn managed_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut Ha
     }
     visiting.remove(&slot);
     backed
+}
+
+/// Recognizes an incoming Mixed reference whose frame owns an authenticated cell lease.
+fn managed_mixed_reference_parameter(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+    let local = &ctx.function.locals[slot.as_raw() as usize];
+    if !ctx.function.params.iter().any(|param| {
+        param.by_ref
+            && param.php_type.codegen_repr() == PhpType::Mixed
+            && local.name.as_deref() == Some(param.name.as_str())
+    }) {
+        return false;
+    }
+    ctx.function.instructions.iter().any(|inst| {
+        inst.op == Op::RetainLocalRefCell
+            && matches!(
+                inst.immediate,
+                Some(Immediate::LocalSlotPair { first, second })
+                    if first == slot && managed_mixed_owner(ctx, second)
+            )
+    })
+}
+
+/// Returns whether a hidden slot owns a managed reference cell with a Mixed payload contract.
+fn managed_mixed_owner(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+    ctx.function.locals.get(slot.as_raw() as usize).is_some_and(|owner| {
+        owner.kind == crate::ir::LocalKind::RefCell
+            && owner.php_type.codegen_repr() == PhpType::Mixed
+    })
 }
