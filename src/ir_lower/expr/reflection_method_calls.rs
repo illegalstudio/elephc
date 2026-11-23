@@ -44,6 +44,7 @@ pub(super) fn lower_reflection_method_invoke_call(
             ctx,
             &class_name,
             &reflected_method,
+            &method_key,
             &object_arg,
             &forwarded_args,
             expr,
@@ -63,11 +64,29 @@ pub(super) fn lower_reflection_static_method_invoke(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     reflected_method: &str,
+    method_key: &str,
     object_arg: &Expr,
     forwarded_args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
     let ignored_object = lower_expr(ctx, object_arg);
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86
+        && !value_is_definitely_null(ctx, ignored_object.value)
+        && !value_is_nullable(ctx, ignored_object.value)
+    {
+        // PHP 8.6 deprecates passing an object when invoking a static method; a statically
+        // non-null argument can never be the `null` the API expects.
+        let method_name = if method_key == "invokeargs" { "invokeArgs" } else { "invoke" };
+        crate::ir_lower::initializer_evaluation::emit_deprecation_at(
+            ctx,
+            &format!(
+                "Calling ReflectionMethod::{}() for static method {}::{}() does not need an object parameter",
+                method_name, class_name, reflected_method
+            ),
+            object_arg.span,
+            crate::ir_lower::initializer_evaluation::LineSource::Static(object_arg.span),
+        );
+    }
     if ctx.value_is_owning_temporary(ignored_object) {
         crate::ir_lower::ownership::release_if_owned(ctx, ignored_object, Some(object_arg.span));
     }

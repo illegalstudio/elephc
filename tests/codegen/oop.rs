@@ -33,6 +33,10 @@ mod nested_default_numeric_review;
 mod readonly_initialization;
 #[path = "oop/readonly_property_defaults_php86.rs"]
 mod readonly_property_defaults_php86;
+#[path = "oop/reflection_method_static_invoke_php86.rs"]
+mod reflection_method_static_invoke_php86;
+#[path = "oop/reflection_property_deprecation_php86.rs"]
+mod reflection_property_deprecation_php86;
 #[path = "oop/reflection_property_access_php86.rs"]
 mod reflection_property_access_php86;
 #[path = "oop/partial_application_php86.rs"]

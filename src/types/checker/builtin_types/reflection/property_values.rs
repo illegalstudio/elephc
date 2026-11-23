@@ -110,10 +110,15 @@ pub(super) fn builtin_reflection_property_set_value_method() -> ClassMethod {
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
         by_ref_return: false,
-        body: vec![
-            reflection_property_static_value_guard("setValue", dummy_span),
-            reflection_property_object_required_guard("setValue", dummy_span),
-            Stmt::new(
+        body: {
+            let mut body = vec![
+                reflection_property_static_value_guard("setValue", dummy_span),
+                reflection_property_object_required_guard("setValue", dummy_span),
+            ];
+            if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+                body.push(reflection_property_unrelated_object_deprecation("setValue", dummy_span));
+            }
+            body.push(Stmt::new(
                 StmtKind::ExprStmt(Expr::new(
                     ExprKind::Assignment {
                         target: Box::new(reflection_dynamic_object_property(object, dummy_span)),
@@ -125,8 +130,9 @@ pub(super) fn builtin_reflection_property_set_value_method() -> ClassMethod {
                     dummy_span,
                 )),
                 dummy_span,
-            ),
-        ],
+            ));
+            body
+        },
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -276,6 +282,52 @@ pub(super) fn reflection_property_object_required_guard(method: &str, span: crat
                     ),
                     span,
                 ),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds PHP 8.6's deprecation for setting a property through an unrelated object.
+///
+/// php-src emits it when the given object is not an instance of the class the property was
+/// declared in; the declaring class is the reflector's own `getDeclaringClass()`.
+fn reflection_property_unrelated_object_deprecation(method: &str, span: crate::span::Span) -> Stmt {
+    let declaring = method_call_expr(
+        Expr::new(ExprKind::This, span),
+        "getDeclaringClass",
+        Vec::new(),
+        span,
+    );
+    let is_instance = method_call_expr(
+        declaring,
+        "isInstance",
+        vec![variable_expr("object", span)],
+        span,
+    );
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                is_instance,
+                BinOp::StrictEq,
+                Expr::new(ExprKind::BoolLiteral(false), span),
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::ExprStmt(function_call(
+                    "__elephc_builtin_deprecated",
+                    vec![string_lit(
+                        &format!(
+                            "Calling ReflectionProperty::{}() with a given object that is not an instance of the class this property was declared in is deprecated",
+                            method
+                        ),
+                        span,
+                    )],
+                    span,
+                )),
                 span,
             )],
             elseif_clauses: Vec::new(),
