@@ -397,6 +397,9 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         } elseif ($option === 20094) {
             $slot = 4;
             $optionName = "CURLOPT_DEBUGFUNCTION";
+        } elseif ($option === 20167) {
+            $slot = 6;
+            $optionName = "CURLOPT_SEEKFUNCTION";
         }
         // TOUCHING CURLOPT_DEBUGFUNCTION AT ALL — even with `null` — PERMANENTLY SHADOWS
         // CURLOPT_STDERR, because php-src installs its C trampoline here and never takes
@@ -458,6 +461,23 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
                 throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be a valid callback for option " . $optionName . ", function \"" . $value . "\" not found or invalid function name");
             }
             throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be a valid callback for option " . $optionName . ", no array or string given");
+        }
+        if ($slot === 6) {
+            // PHP 8.6 validates the seek callback's integer return with a TypeError for a
+            // non-int and a ValueError for any code outside CURL_SEEKFUNC_OK/FAIL/CANTSEEK.
+            // Wrapping here keeps those diagnostics at the PHP layer; the bridge only ever
+            // sees a valid code.
+            $seekUser = $value;
+            $value = function (CurlHandle $ch, int $offset, int $origin) use ($seekUser): int {
+                $ret = call_user_func($seekUser, $ch, $offset, $origin);
+                if (!is_int($ret)) {
+                    throw new \TypeError("The CURLOPT_SEEKFUNCTION callback must return one of CURL_SEEKFUNC_OK, CURL_SEEKFUNC_FAIL or CURL_SEEKFUNC_CANTSEEK");
+                }
+                if ($ret !== 0 && $ret !== 1 && $ret !== 2) {
+                    throw new \ValueError("The CURLOPT_SEEKFUNCTION callback must return one of CURL_SEEKFUNC_OK, CURL_SEEKFUNC_FAIL or CURL_SEEKFUNC_CANTSEEK");
+                }
+                return $ret;
+            };
         }
         $normalized = __elephc_normalize_callable($value);
         // THE READ SLOT NEVER HOLDS THE USER'S CALLABLE DIRECTLY. It is parked on the

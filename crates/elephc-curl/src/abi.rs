@@ -98,6 +98,7 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
             // the PROCESS'S OWN STDIN through libcurl's default `fread`/`CURLOPT_READDATA`
             // pair. See `crate::callbacks::install_read_callback`.
             crate::callbacks::install_read_callback(curl, id);
+            crate::callbacks::install_seek_callback(curl, id);
             // `error_buf`'s heap allocation address is stable across the
             // upcoming move into the handle table (moving a `Vec` only moves
             // its {ptr,len,cap} header, never reallocates), so handing
@@ -941,6 +942,7 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         unsafe {
             php_layer::install_write_callback(entry.curl, id);
             crate::callbacks::install_read_callback(entry.curl, id);
+            crate::callbacks::install_seek_callback(entry.curl, id);
             easy::setopt_ptr(
                 entry.curl,
                 easy::CURLOPT_ERRORBUFFER,
@@ -1125,6 +1127,7 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
         unsafe {
             php_layer::install_write_callback(copied, new_id);
             crate::callbacks::install_read_callback(copied, new_id);
+            crate::callbacks::install_seek_callback(copied, new_id);
             easy::setopt_ptr(
                 copied,
                 easy::CURLOPT_ERRORBUFFER,

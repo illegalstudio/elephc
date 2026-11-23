@@ -110,6 +110,16 @@ fn serve_one(mut sock: TcpStream, port: u16) {
             b"redirecting",
             &[format!("Location: http://127.0.0.1:{port}/hello")],
         ),
+        // 307 preserves the method and body, so an upload resend makes libcurl rewind
+        // the streamed request body through CURLOPT_SEEKFUNCTION.
+        "/redirect307" => respond(
+            &mut sock,
+            307,
+            "Temporary Redirect",
+            None,
+            b"",
+            &[format!("Location: http://127.0.0.1:{port}/echo")],
+        ),
         "/echo" => {
             let mut body = format!("method={}\n", request.method);
             for (name, value) in &request.headers {

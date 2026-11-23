@@ -532,6 +532,25 @@ pub(crate) unsafe fn setopt_xferinfo_function(
     }
 }
 
+/// The `curl_seek_callback` C function-pointer type:
+/// `int (*)(void *clientp, curl_off_t offset, int origin)`.
+pub(crate) type CurlSeekCallback = unsafe extern "C" fn(*mut c_void, i64, c_int) -> c_int;
+
+/// Sets `CURLOPT_SEEKFUNCTION`. `None` clears it back to libcurl's default.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_seek_function(
+    curl: *mut CURL,
+    option: c_int,
+    callback: Option<CurlSeekCallback>,
+) -> CURLcode {
+    match callback {
+        Some(callback) => curl_easy_setopt(curl, option, callback),
+        None => curl_easy_setopt(curl, option, std::ptr::null::<c_void>()),
+    }
+}
+
 /// The `curl_debug_callback` C function-pointer type:
 /// `int (*)(CURL *handle, curl_infotype type, char *data, size_t size, void *clientp)`.
 pub(crate) type CurlDebugCallback =

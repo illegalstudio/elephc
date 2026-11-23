@@ -344,6 +344,7 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (20056, KIND_CALLBACK), // CURLOPT_PROGRESSFUNCTION
     (20079, KIND_CALLBACK), // CURLOPT_HEADERFUNCTION
     (20094, KIND_CALLBACK), // CURLOPT_DEBUGFUNCTION
+    (20167, KIND_CALLBACK), // CURLOPT_SEEKFUNCTION
     // STILL REJECTED (a deliberate second wave, not an oversight): each of these needs
     // machinery the first wave does not build. FNMATCH/PREREQ/SSH_HOSTKEY/TRAILER/
     // HSTS read+write need transfer phases outside the landed callback matrix, and

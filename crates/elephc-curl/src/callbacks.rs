@@ -66,8 +66,10 @@ pub(crate) const SLOT_DEBUG: i32 = 4;
 /// gives `CURLOPT_XFERINFOFUNCTION` precedence when both are registered; merging them
 /// would make "set progress last" win, which is not what either does.
 pub(crate) const SLOT_XFERINFO: i32 = 5;
+/// Slot index for `CURLOPT_SEEKFUNCTION` (20167).
+pub(crate) const SLOT_SEEK: i32 = 6;
 /// Number of callback slots on an easy handle.
-pub(crate) const SLOT_COUNT: usize = 6;
+pub(crate) const SLOT_COUNT: usize = 7;
 
 /// `CURL_READFUNC_ABORT`: returned by a read callback to fail the transfer with
 /// `CURLE_ABORTED_BY_CALLBACK` (libcurl 8.21.0, `include/curl/curl.h`).
@@ -80,6 +82,9 @@ const CURLOPT_HEADERFUNCTION: c_int = 20079;
 const CURLOPT_HEADERDATA: c_int = 10029;
 /// `CURLOPT_READFUNCTION` (20012) / `CURLOPT_READDATA` (10009).
 const CURLOPT_READFUNCTION: c_int = 20012;
+/// `CURLOPT_SEEKFUNCTION` (20167) / `CURLOPT_SEEKDATA` (10168).
+const CURLOPT_SEEKFUNCTION: c_int = 20167;
+const CURLOPT_SEEKDATA: c_int = 10168;
 const CURLOPT_READDATA: c_int = 10009;
 /// `CURLOPT_XFERINFOFUNCTION` (20219) / `CURLOPT_XFERINFODATA` (10057).
 const CURLOPT_XFERINFOFUNCTION: c_int = 20219;
@@ -452,6 +457,78 @@ unsafe extern "C" fn read_callback(
         out_len.max(0) as usize
     }));
     outcome.unwrap_or(CURL_READFUNC_ABORT)
+}
+
+/// `CURL_SEEKFUNC_OK`: the seek callback repositioned the stream successfully.
+const CURL_SEEKFUNC_OK: c_int = 0;
+/// `CURL_SEEKFUNC_FAIL`: the seek callback failed the transfer.
+const CURL_SEEKFUNC_FAIL: c_int = 1;
+/// `CURL_SEEKFUNC_CANTSEEK`: seeking is not supported; libcurl handles the fallback.
+const CURL_SEEKFUNC_CANTSEEK: c_int = 2;
+
+/// The `CURLOPT_SEEKFUNCTION` trampoline: libcurl asks the PHP callable to reposition
+/// a streamed request body (offset, origin) before a resend.
+///
+/// php-src reads the return as an integer and only accepts `CURL_SEEKFUNC_OK`,
+/// `CURL_SEEKFUNC_FAIL` or `CURL_SEEKFUNC_CANTSEEK`; the prelude dispatcher raises the
+/// matching TypeError/ValueError, and this trampoline fails the transfer defensively for
+/// any other value.
+///
+/// # Safety
+/// Called by libcurl with a `clientp` that is this crate's handle id; must not unwind.
+unsafe extern "C" fn seek_callback(
+    clientp: *mut c_void,
+    offset: i64,
+    origin: c_int,
+) -> c_int {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let id = clientp as i64;
+        let Some(slot) = take_slot(id, SLOT_SEEK as usize) else {
+            return CURL_SEEKFUNC_CANTSEEK;
+        };
+        let args = [
+            CallArg {
+                tag: TAG_INT,
+                lo: offset,
+                hi: 0,
+            },
+            CallArg {
+                tag: TAG_INT,
+                lo: origin as i64,
+                hi: 0,
+            },
+        ];
+        let (result, _out_len, threw) = invoke(
+            slot,
+            &args,
+            RESULT_INT,
+            std::ptr::null_mut(),
+            0,
+        );
+        if threw {
+            mark_threw(id);
+            return CURL_SEEKFUNC_FAIL;
+        }
+        if result == CURL_SEEKFUNC_OK as i64
+            || result == CURL_SEEKFUNC_FAIL as i64
+            || result == CURL_SEEKFUNC_CANTSEEK as i64
+        {
+            result as c_int
+        } else {
+            // The prelude dispatcher raises the 8.6 TypeError/ValueError; fail the
+            // transfer rather than let an unknown code reach libcurl.
+            CURL_SEEKFUNC_FAIL
+        }
+    }));
+    outcome.unwrap_or(CURL_SEEKFUNC_CANTSEEK)
+}
+
+/// Installs the seek trampoline and its `userdata` on `curl`. Called from creation,
+/// `curl_reset()` and `curl_copy_handle()`, mirroring `install_read_callback`: an empty
+/// slot answers `CURL_SEEKFUNC_CANTSEEK`, so the registration can stay in place forever.
+pub(crate) unsafe fn install_seek_callback(curl: *mut CURL, id: i64) {
+    let _ = easy::setopt_seek_function(curl, CURLOPT_SEEKFUNCTION, Some(seek_callback));
+    let _ = easy::setopt_ptr(curl, CURLOPT_SEEKDATA, id as usize as *mut c_void);
 }
 
 /// The `CURLOPT_XFERINFOFUNCTION` trampoline, shared by PHP's
