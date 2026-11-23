@@ -90,9 +90,14 @@ pub(super) fn try_lower_outlined_mixed_method_call(
     inst: &Instruction,
     candidates: &[MixedMethodCandidate],
 ) -> Result<bool> {
+    // The native XML property adapters of a boxed receiver have one or two candidate classes, but
+    // every `$mixed->name` read or probe of a program with SimpleXML calls one: they share a helper
+    // whatever the arm count.
+    let native_xml_property = inst.op == Op::MethodCall
+        && method_name_data(ctx, inst).is_ok_and(|name| name.starts_with("__elephc_property_"));
     if outlining_disabled()
         || inst.op != Op::MethodCall
-        || candidates.len() < MIN_ARMS
+        || (candidates.len() < MIN_ARMS && !(native_xml_property && !candidates.is_empty()))
         || inst.operands.len() > MAX_OPERANDS
         || inside_mixed_method_call_helper(ctx)
         || builtins::has_eval_context(ctx)

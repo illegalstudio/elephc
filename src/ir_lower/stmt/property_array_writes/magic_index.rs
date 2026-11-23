@@ -53,31 +53,62 @@ pub(super) fn lower(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: select, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(select);
-    let target = crate::ir::RuntimeFnId::GetClass;
-    let class_name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))), PhpType::Str,
-        target.effects(), Some(span));
-    crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class_name, span);
+    // A program that loads no code at run time knows every class, so a class is its id: one load and
+    // a compare per class, where `get_class()` builds a string that every arm then compares. The
+    // name is only needed by the overloaded tail's notice, which asks for it there.
+    let by_id = !ctx.program_loads_code_at_run_time();
+    let class_id = if by_id {
+        let generic = PhpType::Object(String::new());
+        let unboxed = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, generic.clone(),
+            Op::mixed_unbox_effects(&generic), Some(span));
+        ctx.builder.set_value_ownership(unboxed.value, Ownership::Borrowed);
+        Some(ctx.emit_value(Op::ObjectClassId, vec![unboxed.value], None, PhpType::Int,
+            Op::ObjectClassId.default_effects(), Some(span)))
+    } else {
+        let target = crate::ir::RuntimeFnId::GetClass;
+        let class_name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))), PhpType::Str,
+            target.effects(), Some(span));
+        crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class_name, span);
+        None
+    };
     let mut merged = None;
     // The overloaded and inaccessible reads address the object only through the runtime property
     // dispatcher, so every class of one of those kinds shares one tail; only the class-name test
     // (and the class name in the notice, taken from the selected name) is its own.
     let mut tails: [Option<BlockId>; 2] = [None, None];
+    // With class ids the members of a shared tail are tested together, after the classes with an arm
+    // of their own: a run of consecutive ids is two comparisons.
+    let mut members: [Vec<i64>; 2] = [Vec::new(), Vec::new()];
     for (class, kind) in classes {
+        let flavor = match kind { Kind::Magic { hash: false } => Some(0), Kind::Inaccessible => Some(1), _ => None };
+        if let (Some(flavor), true) = (flavor, class_id.is_some()) {
+            tails[flavor].get_or_insert_with(|| ctx.builder.create_named_block("property.index.shared", vec![]));
+            members[flavor].push(ctx.classes.get(class.trim_start_matches('\\')).map_or(0, |info| info.class_id) as i64);
+            continue;
+        }
         let matched = ctx.builder.create_named_block("property.index.special", vec![]);
         let next = ctx.builder.create_named_block("property.index.next", vec![]);
-        let current = ctx.load_local(&name, Some(span));
-        ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
-        let data = ctx.intern_string(class.trim_start_matches('\\'));
-        let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
-            Op::ConstStr.default_effects(), Some(span));
-        let condition = ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
-            PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+        let condition = if let Some(class_id) = class_id {
+            let wanted = ctx.classes.get(class.trim_start_matches('\\')).map_or(0, |info| info.class_id) as i64;
+            let wanted = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(wanted)), PhpType::Int,
+                Op::ConstI64.default_effects(), Some(span));
+            ctx.emit_value(Op::ICmp, vec![class_id.value, wanted.value],
+                Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)), PhpType::Bool,
+                Op::ICmp.default_effects(), Some(span))
+        } else {
+            let current = ctx.load_local(&name, Some(span));
+            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+            let data = ctx.intern_string(class.trim_start_matches('\\'));
+            let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+                Op::ConstStr.default_effects(), Some(span));
+            ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
+                PhpType::Bool, Op::StrictEq.default_effects(), Some(span))
+        };
         let before = ctx.initialized_slots_snapshot();
         ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
             then_target: matched, then_args: vec![], else_target: next, else_args: vec![] });
         ctx.builder.position_at_end(matched);
-        let flavor = match kind { Kind::Magic { hash: false } => Some(0), Kind::Inaccessible => Some(1), _ => None };
         if let Some(flavor) = flavor {
             let tail = *tails[flavor].get_or_insert_with(||
                 ctx.builder.create_named_block("property.index.shared", vec![]));
@@ -95,15 +126,56 @@ pub(super) fn lower(
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
     }
-    ctx.builder.terminate(Terminator::Br { target: regular, args: vec![] });
+    let mut tests: Vec<(i64, i64, BlockId)> = Vec::new();
+    for (flavor, ids) in members.iter_mut().enumerate() {
+        ids.sort_unstable();
+        for &id in ids.iter() {
+            match tests.last_mut() {
+                Some((_, last, tail)) if *last + 1 == id && Some(*tail) == tails[flavor] => *last = id,
+                _ => tests.push((id, id, tails[flavor].expect("a member has its tail"))),
+            }
+        }
+    }
+    let count = tests.len();
+    for (at, (first, last, tail)) in tests.into_iter().enumerate() {
+        let miss = if at + 1 == count { regular } else {
+            ctx.builder.create_named_block("property.index.member", vec![])
+        };
+        let id = class_id.expect("members are tested by class id").value;
+        let mut compare = |ctx: &mut LoweringContext<'_, '_>, bound: i64, predicate, then_target, else_target| {
+            let bound = ctx.emit_value(Op::ConstI64, vec![], Some(Immediate::I64(bound)), PhpType::Int,
+                Op::ConstI64.default_effects(), Some(span));
+            let hit = ctx.emit_value(Op::ICmp, vec![id, bound.value], Some(Immediate::CmpPredicate(predicate)),
+                PhpType::Bool, Op::ICmp.default_effects(), Some(span));
+            ctx.builder.terminate(Terminator::CondBr { cond: hit.value,
+                then_target, then_args: vec![], else_target, else_args: vec![] });
+        };
+        if first == last {
+            compare(ctx, first, crate::ir::CmpPredicate::Eq, tail, miss);
+        } else {
+            let upper = ctx.builder.create_named_block("property.index.member_upper", vec![]);
+            compare(ctx, first, crate::ir::CmpPredicate::Sge, upper, miss);
+            ctx.builder.position_at_end(upper);
+            compare(ctx, last, crate::ir::CmpPredicate::Sle, tail, miss);
+        }
+        if miss != regular { ctx.builder.position_at_end(miss); }
+    }
+    if count == 0 { ctx.builder.terminate(Terminator::Br { target: regular, args: vec![] }); }
     let before_tails = initial.clone();
     for (flavor, tail) in tails.into_iter().enumerate() {
         let Some(tail) = tail else { continue };
         ctx.builder.position_at_end(tail);
         ctx.restore_initialized_slots(before_tails.clone());
-        let current = ctx.load_local(&name, Some(span));
-        ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+        if by_id && flavor == 0 {
+            let target = crate::ir::RuntimeFnId::GetClass;
+            let class_name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))), PhpType::Str,
+                target.effects(), Some(span));
+            crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class_name, span);
+        }
         let notice = if flavor == 0 {
+            let current = ctx.load_local(&name, Some(span));
+            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
             let prefix = string(ctx, "Notice: Indirect modification of overloaded property ", span);
             let head = ctx.emit_value(Op::StrConcat, vec![prefix.value, current.value], None, PhpType::Str,
                 Op::StrConcat.default_effects(), Some(span));
