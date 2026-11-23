@@ -72,7 +72,7 @@ impl ArrayFact {
     /// Appends one implicit value while preserving PHP 8.5 next-key history.
     fn append(&mut self, value: ValueFact) -> Option<()> {
         let key = match self.maximum_integer {
-            None | Some(..0) => 0,
+            None => 0,
             Some(i64::MAX) => return Some(()),
             Some(maximum) => maximum + 1,
         };

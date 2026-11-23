@@ -22,6 +22,21 @@ echo "$items[1]", ':', "{$items[1]}", ':', $items['1'];
     );
 }
 
+/// Negative integer maxima keep PHP 8.5's next-key history through strict source auditing.
+#[test]
+fn test_strict_array_keys_negative_append_uses_maximum_plus_one() {
+    let source = r#"<?php
+$values = [-2 => []];
+$values[] = 'ab';
+$values[-1][false] = 'x';
+echo $values[-1];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "xb"
+    );
+}
+
 /// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.
 #[test]
 fn test_strict_boxed_overflow_staged_native_arithmetic_and_powers() {

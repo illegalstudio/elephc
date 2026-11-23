@@ -97,6 +97,14 @@ fn strict_array_key_source_validation_keeps_original_domains() {
     }
 }
 
+/// Negative maximum keys advance implicit appends by one instead of resetting to zero.
+#[test]
+fn strict_array_key_source_validation_tracks_negative_append_keys() {
+    let source = "<?php $values = [-2 => []]; $values[] = 'ab'; $values[-1][false] = 'x';";
+    crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+}
+
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.
 #[test]
 fn strict_array_key_source_validation_audits_target_guarded_writes() {
