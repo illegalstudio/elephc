@@ -41,6 +41,36 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.label(&only_start);
     emit_fseek_seek_warning_arm64(ctx, " is seekable only to start position", done_label);
     ctx.emitter.label(&allow);
+    // php-src resets the filter state on every allowed seek (zlib.deflate deflateReset,
+    // bzip2.compress reinitialization). Only descriptors with a registered write filter
+    // carry a label pointer.
+    let reset_skip = ctx.next_label("fseek_seek_reset_skip");
+    let reset_zlib_skip = ctx.next_label("fseek_seek_reset_zlib_skip");
+    let reset_bz2_skip = ctx.next_label("fseek_seek_reset_bz2_skip");
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");                       // is a write filter registered for this descriptor?
+    ctx.emitter.instruction(&format!("cbz x10, {reset_skip}"));                 // no filter: keep the plain seek
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+    abi::emit_store_to_sp(ctx.emitter, "x1", 8);
+    abi::emit_store_to_sp(ctx.emitter, "x2", 16);
+    abi::emit_symbol_address(ctx.emitter, "x9", "_zlib_reset_fn");
+    ctx.emitter.instruction("ldr x10, [x9]");                                   // published zlib.deflate reset hook
+    ctx.emitter.instruction(&format!("cbz x10, {reset_zlib_skip}"));            // no zlib filter anywhere: skip
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+    ctx.emitter.instruction("blr x10");                                         // deflateReset for this descriptor
+    ctx.emitter.label(&reset_zlib_skip);
+    abi::emit_symbol_address(ctx.emitter, "x9", "_bz2_reset_fn");
+    ctx.emitter.instruction("ldr x10, [x9]");                                   // published bzip2.compress reset hook
+    ctx.emitter.instruction(&format!("cbz x10, {reset_bz2_skip}"));             // no bzip2 filter anywhere: skip
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+    ctx.emitter.instruction("blr x10");                                         // reinitialize the bzip2 stream
+    ctx.emitter.label(&reset_bz2_skip);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 16);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&reset_skip);
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.emitter.syscall(199);
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
@@ -98,6 +128,36 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.label(&only_start);
     emit_fseek_seek_warning_x86_64(ctx, " is seekable only to start position", done_label);
     ctx.emitter.label(&allow);
+    let reset_skip = ctx.next_label("fseek_seek_reset_skip");
+    let reset_zlib_skip = ctx.next_label("fseek_seek_reset_zlib_skip");
+    let reset_bz2_skip = ctx.next_label("fseek_seek_reset_bz2_skip");
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                 // is a write filter registered for this descriptor?
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_skip}"));                       // no filter: keep the plain seek
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+    abi::emit_store_to_sp(ctx.emitter, "rsi", 8);
+    abi::emit_store_to_sp(ctx.emitter, "rdx", 16);
+    abi::emit_symbol_address(ctx.emitter, "r9", "_zlib_reset_fn");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // published zlib.deflate reset hook
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_zlib_skip}"));                  // no zlib filter anywhere: skip
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+    ctx.emitter.instruction("call r10");                                        // deflateReset for this descriptor
+    ctx.emitter.label(&reset_zlib_skip);
+    abi::emit_symbol_address(ctx.emitter, "r9", "_bz2_reset_fn");
+    ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                         // published bzip2.compress reset hook
+    ctx.emitter.instruction(&format!("test r10, r10"));
+    ctx.emitter.instruction(&format!("jz {reset_bz2_skip}"));                   // no bzip2 filter anywhere: skip
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+    ctx.emitter.instruction("call r10");                                        // reinitialize the bzip2 stream
+    ctx.emitter.label(&reset_bz2_skip);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 16);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&reset_skip);
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("call lseek");                                      // reposition the stream through libc lseek()
     ctx.emitter.instruction("cmp rax, 0");                                      // test whether lseek returned a non-negative offset

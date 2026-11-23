@@ -156,3 +156,51 @@ restore_error_handler();
         "fseek(): Stream filter zlib.deflate is never seekable\nfseek(): Stream filter zlib.deflate is seekable only to start position\n"
     );
 }
+
+/// An allowed seek resets the deflate state: after `ftruncate(0)` + `fseek(0)`, writes form
+/// a fresh compressed stream, as php-src's `php_zlib_deflate_seek` does with `deflateReset`.
+#[test]
+fn test_stream_filter_write_seek_mode_resets_deflate_state_php86() {
+    let out = run86(
+        r#"<?php
+$text1 = "First message that will be discarded.";
+$text2 = "Second message that replaces the first.";
+$fp = fopen("reset.bin", "w+");
+stream_filter_append($fp, "zlib.deflate", STREAM_FILTER_WRITE, ['write_seek_mode' => 'reset']);
+fwrite($fp, $text1);
+ftruncate($fp, 0);
+echo fseek($fp, 0, 0) === 0 ? "seeked|" : "bad|";
+fwrite($fp, $text2);
+fclose($fp);
+$rd = fopen("reset.bin", "r");
+stream_filter_append($rd, "zlib.inflate", STREAM_FILTER_READ);
+echo stream_get_contents($rd) === $text2 ? "reset-ok" : "reset-bad";
+fclose($rd);
+"#,
+    );
+    assert_eq!(out, "seeked|reset-ok");
+}
+
+/// The same reset semantics apply to `bzip2.compress`: an allowed seek ends and
+/// reinitializes the compression stream, so the new writes decode to the new payload.
+#[test]
+fn test_stream_filter_write_seek_mode_resets_bzip2_state_php86() {
+    let out = run86(
+        r#"<?php
+$text1 = "First message that will be discarded.";
+$text2 = "Second message that replaces the first.";
+$fp = fopen("reset.bz2", "w+");
+stream_filter_append($fp, "bzip2.compress", STREAM_FILTER_WRITE, ['write_seek_mode' => 'reset']);
+fwrite($fp, $text1);
+ftruncate($fp, 0);
+echo fseek($fp, 0, 0) === 0 ? "seeked|" : "bad|";
+fwrite($fp, $text2);
+fclose($fp);
+$rd = fopen("reset.bz2", "r");
+stream_filter_append($rd, "bzip2.decompress", STREAM_FILTER_READ);
+echo stream_get_contents($rd) === $text2 ? "reset-ok" : "reset-bad";
+fclose($rd);
+"#,
+    );
+    assert_eq!(out, "seeked|reset-ok");
+}

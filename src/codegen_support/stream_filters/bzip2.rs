@@ -60,6 +60,7 @@ pub(crate) fn emit_compress_arm64(
     emitter: &mut Emitter,
     fwrite_label: &str,
     close_label: &str,
+    reset_label: &str,
     skip_label: &str,
     block_size: i64,
     work_factor: i64,
@@ -173,6 +174,35 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("ret");                                                 // return to the fclose path
 
     // ================================================================
+    // bzip2 compress reset helper (PHP 8.6 write_seek_mode: php-src ends and
+    // reinitializes the compression stream on every allowed seek).
+    // Input: x0 = fd. Output: x0 = BZ2_bzCompressInit status, or 0 when unattached.
+    // ================================================================
+    emitter.label(reset_label);
+    emitter.instruction("sub sp, sp, #32");                                     // reset frame: [0]=fd [8]=bz_stream [16]=x29 [24]=x30
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve linkage across libbz2 calls
+    emitter.instruction("add x29, sp, #16");                                    // establish the reset helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor
+    abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
+    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // load this descriptor's bz_stream handle
+    emitter.instruction(&format!("cbz x10, {}_done", reset_label));             // no bzip2 stream: report success
+    emitter.instruction("str x10, [sp, #8]");                                   // save the handle across the end call
+    emitter.instruction("mov x0, x10");                                         // arg 0 = bz_stream pointer
+    emitter.bl_c("BZ2_bzCompressEnd"); // end the current compression stream
+    emitter.instruction("ldr x0, [sp, #8]");                                    // arg 0 = bz_stream pointer
+    emitter.instruction(&format!("mov x1, #{}", block_size));                   // arg 1 = blockSize100k
+    emitter.instruction("mov x2, #0");                                          // arg 2 = verbosity = 0
+    emitter.instruction(&format!("mov x3, #{}", work_factor));                  // arg 3 = workFactor
+    emitter.bl_c("BZ2_bzCompressInit"); // reinitialize the compression stream
+    emitter.instruction(&format!("b {}_finish", reset_label));                  // return BZ2_bzCompressInit's status
+    emitter.label(&format!("{}_done", reset_label));
+    emitter.instruction("mov x0, #0");                                          // no handle: treat as a successful reset
+    emitter.label(&format!("{}_finish", reset_label));
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore linkage
+    emitter.instruction("add sp, sp, #32");                                     // release the reset helper frame
+    emitter.instruction("ret");                                                 // return the reset status
+
+    // ================================================================
     // Initialization: allocate and register a bz_stream for this fd.
     // ================================================================
     emitter.label(skip_label);
@@ -218,6 +248,9 @@ pub(crate) fn emit_compress_arm64(
     abi::emit_symbol_address(emitter, "x11", close_label);
     abi::emit_symbol_address(emitter, "x9", "_bz2_close_fn");
     emitter.instruction("str x11, [x9]");                                       // _bz2_close_fn = the compress close helper
+    abi::emit_symbol_address(emitter, "x11", reset_label);
+    abi::emit_symbol_address(emitter, "x9", "_bz2_reset_fn");
+    emitter.instruction("str x11, [x9]");                                       // _bz2_reset_fn = the compress seek-reset helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.label(&format!("{}_fd_skip", skip_label));
@@ -236,6 +269,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter: &mut Emitter,
     fwrite_label: &str,
     close_label: &str,
+    reset_label: &str,
     skip_label: &str,
     block_size: i64,
     work_factor: i64,
@@ -341,6 +375,34 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("ret");                                                 // return to the fclose path
 
     // ================================================================
+    // bzip2 compress reset helper (PHP 8.6 write_seek_mode).
+    // Input: rdi = fd. Output: rax = BZ2_bzCompressInit status, or 0 when unattached.
+    // ================================================================
+    emitter.label(reset_label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the reset helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // keep rsp 16-aligned across libbz2 calls
+    abi::emit_symbol_address(emitter, "r9", "_bzstream_handles");               // bz_stream handle table base
+    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // load this descriptor's bz_stream handle
+    emitter.instruction("test r10, r10");                                       // is a bzip2 stream attached?
+    emitter.instruction(&format!("jz {}_done", reset_label));                   // no handle: report success
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the handle across the end call
+    emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
+    emitter.instruction("call BZ2_bzCompressEnd");                              // end the current compression stream
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg 0 = bz_stream pointer
+    emitter.instruction(&format!("mov esi, {}", block_size));                   // arg 1 = blockSize100k
+    emitter.instruction("xor edx, edx");                                        // arg 2 = verbosity = 0
+    emitter.instruction(&format!("mov ecx, {}", work_factor));                  // arg 3 = workFactor
+    emitter.instruction("call BZ2_bzCompressInit");                             // reinitialize the compression stream
+    emitter.instruction(&format!("jmp {}_finish", reset_label));                // return BZ2_bzCompressInit's status
+    emitter.label(&format!("{}_done", reset_label));
+    emitter.instruction("xor eax, eax");                                        // no handle: treat as a successful reset
+    emitter.label(&format!("{}_finish", reset_label));
+    emitter.instruction("add rsp, 16");                                         // release the reset helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the reset status
+
+    // ================================================================
     // Initialization: allocate and register a bz_stream for this fd.
     // ================================================================
     emitter.label(skip_label);
@@ -391,6 +453,9 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction(&format!("lea r10, [rip + {}]", close_label));          // address of the compress close helper
     abi::emit_symbol_address(emitter, "r9", "_bz2_close_fn"); // _bz2_close_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _bz2_close_fn = the compress close helper
+    emitter.instruction(&format!("lea r10, [rip + {}]", reset_label));          // address of the compress seek-reset helper
+    abi::emit_symbol_address(emitter, "r9", "_bz2_reset_fn"); // _bz2_reset_fn slot
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // _bz2_reset_fn = the compress seek-reset helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.label(&format!("{}_fd_skip", skip_label));

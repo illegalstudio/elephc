@@ -34,6 +34,7 @@ pub(crate) fn emit_arm64(
     emitter: &mut Emitter,
     fwrite_label: &str,
     close_label: &str,
+    reset_label: &str,
     skip_label: &str,
     level: i64,
 ) {
@@ -146,6 +147,30 @@ pub(crate) fn emit_arm64(
     emitter.instruction("ret");                                                 // return to the fclose path
 
     // ================================================================
+    // zlib deflate reset helper (PHP 8.6 write_seek_mode: php-src runs
+    // deflateReset on every allowed seek through the filter).
+    // Input: x0 = fd. Output: x0 = deflateReset status (0 = Z_OK), or 0 when
+    // no deflate stream is attached to the descriptor.
+    // ================================================================
+    emitter.label(reset_label);
+    emitter.instruction("sub sp, sp, #32");                                     // reset frame: [0]=fd [16]=x29 [24]=x30
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve linkage across deflateReset
+    emitter.instruction("add x29, sp, #16");                                    // establish the reset helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor
+    abi::emit_symbol_address(emitter, "x9", "_zstream_handles");
+    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // load this descriptor's z_stream handle
+    emitter.instruction(&format!("cbz x10, {}_done", reset_label));             // no deflate stream: report success
+    emitter.instruction("mov x0, x10");                                         // arg 0 = z_stream pointer
+    emitter.bl_c("deflateReset"); // restart the raw-deflate stream at the new position
+    emitter.instruction(&format!("b {}_finish", reset_label));                  // return deflateReset's status
+    emitter.label(&format!("{}_done", reset_label));
+    emitter.instruction("mov x0, #0");                                          // no handle: treat as a successful reset
+    emitter.label(&format!("{}_finish", reset_label));
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore linkage
+    emitter.instruction("add sp, sp, #32");                                     // release the reset helper frame
+    emitter.instruction("ret");                                                 // return the reset status
+
+    // ================================================================
     // Initialization: allocate and register a z_stream for this fd.
     // ================================================================
     emitter.label(skip_label);
@@ -197,6 +222,9 @@ pub(crate) fn emit_arm64(
     abi::emit_symbol_address(emitter, "x11", close_label);
     abi::emit_symbol_address(emitter, "x9", "_zlib_close_fn");
     emitter.instruction("str x11, [x9]");                                       // _zlib_close_fn = the deflate close helper
+    abi::emit_symbol_address(emitter, "x11", reset_label);
+    abi::emit_symbol_address(emitter, "x9", "_zlib_reset_fn");
+    emitter.instruction("str x11, [x9]");                                       // _zlib_reset_fn = the deflate seek-reset helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.label(&format!("{}_fd_skip", skip_label));
@@ -213,6 +241,7 @@ pub(crate) fn emit_x86_64(
     emitter: &mut Emitter,
     fwrite_label: &str,
     close_label: &str,
+    reset_label: &str,
     skip_label: &str,
     level: i64,
 ) {
@@ -317,6 +346,28 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("ret");                                                 // return to the fclose path
 
     // ================================================================
+    // zlib deflate reset helper (PHP 8.6 write_seek_mode).
+    // Input: rdi = fd. Output: rax = deflateReset status, or 0 when unattached.
+    // ================================================================
+    emitter.label(reset_label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the reset helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // keep rsp 16-aligned across deflateReset
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");                // z_stream handle table base
+    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // load this descriptor's z_stream handle
+    emitter.instruction("test r10, r10");                                       // is a deflate stream attached?
+    emitter.instruction(&format!("jz {}_done", reset_label));                   // no handle: report success
+    emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
+    emitter.instruction("call deflateReset");                                   // restart the raw-deflate stream
+    emitter.instruction(&format!("jmp {}_finish", reset_label));                // return deflateReset's status
+    emitter.label(&format!("{}_done", reset_label));
+    emitter.instruction("xor eax, eax");                                        // no handle: treat as a successful reset
+    emitter.label(&format!("{}_finish", reset_label));
+    emitter.instruction("add rsp, 16");                                         // release the reset helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the reset status
+
+    // ================================================================
     // Initialization: allocate and register a z_stream for this fd.
     // ================================================================
     emitter.label(skip_label);
@@ -376,6 +427,9 @@ pub(crate) fn emit_x86_64(
     emitter.instruction(&format!("lea r10, [rip + {}]", close_label));          // address of the deflate close helper
     abi::emit_symbol_address(emitter, "r9", "_zlib_close_fn"); // _zlib_close_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_close_fn = the deflate close helper
+    emitter.instruction(&format!("lea r10, [rip + {}]", reset_label));          // address of the deflate seek-reset helper
+    abi::emit_symbol_address(emitter, "r9", "_zlib_reset_fn"); // _zlib_reset_fn slot
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_reset_fn = the deflate seek-reset helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.label(&format!("{}_fd_skip", skip_label));

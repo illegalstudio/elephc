@@ -254,12 +254,14 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
     let level = const_int_filter_param(ctx, inst, "level", true, -1, 9)?.unwrap_or(-1);
     let fwrite_label = ctx.next_label("zlib_deflate_fwrite");
     let close_label = ctx.next_label("zlib_deflate_close");
+    let reset_label = ctx.next_label("zlib_deflate_reset");
     let skip_label = ctx.next_label("zlib_deflate_skip_helpers");
     match ctx.emitter.target.arch {
         Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(
             ctx.emitter,
             &fwrite_label,
             &close_label,
+            &reset_label,
             &skip_label,
             level,
         ),
@@ -267,6 +269,7 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
             ctx.emitter,
             &fwrite_label,
             &close_label,
+            &reset_label,
             &skip_label,
             level,
         ),
@@ -353,12 +356,14 @@ pub(super) fn lower_bzip2_compress_stream_filter_attach(
     let work_factor = const_int_filter_param(ctx, inst, "work", false, 0, 250)?.unwrap_or(0);
     let fwrite_label = ctx.next_label("bz2_compress_fwrite");
     let close_label = ctx.next_label("bz2_compress_close");
+    let reset_label = ctx.next_label("bz2_compress_reset");
     let skip_label = ctx.next_label("bz2_compress_skip_helpers");
     match ctx.emitter.target.arch {
         Arch::AArch64 => crate::codegen::stream_filters::bzip2::emit_compress_arm64(
             ctx.emitter,
             &fwrite_label,
             &close_label,
+            &reset_label,
             &skip_label,
             block_size,
             work_factor,
@@ -367,6 +372,7 @@ pub(super) fn lower_bzip2_compress_stream_filter_attach(
             ctx.emitter,
             &fwrite_label,
             &close_label,
+            &reset_label,
             &skip_label,
             block_size,
             work_factor,

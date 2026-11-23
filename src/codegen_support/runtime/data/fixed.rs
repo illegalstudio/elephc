@@ -1187,6 +1187,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_zstream_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
+    out.push_str(&comm_directive("_zlib_reset_fn", 8, target));
+    out.push_str(&comm_directive("_bz2_reset_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_end_fn", 8, target));
