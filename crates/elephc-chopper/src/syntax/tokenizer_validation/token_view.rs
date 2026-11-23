@@ -18,7 +18,7 @@ use crate::syntax::lexer::{
 };
 use crate::syntax::span::Span;
 
-use super::parser_view::void_cast_starts_statement;
+use super::parser_view::{paren_is_declaration_parameters, void_cast_starts_statement};
 use super::prechecks::matching_brace_end;
 use super::{tok, ReferenceError, SourceToken};
 
@@ -59,6 +59,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
     let mut projected = Vec::with_capacity(tokens.len() + 2);
     let mut previous_significant = tok::T_OPEN_TAG;
     let mut pending_label = false;
+    let mut parens: Vec<usize> = Vec::new();
     projected.push((
         Token::OpenTag,
         TokenMetadata::new(Span::new_in_source(1, 1, 0)),
@@ -80,6 +81,25 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
             pending_label = true;
         }
         let id = token.id();
+        if id == i64::from(b'(') {
+            parens.push(index);
+        } else if id == i64::from(b')') {
+            parens.pop();
+        }
+        if matches!(
+            id,
+            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+        ) {
+            if !reference_ampersand_supported(tokens, previous_significant, &parens) {
+                return None;
+            }
+            if !fast_spans {
+                cursor.skip_bytes(token.len());
+            }
+            index += 1;
+            continue;
+        }
         let start = if fast_spans {
             span_start(token, &line_starts)?
         } else {
@@ -320,6 +340,21 @@ fn offset_span(start: Span, offset: usize, len: usize) -> Option<Span> {
     ))
 }
 
+/// Returns whether an ampersand is a declaration/capture marker we can omit.
+fn reference_ampersand_supported<T: SourceToken>(
+    tokens: &[T],
+    previous_significant: i64,
+    parens: &[usize],
+) -> bool {
+    match previous_significant {
+        tok::T_FUNCTION | tok::T_AS => true,
+        id if id == i64::from(b'(') || id == i64::from(b',') => parens
+            .last()
+            .is_some_and(|open| paren_is_declaration_parameters(tokens, *open)),
+        _ => false,
+    }
+}
+
 /// Returns whether a native token is a cast form.
 fn is_cast_token(id: i64) -> bool {
     matches!(
@@ -424,8 +459,6 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
         | tok::T_STRING_VARNAME
         | tok::T_CURLY_OPEN
         | tok::T_DOLLAR_OPEN_CURLY_BRACES
-        | tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
-        | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
         | tok::T_GOTO
         | tok::T_ELLIPSIS
         | tok::T_HALT_COMPILER
@@ -572,9 +605,7 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
         }
         !matches!(
             id,
-            tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
-                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
-                | tok::T_GOTO
+            tok::T_GOTO
                 | tok::T_ELLIPSIS
                 | tok::T_HALT_COMPILER
                 | tok::T_NS_SEPARATOR

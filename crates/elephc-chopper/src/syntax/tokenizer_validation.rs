@@ -1072,12 +1072,19 @@ mod tests {
             b"<?php (void) $a;",
             b"<?php echo C::{foo()}::BAR;",
             b"<?php $a::{ $b + 1 };",
+            b"<?php function f(&$x) {}",
+            b"<?php function &f() {}",
+            b"<?php foreach ($a as &$v) {}",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
             b"<?php if (1) done: echo 1;",
             b"<?php\r\n$a = 1;\r\n",
             b"<?php $a = (void) $b;",
+            b"<?php $a = &$b;",
+            b"<?php $a = [&$b];",
+            b"<?php function () use (&$x) {};",
+            b"<?php $f = fn&($x) => $x;",
         ] {
             let tokens = scan_tokens(source);
             assert!(
