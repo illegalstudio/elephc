@@ -472,10 +472,7 @@ pub(crate) fn all_declaration(web: bool) -> Stmt {
     function("ini_get_all")
         .param_default("extension", t_nullable(TypeExpr::Str), e_null())
         .param_default("details", TypeExpr::Bool, e_bool(true))
-        .returns(t_union(vec![TypeExpr::AssocArray {
-            key: Box::new(TypeExpr::Str),
-            value: Box::new(t_mixed()),
-        }, TypeExpr::False]))
+        .returns(t_union(vec![t_array(), TypeExpr::False]))
         .body(body).build()
 }
 
