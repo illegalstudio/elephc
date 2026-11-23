@@ -100,15 +100,18 @@ pub(in crate::codegen) struct ConstDefaultObjectArg {
 pub(in crate::codegen) struct ConstDefaultContext<'a> {
     pub(in crate::codegen) module: &'a Module,
     pub(in crate::codegen) current_class: Option<&'a str>,
+    literal_only: bool,
 }
 
 impl<'a> ConstDefaultContext<'a> {
+    /// Builds a resolution context for a global or class-like declaration.
+    pub(in crate::codegen) fn new(module: &'a Module, current_class: Option<&'a str>) -> Self {
+        Self { module, current_class, literal_only: false }
+    }
+
     /// Builds a resolution context for a class-like member default.
     pub(in crate::codegen) fn for_class(module: &'a Module, class_name: &'a str) -> Self {
-        Self {
-            module,
-            current_class: Some(class_name),
-        }
+        Self::new(module, Some(class_name))
     }
 }
 
@@ -120,9 +123,19 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Evaluates literal expressions, stopping at a reached constant read or object construction.
+pub(in crate::codegen) fn resolve_literal_expression(
+    expr: &Expr,
+    module: &Module,
+    current_class: Option<&str>,
+) -> Option<ExprKind> {
+    let context = ConstDefaultContext { module, current_class, literal_only: true };
+    resolve_const_default(expr, &context).and_then(resolved_scalar_literal)
+}
+
 /// Resolves scalar global producers while preserving compound and opaque consumer contracts.
 pub(in crate::codegen) fn materialized_global_constant(module: &Module, value: &Expr) -> Expr {
-    let context = ConstDefaultContext { module, current_class: None };
+    let context = ConstDefaultContext::new(module, None);
     resolve_const_default(value, &context).and_then(resolved_scalar_literal)
         .map(|kind| value.with_kind(kind)).unwrap_or_else(|| value.clone())
 }
@@ -294,12 +307,14 @@ fn resolve_constant_expression_const_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     match &expr.kind {
-        ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
+        ExprKind::ConstRef(name) if !context.literal_only => {
+            resolve_global_constant_default(context, name, depth + 1)
+        }
         ExprKind::ClassConstant { receiver } => {
             resolve_static_receiver_name(context, receiver)
                 .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
-        ExprKind::ScopedConstantAccess { receiver, name } => {
+        ExprKind::ScopedConstantAccess { receiver, name } if !context.literal_only => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
         }
         ExprKind::ArrayAccess { array, index } => {
@@ -595,6 +610,7 @@ fn resolve_object_const_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
+    if context.literal_only { return None; }
     let ExprKind::NewObject { class_name, args } = &expr.kind else {
         return None;
     };

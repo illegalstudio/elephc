@@ -54,9 +54,7 @@ fn quoted_literal(value: &str) -> String {
 /// Resolves a lexical class receiver before its default crosses into runtime eval metadata.
 fn receiver_name(receiver: &StaticReceiver, context: &EvalNativeDefaultContext<'_>) -> Option<String> {
     const_default_values::resolve_static_receiver_name(
-        &const_default_values::ConstDefaultContext {
-            module: context.module, current_class: context.current_class,
-        }, receiver,
+        &const_default_values::ConstDefaultContext::new(context.module, context.current_class), receiver,
     )
 }
 

@@ -467,7 +467,7 @@ fn eval_class_constant_value(
         ExprKind::StringLiteral(value) => Some(EvalClassConstantValue::Str(value.clone())),
         ExprKind::Null => Some(EvalClassConstantValue::Null),
         ExprKind::UnaryPlus(_) => {
-            let context = crate::codegen::const_default_values::ConstDefaultContext { module, current_class: Some(current_class) };
+            let context = crate::codegen::const_default_values::ConstDefaultContext::new(module, Some(current_class));
             let kind = crate::codegen::const_default_values::resolve_const_default(expr, &context)
                 .and_then(crate::codegen::const_default_values::resolved_literal_default)?;
             eval_class_constant_value(module, current_class, current_info, &Expr::new(kind, expr.span), depth + 1)

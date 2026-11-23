@@ -266,8 +266,8 @@ pub(crate) fn parameter_default_is_refcounted(ctx: &LoweringContext<'_, '_>, sco
 }
 
 /// Reports whether evaluating `expr` constructs an object (`new`).
-fn constructs_object(expr: &Expr) -> bool {
-    if matches!(expr.kind, ExprKind::NewObject { .. }) {
+pub(super) fn constructs_object(expr: &Expr) -> bool {
+    if matches!(expr.kind, ExprKind::NewObject { .. } | ExprKind::NewScopedObject { .. }) {
         return true;
     }
     let mut found = false;
@@ -1089,7 +1089,8 @@ fn visit_direct_children(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
             visit(then_expr);
             visit(else_expr);
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner)
+        | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Spread(inner)
@@ -1099,7 +1100,8 @@ fn visit_direct_children(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
             visit(array);
             visit(index);
         }
-        ExprKind::ArrayLiteral(elements) | ExprKind::NewObject { args: elements, .. } => {
+        ExprKind::ArrayLiteral(elements) | ExprKind::NewObject { args: elements, .. }
+        | ExprKind::NewScopedObject { args: elements, .. } => {
             elements.iter().for_each(|element| visit(element));
         }
         ExprKind::ArrayLiteralAssoc(pairs) => {

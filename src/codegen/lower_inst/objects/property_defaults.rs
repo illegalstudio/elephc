@@ -36,9 +36,7 @@ pub(super) fn collect_property_initialization(
         let offset = 8 + index * 16;
         let declaring_class = class_info.property_declaring_classes.get(property)
             .map(String::as_str);
-        let context = crate::codegen::const_default_values::ConstDefaultContext {
-            module, current_class: declaring_class,
-        };
+        let context = crate::codegen::const_default_values::ConstDefaultContext::new(module, declaring_class);
         let resolved = crate::codegen::const_default_values::resolve_enum_case_default(default_expr, &context);
         // Other scoped constants keep ordinary EIR initialization; their spelling alone does
         // not identify an enum case, especially in a mixed or union property slot.

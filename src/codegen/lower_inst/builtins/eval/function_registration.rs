@@ -178,7 +178,7 @@ pub(super) fn register_eval_native_function(
         }
         if register_eval_native_param_default_error(ctx, context_source,
             (&name_label, name_len), registered_index,
-            registration.signature.defaults.get(physical_index).and_then(Option::as_ref),
+            registration.signature.reflection_default_expr(physical_index).as_ref(),
             &default_context, "__elephc_eval_register_native_function_param_default_error")
         {
             register_eval_native_function_param_default_constant_name(ctx, context_source,

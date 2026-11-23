@@ -15,7 +15,7 @@ use crate::codegen::const_default_values::{self, ConstDefaultContext};
 pub(super) fn reflection_folded_property_default(
     ctx: &FunctionContext<'_>, declaring_class: Option<&str>, default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
-    let context = ConstDefaultContext { module: ctx.module, current_class: declaring_class };
+    let context = ConstDefaultContext::new(ctx.module, declaring_class);
     if let Some(value) = const_default_values::resolve_enum_case_default(default, &context) {
         return Some(ReflectionParameterDefaultValue::EnumCase(value));
     }

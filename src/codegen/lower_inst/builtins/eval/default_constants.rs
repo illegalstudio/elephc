@@ -39,9 +39,7 @@ pub(super) fn eval_native_property_default(
         }
         if let Some(value) =
             crate::codegen::const_default_values::resolve_enum_case_default(default,
-                &crate::codegen::const_default_values::ConstDefaultContext {
-                    module: default_context.module, current_class: default_context.current_class,
-                })
+                &crate::codegen::const_default_values::ConstDefaultContext::new(default_context.module, default_context.current_class))
         {
             return Some(EvalNativePropertyDefault::EnumCase(value));
         }

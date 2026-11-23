@@ -1425,6 +1425,21 @@ pub(crate) fn lower_eval_native_default_helpers(
         classes: &module.class_infos,
         interfaces: &check_result.interfaces,
     };
+    let mut collect = |name: String, scope: Option<String>, signature: &FunctionSig,
+                       index: usize, native: bool, constructor: bool| {
+        let default = signature.default_value(index).expect("present default");
+        let reflect = constructor || (native && (
+            default.producer_binding == Some(crate::parser::ast::ProducerBinding::IntegerToFloat)
+            || super::initializer_reads::default_reaches_deprecated_read(&tables, scope.as_deref(), &default)
+        ));
+        if reflect {
+            let original = signature.reflection_default_expr(index).expect("present default");
+            specs.push((reflection_default_helper_name(&name), scope.clone(), original, true));
+        }
+        if native {
+            specs.push((name, scope, default, false));
+        }
+    };
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
     for (class_name, class_info) in classes {
@@ -1437,21 +1452,22 @@ pub(crate) fn lower_eval_native_default_helpers(
             for (method_name, signature) in methods {
                 for (param_index, default) in signature.defaults.iter().enumerate() {
                     let Some(default) = default else { continue };
-                    if contains_deferred_error(default)
+                    let native = contains_deferred_error(default)
                         && !matches!(default.kind, ExprKind::Throw(_))
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
                         || super::initializer_reads::default_reaches_deprecated_read(
                             &tables, Some(class_name.as_str()), default,
-                        )
-                    {
+                        );
+                    let constructor = reflection_default_contains_nested_construction(default);
+                    if native || constructor {
                         let scope = if is_static {
                             class_info.static_method_impl_classes.get(method_name)
                         } else { class_info.method_impl_classes.get(method_name) }
                             .cloned().unwrap_or_else(|| class_name.clone());
-                        specs.push((eval_native_default_helper_name(
+                        collect(eval_native_default_helper_name(
                             class_info.class_id, is_static, method_name, param_index,
-                        ), Some(scope), signature.default_value(param_index).expect("present method default")));
+                        ), Some(scope), signature, param_index, native, constructor);
                     }
                 }
             }
@@ -1462,13 +1478,14 @@ pub(crate) fn lower_eval_native_default_helpers(
     for (name, signature) in functions {
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue; };
-            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_))
+            let native = contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_))
                 || super::initializer_reads::default_reaches_deprecated_read(
                     &tables, None, default,
-                )
-            {
-                specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
-                    None, signature.default_value(index).expect("present function default")));
+                );
+            let constructor = reflection_default_contains_nested_construction(default);
+            if native || constructor {
+                collect(format!("__elephc_eval_default\\function\\{name}\\{index}"),
+                    None, signature, index, native, constructor);
             }
         }
     }
@@ -1479,34 +1496,18 @@ pub(crate) fn lower_eval_native_default_helpers(
         let Some(signature) = &closure.signature else { continue };
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue };
-            if super::initializer_reads::default_reaches_deprecated_read(
+            let native = super::initializer_reads::default_reaches_deprecated_read(
                 &tables, closure.lexical_class.as_deref(), default,
-            ) {
-                specs.push((
+            );
+            let constructor = reflection_default_contains_nested_construction(default);
+            if native || constructor {
+                collect(
                     format!("__elephc_eval_default\\closure\\{}\\{index}", closure.name),
-                    closure.lexical_class.clone(),
-                    signature
-                        .default_value(index)
-                        .expect("present closure default"),
-                ));
+                    closure.lexical_class.clone(), signature, index, native, constructor,
+                );
             }
         }
     }
-    // `ReflectionParameter::getDefaultValue()` evaluates a fresh copy of the default on every
-    // call, at the caller's line, and leaves the parameter's own once flags alone. It gets a
-    // twin of each helper whose default reads a deprecated constant.
-    let reflection_specs: Vec<_> = specs
-        .iter()
-        .filter(|(_, scope, default)| {
-            super::initializer_reads::default_reaches_deprecated_read(&tables, scope.as_deref(), default)
-        })
-        .map(|(name, scope, default)| (reflection_default_helper_name(name), scope.clone(), default.clone()))
-        .collect();
-    let specs: Vec<_> = specs
-        .into_iter()
-        .map(|(name, scope, default)| (name, scope, default, false))
-        .chain(reflection_specs.into_iter().map(|(name, scope, default)| (name, scope, default, true)))
-        .collect();
     for (function_name, default_scope, default, for_reflection) in specs {
         if module.functions.iter().any(|function| function.name == function_name) {
             continue;
@@ -1609,6 +1610,12 @@ pub(crate) fn lower_eval_native_default_helpers(
         add_closures(module, closures);
         module.add_function(function);
     }
+}
+
+/// Uses a Reflection helper when construction is embedded in a compound default expression.
+fn reflection_default_contains_nested_construction(default: &Expr) -> bool {
+    !matches!(default.kind, ExprKind::NewObject { .. } | ExprKind::NewScopedObject { .. })
+        && super::initializer_reads::constructs_object(default)
 }
 
 /// Returns the name of the reflection twin of default helper `helper`.

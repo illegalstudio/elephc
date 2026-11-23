@@ -22,7 +22,7 @@ fn property_scalar_default_metadata_preserves_warning_and_source_domains() {
         for profile in [SemanticProfile::PERMISSIVE, strict] {
             let mut module = Module::new(Target::parse(target).unwrap());
             module.semantic_profile = profile;
-            let context = ConstDefaultContext { module: &module, current_class: None };
+            let context = ConstDefaultContext::new(&module, None);
             for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
                 for (left, expected) in [
                     (ExprKind::StringLiteral("1".into()), Some(2)),
@@ -62,7 +62,7 @@ fn enum_condition_defaults_retain_materialization_on_all_targets() {
             then_expr: Box::new(expr(ExprKind::IntLiteral(7))),
             else_expr: Box::new(expr(ExprKind::IntLiteral(9))),
         });
-        let context = ConstDefaultContext { module: &module, current_class: None };
+        let context = ConstDefaultContext::new(&module, None);
         let value = resolve_const_default(&expression, &context).unwrap();
         assert!(const_default_contains_enum(&value), "{target}");
         assert!(without_enum_effects(value.clone()) == const_default_int_value(7), "{target}");
@@ -85,7 +85,7 @@ fn array_offset_defaults_preserve_key_semantics_on_all_targets() {
     ]);
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = Module::new(Target::parse(target).unwrap());
-        let context = ConstDefaultContext { module: &module, current_class: None };
+        let context = ConstDefaultContext::new(&module, None);
         for (index, expected) in [
             (ExprKind::IntLiteral(2), Some(10)),
             (ExprKind::StringLiteral("3".into()), Some(30)),
@@ -105,7 +105,7 @@ fn array_offset_defaults_preserve_key_semantics_on_all_targets() {
 #[test]
 fn array_offset_defaults_decline_object_construction() {
     let module = Module::new(Target::parse("linux-x86_64").unwrap());
-    let context = ConstDefaultContext { module: &module, current_class: None };
+    let context = ConstDefaultContext::new(&module, None);
     let expr = |kind| Expr::new(kind, Span::dummy());
     let access = expr(ExprKind::ArrayAccess {
         array: Box::new(expr(ExprKind::ArrayLiteral(vec![
@@ -121,7 +121,7 @@ fn array_offset_defaults_decline_object_construction() {
 fn assert_arithmetic(op: BinOp, left: ExprKind, right: ExprKind, expected: Option<ConstDefaultValue>) {
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = Module::new(Target::parse(target).unwrap());
-        let context = ConstDefaultContext { module: &module, current_class: None };
+        let context = ConstDefaultContext::new(&module, None);
         let expression = Expr::new(ExprKind::BinaryOp {
             left: Box::new(Expr::new(left.clone(), Span::dummy())), op: op.clone(),
             right: Box::new(Expr::new(right.clone(), Span::dummy())),
@@ -194,7 +194,7 @@ fn enum_dependent_keys_and_offsets_retain_ordered_reads_on_all_targets() {
                 attribute_names: Vec::new(), attribute_args: Vec::new(),
             }).collect(),
         });
-        let context = ConstDefaultContext { module: &module, current_class: None };
+        let context = ConstDefaultContext::new(&module, None);
         // [E::C ? 1 : 0] reads the list [E::A, E::B] first, then the offset's E::C.
         let offset = expr(ExprKind::ArrayAccess {
             array: Box::new(expr(ExprKind::ArrayLiteral(vec![case("A"), case("B")]))),
@@ -235,7 +235,7 @@ fn exact_array_default_keys_preserve_kinds_bytes_and_append_history() {
             let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
             let mut module = Module::new(Target::parse(target).unwrap());
             module.semantic_profile = profile;
-            let context = ConstDefaultContext { module: &module, current_class: None };
+            let context = ConstDefaultContext::new(&module, None);
             for (source, expected) in [
                 ("<?php $v = [1 => 10, '1' => 20, '01' => 30][1];", if exact { 10 } else { 20 }),
                 ("<?php $v = [1 => 10, '1' => 20, '01' => 30]['1'];", 20),

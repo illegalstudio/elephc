@@ -23,10 +23,7 @@ use crate::codegen::const_default_values::{
 fn shared_default_context<'a>(
     default_context: &EvalNativeDefaultContext<'a>,
 ) -> crate::codegen::const_default_values::ConstDefaultContext<'a> {
-    crate::codegen::const_default_values::ConstDefaultContext {
-        module: default_context.module,
-        current_class: default_context.current_class,
-    }
+    crate::codegen::const_default_values::ConstDefaultContext::new(default_context.module, default_context.current_class)
 }
 
 /// Converts a PHP signature default into the compact eval bridge default ABI.

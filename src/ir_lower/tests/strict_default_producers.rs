@@ -19,6 +19,9 @@ function nullProducer(float|null $value = null): mixed { return $value; }
 function nominalProducer(float|stdClass $value = PRODUCER_BASE): mixed { return $value; }
 function objectProducer(float|stdClass $value = new stdClass()): mixed { return $value; }
 function arithmeticProducer(float $value = '1' + 1): float { return $value; }
+function ternaryProducer(float $value = ('1' + 1) ? 2 : PRODUCER_BASE): float { return $value; }
+class SideEffectProducer { public function __construct() { echo 'T'; } }
+function objectTernaryProducer(float $value = (new SideEffectProducer()) ? 1 : 2): float { return $value; }
 function identityProducer($value = '1' + 1): mixed { return $value; }
 function powerProducer($value = 2 ** -1): mixed { return $value; }
 function overflowProducer(float $value = PHP_INT_MAX + 1): float { return $value; }
@@ -43,7 +46,13 @@ echo objectProducer() instanceof stdClass ? 'A|' : 'X|';
 $call = expressionProducer(...); echo $call(), '|', $producerClosure(), '|', $producerArrow(), '|';
 $host = new ProducerConsumer(); echo $host->imported(), '|';
 $reflection = new ReflectionFunction('expressionProducer');
-echo is_float($reflection->getParameters()[0]->getDefaultValue()) ? 'R|' : 'X|';
+echo is_int($reflection->getParameters()[0]->getDefaultValue()) ? 'I|' : 'X|';
+$literalReflection = new ReflectionFunction('arithmeticProducer');
+echo is_float($literalReflection->getParameters()[0]->getDefaultValue()) ? 'F|' : 'X|';
+$ternaryReflection = new ReflectionFunction('ternaryProducer');
+echo is_float($ternaryReflection->getParameters()[0]->getDefaultValue()) ? 'F|' : 'X|';
+$objectReflection = new ReflectionFunction('objectTernaryProducer');
+echo is_int($objectReflection->getParameters()[0]->getDefaultValue()) ? 'I|' : 'X|';
 echo expressionProducer(...producerArguments($argc < 0)), '|';
 echo is_float(ProducerConstants::VALUE) ? 'C' : 'X', ProducerConstants::ALIAS, '|';
 try { expressionProducer(producerUnknown(1)); } catch (TypeError $error) { echo 'D'; }
@@ -125,7 +134,7 @@ fn strict_default_producers_native_nonliteral_kinds_and_owners() {
         let output = super::native_module::run(&module);
         let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "opt={optimize}: {stdout} {stderr}");
-        assert_eq!(stdout, "1|2|2|IPBLK|UNO|A|2|3|4|5|R|2|C3|DCS", "opt={optimize}");
+        assert_eq!(stdout, "1|2|2|IPBLK|UNO|A|2|3|4|5|I|F|F|TI|2|C3|DCS", "opt={optimize}");
         assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
     }
 }

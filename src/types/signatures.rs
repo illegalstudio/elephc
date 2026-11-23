@@ -9,7 +9,7 @@
 //! Key details:
 //! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
 
-use crate::parser::ast::{AttributeGroup, Expr, ExprKind, TypeExpr};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, ProducerBinding, TypeExpr};
 use crate::span::Span;
 
 use super::PhpType;
@@ -91,6 +91,15 @@ impl FunctionSig {
             Some(ty) => super::constant_binding::bind_value(value, &ty),
             None => super::constant_binding::bind_value(value, &PhpType::Mixed),
         })
+    }
+
+    /// Selects the producer used by Reflection after any declaration-time literal folding.
+    pub(crate) fn reflection_default_expr(&self, index: usize) -> Option<Expr> {
+        let prepared = self.default_value(index)?;
+        if prepared.producer_binding == Some(ProducerBinding::IntegerToFloat) {
+            return self.defaults[index].clone();
+        }
+        Some(prepared)
     }
 
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.

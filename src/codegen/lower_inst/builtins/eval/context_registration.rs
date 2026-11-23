@@ -153,9 +153,7 @@ pub(super) fn register_eval_native_user_constants(
         }
         let normalized = if matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::ArrayLiteralMixed(_)) {
-            let context = crate::codegen::const_default_values::ConstDefaultContext {
-                module: ctx.module, current_class: None,
-            };
+            let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, None);
             crate::codegen::const_default_values::resolve_const_default(&value, &context)
                 .and_then(crate::codegen::const_default_values::resolved_literal_default)
         } else { None };

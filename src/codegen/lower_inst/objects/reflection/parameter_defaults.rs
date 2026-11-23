@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Applies declaration-time int-to-float binding only to defaults PHP can fold without constants.
+pub(super) fn reflection_folded_integer_default(
+    source: &Expr,
+    ty: &PhpType,
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+) -> Option<ReflectionParameterDefaultValue> {
+    if !ty.coerces_integer_to_float() { return None; }
+    crate::optimize::with_expression_semantics(ctx.module.semantic_profile, source.source_profile, || {
+        let mut source = source.clone();
+        source.producer_binding = None;
+        let mut folded = crate::optimize::fold_constant_expression(source);
+        crate::types::deferred_defaults::prune_literal_branches(&mut folded);
+        let folded = crate::optimize::fold_constant_expression(folded);
+        let value = crate::codegen::const_default_values::resolve_literal_expression(
+            &folded, ctx.module, (!current_class.is_empty()).then_some(current_class),
+        )?;
+        let ExprKind::IntLiteral(value) = value else { return None; };
+        Some(ReflectionParameterDefaultValue::Float(value as f64))
+    })
+}
+
 /// Converts a supported parameter default expression into Reflection metadata.
 pub(super) fn reflection_parameter_default_value(
     ctx: &FunctionContext<'_>,
@@ -43,10 +65,7 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_literal_parameter_default_value(default, ctx.module.semantic_profile) {
         return Ok(Some(value));
     }
-    let context = crate::codegen::const_default_values::ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
+    let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, (!current_class.is_empty()).then_some(current_class));
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
         .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
@@ -87,10 +106,7 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(value) = reflection_literal_parameter_default_non_object_value(default, ctx.module.semantic_profile) {
         return Ok(Some(value));
     }
-    let context = crate::codegen::const_default_values::ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
+    let context = crate::codegen::const_default_values::ConstDefaultContext::new(ctx.module, (!current_class.is_empty()).then_some(current_class));
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
         .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {

@@ -79,10 +79,7 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
     current_class: Option<&str>,
     sig: &FunctionSig,
 ) -> InvokerDefaults {
-    let context = ConstDefaultContext {
-        module,
-        current_class,
-    };
+    let context = ConstDefaultContext::new(module, current_class);
     sig.defaults
         .iter()
         .enumerate()

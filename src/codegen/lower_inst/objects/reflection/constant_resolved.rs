@@ -21,10 +21,7 @@ pub(super) fn reflection_resolved_constant_value(
     current_class: &str,
     expr: &Expr,
 ) -> Option<ReflectionConstantValue> {
-    let context = ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
+    let context = ConstDefaultContext::new(ctx.module, (!current_class.is_empty()).then_some(current_class));
     reflection_constant_from_resolved(const_default_values::resolve_const_default(expr, &context)?)
 }
 
