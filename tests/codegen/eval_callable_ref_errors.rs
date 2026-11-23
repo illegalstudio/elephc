@@ -72,18 +72,32 @@ try {
 
 /// Checks one catchable AOT callable argument error through the uncaught reporter.
 fn assert_aot_arg_prep_type_error(label: &str, source: &str) {
+    assert_uncaught_arg_prep_type_error(label, "Value does not satisfy ", source);
+}
+
+/// Checks the PHP argument diagnostic when the AOT function signature is available.
+fn assert_aot_function_arg_prep_type_error(
+    label: &str,
+    callee: &str,
+    expected_type: &str,
+    source: &str,
+) {
+    let message = format!(
+        "{callee}(): Argument #2 ($need) must be of type {expected_type}, int given"
+    );
+    assert_uncaught_arg_prep_type_error(label, &message, source);
+}
+
+/// Checks that argument preparation reports the expected error without entering the callee.
+fn assert_uncaught_arg_prep_type_error(label: &str, message: &str, source: &str) {
     let out = compile_and_run_capture(source);
     assert!(
         !out.success,
         "{label}: expected an uncaught TypeError, stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert!(
-        out.stdout
-            .contains("Fatal error: Uncaught TypeError: Value does not satisfy "),
-        "{label}: stdout did not contain the nominal TypeError: {}",
-        out.stdout
-    );
+    let expected = format!("Fatal error: Uncaught TypeError: {message}");
+    assert!(out.stdout.contains(&expected), "{label}: expected {expected:?}, stdout={:?}", out.stdout);
     assert!(!out.stdout.contains("bad"), "{label}: method body ran");
     assert!(
         !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
@@ -95,8 +109,10 @@ fn assert_aot_arg_prep_type_error(label: &str, source: &str) {
 /// Verifies string callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_string_callable() {
-    assert_aot_arg_prep_type_error(
+    assert_aot_function_arg_prep_type_error(
         "string callable",
+        "eval_aot_function_string_prep_fatal_bridge",
+        "EvalAotFunctionStringPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionStringPrepFatalNeed {}
 function eval_aot_function_string_prep_fatal_bridge(int &$value, EvalAotFunctionStringPrepFatalNeed $need): int {
@@ -115,8 +131,10 @@ echo "bad";');
 /// Verifies first-class callable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_first_class_callable() {
-    assert_aot_arg_prep_type_error(
+    assert_aot_function_arg_prep_type_error(
         "first-class callable",
+        "eval_aot_function_first_prep_fatal_bridge",
+        "EvalAotFunctionFirstPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionFirstPrepFatalNeed {}
 function eval_aot_function_first_prep_fatal_bridge(int &$value, EvalAotFunctionFirstPrepFatalNeed $need): int {
@@ -135,8 +153,10 @@ echo "bad";');
 /// Verifies Closure::fromCallable argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_closure_from_callable() {
-    assert_aot_arg_prep_type_error(
+    assert_aot_function_arg_prep_type_error(
         "Closure::fromCallable",
+        "eval_aot_function_closure_prep_fatal_bridge",
+        "EvalAotFunctionClosurePrepFatalNeed",
         r#"<?php
 class EvalAotFunctionClosurePrepFatalNeed {}
 function eval_aot_function_closure_prep_fatal_bridge(int &$value, EvalAotFunctionClosurePrepFatalNeed $need): int {
@@ -155,8 +175,10 @@ echo "bad";');
 /// Verifies call_user_func_array argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack_call_user_func_array() {
-    assert_aot_arg_prep_type_error(
+    assert_aot_function_arg_prep_type_error(
         "call_user_func_array",
+        "eval_aot_function_array_prep_fatal_bridge",
+        "EvalAotFunctionArrayPrepFatalNeed",
         r#"<?php
 class EvalAotFunctionArrayPrepFatalNeed {}
 function eval_aot_function_array_prep_fatal_bridge(int &$value, EvalAotFunctionArrayPrepFatalNeed $need): int {
