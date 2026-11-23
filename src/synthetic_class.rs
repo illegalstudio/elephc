@@ -1524,6 +1524,8 @@ pub struct MethodBuilder {
     visibility: Visibility,
     is_static: bool,
     is_final: bool,
+    /// Declaration-level attribute groups (`#[\Deprecated(...)]`), emitted verbatim.
+    attributes: Vec<AttributeGroup>,
     signature: Signature,
     /// Attribute groups per parameter, aligned with `signature.params` and grown lazily by
     /// `param_attr`. Left empty when no parameter carries one, so the common method pays
@@ -1538,12 +1540,52 @@ pub fn method(name: &str) -> MethodBuilder {
         visibility: Visibility::Public,
         is_static: false,
         is_final: false,
+        attributes: Vec::new(),
         signature: Signature::default(),
         param_attributes: Vec::new(),
     }
 }
 
+/// Builds one `#[\Deprecated(since: '...', message: '...')]` group with exactly the
+/// argument shape the parser produces for that source form: a fully qualified name and
+/// two `NamedArg`s.
+pub fn deprecated_since_attribute(since: &str, message: &str) -> AttributeGroup {
+    let named = |name: &str, value: &str| {
+        Expr::new(
+            ExprKind::NamedArg {
+                name: name.to_string(),
+                value: Box::new(e_str(value)),
+            },
+            Span::dummy(),
+        )
+    };
+    AttributeGroup {
+        attributes: vec![Attribute {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["Deprecated".to_string()]),
+            args: vec![named("since", since), named("message", message)],
+            span: Span::dummy(),
+        }],
+        span: Span::dummy(),
+    }
+}
+
 impl MethodBuilder {
+    /// Attaches a `#[\Deprecated(since: ..., message: ...)]` declaration attribute.
+    pub fn deprecated(mut self, since: &str, message: &str) -> Self {
+        self.attributes.push(deprecated_since_attribute(since, message));
+        self
+    }
+
+    /// Attaches the `#[\Deprecated(...)]` marker only when `condition` holds, for a
+    /// version-gated prelude declaration.
+    pub fn deprecated_if(self, condition: bool, since: &str, message: &str) -> Self {
+        if condition {
+            self.deprecated(since, message)
+        } else {
+            self
+        }
+    }
+
     /// Attaches a PHP 8 attribute to the parameter added LAST (`#[\SensitiveParameter] $pw`).
     ///
     /// Written as a separate call rather than an argument to every `param*` because a
@@ -1741,7 +1783,7 @@ impl MethodBuilder {
             by_ref_return: false,
             body: Vec::new(),
             span: Span::dummy(),
-            attributes: Vec::new(),
+            attributes: self.attributes,
         }
     }
 
@@ -1781,7 +1823,7 @@ impl MethodBuilder {
             by_ref_return: false,
             body,
             span: Span::dummy(),
-            attributes: Vec::new(),
+            attributes: self.attributes,
         }
     }
 }
@@ -1789,6 +1831,8 @@ impl MethodBuilder {
 /// Builder for one synthetic free function.
 pub struct FunctionBuilder {
     name: String,
+    /// Declaration-level attribute groups (`#[\Deprecated(...)]`), emitted verbatim.
+    attributes: Vec<AttributeGroup>,
     signature: Signature,
 }
 
@@ -1796,6 +1840,7 @@ pub struct FunctionBuilder {
 pub fn function(name: &str) -> FunctionBuilder {
     FunctionBuilder {
         name: name.to_string(),
+        attributes: Vec::new(),
         signature: Signature::default(),
     }
 }
@@ -1890,6 +1935,22 @@ impl FunctionBuilder {
         self
     }
 
+    /// Attaches a `#[\Deprecated(since: ..., message: ...)]` declaration attribute.
+    pub fn deprecated(mut self, since: &str, message: &str) -> Self {
+        self.attributes.push(deprecated_since_attribute(since, message));
+        self
+    }
+
+    /// Attaches the `#[\Deprecated(...)]` marker only when `condition` holds, for a
+    /// version-gated prelude declaration.
+    pub fn deprecated_if(self, condition: bool, since: &str, message: &str) -> Self {
+        if condition {
+            self.deprecated(since, message)
+        } else {
+            self
+        }
+    }
+
     /// Leaves unread parameters UNCONSUMED, the free-function twin of
     /// `MethodBuilder::keep_unread_params` (same reason: parse parity for a transcription).
     pub fn keep_unread_params(mut self) -> Self {
@@ -1909,7 +1970,7 @@ impl FunctionBuilder {
         // tail when there is one, so the vector is one longer than `params` for a variadic.
         let param_attributes =
             vec![Vec::new(); params.len() + usize::from(variadic_name.is_some())];
-        Stmt::new(
+        Stmt::with_attributes(
             StmtKind::FunctionDecl {
                 name: self.name,
                 // Synthetic declarations are already monomorphic: a builder emits one concrete
@@ -1925,6 +1986,7 @@ impl FunctionBuilder {
                 body,
             },
             Span::dummy(),
+            self.attributes,
         )
     }
 }

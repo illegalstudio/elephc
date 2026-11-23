@@ -140,11 +140,28 @@ pub(crate) fn extract_deprecation(groups: &[crate::parser::ast::AttributeGroup])
             if !matches_global_builtin_attribute(attr, "Deprecated") {
                 continue;
             }
-            let reason = attr.args.iter().find_map(|expr| match &expr.kind {
-                ExprKind::StringLiteral(s) => Some(s.clone()),
-                _ => None,
-            });
-            return Some(reason.unwrap_or_default());
+            // php-src spells its 8.6 reasons as
+            // `#[\Deprecated(since: '8.6', message: '...')]`, while 8.4-era
+            // declarations still use the positional `#[\Deprecated('...')]`
+            // form; accept both and prefer the named message.
+            let mut positional = None;
+            let mut message = None;
+            for expr in &attr.args {
+                match &expr.kind {
+                    ExprKind::StringLiteral(s) => {
+                        if positional.is_none() {
+                            positional = Some(s.clone());
+                        }
+                    }
+                    ExprKind::NamedArg { name, value } if name == "message" => {
+                        if let ExprKind::StringLiteral(s) = &value.kind {
+                            message = Some(s.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return Some(message.or(positional).unwrap_or_default());
         }
     }
     None

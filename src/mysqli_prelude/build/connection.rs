@@ -1942,6 +1942,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         )
         .method(
             method("stmt_init")
+                // PHP 8.6 deprecates the two-step form in favour of prepare().
+                .deprecated_if(php_version >= PhpVersion::Php86, "8.6", "use mysqli::prepare() instead")
                 .returns(t_union(vec![t_class("mysqli_stmt"), TypeExpr::False]))
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
@@ -1950,6 +1952,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         )
         .method(
             method("get_charset")
+                // PHP 8.6 deprecates the mysqlnd charset description.
+                .deprecated_if(php_version >= PhpVersion::Php86, "8.6", "did you mean mysqli_character_set_name()?")
                 .returns(t_mixed())
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),

@@ -633,6 +633,9 @@ function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null
 
 // -- elephc PHP >= 8.2 mysqli execute_query end --
 
+// -- elephc PHP >= 8.6 mysqli deprecations begin --
+#[\Deprecated(since: '8.6', message: 'use mysqli_prepare() instead')]
+// -- elephc PHP >= 8.6 mysqli deprecations end --
 function mysqli_stmt_init(mixed $mysql): mysqli_stmt|false {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_stmt_init(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
@@ -852,6 +855,9 @@ function mysqli_stmt_sqlstate(mixed $statement): string {
     return $statement->sqlstate;
 }
 
+// -- elephc PHP >= 8.6 mysqli deprecations begin --
+#[\Deprecated(since: '8.6', message: 'did you mean mysqli_character_set_name()?')]
+// -- elephc PHP >= 8.6 mysqli deprecations end --
 function mysqli_get_charset(mixed $mysql): mixed {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_get_charset(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");

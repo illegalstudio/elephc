@@ -41,6 +41,27 @@ fn check_mysqli(src: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs the same pipeline as [`check_mysqli`] for an explicit profile and returns the
+/// checker result, so warnings (the PHP 8.6 deprecations) can be inspected.
+fn check_mysqli_full(
+    src: &str,
+    version: elephc::php_version::PhpVersion,
+) -> elephc::types::CheckResult {
+    elephc::codegen::set_compile_profile(version, false);
+    let tokens = tokenize(src).expect("mysqli fixture must tokenize");
+    let ast = parse(&tokens).expect("mysqli fixture must parse");
+    let defines: HashSet<String> = HashSet::new();
+    let ast = elephc::conditional::apply(ast, &defines);
+    let ast = elephc::autoload::collect_aliases(ast).expect("alias collection must succeed");
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::mysqli_prelude::inject_if_used(ast, false, version, &mut prelude_inventory);
+    let ast = elephc::name_resolver::resolve(ast).expect("name resolution must succeed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("mysqli fixture must type-check");
+    elephc::codegen::set_compile_profile(elephc::php_version::PhpVersion::default(), false);
+    result
+}
+
 /// Asserts that `src` fails to compile and that the error names `needle`.
 fn expect_mysqli_error(src: &str, needle: &str) {
     let msg = check_mysqli(src)
@@ -198,5 +219,53 @@ fn warning_constructor_is_private() {
 $w = new mysqli_warning();
 "#,
         "mysqli_warning",
+    );
+}
+
+/// PHP 8.6 deprecates the mysqlnd charset description
+/// (`mysqli::get_charset()` / `mysqli_get_charset()`) and the two-step
+/// statement constructor (`mysqli::stmt_init()` / `mysqli_stmt_init()`), in
+/// both their method and procedural forms; PHP 8.5 must stay silent.
+#[test]
+fn stmt_init_and_get_charset_are_deprecated_php86() {
+    use elephc::php_version::PhpVersion;
+
+    let source = r#"<?php
+$db = new mysqli();
+$db->stmt_init();
+$db->get_charset();
+mysqli_stmt_init($db);
+mysqli_get_charset($db);
+"#;
+    let result = check_mysqli_full(source, PhpVersion::Php86);
+    for needle in [
+        "Call to deprecated method: mysqli::stmt_init() — use mysqli::prepare() instead",
+        "Call to deprecated method: mysqli::get_charset() — did you mean mysqli_character_set_name()?",
+        "Call to deprecated function: mysqli_stmt_init() — use mysqli_prepare() instead",
+        "Call to deprecated function: mysqli_get_charset() — did you mean mysqli_character_set_name()?",
+    ] {
+        assert!(
+            result.warnings.iter().any(|warning| warning.message == needle),
+            "missing {needle}: {:?}",
+            result
+                .warnings
+                .iter()
+                .map(|warning| warning.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let older = check_mysqli_full(source, PhpVersion::Php85);
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("deprecated")),
+        "PHP 8.5 must not deprecate: {:?}",
+        older
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect::<Vec<_>>()
     );
 }

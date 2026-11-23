@@ -37,6 +37,9 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
         // MYSQLI_OPT_COMPRESS and mysqli::quote_string / mysqli_quote_string are PHP 8.6+.
         remove_version_blocks(&mut source, "PHP >= 8.6 mysqli constants");
         remove_version_blocks(&mut source, "PHP >= 8.6 mysqli quote_string");
+        // PHP 8.6 deprecates mysqli::stmt_init()/mysqli_stmt_init() and
+        // mysqli::get_charset()/mysqli_get_charset().
+        remove_version_blocks(&mut source, "PHP >= 8.6 mysqli deprecations");
     }
     if php_version < PhpVersion::Php84 {
         // MYSQLI_TYPE_VECTOR arrived in PHP 8.4, which also removed the

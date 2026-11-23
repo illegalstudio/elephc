@@ -32,9 +32,9 @@
 //! - One helper per declaration, never one expression for the whole surface: a
 //!   prelude built as a single nested builder expression overflows the stack.
 
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, Stmt};
 use crate::php_version::PhpVersion;
-use crate::synthetic_class::internal_declarations;
+use crate::synthetic_class::{deprecated_since_attribute, internal_declarations};
 
 mod connection;
 mod constants;
@@ -43,6 +43,16 @@ mod exception;
 mod procedural;
 mod result;
 mod statement;
+
+/// Applies the PHP 8.6 `#[\Deprecated(since: '8.6', message: ...)]` marker to a built
+/// free-function declaration when the compiled profile is 8.6 or later.
+fn deprecated_from_86(mut decl: Stmt, php_version: PhpVersion, message: &str) -> Stmt {
+    if php_version >= PhpVersion::Php86 {
+        decl.attributes
+            .push(deprecated_since_attribute("8.6", message));
+    }
+    decl
+}
 
 /// Builds the whole mysqli surface for `php_version`, one declaration per helper.
 pub(crate) fn mysqli_declarations(php_version: PhpVersion) -> Program {
@@ -290,7 +300,11 @@ pub(crate) fn mysqli_declarations(php_version: PhpVersion) -> Program {
             declarations.push(procedural::decl_fn_mysqli_execute_query());
         }
         declarations.extend([
-            procedural::decl_fn_mysqli_stmt_init(),
+            deprecated_from_86(
+                procedural::decl_fn_mysqli_stmt_init(),
+                php_version,
+                "use mysqli_prepare() instead",
+            ),
             procedural::decl_fn_mysqli_stmt_bind_param(),
             procedural::decl_fn_mysqli_stmt_bind_result(),
             procedural::decl_fn_mysqli_stmt_execute(),
@@ -319,7 +333,11 @@ pub(crate) fn mysqli_declarations(php_version: PhpVersion) -> Program {
             procedural::decl_fn_mysqli_stmt_field_count(),
             procedural::decl_fn_mysqli_stmt_insert_id(),
             procedural::decl_fn_mysqli_stmt_sqlstate(),
-            procedural::decl_fn_mysqli_get_charset(),
+            deprecated_from_86(
+                procedural::decl_fn_mysqli_get_charset(),
+                php_version,
+                "did you mean mysqli_character_set_name()?",
+            ),
             procedural::decl_fn_mysqli_thread_safe(),
         ]);
         declarations

@@ -1243,6 +1243,9 @@ class mysqli {
         return $_statement;
     }
 
+    // -- elephc PHP >= 8.6 mysqli deprecations begin --
+    #[\Deprecated(since: '8.6', message: 'use mysqli::prepare() instead')]
+    // -- elephc PHP >= 8.6 mysqli deprecations end --
     public function stmt_init(): mysqli_stmt|false {
         // The two-step form: an unprepared statement to be prepared with
         // $stmt->prepare($sql) (or mysqli_stmt_prepare()).
@@ -1250,6 +1253,9 @@ class mysqli {
         return new mysqli_stmt($this);
     }
 
+    // -- elephc PHP >= 8.6 mysqli deprecations begin --
+    #[\Deprecated(since: '8.6', message: 'did you mean mysqli_character_set_name()?')]
+    // -- elephc PHP >= 8.6 mysqli deprecations end --
     public function get_charset(): mixed {
         // php describes the connection charset from mysqlnd's compiled-in table:
         // the first entry for the session's charset name (its default collation,
