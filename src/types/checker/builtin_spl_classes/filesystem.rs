@@ -388,8 +388,18 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             spl_file_object_construct_body(var_expr("filename"), var_expr("mode")),
         ),
-        method_with_body("current", Vec::new(), Some(mixed_type()), spl_file_object_current_body()),
-        method_with_body("key", Vec::new(), Some(mixed_type()), return_body(file_line_number_expr())),
+        method_with_body(
+            "current",
+            Vec::new(),
+            // PHP 8.6's tentative return type: a line, a CSV row in READ_CSV mode, or false.
+            Some(TypeExpr::Union(vec![
+                TypeExpr::Str,
+                TypeExpr::Array(Box::new(mixed_type())),
+                TypeExpr::False,
+            ])),
+            spl_file_object_current_body(),
+        ),
+        method_with_body("key", Vec::new(), Some(TypeExpr::Int), return_body(file_line_number_expr())),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), spl_file_object_next_body()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), spl_file_object_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
@@ -547,10 +557,18 @@ fn directory_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "current",
             Vec::new(),
-            Some(mixed_type()),
+            // PHP 8.6 widens the tentative return type to include the string and
+            // SplFileInfo forms a subclass can select through the filesystem flags.
+            Some(TypeExpr::Union(vec![TypeExpr::Str, named_type("SplFileInfo"), named_type("static")])),
             return_body(this_expr()),
         ),
-        method_with_body("key", Vec::new(), Some(mixed_type()), return_body(directory_position_expr())),
+        method_with_body(
+            "key",
+            Vec::new(),
+            // PHP 8.6 corrects the tentative return type from `mixed` to `int|string`.
+            Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str])),
+            return_body(directory_position_expr()),
+        ),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), directory_next_body()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), directory_rewind_body()),
         method_with_body("seek", vec![param("offset", TypeExpr::Int)], Some(TypeExpr::Void), directory_seek_body()),
@@ -573,8 +591,14 @@ fn filesystem_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
         ),
-        method_with_body("current", Vec::new(), Some(mixed_type()), filesystem_current_body()),
-        method_with_body("key", Vec::new(), Some(mixed_type()), filesystem_key_body()),
+        method_with_body(
+            "current",
+            Vec::new(),
+            // PHP 8.6 widens the tentative return type to the string/SplFileInfo forms.
+            Some(TypeExpr::Union(vec![TypeExpr::Str, named_type("SplFileInfo"), named_type("static")])),
+            filesystem_current_body(),
+        ),
+        method_with_body("key", Vec::new(), Some(TypeExpr::Str), filesystem_key_body()),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(filesystem_flags_expr())),
         method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), filesystem_set_flags_body()),
     ]

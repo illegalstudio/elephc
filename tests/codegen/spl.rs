@@ -14,6 +14,8 @@ mod autoload;
 mod autoload_span_identity;
 #[path = "spl/classes.rs"]
 mod classes;
+#[path = "spl/iterator_types_php86.rs"]
+mod iterator_types_php86;
 #[path = "spl/decorators.rs"]
 mod decorators;
 #[path = "spl/interfaces.rs"]
