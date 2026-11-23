@@ -69,3 +69,58 @@ foreach ($q as $name => $info) {
         "BadMethodCallException:Cannot create a directory in magic \".phar\" directory\nBadMethodCallException:Cannot create a directory in magic \".phar\" directory\nBadMethodCallException:Cannot create a directory in magic \".phar\" directory\nok\nok\n.pharma/|dir/|"
     );
 }
+
+/// The four `mungServer()` validation failures and the accepted names, including a
+/// reference element (which PHP dereferences before validating).
+#[test]
+fn test_phar_mung_server_validation_php86() {
+    let out = run86(
+        r#"<?php
+try {
+    Phar::mungServer([]);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+try {
+    Phar::mungServer(["PHP_SELF", "REQUEST_URI", "SCRIPT_NAME", "SCRIPT_FILENAME", "PHP_SELF"]);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+try {
+    Phar::mungServer([42]);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+try {
+    Phar::mungServer(["NOPE"]);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+try {
+    Phar::mungServer(["PHP_SELF", "SCRIPT_FILENAME"]);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+$refs = ["REQUEST_URI"];
+$ref = &$refs[0];
+try {
+    Phar::mungServer($refs);
+    echo "ok\n";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "\n";
+}
+"#,
+    );
+    let suffix = "passed to Phar::mungServer(), expecting an array of any of these strings: PHP_SELF, REQUEST_URI, SCRIPT_FILENAME, SCRIPT_NAME";
+    assert_eq!(
+        out,
+        format!(
+            "PharException:No values {suffix}\nPharException:Too many values {suffix}\nPharException:Non-string value {suffix}\nPharException:Invalid value {suffix}\nok\nok\n"
+        )
+    );
+}

@@ -198,6 +198,13 @@ fn phar_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             phar_add_empty_dir_body(),
         ),
+        class_method_with_body(
+            "mungServer",
+            true,
+            vec![param("variables", array_type())],
+            Some(TypeExpr::Void),
+            phar_mung_server_body(),
+        ),
         method_with_body(
             "compressFiles",
             vec![param("compression", TypeExpr::Int)],
@@ -723,6 +730,54 @@ fn phar_add_empty_dir_body() -> Vec<crate::parser::ast::Stmt> {
     ];
     body.extend(phar_track_entry_body(var_expr("directory")));
     body
+}
+
+/// Builds `mungServer()` with php-src's validation and error messages.
+///
+/// Reference entries are dereferenced by PHP's by-value `foreach`, so a referenced string
+/// is accepted exactly like a plain one, matching `ZVAL_DEREF` in `phar_object.c`.
+fn phar_mung_server_body() -> Vec<crate::parser::ast::Stmt> {
+    let suffix = "passed to Phar::mungServer(), expecting an array of any of these strings: PHP_SELF, REQUEST_URI, SCRIPT_FILENAME, SCRIPT_NAME";
+    let fail = |kind: &str| throw_stmt(new_object_expr(
+        "PharException",
+        vec![string_expr(&format!("{kind} {suffix}"))],
+    ));
+    vec![
+        if_stmt(
+            binary_expr(count_expr(var_expr("variables")), BinOp::StrictEq, int_expr(0)),
+            vec![fail("No values")],
+            None,
+        ),
+        if_stmt(
+            binary_expr(count_expr(var_expr("variables")), BinOp::Gt, int_expr(4)),
+            vec![fail("Too many values")],
+            None,
+        ),
+        foreach_stmt(var_expr("variables"), None, "value", vec![
+            if_stmt(
+                not_expr(function_call("is_string", vec![var_expr("value")])),
+                vec![fail("Non-string value")],
+                None,
+            ),
+            if_stmt(
+                binary_expr(
+                    binary_expr(
+                        binary_expr(
+                            binary_expr(var_expr("value"), BinOp::StrictNotEq, string_expr("PHP_SELF")),
+                            BinOp::And,
+                            binary_expr(var_expr("value"), BinOp::StrictNotEq, string_expr("REQUEST_URI")),
+                        ),
+                        BinOp::And,
+                        binary_expr(var_expr("value"), BinOp::StrictNotEq, string_expr("SCRIPT_NAME")),
+                    ),
+                    BinOp::And,
+                    binary_expr(var_expr("value"), BinOp::StrictNotEq, string_expr("SCRIPT_FILENAME")),
+                ),
+                vec![fail("Invalid value")],
+                None,
+            ),
+        ]),
+    ]
 }
 
 /// Builds `compressFiles()` as an archive-wide native PHAR compression rewrite.

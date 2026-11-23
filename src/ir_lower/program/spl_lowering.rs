@@ -18,12 +18,6 @@ pub(super) fn lower_builtin_spl_method(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
-    if class_method_already_lowered(module, class_name, method_key, false)
-        || !is_supported_builtin_spl_method(class_name, method_key)
-        || runtime_intrinsic_method_has_wrapper(class_name, method_key, false)
-    {
-        return;
-    }
     let Some(class_info) = check_result.classes.get(class_name) else {
         return;
     };
@@ -34,6 +28,15 @@ pub(super) fn lower_builtin_spl_method(
     else {
         return;
     };
+    // A static builtin method is lowered with `flags.is_static = true`; checking the
+    // instance flag here would never see it and would re-lower it on every discovery
+    // round, growing `class_methods` forever (the Phar::mungServer hang).
+    if class_method_already_lowered(module, class_name, method_key, method.is_static)
+        || !is_supported_builtin_spl_method(class_name, method_key)
+        || runtime_intrinsic_method_has_wrapper(class_name, method_key, method.is_static)
+    {
+        return;
+    }
     function::lower_class_method(
         class_name,
         &method.name,

@@ -284,6 +284,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "offsetunset"
                 | "addfromstring"
                 | "addemptydir"
+                | "mungserver"
                 | "__tostring"
                 | "getpath"
                 | "getpathname"
