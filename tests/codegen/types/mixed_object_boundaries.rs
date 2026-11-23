@@ -679,3 +679,55 @@ try { cT($z, $z = m("str")); } catch (TypeError $e) { echo msg($e), "\n"; }
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the caller-side `callable` check lets go of the value it read once the check is
+/// done: an invokable object passed as `mixed` dies when its last visible owner is unset, as
+/// in php, whether the check accepts it (positional or named), rejects it, or guards a return.
+#[test]
+fn test_callable_parameter_check_releases_its_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T {}
+class Inv {
+    public function __construct(private string $name) {}
+    public function __invoke(string $s): int { return strlen($s); }
+    public function __destruct() { echo "drop ", $this->name, "\n"; }
+}
+function m(mixed $v): mixed { return $v; }
+function cT(callable $c, ?T $b) { echo "cT ", $c("ab"), "\n"; }
+function back(mixed $v): callable { return $v; }
+function go() {
+    $a = m(new Inv("a"));
+    cT($a, m(null));
+    unset($a);
+    echo "a unset\n";
+    $b = m(new Inv("b"));
+    cT(b: m(null), c: $b);
+    unset($b);
+    echo "b unset\n";
+    $c = m(new Inv("c"));
+    try { cT($c, m("str")); } catch (TypeError) { echo "TypeError\n"; }
+    unset($c);
+    echo "c unset\n";
+    $d = back(m(new Inv("d")));
+    echo "d ", $d("abc"), "\n";
+    unset($d);
+    echo "d unset\n";
+}
+go();
+echo "end\n";
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "cT 2\n", "drop a\n", "a unset\n",
+            "cT 2\n", "drop b\n", "b unset\n",
+            "TypeError\n", "drop c\n", "c unset\n",
+            "d 3\n", "drop d\n", "d unset\n",
+            "end\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

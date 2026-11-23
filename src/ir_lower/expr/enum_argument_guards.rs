@@ -382,7 +382,8 @@ pub(crate) fn guard_declared_callable_return(
 /// Checks `value` against a declared `callable` (or a union with `callable`), raising a
 /// `TypeError` whose message is `prefix`, the value's `get_debug_type()` spelling, then `suffix`.
 ///
-/// The value keeps its owner; the check reads a retained copy in a hidden temp. An owning
+/// The value keeps its owner; the check reads a retained copy in a hidden temp and releases
+/// it on both edges, so the check never outlives the value's last visible owner. An owning
 /// temporary (a property read, a call result) is pinned across the check, so the throw
 /// releases it; the ok path retires the pin without a release and the caller keeps it.
 pub(crate) fn guard_declared_callable_value(
@@ -397,8 +398,11 @@ pub(crate) fn guard_declared_callable_value(
     let temp = ctx.declare_hidden_temp(value_type.clone());
     let copy = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     store_value_into_temp(ctx, &temp, value_type, copy, span);
-    let checked = Expr::new(ExprKind::Variable(temp), span);
-    let Some(accepted) = accepts_type(declared, &checked, span) else { return; };
+    let checked = Expr::new(ExprKind::Variable(temp.clone()), span);
+    let Some(accepted) = accepts_type(declared, &checked, span) else {
+        release_checked_copy(ctx, &temp, span);
+        return;
+    };
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     let accepted = lower_expr(ctx, &accepted);
     let ok = ctx.builder.create_named_block("callable.value.ok", Vec::new());
@@ -414,9 +418,24 @@ pub(crate) fn guard_declared_callable_value(
         concat(runtime_debug_type(&checked, span), literal(suffix.to_string()), span),
         span,
     );
-    throw_message(ctx, "TypeError", message, span);
+    let exception = lower_expr(ctx, &Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("TypeError"), args: vec![message],
+    }, span));
+    release_checked_copy(ctx, &temp, span);
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
     ctx.builder.position_at_end(ok);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    release_checked_copy(ctx, &temp, span);
+}
+
+/// Releases the copy a check read and clears its slot, so the checked value dies when its
+/// owner lets go of it rather than when the frame returns.
+fn release_checked_copy(ctx: &mut LoweringContext<'_, '_>, temp: &str, span: Span) {
+    let slot = ctx.local_slots[temp];
+    ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span));
+    ctx.emit_void(Op::UnsetLocal, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::UnsetLocal.default_effects(), Some(span));
 }
 
 /// Checks a by-reference parameter's value against its declared union on entry to the callee,
