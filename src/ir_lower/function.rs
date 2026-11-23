@@ -2042,6 +2042,34 @@ fn lower_closure_function_with_signature(
     signature
 }
 
+/// Reports functions whose lowering is slow: `ELEPHC_LOWER_TIMES=<ms>` prints every body that takes
+/// at least that long (closures count in their enclosing body), so a lowering blow-up names the
+/// PHP function that triggers it. Costs one environment lookup per body otherwise.
+struct LoweringTiming {
+    running: Option<(String, u128, std::time::Instant)>,
+}
+
+impl LoweringTiming {
+    /// Starts timing `name` when the report is asked for.
+    fn start(name: &str) -> Self {
+        let running = std::env::var("ELEPHC_LOWER_TIMES").ok().map(|limit| {
+            (name.to_string(), limit.parse().unwrap_or(1000), std::time::Instant::now())
+        });
+        Self { running }
+    }
+}
+
+impl Drop for LoweringTiming {
+    fn drop(&mut self) {
+        if let Some((name, limit, started)) = self.running.take() {
+            let elapsed = started.elapsed().as_millis();
+            if elapsed >= limit {
+                eprintln!("[lower] {elapsed} ms {name}");
+            }
+        }
+    }
+}
+
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     source_catalog: Option<std::sync::Arc<crate::ir::SourceCatalog>>,
