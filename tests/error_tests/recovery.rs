@@ -719,7 +719,7 @@ fn test_class_member_recovery_skips_braces_inside_initializers() {
         parse_error_messages(
             "<?php class A { static const X = match (1) { default => 1 }; public function f() {} }",
         ),
-        vec!["Class constants cannot be declared static".to_string()],
+        vec!["Cannot use the static modifier on a class constant".to_string()],
     );
     for src in [
         "<?php class A { public static readonly int $p = match (1) { default => 1 }; function two(public int $x) {} }",
@@ -747,5 +747,31 @@ fn test_class_member_recovery_skips_braces_inside_initializers() {
             messages[1], "Cannot declare promoted property outside a constructor",
             "source: {src}, got {messages:?}"
         );
+    }
+}
+
+/// A misplaced or repeated member modifier is one error: recovery resumes after the member, so
+/// the constant's `=` and the class's `}` are not reported as follow-up errors (#2501, #2502).
+#[test]
+fn test_member_modifier_errors_do_not_cascade() {
+    for (src, message) in [
+        (
+            "<?php class A { static const X = 1; }\necho A::X, \"\\n\";",
+            "Cannot use the static modifier on a class constant",
+        ),
+        (
+            "<?php class A { readonly const X = 1; }",
+            "Cannot use the readonly modifier on a class constant",
+        ),
+        (
+            "<?php class A { abstract const X = 1; }",
+            "Cannot use the abstract modifier on a class constant",
+        ),
+        (
+            "<?php class A { public public $p; }",
+            "Multiple access type modifiers are not allowed",
+        ),
+    ] {
+        assert_eq!(parse_error_messages(src), vec![message.to_string()], "source: {src}");
     }
 }
