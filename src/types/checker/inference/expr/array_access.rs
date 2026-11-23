@@ -71,10 +71,16 @@ impl Checker {
                         if self.nonnull_array_read(name, index) {
                             // Codegen keeps the raw slot representation only for reads the fill
                             // proof proves in range; every other float read needs a boxed result.
-                            self.promotable_arrays.nonnull_read_sites.insert((
-                                self.current_loop_storage_scope.clone(),
-                                expr.span,
-                            ));
+                            let site =
+                                (self.current_loop_storage_scope.clone(), expr.span);
+                            self.promotable_arrays
+                                .nonnull_read_sites
+                                .insert(site.clone());
+                            // The read is re-executed by every enclosing consumer loop, so a
+                            // later removal must unmark it from each of their scopes.
+                            for scope in &mut self.active_fill_read_scopes {
+                                scope.insert(site.clone());
+                            }
                             return Ok((**elem_ty).clone());
                         }
                     }

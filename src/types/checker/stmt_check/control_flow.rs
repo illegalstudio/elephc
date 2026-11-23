@@ -953,6 +953,7 @@ impl Checker {
                 update,
                 body,
             } => {
+                let fill_scope_depth = self.active_fill_read_scopes.len();
                 let saved_nonnull_reads = self.nonnull_array_reads.take();
                 let mut wraps_matching_loop = false;
                 if let Some(fact) = self.filled_array_facts.clone() {
@@ -979,6 +980,7 @@ impl Checker {
                             counter: fact.counter,
                             arrays: fact.arrays,
                         });
+                        self.active_fill_read_scopes.push(HashSet::new());
                     }
                 }
                 if let Some(s) = init {
@@ -1047,6 +1049,7 @@ impl Checker {
                 // walk than on the first — and is restored on every exit, error paths included.
                 let outcome = self.check_for_tail(condition.as_ref(), update.as_deref(), body, env);
                 self.nonnull_array_reads = saved_nonnull_reads;
+                self.active_fill_read_scopes.truncate(fill_scope_depth);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 self.packed_loop_counter = saved_packed_counter;

@@ -428,6 +428,11 @@ pub(crate) struct Checker {
     /// Set while checking a `for` statement's own update. A pure counter advance there is loop
     /// control, not a proof-breaking body write.
     pub(crate) checking_loop_update: bool,
+    /// Read keys proved by each consumer loop currently being checked, outermost first.
+    ///
+    /// A removal clears only these: a loop that already finished cannot re-execute the read, so
+    /// a later call must not unmark it.
+    pub(crate) active_fill_read_scopes: Vec<HashSet<(String, crate::span::Span)>>,
     /// Whether the active local statement stream has crossed an `eval()` call.
     ///
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because

@@ -225,3 +225,33 @@ var_export($last);
 "#;
     assert_eq!(compile_and_run(source), "NULL");
 }
+
+/// A call after a completed fill-and-update loop must not unmark the reads that loop already
+/// executed: only consumer loops still being checked can see a later removal.
+#[test]
+fn test_later_call_keeps_completed_fill_reads_raw() {
+    let source = r#"<?php
+$count = 10 + $argc;
+$x = [];
+$v = [];
+for ($i = 0; $i < $count; $i++) {
+    $x[$i] = 0.0;
+    $v[$i] = 1.5;
+}
+for ($step = 0; $step < 3; $step++) {
+    for ($i = 0; $i < $count; $i++) {
+        $x[$i] = $x[$i] + $v[$i];
+    }
+}
+$n = count($x);
+$sum = 0;
+for ($i = 0; $i < $count; $i++) {
+    $sum += (int) $x[$i];
+}
+echo $sum, "|", $n, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "44|11\n");
+    let main = main_ir(source);
+    // The completed update loop keeps its two raw reads; the sum loop after the call boxes.
+    assert_eq!(main.matches("F64 php=float = array_get").count(), 2, "{main}");
+}

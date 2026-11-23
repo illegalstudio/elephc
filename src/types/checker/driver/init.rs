@@ -135,6 +135,7 @@ impl Checker {
             filled_array_facts: None,
             nonnull_array_reads: None,
             checking_loop_update: false,
+            active_fill_read_scopes: Vec::new(),
             eval_barrier_active: false,
             eval_native_callables_reachable: false,
             flow_typed_returns: HashMap::new(),

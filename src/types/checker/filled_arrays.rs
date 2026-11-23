@@ -178,15 +178,20 @@ impl Checker {
         }
     }
 
-    /// Ends the fill proof and unmarks reads it already proved.
+    /// Ends the fill proof and unmarks the reads active consumer loops already proved.
     ///
-    /// A removing statement invalidates the whole consumer loop, including reads that were
-    /// checked before it in the body: the loop re-executes them after the removal, so a read
-    /// marked non-null would return `0.0` for a key the previous iteration popped.
+    /// A removing statement invalidates the whole loop, including reads checked before it in the
+    /// body: the loop re-executes them after the removal. Only scopes still being checked are
+    /// unmarked — a loop that already finished cannot re-execute its read, so a later call must
+    /// not drop its raw slot access.
     fn clear_fill_proof(&mut self) {
+        for scope in &self.active_fill_read_scopes {
+            for site in scope {
+                self.promotable_arrays.nonnull_read_sites.remove(site);
+            }
+        }
         self.filled_array_facts = None;
         self.nonnull_array_reads = None;
-        self.promotable_arrays.nonnull_read_sites.clear();
     }
 }
 
