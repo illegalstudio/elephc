@@ -2426,7 +2426,7 @@ fn compute_predecessors(function: &Function) -> HashMap<BlockId, Vec<BlockId>> {
 }
 
 /// Returns all direct successor blocks for a terminator.
-fn successors(term: &Terminator) -> Vec<BlockId> {
+pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
     match term {
         Terminator::Br { target, .. } => vec![*target],
         Terminator::CondBr {

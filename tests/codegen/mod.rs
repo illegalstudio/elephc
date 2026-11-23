@@ -195,6 +195,7 @@ mod generators;
 mod dead_strip;
 mod locals_retype;
 mod local_definedness;
+mod diverging_operands;
 mod stack_guard;
 mod zval;
 

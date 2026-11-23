@@ -458,6 +458,10 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
     }
     match &expr.kind {
         ExprKind::Variable(name) => {
+            // A read that may find the variable unassigned lowers as a boxed `mixed`.
+            if crate::ir_lower::local_definedness::read_lowers_as_boxed_mixed(ctx, name) {
+                return PhpType::Mixed;
+            }
             let storage = local_values::projected_local_value_type(ctx, name, expr.span)
                 .unwrap_or_else(|| ctx.local_type(name));
             // A tagged local still has int/null alternatives. Keep them for the branch

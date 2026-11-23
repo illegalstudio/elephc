@@ -587,6 +587,11 @@ pub(super) fn lower_reflection_method_constructor_operands(
 /// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
+    // An operand that always throws (`clone $null->method()`) ended the block: nothing is left
+    // to copy, and its value has no object type to take a clone of.
+    if ctx.builder.insertion_block_is_terminated() {
+        return object;
+    }
     let object_ty = ctx.builder.value_php_type(object.value);
     if matches!(object_ty, PhpType::Callable) {
         return lower_closure_clone(ctx, inner, object, expr);

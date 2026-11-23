@@ -79,6 +79,25 @@ impl std::fmt::Debug for PhpType {
 }
 
 impl PhpType {
+    /// Whether a local of this type keeps a plain unboxed frame slot that cannot hold php's
+    /// NULL: scalars, strings, arrays and objects.
+    ///
+    /// A read of such a local that may find its binding missing is lowered as a boxed `mixed`
+    /// (see `ir_lower::local_definedness`), and the checker widens that read with `null`, so
+    /// both sides use this one predicate.
+    pub(crate) fn is_plain_binding_storage(&self) -> bool {
+        matches!(
+            self.codegen_repr(),
+            PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+        )
+    }
+
     /// Returns true when this nominal object type denotes PHP's built-in `Closure` class.
     ///
     /// Closure values use Elephc's callable descriptor representation even when flow

@@ -73,6 +73,10 @@ pub(super) fn check(
             }
             for arg in args {
                 check_unset_arg(checker, arg, env)?;
+                // The binding is gone from here on: a later read may find it missing.
+                if let ExprKind::Variable(name) = &arg.kind {
+                    checker.definitely_bound_locals.remove(name);
+                }
             }
             Ok(PhpType::Void)
         }

@@ -649,6 +649,10 @@ pub(crate) struct Checker {
     pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
+    /// How many loop statements (`while`, `do`, `for`, `foreach`) enclose the statement being
+    /// checked. A read inside one keeps its type when its binding may be missing: the loop
+    /// analysis unbinds far more names than a loop can leave undefined.
+    pub loop_stmt_depth: usize,
     /// Control-flow exits owned by the current function-like frame's active loops.
     loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
     /// Shared callable exception summaries for source-order try/catch flow.

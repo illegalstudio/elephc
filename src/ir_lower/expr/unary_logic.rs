@@ -190,7 +190,11 @@ pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
 pub(super) fn lower_error_suppress(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     ctx.emit_void(Op::ErrorSuppressBegin, Vec::new(), None, Op::ErrorSuppressBegin.default_effects(), Some(expr.span));
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::ErrorSuppressEnd, Vec::new(), None, Op::ErrorSuppressEnd.default_effects(), Some(expr.span));
+    // An operand that always throws (a call on a receiver known to be null) ends the block, and
+    // the unwinder restores the suppression level on its own: there is nothing left to close.
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.emit_void(Op::ErrorSuppressEnd, Vec::new(), None, Op::ErrorSuppressEnd.default_effects(), Some(expr.span));
+    }
     value
 }
 

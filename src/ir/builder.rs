@@ -810,6 +810,7 @@ impl<'f> Builder<'f> {
 
     /// Writes the terminator for the current block.
     pub fn terminate(&mut self, term: Terminator) {
+        self.leave_terminated_block();
         let block = self.current_block();
         let block = self.func.block_mut(block).expect("current block exists");
         assert!(
@@ -861,6 +862,7 @@ impl<'f> Builder<'f> {
         } else {
             self.definedness_flag_written_by(op, &operands, immediate.as_ref())
         };
+        self.leave_terminated_block();
         let block_id = self.current_block();
         self.assert_can_append(block_id);
         for operand in &operands {
@@ -1043,6 +1045,23 @@ impl<'f> Builder<'f> {
             "unknown EIR value {}",
             value.as_raw()
         );
+    }
+
+    /// Moves insertion to a fresh unreachable block when the current one already ended.
+    ///
+    /// An operand that always diverges (a call on a receiver known to be null, a `throw`) ends
+    /// its block, yet the expression around it is still lowered: the cast, the unary operator,
+    /// the argument list or the interpolation that consumed it emits its own instructions. They
+    /// can never run, so they land in a block no edge reaches, which the unreachable-block
+    /// cleanup drops, instead of every enclosing lowering having to test for the divergence.
+    fn leave_terminated_block(&mut self) {
+        let Some(current) = self.current else {
+            return;
+        };
+        if self.func.blocks[current.as_raw() as usize].terminator.is_some() {
+            let dead = self.create_named_block(super::dead_blocks::DEAD_BLOCK, Vec::new());
+            self.current = Some(dead);
+        }
     }
 
     /// Panics if an instruction is appended after the current block terminator.

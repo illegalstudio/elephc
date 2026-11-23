@@ -62,9 +62,15 @@ impl Checker {
             | StmtKind::StaticPropertyArrayAssign { .. })).then(|| self.snapshot_flow_exit(env));
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
+        let is_loop = matches!(
+            stmt.kind,
+            StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::For { .. } | StmtKind::Foreach { .. }
+        );
+        self.loop_stmt_depth += usize::from(is_loop);
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        self.loop_stmt_depth -= usize::from(is_loop);
         // Global bindings record retirement separately before each source-order alias change.
         if result.is_ok() && !matches!(stmt.kind, StmtKind::Foreach { .. } | StmtKind::Global { .. }) {
             self.record_statement_exception_flow(stmt, env, retirement.as_ref(), before_write);

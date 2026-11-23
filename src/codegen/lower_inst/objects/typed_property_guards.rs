@@ -297,12 +297,21 @@ pub(super) fn emit_uninitialized_typed_property_fatal(
     // `--web` module it is 56 280 sites and 2 363 760 lines, so those constants move into the
     // record and the site becomes its address plus a call.
     if let Some(helper) = crate::codegen::shared_static_throw::shared_throw_label(ctx) {
+        // php locates the Error at the line of the read. A read inside a shared helper body
+        // belongs to the statement that called it; any other read names its own instruction.
+        let creation_line = match ctx.current_source_location() {
+            Some((_, line)) => line,
+            None if crate::codegen::shared_static_throw::raises_on_calling_site(ctx) => {
+                crate::codegen::shared_static_throw::LINE_OF_CALLING_SITE
+            }
+            None => 0,
+        };
         let record = crate::codegen::shared_static_throw::throw_descriptor(
             ctx.data,
             "_spl_error_class_id",
             &message_label,
             message_len,
-            0,
+            creation_line,
             &fatal_label,
             fatal_len,
             crate::codegen::shared_static_throw::REPORT_TYPED_PROPERTY,

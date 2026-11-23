@@ -32,13 +32,24 @@
 //!   not report as an initialization still defines the variable at run time. A write that only
 //!   mutates the storage in place (`$a[] = 1`, a by-reference fill) is covered by
 //!   `note_slot_initialized` and by [`define_element_write_root`].
-//! - A variable a body may pass to a by-reference parameter is never tracked: the call writes
-//!   its storage without any store lowering sees.
+//! - A variable a body may pass to a by-reference parameter of a function it cannot resolve, a
+//!   closure or a constructor is never tracked: the call writes its storage without any store
+//!   lowering sees. A method call is not in that set: binding the argument by reference is a
+//!   write of its slot the builder already marks as a definition.
 //! - A local `$a[] = …` creates keeps its entry-block seed (`seed_vivified_array_locals`): the
 //!   seed only pre-allocates storage, the flag says whether php's variable exists yet. Such a
 //!   local is tracked up front whenever the body reads it, which needs no replay.
-//! - Bodies whose scope other code can write (`eval`, a runtime `include`, `extract()`) and
-//!   generators keep the old behaviour: their writes are not all visible here.
+//! - A read that may find the variable unassigned is a boxed `mixed` whatever type the variable
+//!   holds elsewhere ([`load_holds_null`]): an int, float, bool, string, array or object slot has
+//!   no representation of NULL, and the undefined path read it as uninitialized storage (a
+//!   garbage int). The checker widens the same reads with `null`
+//!   (`Checker::binding_read_type`) and expression merges predict them as `mixed`
+//!   ([`read_lowers_as_boxed_mixed`]). A variable every read of which finds it defined keeps its
+//!   unboxed slot and its code unchanged.
+//! - `unset($x)` ends the variable ([`note_unset`]): the flag is cleared at run time and the
+//!   static "defined" fact dropped, so the next read warns again.
+//! - Bodies whose scope other code can write (`eval`, a runtime `include`, `extract()`) keep the
+//!   old behaviour: their writes are not all visible here.
 
 use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::collections::BTreeSet;
@@ -66,7 +77,8 @@ pub(crate) struct DefinednessState {
     quiet_reads: HashSet<Span>,
     /// The subset of `quiet_reads` whose probe operand is the variable itself.
     whole_probe_reads: HashSet<Span>,
-    /// Names the body may pass to a by-reference parameter. The call binds the argument's own
+    /// Names the body may pass to a by-reference parameter of a call this module cannot follow
+    /// (an unresolved function, a closure, a constructor). The call binds the argument's own
     /// storage and defines it without a store this module could see, so they are never tracked.
     by_ref_arguments: HashSet<String>,
     /// Names a read found possibly unassigned while they had no flag.
@@ -239,6 +251,21 @@ pub(crate) fn take_replay_request(ctx: &mut LoweringContext<'_, '_>) -> bool {
     grew
 }
 
+/// Whether a read of `name` here lowers to a boxed `mixed` because the variable may still be
+/// unassigned: expression merges (`?:`, `match`) must predict that value type for the arm.
+pub(crate) fn read_lowers_as_boxed_mixed(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    if !ctx.definedness.is_eligible()
+        || !is_trackable_name(ctx, name)
+        || !ctx.variable_read_is_frame_local(name)
+    {
+        return false;
+    }
+    ctx.definedness
+        .flag(name)
+        .is_some_and(|flag| !ctx.definedness_flag_is_known_set(flag))
+        && load_holds_null(ctx, name)
+}
+
 /// Lowers a read of `$name` in value position.
 pub(crate) fn lower_variable_read(
     ctx: &mut LoweringContext<'_, '_>,
@@ -249,10 +276,16 @@ pub(crate) fn lower_variable_read(
         return crate::ir_lower::expr::lower_local_value(ctx, name, span);
     };
     let quiet = ctx.definedness.quiet_reads.contains(&span);
-    if load_holds_null(ctx, name)
-        || ctx.definedness.whole_probe_reads.contains(&span)
-        || (quiet && ctx.definedness.seeded.contains(name))
-    {
+    let whole_probe = ctx.definedness.whole_probe_reads.contains(&span);
+    // The root of a probed chain (`$box['k'] ?? $d`) hands its value to the chain, which asks a
+    // boxed ArrayAccess receiver `offsetExists()` first: it keeps its typed load, as before.
+    let chain_root = quiet && !whole_probe;
+    let holds_null = if chain_root {
+        load_is_mixed(ctx, name)
+    } else {
+        load_holds_null(ctx, name)
+    };
+    if holds_null || whole_probe || (quiet && ctx.definedness.seeded.contains(name)) {
         return lower_guarded_read(ctx, name, flag, quiet, span);
     }
     if !quiet {
@@ -261,19 +294,28 @@ pub(crate) fn lower_variable_read(
     crate::ir_lower::expr::lower_local_value(ctx, name, span)
 }
 
-/// Whether a read of `name` is a boxed `mixed`, which can carry php's NULL without changing the
-/// value's representation for its consumer.
+/// Whether a read of `name` is lowered as a boxed `mixed`, which can carry php's NULL, when the
+/// variable may be unassigned.
 ///
-/// A read lowering types concretely (an object, a string, the `array` the checker gives a local
-/// `$a[] = …` creates for its whole scope) keeps its typed load: php's warning when the variable
-/// is undefined, but the value read as before. Answering NULL there would hand every consumer a
-/// boxed value where it expected the concrete one and change how it dispatches, and the checker
-/// promises the concrete type onward: an inferred `array` return of such a local turned php's
-/// warning into a TypeError, and `empty($box['k'])` on a boxed ArrayAccess receiver no longer
-/// asked `offsetExists()` first. A probe whose whole operand is the variable (`isset($x)`,
-/// `$x ?? $d`) is the exception, as is any probe of a seeded array local: they consume the
-/// value themselves.
+/// A slot that holds a scalar, a string, an array or an object has no representation of NULL: the
+/// undefined path used to read it as it stood, uninitialized storage that printed as a garbage
+/// int (`elephc-08wi`), so those reads are boxed too, in the cases the flag says undefined (a
+/// variable every read of which finds it defined never reaches here and keeps its unboxed slot).
+/// The checker widens such reads with `null` in step (`Checker::binding_read_type`), so a
+/// consumer sees the nullable type it was typed against.
+///
+/// The root of a probed chain (`isset($box['k'])`, `$box['k'] ?? $d`) keeps its typed load: the
+/// chain consumes it, and an `empty($box['k'])` on a boxed ArrayAccess receiver would no longer
+/// ask `offsetExists()` first. A probe whose whole operand is the variable (`isset($x)`,
+/// `$x ?? $d`) is boxed as well, as is any probe of a seeded array local: they consume the value
+/// themselves.
 fn load_holds_null(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    load_is_mixed(ctx, name)
+        || ctx.local_load_php_type(name).is_some_and(|ty| ty.is_plain_binding_storage())
+}
+
+/// Whether the load of `name` is already a boxed `mixed` (or the `null` type) in its storage.
+fn load_is_mixed(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     ctx.local_load_php_type(name)
         .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Void))
 }
@@ -392,6 +434,25 @@ pub(crate) fn note_defined(ctx: &mut LoweringContext<'_, '_>, name: &str) {
     }
 }
 
+/// Records that the current path un-defined `name` with `unset($name)`: a later read warns
+/// `Undefined variable` and yields NULL like a variable that was never assigned.
+///
+/// A tracked name's flag is cleared at run time; an untracked name loses its static "defined"
+/// marker, so the next read finds it possibly undefined and the body is lowered again with the
+/// name tracked.
+pub(crate) fn note_unset(ctx: &mut LoweringContext<'_, '_>, name: &str) {
+    if ctx.definedness.is_inactive() || ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    if let Some(flag) = ctx.definedness.flag(name) {
+        ctx.builder.emit_definedness_flag_store(flag, false);
+        ctx.forget_definedness_flag(flag);
+    } else {
+        let marker = ctx.definedness.marker(name);
+        ctx.forget_definedness_flag(marker);
+    }
+}
+
 /// Reads a tracked local that may be unassigned: its value when the flag is set, otherwise NULL
 /// after php's warning (none for a probe operand). The result is a boxed `mixed`, the only
 /// representation that holds both.
@@ -426,9 +487,21 @@ fn lower_guarded_read(
         ctx.declare_local(name, PhpType::Mixed);
         ctx.local_types.insert(name.to_string(), PhpType::Mixed);
     }
+    // An `unset()` on one branch leaves the flow type `null` while the frame slot keeps the
+    // representation the other branch stored: the defined path reads the slot as it is.
+    let flow_type = ctx.local_types.get(name).cloned();
+    let slot_type = ctx.local_storage_type(name);
+    let reads_slot_representation = !reserved
+        && matches!(flow_type, Some(PhpType::Void))
+        && slot_type.is_plain_binding_storage();
+    if reads_slot_representation {
+        ctx.local_types.insert(name.to_string(), slot_type);
+    }
     let value = crate::ir_lower::expr::lower_local_value(ctx, name, span);
     if reserved {
         ctx.local_types.remove(name);
+    } else if reads_slot_representation {
+        ctx.local_types.insert(name.to_string(), PhpType::Void);
     }
     crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, value, span);
     branch_to(ctx, merge);
@@ -758,11 +831,7 @@ fn by_ref_argument_names(ctx: &LoweringContext<'_, '_>, body: &[Stmt]) -> HashSe
             | ExprKind::NewGeneric { args, .. }
             | ExprKind::NewDynamic { args, .. }
             | ExprKind::NewDynamicObject { args, .. }
-            | ExprKind::NewScopedObject { args, .. }
-            | ExprKind::MethodCall { args, .. }
-            | ExprKind::NullsafeMethodCall { args, .. }
-            | ExprKind::NullsafeDynamicMethodCall { args, .. }
-            | ExprKind::StaticMethodCall { args, .. } => add_all(args, &mut names),
+            | ExprKind::NewScopedObject { args, .. } => add_all(args, &mut names),
             _ => {}
         }
     });
@@ -771,7 +840,7 @@ fn by_ref_argument_names(ctx: &LoweringContext<'_, '_>, body: &[Stmt]) -> HashSe
 
 /// Whether a body's variables are all written by code lowering sees.
 fn body_is_eligible(ctx: &LoweringContext<'_, '_>, body: &[Stmt]) -> bool {
-    if ctx.body_contains_eval || ctx.builder.function().flags.is_generator {
+    if ctx.body_contains_eval {
         return false;
     }
     let mut eligible = true;

@@ -949,6 +949,8 @@ impl Checker {
                 let single_clause = clauses.len() == 1;
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
+                // Bindings an `unset()` removed on some branch: the join cannot call them bound.
+                let mut unbound_by_branch: Vec<String> = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
@@ -1040,6 +1042,13 @@ impl Checker {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     self.restore_statement_flow_storage(&flow, &branch_entry_reads);
                     self.restore_conditional_read_inputs(&branch_entry_reads, env);
+                    if !self.body_cannot_fall_through(body) {
+                        unbound_by_branch.extend(
+                            branch_entry_bound.iter()
+                                .filter(|name| !self.definitely_bound_locals.contains(*name))
+                                .cloned(),
+                        );
+                    }
                     self.definitely_bound_locals = branch_entry_bound;
                     for (var, previous) in &saved {
                         restore_narrowed_var(env, var, previous);
@@ -1058,8 +1067,16 @@ impl Checker {
                 let mut else_exit_ty: Option<Option<PhpType>> = None;
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
+                    let else_entry_bound = self.definitely_bound_locals.clone();
                     errors.extend(self.check_body(body, env));
                     else_falls_through = !self.body_cannot_fall_through(body);
+                    if else_falls_through {
+                        unbound_by_branch.extend(
+                            else_entry_bound.iter()
+                                .filter(|name| !self.definitely_bound_locals.contains(*name))
+                                .cloned(),
+                        );
+                    }
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
                     ) {
@@ -1072,6 +1089,9 @@ impl Checker {
                 }
                 if else_falls_through && else_body.is_none() {
                     self.observe_conditional_binding_exit(&mut flow);
+                }
+                for name in &unbound_by_branch {
+                    self.definitely_bound_locals.remove(name);
                 }
                 if else_falls_through {
                     callable_target_exits.push(self.callable_array_targets.clone());

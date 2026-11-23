@@ -481,6 +481,21 @@ initializes. A name that is *also* assigned at top level (`if (!isset($cfg)) { $
 get that assigned type on a slot the probe reads before the store, so the original diagnostic is
 restored for it.
 
+### Reads of a binding that may be missing
+
+**File:** `src/types/checker/binding_flow.rs`
+
+A read of a local that is not definitely bound on every path (`if ($c) { $q = 1; } use($q);`, or a
+variable some branch `unset()`s) takes `null` into its read type, whatever the variable holds on the
+other path: `int` becomes `int|null`, and so do `float`, `bool`, `string`, arrays and objects
+(`PhpType::is_plain_binding_storage`). PHP reads such a variable as `NULL` with a warning, and a
+plain frame slot has no representation of that. EIR lowering (`ir_lower::local_definedness`) boxes
+exactly those reads as `mixed` behind the run-time definedness flag, so the warning and the `NULL`
+come from the flag and the value is never read out of uninitialized storage. A variable every read
+of which finds it bound keeps its unboxed slot and its code. Inside a loop statement the read keeps
+its type (the loop analysis unbinds far more names than a loop can leave undefined, and a counter
+must stay an `int`); the lowering still boxes it behind the flag.
+
 ### Null-coalesce results
 
 **Files:** `src/types/checker/inference/expr/null_coalesce.rs`, `src/types/checker/inference/expr/mod.rs`

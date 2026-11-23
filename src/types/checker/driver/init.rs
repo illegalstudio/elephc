@@ -174,6 +174,7 @@ impl Checker {
             pending_null_probe_roots: Vec::new(),
             null_probe_depth: 0,
             break_continue_depth: 0,
+            loop_stmt_depth: 0,
             loop_break_envs: Vec::new(),
             finally_break_continue_bases: Vec::new(),
             current_loop_storage_scope: crate::types::TOP_LEVEL_SCOPE.to_string(),

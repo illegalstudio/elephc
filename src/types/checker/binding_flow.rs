@@ -91,7 +91,17 @@ impl Checker {
             || self.definitely_bound_locals.contains(name)
         { return read.clone(); }
         let physical = self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(read);
-        if Self::binding_storage_admits_null(physical) {
+        // A plain frame slot (scalar, string, array, object) cannot hold null, but a read that
+        // may find the binding missing is lowered as a boxed `mixed` (see `local_definedness`),
+        // so its read contract carries php's null too.
+        // The request superglobals exist in every scope; only an ordinary local can be missing.
+        // The loop analysis unbinds names the body writes before its backedge, which is far more
+        // than the names a loop can leave undefined: inside a loop the plain read keeps its type
+        // (the lowering still boxes it behind the flag), so a loop counter stays an int.
+        let widens_plain = physical.is_plain_binding_storage()
+            && self.loop_stmt_depth == 0
+            && !crate::superglobals::is_superglobal(name);
+        if Self::binding_storage_admits_null(physical) || widens_plain {
             self.join_flow_views(read, &PhpType::Void)
         } else { read.clone() }
     }

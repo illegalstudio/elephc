@@ -35,6 +35,7 @@ pub(super) fn lower_unset_locals(
         let removal = match &arg.kind {
             ExprKind::Variable(name) => {
                 ctx.unset_local(name, null, Some(arg.span));
+                crate::ir_lower::local_definedness::note_unset(ctx, name);
                 None
             }
             ExprKind::ArrayAccess { array, index } => {

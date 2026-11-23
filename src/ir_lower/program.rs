@@ -333,7 +333,21 @@ fn lower_on_compiler_stack(
 /// A collecting pass that finds no failing body has validated every body already, so only the
 /// module-level references are left to check: validating each body a second time was about 3 s
 /// of the Symfony demo's single-core lowering.
-pub(super) fn validate_finished_module(module: Module, collect: bool) -> Result<Module, LoweringError> {
+pub(super) fn validate_finished_module(mut module: Module, collect: bool) -> Result<Module, LoweringError> {
+    // Code lowered after an operand that always diverges sits in blocks nothing reaches; it is
+    // dropped before validation because it need not even be well typed.
+    for function in module
+        .functions
+        .iter_mut()
+        .chain(module.class_methods.iter_mut())
+        .chain(module.closures.iter_mut())
+        .chain(module.fiber_wrappers.iter_mut())
+        .chain(module.callback_wrappers.iter_mut())
+        .chain(module.extern_callback_trampolines.iter_mut())
+        .chain(module.runtime_callable_invokers.iter_mut())
+    {
+        crate::ir::prune_dead_blocks(function);
+    }
     if collect {
         let failures = invalid_bodies(&module);
         if let Some((_, first)) = failures.first() {

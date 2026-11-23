@@ -421,3 +421,482 @@ array(0) {
 }"
     );
 }
+
+/// Runs `source` twice and compares it with php 8.5 (`php -n`): once with diagnostics merged in
+/// write order (`merged`, normalized like [`normalized`]) and once under heap debug, where the
+/// program's stdout alone must equal php's (`plain`, diagnostics off) and the heap must end clean,
+/// so the boxed reads these fixtures produce neither leak nor double-free.
+pub(super) fn checked(source: &str, merged: &str, plain: &str) {
+    assert_eq!(normalized(source), merged);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "heap-debug run failed: {}", out.stderr);
+    assert_eq!(out.stdout, plain);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A local assigned on one branch only reads as php's NULL with the warning when the branch did not run, whatever type the branch stored (int, float, bool, string, array, object): as a return value, a var_dump argument, a method and a function argument, an interpolation and a comparison. The frame slot of such a read held uninitialized storage, which printed as a garbage int (`elephc-08wi`).
+#[test]
+fn test_maybe_undefined_local_of_every_type_reads_null_with_a_warning() {
+    let source = r####"<?php
+class Pt { public $x = 1; }
+class Reg { public function same($v) { return $v; } }
+function id($v) { return $v; }
+function ret(int $n, $kind) {
+    if ($n > 5) {
+        $i = 1; $f = 1.5; $b = true; $s = "s"; $a = [1, 2]; $o = new Pt;
+    }
+    return match ($kind) { 'i' => $i, 'f' => $f, 'b' => $b, 's' => $s, 'a' => $a, 'o' => $o };
+}
+function boxed(int $n) {
+    if ($n > 5) { $i = 1; $f = 1.5; $b = true; $s = "s"; $a = [1, 2]; $o = new Pt; }
+    var_dump($i, $f, $b, $s, $a, $o);
+}
+$r = new Reg;
+$n = $argc;
+foreach (['i', 'f', 'b', 's', 'a', 'o'] as $kind) {
+    var_dump(ret($n, $kind));
+    var_dump(ret($n + 9, $kind) === ret($n + 9, $kind));
+}
+boxed($n);
+boxed($n + 9);
+if ($n > 5) { $q = 1; }
+var_dump($q);
+var_dump($r->same($q));
+var_dump(id($q));
+var_dump(gettype($q), $q === null, is_null($q));
+if ($n > 5) { $t = "str"; }
+echo "[", $t, "]\n";
+echo "v={$t} w=$t\n";
+var_dump($t . "x", (string)$t, strlen($t ?? ''));
+$q = 4;
+var_dump($q);"####;
+    checked(
+        source,
+        r####"Warning: Undefined variable $i on line 9
+NULL
+bool(true)
+Warning: Undefined variable $f on line 9
+NULL
+bool(true)
+Warning: Undefined variable $b on line 9
+NULL
+bool(true)
+Warning: Undefined variable $s on line 9
+NULL
+bool(true)
+Warning: Undefined variable $a on line 9
+NULL
+bool(true)
+Warning: Undefined variable $o on line 9
+NULL
+bool(false)
+Warning: Undefined variable $i on line 13
+Warning: Undefined variable $f on line 13
+Warning: Undefined variable $b on line 13
+Warning: Undefined variable $s on line 13
+Warning: Undefined variable $a on line 13
+Warning: Undefined variable $o on line 13
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+int(1)
+float(1.5)
+bool(true)
+string(1) "s"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+object(Pt)#3 (1) {
+  ["x"]=>
+  int(1)
+}
+Warning: Undefined variable $q on line 24
+NULL
+Warning: Undefined variable $q on line 25
+NULL
+Warning: Undefined variable $q on line 26
+NULL
+Warning: Undefined variable $q on line 27
+Warning: Undefined variable $q on line 27
+Warning: Undefined variable $q on line 27
+string(4) "NULL"
+bool(true)
+bool(true)
+[
+Warning: Undefined variable $t on line 29
+]
+Warning: Undefined variable $t on line 30
+Warning: Undefined variable $t on line 30
+v= w=
+Warning: Undefined variable $t on line 31
+Warning: Undefined variable $t on line 31
+string(1) "x"
+string(0) ""
+int(0)
+int(4)"####,
+        r####"NULL
+bool(true)
+NULL
+bool(true)
+NULL
+bool(true)
+NULL
+bool(true)
+NULL
+bool(true)
+NULL
+bool(false)
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+int(1)
+float(1.5)
+bool(true)
+string(1) "s"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+object(Pt)#3 (1) {
+  ["x"]=>
+  int(1)
+}
+NULL
+NULL
+NULL
+string(4) "NULL"
+bool(true)
+bool(true)
+[]
+v= w=
+string(1) "x"
+string(0) ""
+int(0)
+int(4)
+"####,
+    );
+}
+
+/// `unset()` of a typed local, on every path or on one branch, makes the next read warn and yield NULL; a store afterwards defines the variable again.
+#[test]
+fn test_unset_local_reads_as_undefined_for_every_type() {
+    let source = r####"<?php
+class Pt { public $x = 1; }
+function cond_unset(int $n, $kind) {
+    $i = 1; $f = 1.5; $b = true; $s = "s"; $a = [1, 2]; $o = new Pt;
+    if ($n > 5) { unset($i, $f, $b, $s, $a, $o); }
+    return match ($kind) { 'i' => $i, 'f' => $f, 'b' => $b, 's' => $s, 'a' => $a, 'o' => $o };
+}
+foreach (['i', 'f', 'b', 's', 'a', 'o'] as $kind) {
+    var_dump(cond_unset($argc, $kind));
+    var_dump(cond_unset($argc + 9, $kind));
+}
+$i = 1; $s = "s"; $f = 2.5;
+unset($i, $s, $f);
+var_dump($i, $s, $f);
+$i = 3;
+var_dump($i);
+for ($k = 0; $k < 2; $k++) { $loop = $k; unset($loop); }
+var_dump($loop);
+function again(int $n) {
+    $v = 10;
+    unset($v);
+    if ($n > 0) { $v = 20; }
+    return $v;
+}
+var_dump(again(0), again(1));"####;
+    checked(
+        source,
+        r####"int(1)
+Warning: Undefined variable $i on line 6
+NULL
+float(1.5)
+Warning: Undefined variable $f on line 6
+NULL
+bool(true)
+Warning: Undefined variable $b on line 6
+NULL
+string(1) "s"
+Warning: Undefined variable $s on line 6
+NULL
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+Warning: Undefined variable $a on line 6
+NULL
+object(Pt)#1 (1) {
+  ["x"]=>
+  int(1)
+}
+Warning: Undefined variable $o on line 6
+NULL
+Warning: Undefined variable $i on line 14
+Warning: Undefined variable $s on line 14
+Warning: Undefined variable $f on line 14
+NULL
+NULL
+NULL
+int(3)
+Warning: Undefined variable $loop on line 18
+NULL
+Warning: Undefined variable $v on line 23
+NULL
+int(20)"####,
+        r####"int(1)
+NULL
+float(1.5)
+NULL
+bool(true)
+NULL
+string(1) "s"
+NULL
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+NULL
+object(Pt)#1 (1) {
+  ["x"]=>
+  int(1)
+}
+NULL
+NULL
+NULL
+NULL
+int(3)
+NULL
+NULL
+int(20)
+"####,
+    );
+}
+
+/// The same warning and NULL through a method argument, a method return, by-value and by-reference closure captures, a generator, a static, switch, try and loop joins, `+=`, `++` and `.=`.
+#[test]
+fn test_maybe_undefined_local_in_method_closure_generator_and_loop_contexts() {
+    let source = r####"<?php
+class Reg {
+    public function same($v) { return $v; }
+    public function inc(&$v) { $v = 7; }
+    public function viaMethod(int $n) { if ($n > 5) { $q = 1; } return $q; }
+}
+function byref(&$v) { $v = 5; }
+function viaClosure(int $n) {
+    if ($n > 5) { $q = 1; }
+    $by = function () use ($q) { var_dump($q); };
+    $by();
+    $ref = function () use (&$q) { var_dump($q); };
+    $ref();
+    $set = function () use (&$q) { $q = 4; };
+    $set();
+    var_dump($q);
+}
+function viaGenerator(int $n) {
+    if ($n > 5) { $q = 1; }
+    yield $q;
+    $a = 10;
+    yield $a;
+    unset($a);
+    yield $a;
+}
+function viaStatic(int $n) {
+    static $s;
+    if ($n > 5) { $s = 1; }
+    return $s;
+}
+function viaSwitch(int $n) {
+    switch ($n) { case 5: $q = 1; break; case 6: $q = 2; break; }
+    return $q;
+}
+function viaTry(int $n) {
+    try { if ($n > 0) { throw new Exception("x"); } $q = 1; } catch (Exception $e) { }
+    return $q;
+}
+function viaLoop(int $n) {
+    for ($i = 0; $i < $n - 1; $i++) { $q = $i; }
+    foreach ([] as $x) { $w = $x; }
+    return [$q, $w];
+}
+$r = new Reg;
+$n = $argc;
+if ($n > 5) { $q = 1; }
+var_dump($r->same($q));
+var_dump($r->viaMethod($n));
+viaClosure($n);
+foreach (viaGenerator($n) as $v) { var_dump($v); }
+var_dump(viaStatic($n));
+var_dump(viaSwitch($n));
+var_dump(viaTry($n));
+var_dump(viaLoop($n));
+$q += 2; var_dump($q);
+if ($n > 5) { $c = 1; }
+$c++; var_dump($c);
+if ($n > 5) { $m = "a"; }
+$m .= "b"; var_dump($m);"####;
+    checked(
+        source,
+        r####"Warning: Undefined variable $q on line 47
+NULL
+Warning: Undefined variable $q on line 5
+NULL
+Warning: Undefined variable $q on line 10
+NULL
+NULL
+int(4)
+Warning: Undefined variable $q on line 20
+NULL
+int(10)
+Warning: Undefined variable $a on line 24
+NULL
+NULL
+Warning: Undefined variable $q on line 33
+NULL
+Warning: Undefined variable $q on line 37
+NULL
+Warning: Undefined variable $q on line 42
+Warning: Undefined variable $w on line 42
+array(2) {
+  [0]=>
+  NULL
+  [1]=>
+  NULL
+}
+Warning: Undefined variable $q on line 55
+int(2)
+Warning: Undefined variable $c on line 57
+int(1)
+Warning: Undefined variable $m on line 59
+string(1) "b""####,
+        r####"NULL
+NULL
+NULL
+NULL
+int(4)
+NULL
+int(10)
+NULL
+NULL
+NULL
+NULL
+array(2) {
+  [0]=>
+  NULL
+  [1]=>
+  NULL
+}
+int(2)
+int(1)
+string(1) "b"
+"####,
+    );
+}
+
+/// A maybe-undefined local destructured by `[$a, $b] = $l`, named by `compact()`, probed by `??`/`isset()`/`empty()` and passed to a by-reference parameter of a function or method (which defines it as NULL without a warning).
+#[test]
+fn test_maybe_undefined_local_through_list_compact_and_reference_parameters() {
+    let source = r####"<?php
+class Reg { public function inc(&$v) { $v = 7; } }
+function byref(&$v) { $v = 5; }
+function t6(int $n, Reg $r) {
+    if ($n > 5) { $c = 1; }
+    $c++; var_dump($c);
+    if ($n > 5) { $m = "a"; }
+    $m .= "b"; var_dump($m);
+    if ($n > 5) { $l = [1, 2]; }
+    [$p1, $p2] = $l; var_dump($p1, $p2);
+    if ($n > 5) { $k = 1; }
+    var_dump(compact('k'), $k ?? 'dflt', isset($k), empty($k));
+    byref($u1); var_dump($u1);
+    $r->inc($u2); var_dump($u2);
+    if ($n > 5) { $w = 1; }
+    byref($w); var_dump($w);
+    if ($n > 5) { $z = 1; }
+    $r->inc($z); var_dump($z);
+}
+t6($argc, new Reg);
+t6($argc + 9, new Reg);"####;
+    checked(
+        source,
+        r####"Warning: Undefined variable $c on line 6
+int(1)
+Warning: Undefined variable $m on line 8
+string(1) "b"
+Warning: Undefined variable $l on line 10
+NULL
+NULL
+Warning: compact(): Undefined variable $k on line 12
+array(0) {
+}
+string(4) "dflt"
+bool(false)
+bool(true)
+int(5)
+int(7)
+int(5)
+int(7)
+int(2)
+string(2) "ab"
+int(1)
+int(2)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+int(1)
+bool(true)
+bool(false)
+int(5)
+int(7)
+int(5)
+int(7)"####,
+        r####"int(1)
+string(1) "b"
+NULL
+NULL
+array(0) {
+}
+string(4) "dflt"
+bool(false)
+bool(true)
+int(5)
+int(7)
+int(5)
+int(7)
+int(2)
+string(2) "ab"
+int(1)
+int(2)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+int(1)
+bool(true)
+bool(false)
+int(5)
+int(7)
+int(5)
+int(7)
+"####,
+    );
+}

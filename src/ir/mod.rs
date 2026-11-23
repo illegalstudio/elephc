@@ -12,6 +12,7 @@
 mod block;
 mod runtime_fn;
 mod builder;
+mod dead_blocks;
 mod effects;
 mod function;
 pub(crate) mod function_variants;
@@ -62,6 +63,7 @@ pub use runtime_call::{
     ArrayKeySort, RuntimeArgumentLayout, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };
 pub use types::{IrHeapKind, IrType};
+pub(crate) use dead_blocks::prune_dead_blocks;
 pub use validator::{validate_function, validate_module, validate_module_references, ValidationError};
 #[cfg(test)]
 pub(crate) use validator::VALIDATED_FUNCTIONS;
