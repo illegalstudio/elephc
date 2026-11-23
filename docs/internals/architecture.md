@@ -335,9 +335,14 @@ validates UTF-8 in code and retains the original bytes of inline HTML.
 
 The tokenizer bridge and Magician share the Rust API in
 `elephc_chopper::syntax::php_tokenizer`. It uses the scanner for every call. With
-`TOKEN_PARSE`, it scans the normalized validation view through the same scanner
-and enters a scoped mode on the shared parser. The mode discards each parsed
-statement and collects PHP diagnostics and semi-reserved-word feedback.
+`TOKEN_PARSE`, supported native scanner tokens are projected directly into
+source-spanned compiler tokens by the token view, which then enters a scoped mode
+on the shared parser. Normalization-sensitive constructs still use the text
+parser view and its second scanner as the automatic fallback; the token view is
+never a second grammar. The scoped mode discards each parsed statement and
+collects PHP diagnostics and semi-reserved-word feedback. `ELEPHC_TOKEN_VIEW`
+accepts `text`, `off`, or `0` to force the legacy text view while rolling out or
+comparing the two paths.
 
 The full parser-enabled engine can be measured with
 `scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use

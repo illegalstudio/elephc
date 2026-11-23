@@ -69,11 +69,14 @@ when the source is empty.
 Passing `TOKEN_PARSE` validates the source through elephc's lexer and AST parser
 and reclassifies reserved words used as identifiers in contexts where PHP
 permits them, such as class constant names, trait adaptation names and static or
-instance member names. Valid PHP constructs outside elephc's own grammar are
-normalized in the parser view first, so `goto`, variable variables, dynamic
-`::` chains, grouped and dynamic `new` class names, DNF types, abstract property
-hooks, first-class callables, pipes and destructuring in expression position
-remain accepted. Syntax errors throw a catchable `ParseError` with PHP's parser-facing
+instance member names. Supported native tokens are projected directly into
+source-spanned compiler tokens by the token view. Valid PHP constructs outside
+elephc's own grammar are normalized in the text parser view fallback first, so
+`goto`, variable variables, dynamic `::` chains, grouped and dynamic `new` class
+names, DNF types, abstract property hooks, first-class callables, pipes and
+destructuring in expression position remain accepted. Set
+`ELEPHC_TOKEN_VIEW=text`, `off`, or `0` to force that legacy fallback while
+comparing both paths. Syntax errors throw a catchable `ParseError` with PHP's parser-facing
 wording, including heredoc indentation, invalid escapes, unclosed delimiters,
 numeric-literal boundaries and interpolation offsets. `__halt_compiler()` outside
 the outermost scope throws `CompileError` with PHP's outermost-scope message, and a
