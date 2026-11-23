@@ -16,7 +16,7 @@
 //!   `toupper()` under the process `LC_CTYPE`, which maps Latin-1 on Darwin and not on glibc;
 //!   elephc gives the same answer on every target and one fixture pins that.
 
-use crate::codegen::ctype_php_src::locale_available;
+use crate::codegen::ctype_php_src::{locale_available, test_locales_required};
 use crate::support::*;
 
 /// Verifies each documented mode orders the same keys the way PHP does.
@@ -197,7 +197,7 @@ if (setlocale(LC_COLLATE, "de_DE.UTF-8", "de_DE.utf8") === false) {
 }
 "#,
     );
-    if direct == "skip" {
+    if direct == "skip" && !test_locales_required() {
         return;
     }
     assert_eq!(direct, "ä,z");
@@ -213,7 +213,7 @@ eval('if (setlocale(LC_COLLATE, "de_DE.UTF-8", "de_DE.utf8") === false) {
 }');
 "#,
     );
-    if evaluated == "skip" {
+    if evaluated == "skip" && !test_locales_required() {
         return;
     }
     assert_eq!(evaluated, "ä,z");

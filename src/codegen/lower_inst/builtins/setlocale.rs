@@ -10,8 +10,8 @@
 //!   into an owned PHP string before another locale change can overwrite it.
 //! - Locale names are copied into a NUL-terminated stack buffer because PHP strings are
 //!   length-delimited and need not end in NUL.
-//! - A locale name longer than 255 bytes is refused with PHP `false` instead of being
-//!   truncated into a different locale.
+//! - A locale name of 255 bytes or more is refused with PHP `false`, matching php-src's
+//!   `try_setlocale_str()` limit; the prelude emits PHP's warning before it gets here.
 
 use crate::codegen::abi;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -23,8 +23,9 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::{ensure_arg_count, expect_operand, store_if_result};
 
-/// Longest locale name copied into the stack buffer (excluding the NUL byte).
-const MAX_LOCALE_NAME: i64 = 255;
+/// PHP refuses a locale name of this many bytes or more; shorter names fit the stack buffer
+/// together with their NUL terminator.
+const LOCALE_NAME_LIMIT: i64 = 255;
 
 /// Lowers `__elephc_setlocale_query(category)` through libc `setlocale(category, NULL)`.
 pub(crate) fn lower_setlocale_query(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -89,8 +90,8 @@ fn lower_aarch64_set(
     let copy_done = ctx.next_label("setlocale_copy_done");
     ctx.emitter.instruction("sub sp, sp, #288");                                // reserve the NUL-terminated locale buffer and result slot
     ctx.load_value_to_result(locale)?;
-    ctx.emitter.instruction(&format!("cmp x2, #{MAX_LOCALE_NAME}"));            // reject names that do not fit the fixed buffer
-    ctx.emitter.instruction(&format!("b.hi {too_long}"));                       // answer false rather than truncating a locale name
+    ctx.emitter.instruction(&format!("cmp x2, #{LOCALE_NAME_LIMIT}"));          // compare the name length with PHP's locale-name limit
+    ctx.emitter.instruction(&format!("b.hs {too_long}"));                       // answer false for names of 255 bytes or more
     ctx.emitter.instruction("add x9, sp, #16");                                 // select the start of the locale-name buffer
     ctx.emitter.instruction("mov x10, #0");                                     // copy the locale name from its first byte
     ctx.emitter.label(&copy_loop);
@@ -126,8 +127,8 @@ fn lower_x86_64_set(
     let copy_done = ctx.next_label("setlocale_copy_done");
     ctx.emitter.instruction("sub rsp, 288");                                    // reserve the NUL-terminated locale buffer and result slot
     ctx.load_value_to_result(locale)?;
-    ctx.emitter.instruction(&format!("cmp rdx, {MAX_LOCALE_NAME}"));            // reject names that do not fit the fixed buffer
-    ctx.emitter.instruction(&format!("ja {too_long}"));                         // answer false rather than truncating a locale name
+    ctx.emitter.instruction(&format!("cmp rdx, {LOCALE_NAME_LIMIT}"));          // compare the name length with PHP's locale-name limit
+    ctx.emitter.instruction(&format!("jae {too_long}"));                        // answer false for names of 255 bytes or more
     ctx.emitter.instruction("lea r8, [rsp + 16]");                              // select the start of the locale-name buffer
     ctx.emitter.instruction("xor r9d, r9d");                                    // copy the locale name from its first byte
     ctx.emitter.label(&copy_loop);
