@@ -42,9 +42,11 @@ use crate::codegen::{CodegenIrError, Result};
 mod instance_expr;
 pub(super) mod results;
 mod scope;
+mod scope_probe;
 mod selector_tables;
 mod shared_selector;
 use scope::{factory_method_visible, inherits_lexical_private_static};
+pub(in crate::codegen) use scope_probe::emit_scope_is_callable_probe;
 pub(in crate::codegen) use shared_selector::{emit_pending_callable_selectors, SharedCallableSelectorKey};
 use shared_selector::SelectorPolicy;
 
@@ -277,8 +279,21 @@ fn lower_shared_mixed_descriptor_invoke(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
 ) -> Result<()> {
     ctx.shared.callable_argument_normalizer = true;
+    // PHP resolves the callback from the calling scope: try the methods only this class can
+    // call before the shared (public) normalizer. A scope without any emits nothing.
+    let normalized = ctx.next_label("scope_callable_normalized");
+    shared_selector::emit_scope_extras(ctx, callable, SelectorPolicy {
+        op_name: "callable argument",
+        retain_existing_descriptor: true,
+        string_type_error: Some(CallableConversionError::Type("Argument must be a valid callback")),
+        invalid_type_error: Some(CallableConversionError::Type("Argument must be a valid callback")),
+        arity: None,
+        scoped: true,
+        fresh_closure: false,
+    }, &normalized)?;
     ctx.load_value_to_result(callable)?;
     abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
+    ctx.emitter.label(&normalized);
     let descriptor = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, descriptor, abi::int_result_reg(ctx.emitter));
     emit_descriptor_reg_invoker_call_with_mixed_arg(
@@ -545,6 +560,21 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         None,
         false,
         false,
+    )
+}
+
+/// Materializes a descriptor for a boxed callable the current function is about to invoke.
+///
+/// PHP resolves it from the calling scope, so inside a class the methods only that class can
+/// call (private and protected ones) are tried before the public candidates.
+pub(super) fn emit_scoped_runtime_mixed_callable_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    let scoped = ctx.lexical_class().is_some();
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx, callable, op_name, true, None, None, None, scoped, false,
     )
 }
 
@@ -1741,8 +1771,8 @@ fn lower_runtime_mixed_callable_array_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
-    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    // The calling scope decides which methods the array may name, as in PHP.
+    let (instance_targets, static_cases) = scoped_array_descriptor_inventory(ctx);
     if instance_targets.is_empty() && static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime mixed callable array with no descriptor targets",
@@ -1823,7 +1853,7 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    let (_, static_cases) = scoped_array_descriptor_inventory(ctx);
     if static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string callable array with no static targets",
@@ -1996,6 +2026,31 @@ fn emit_string_callable_array_descriptor_value(
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, STRING_SELECTOR_BYTES);
     Ok(())
+}
+
+/// Collects the instance and static candidates a callable array may name from this function.
+///
+/// Outside a class this is the public inventory. Inside one it adds the methods only that class
+/// can call, ordered after the public candidates so a public method keeps its first-match
+/// position in the dispatch ladder. A private shadow replaces the child's public row for the
+/// same receiver class and method, so the order between distinct rows does not change a match.
+fn scoped_array_descriptor_inventory(
+    ctx: &mut FunctionContext<'_>,
+) -> (Vec<RuntimeArrayInstanceMethodTarget>, Vec<callable_dispatch::RuntimeStaticMethodCallableCase>) {
+    let public_instance = runtime_array_instance_method_targets_with_scope(ctx, false);
+    let public_static = runtime_static_method_descriptor_cases(ctx, None);
+    if ctx.lexical_class().is_none() {
+        return (public_instance, public_static);
+    }
+    let mut instance = runtime_array_instance_method_targets_with_scope(ctx, true);
+    instance.sort_by_key(|target| {
+        !public_instance.iter().any(|public| shared_selector::same_instance_target(public, target))
+    });
+    let mut statics = runtime_static_method_descriptor_cases_with_scope(ctx, None, true);
+    statics.sort_by_key(|case| {
+        !public_static.iter().any(|public| public.case.php_name == case.case.php_name)
+    });
+    (instance, statics)
 }
 
 /// Collects public instance methods for runtime descriptor selection.

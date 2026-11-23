@@ -52,6 +52,7 @@ mod preg_match_all_capture;
 mod preg_replace;
 mod preg_replace_callback;
 mod preg_split;
+mod preg_compiled;
 mod preg_error_state;
 mod preg_strip;
 mod regex_locale;
@@ -120,6 +121,7 @@ pub(crate) use preg_match_all::emit_preg_match_all;
 pub(crate) use preg_replace::emit_preg_replace;
 pub(crate) use preg_replace_callback::emit_preg_replace_callback;
 pub(crate) use preg_split::emit_preg_split;
+pub(crate) use preg_compiled::emit_preg_compiled;
 pub(crate) use preg_error_state::{
     emit_preg_error_data, emit_preg_last_error_msg, emit_preg_exec_wrapper,
 };

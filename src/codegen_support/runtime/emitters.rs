@@ -240,6 +240,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_preg_replace(emitter);
         system::emit_preg_replace_callback(emitter);
         system::emit_preg_split(emitter);
+        system::emit_preg_compiled(emitter);
     }
     system::emit_match_unhandled(emitter);
     system::emit_stack_limit_init(emitter);

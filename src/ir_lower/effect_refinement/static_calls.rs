@@ -22,6 +22,15 @@ pub(super) fn static_call_effects(
 ) -> Option<Effects> {
     let Immediate::Data(name_id) = instruction.immediate.as_ref()? else { return None; };
     let name = context.data.strings.get(name_id.as_raw() as usize)?;
+    // `@late@Class=id;…@static::m`: the scope's private method or one same-signature
+    // redeclaration per arm runs, so the call has the union of their effects.
+    let (late_private_arms, name) = match name.strip_prefix("@late@") {
+        Some(rest) => {
+            let (arms, name) = rest.split_once('@')?;
+            (Some(arms), name)
+        }
+        None => (None, name.as_str()),
+    };
     let (receiver, method) = name.rsplit_once("::")?;
     let receiver = receiver.trim_start_matches('\\');
     let class_name = match receiver {
@@ -39,6 +48,18 @@ pub(super) fn static_call_effects(
     }
     if context.has_dynamic_class_barrier {
         return Some(Op::EvalStaticMethodCall.default_effects());
+    }
+    if let Some(arms) = late_private_arms {
+        let mut effects =
+            implementation_effects(function, instruction, context, class, &method_key, false)?;
+        for arm in arms.split(';') {
+            let (arm_class, _) = arm.split_once('=')?;
+            let arm_class = context.classes.get(arm_class)?;
+            effects |= implementation_effects(
+                function, instruction, context, arm_class, &method_key, false,
+            )?;
+        }
+        return Some(effects);
     }
     // With no lexical vtable slot, codegen calls this implementation directly.
     // Private methods are absent from descendant implementation maps.

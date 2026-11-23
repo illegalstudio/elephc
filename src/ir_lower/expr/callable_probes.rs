@@ -34,33 +34,34 @@ pub(super) fn lower_static_is_callable(
             let is_callable = static_array_callable_is_callable(ctx, items)?;
             Some(emit_bool_literal(ctx, is_callable, Some(expr.span)))
         }
-        ExprKind::Variable(name) => ctx.static_callable_local(name).map(|target| {
-            emit_bool_literal(
-                ctx,
-                static_callable_binding_is_callable(ctx, &target),
-                Some(expr.span),
-            )
-        }),
+        ExprKind::Variable(name) => {
+            let target = ctx.static_callable_local(name)?;
+            let is_callable = static_callable_binding_is_callable(ctx, &target)?;
+            Some(emit_bool_literal(ctx, is_callable, Some(expr.span)))
+        }
         _ => None,
     }
 }
 
-/// Returns whether straight-line callable-local metadata represents a public callable.
+/// Returns whether straight-line callable-local metadata represents a callable, or `None` when
+/// only the calling class scope can decide (see `static_method_callback_is_callable`).
 pub(super) fn static_callable_binding_is_callable(
     ctx: &LoweringContext<'_, '_>,
     target: &StaticCallableBinding,
-) -> bool {
+) -> Option<bool> {
     match target {
         StaticCallableBinding::StaticMethod { receiver, method }
         | StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
-            static_receiver_class_name(ctx, receiver)
-                .is_some_and(|class_name| static_method_callback_is_callable(ctx, &class_name, method))
+            match static_receiver_class_name(ctx, receiver) {
+                Some(class_name) => static_method_callback_is_callable(ctx, &class_name, method),
+                None => Some(false),
+            }
         }
         StaticCallableBinding::UserFunction(_)
         | StaticCallableBinding::ExternFunction(_)
         | StaticCallableBinding::Builtin(_)
         | StaticCallableBinding::Closure { .. }
-        | StaticCallableBinding::InstanceMethod { .. } => true,
+        | StaticCallableBinding::InstanceMethod { .. } => Some(true),
     }
 }
 

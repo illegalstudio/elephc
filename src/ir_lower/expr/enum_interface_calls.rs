@@ -147,7 +147,7 @@ pub(super) fn lower_enum_interface_call(
 
 /// Gives a selected by-value result its own cell instead of another branch's return lease.
 /// The enclosing reference assignment already published staging for unwind cleanup.
-fn complete_reference_branch(
+pub(super) fn complete_reference_branch(
     ctx: &mut LoweringContext<'_, '_>, call: LoweredValue, reference_assignment: bool,
     result_type: &PhpType, span: Span,
 ) {

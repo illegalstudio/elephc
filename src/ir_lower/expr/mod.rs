@@ -175,6 +175,7 @@ mod nullable_method_calls;
 mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
+mod private_late_static_calls;
 mod scoped_values;
 mod buffer_length;
 mod generators;

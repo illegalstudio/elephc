@@ -174,6 +174,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         PhpType::Array(_) => {
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_array");
+            crate::codegen::lower_inst::callables::emit_scope_is_callable_probe(ctx, value, false)?;
         }
         PhpType::AssocArray { .. } => {
             ctx.load_value_to_result(value)?;
@@ -186,6 +187,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
+            crate::codegen::lower_inst::callables::emit_scope_is_callable_probe(ctx, value, true)?;
             emit_active_eval_frame_is_callable_fallback(ctx, value)?;
         }
         PhpType::Iterable => {
