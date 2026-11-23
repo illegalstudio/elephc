@@ -193,6 +193,12 @@ fn phar_methods() -> Vec<ClassMethod> {
             phar_add_from_string_body(),
         ),
         method_with_body(
+            "addEmptyDir",
+            vec![param("directory", TypeExpr::Str)],
+            Some(TypeExpr::Void),
+            phar_add_empty_dir_body(),
+        ),
+        method_with_body(
             "compressFiles",
             vec![param("compression", TypeExpr::Int)],
             Some(TypeExpr::Void),
@@ -639,6 +645,83 @@ fn phar_add_from_string_body() -> Vec<crate::parser::ast::Stmt> {
         vec![phar_entry_url_expr(var_expr("localName")), var_expr("contents")],
     ))];
     body.extend(phar_track_entry_body(var_expr("localName")));
+    body
+}
+
+/// Builds `addEmptyDir()` with PHP 8.6's magic `.phar` path rejection.
+///
+/// php-src strips one leading slash, then treats `.phar` (whole name) and any name whose
+/// `.phar` prefix is followed by `/` or `\` as the reserved magic directory. Names that
+/// merely share the prefix (`.pharma`, `.phar.txt`) stay ordinary directories.
+fn phar_add_empty_dir_body() -> Vec<crate::parser::ast::Stmt> {
+    let name = || var_expr("name");
+    let mut body = vec![
+        assign_stmt("name", var_expr("directory")),
+        if_stmt(
+            binary_expr(
+                binary_expr(name(), BinOp::StrictNotEq, string_expr("")),
+                BinOp::And,
+                binary_expr(
+                    function_call("substr", vec![name(), int_expr(0), int_expr(1)]),
+                    BinOp::StrictEq,
+                    string_expr("/"),
+                ),
+            ),
+            vec![assign_stmt(
+                "name",
+                function_call("substr", vec![name(), int_expr(1)]),
+            )],
+            None,
+        ),
+        assign_stmt("magic", binary_expr(name(), BinOp::StrictEq, string_expr(".phar"))),
+        if_stmt(
+            binary_expr(
+                binary_expr(not_expr(var_expr("magic")), BinOp::And,
+                    binary_expr(function_call("strlen", vec![name()]), BinOp::Gt, int_expr(5))),
+                BinOp::And,
+                binary_expr(
+                    function_call("substr", vec![name(), int_expr(0), int_expr(5)]),
+                    BinOp::StrictEq,
+                    string_expr(".phar"),
+                ),
+            ),
+            vec![
+                assign_stmt(
+                    "next",
+                    function_call("substr", vec![name(), int_expr(5), int_expr(1)]),
+                ),
+                assign_stmt(
+                    "magic",
+                    binary_expr(
+                        binary_expr(var_expr("next"), BinOp::StrictEq, string_expr("/")),
+                        BinOp::Or,
+                        binary_expr(var_expr("next"), BinOp::StrictEq, string_expr("\\")),
+                    ),
+                ),
+            ],
+            None,
+        ),
+        if_stmt(
+            var_expr("magic"),
+            vec![throw_stmt(new_object_expr(
+                "BadMethodCallException",
+                vec![string_expr("Cannot create a directory in magic \".phar\" directory")],
+            ))],
+            None,
+        ),
+        expr_stmt(function_call(
+            "file_put_contents",
+            vec![
+                binary_expr(
+                    phar_entry_url_expr(var_expr("directory")),
+                    BinOp::Concat,
+                    string_expr("/"),
+                ),
+                string_expr(""),
+            ],
+        )),
+    ];
+    body.extend(phar_track_entry_body(var_expr("directory")));
     body
 }
 

@@ -102,6 +102,7 @@ pub(crate) fn inject_builtin_throwables(
         "RuntimeException",
         "ReflectionException",
         "JsonException",
+        "PharException",
         "Fiber",
         "FiberError",
         "ClosedGeneratorException",
@@ -224,6 +225,25 @@ pub(crate) fn inject_builtin_throwables(
         "ReflectionException".to_string(),
         FlattenedClass {
             name: "ReflectionException".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Exception".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    // `PharException extends Exception` (php-src `ext/phar/phar_exception.c`).
+    class_map.insert(
+        "PharException".to_string(),
+        FlattenedClass {
+            name: "PharException".to_string(),
             span: crate::span::Span::dummy(),
             extends: Some("Exception".to_string()),
             implements: Vec::new(),
