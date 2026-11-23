@@ -270,8 +270,10 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
     // A generator constructor runs its EIR validator eagerly before the lazy body starts.
     if function.flags.is_generator {
         let validator = crate::names::generator_parameter_guard_name(&function.name);
-        if let Some(summary) = context.summaries.get(&callable_key(&validator)) {
-            effects |= *summary;
+        // Through `summary`, so the incremental fixed point records this read and recomputes the
+        // generator when the validator's summary grows after the first round.
+        if let Some(summary) = context.summary(&callable_key(&validator)) {
+            effects |= summary;
         }
     }
     let borrowed_roots = if context.has_dynamic_class_barrier {
