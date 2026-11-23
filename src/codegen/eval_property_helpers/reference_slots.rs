@@ -43,23 +43,23 @@ pub(super) fn begin_canonical_read(
     let done = format!("{}_canonical_done", slot_body_label_raw(slot, "get"));
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [sp, #16]");                          // reload the native object
-            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));  // select its managed reference cell
-            emitter.instruction("bl __rt_reference_cell_canonical");           // inspect its current physical representation
-            emitter.instruction(&format!("cbz x0, {raw}"));                    // raw cells retain their declared bridge path
-            emitter.instruction("bl __rt_mixed_deref");                        // expose the wrapper's current concrete child
-            emitter.instruction("bl __rt_mixed_clone");                        // return a value copy independent from the alias
-            emitter.instruction(&format!("b {done}"));
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the native object
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // select its managed reference cell
+            emitter.instruction("bl __rt_reference_cell_canonical");            // inspect its current physical representation
+            emitter.instruction(&format!("cbz x0, {raw}"));                     // raw cells retain their declared bridge path
+            emitter.instruction("bl __rt_mixed_deref");                         // expose the wrapper's current concrete child
+            emitter.instruction("bl __rt_mixed_clone");                         // return a value copy independent from the alias
+            emitter.instruction(&format!("b {done}"));                          // join after the cloned canonical read
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");              // reload the native object
-            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset));// select its managed reference cell
-            emitter.instruction("call __rt_reference_cell_canonical");         // inspect its current physical representation
-            emitter.instruction("test rax, rax");
-            emitter.instruction(&format!("jz {raw}"));                         // raw cells retain their declared bridge path
-            emitter.instruction("call __rt_mixed_deref");                      // expose the wrapper's current concrete child
-            emitter.instruction("call __rt_mixed_clone");                      // return a value copy independent from the alias
-            emitter.instruction(&format!("jmp {done}"));
+            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the native object
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // select its managed reference cell
+            emitter.instruction("call __rt_reference_cell_canonical");          // inspect its current physical representation
+            emitter.instruction("test rax, rax");                               // test whether the cell owns a canonical wrapper
+            emitter.instruction(&format!("jz {raw}"));                          // raw cells retain their declared bridge path
+            emitter.instruction("call __rt_mixed_deref");                       // expose the wrapper's current concrete child
+            emitter.instruction("call __rt_mixed_clone");                       // return a value copy independent from the alias
+            emitter.instruction(&format!("jmp {done}"));                        // join after the cloned canonical read
         }
     }
     emitter.label(&raw);
@@ -86,63 +86,63 @@ pub(super) fn emit_canonical_scalar_store(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("str {result_reg}, [sp, #56]"));       // preserve the converted scalar across canonical-shape probing
-            emitter.instruction("ldr x9, [sp, #16]");                          // reload the native object
-            emitter.instruction(&format!("ldr x9, [x9, #{}]", slot.offset));  // select its managed reference cell
-            emitter.instruction("str x9, [sp, #64]");                          // preserve the raw cell for the legacy branch
-            emitter.instruction("mov x0, x9");                                 // probe the cell's current physical representation
-            emitter.instruction("bl __rt_reference_cell_canonical");
-            emitter.instruction(&format!("cbz x0, {raw}"));                    // raw cells keep their declared scalar ABI
-            emitter.instruction("str x0, [sp, #72]");                          // preserve the persistent wrapper
-            emitter.instruction(&format!("ldr {result_reg}, [sp, #56]"));      // restore the converted scalar for boxing
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the native object
+            emitter.instruction(&format!("ldr x9, [x9, #{}]", slot.offset));    // select its managed reference cell
+            emitter.instruction("str x9, [sp, #64]");                           // preserve the raw cell for the legacy branch
+            emitter.instruction("mov x0, x9");                                  // probe the cell's current physical representation
+            emitter.instruction("bl __rt_reference_cell_canonical");            // inspect its current physical representation
+            emitter.instruction(&format!("cbz x0, {raw}"));                     // raw cells keep their declared scalar ABI
+            emitter.instruction("str x0, [sp, #72]");                           // preserve the persistent wrapper
+            emitter.instruction(&format!("ldr {result_reg}, [sp, #56]"));       // restore the converted scalar for boxing
             crate::codegen::emit_box_current_value_as_mixed(emitter, &slot.ty);
-            emitter.instruction("ldr x9, [sp, #72]");                          // recover the wrapper after Mixed allocation
-            emitter.instruction("ldr x10, [x9, #8]");                          // snapshot its displaced child
-            emitter.instruction("str x0, [x9, #8]");                           // publish the replacement before cleanup
-            emitter.instruction("mov x0, x10");                                // retire the previous boxed child
-            emitter.instruction("bl __rt_decref_mixed");
-            emitter.instruction(&format!("b {done}"));
+            emitter.instruction("ldr x9, [sp, #72]");                           // recover the wrapper after Mixed allocation
+            emitter.instruction("ldr x10, [x9, #8]");                           // snapshot its displaced child
+            emitter.instruction("str x0, [x9, #8]");                            // publish the replacement before cleanup
+            emitter.instruction("mov x0, x10");                                 // retire the previous boxed child
+            emitter.instruction("bl __rt_decref_mixed");                        // release the displaced boxed child
+            emitter.instruction(&format!("b {done}"));                          // join after canonical replacement
             emitter.label(&raw);
-            emitter.instruction("ldr x9, [sp, #64]");                          // recover the raw reference cell
-            emitter.instruction(&format!("ldr {result_reg}, [sp, #56]"));      // restore the converted scalar
-            emitter.instruction(&format!("str {result_reg}, [x9]"));           // publish through the legacy scalar layout
-            emitter.instruction("str xzr, [x9, #8]");                          // clear its typed-property marker
+            emitter.instruction("ldr x9, [sp, #64]");                           // recover the raw reference cell
+            emitter.instruction(&format!("ldr {result_reg}, [sp, #56]"));       // restore the converted scalar
+            emitter.instruction(&format!("str {result_reg}, [x9]"));            // publish through the legacy scalar layout
+            emitter.instruction("str xzr, [x9, #8]");                           // clear its typed-property marker
         }
         Arch::X86_64 => {
             if slot.ty.codegen_repr() == PhpType::Float {
-                emitter.instruction(&format!("movsd QWORD PTR [rbp - 64], {result_reg}"));// preserve the converted float across canonical-shape probing
+                emitter.instruction(&format!("movsd QWORD PTR [rbp - 64], {result_reg}")); // preserve the converted float across canonical-shape probing
             } else {
-                emitter.instruction(&format!("mov QWORD PTR [rbp - 64], {result_reg}"));// preserve the converted integer across canonical-shape probing
+                emitter.instruction(&format!("mov QWORD PTR [rbp - 64], {result_reg}")); // preserve the converted integer across canonical-shape probing
             }
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");              // reload the native object
-            emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot.offset));// select its managed reference cell
-            emitter.instruction("mov rax, r11");                               // probe the cell's current physical representation
-            emitter.instruction("call __rt_reference_cell_canonical");
-            emitter.instruction("test rax, rax");
-            emitter.instruction(&format!("jz {raw}"));                         // raw cells keep their declared scalar ABI
-            emitter.instruction("mov QWORD PTR [rbp - 72], rax");              // preserve the persistent wrapper
+            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the native object
+            emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot.offset)); // select its managed reference cell
+            emitter.instruction("mov rax, r11");                                // probe the cell's current physical representation
+            emitter.instruction("call __rt_reference_cell_canonical");          // inspect its current physical representation
+            emitter.instruction("test rax, rax");                               // test whether the cell owns a canonical wrapper
+            emitter.instruction(&format!("jz {raw}"));                          // raw cells keep their declared scalar ABI
+            emitter.instruction("mov QWORD PTR [rbp - 72], rax");               // preserve the persistent wrapper
             if slot.ty.codegen_repr() == PhpType::Float {
-                emitter.instruction(&format!("movsd {result_reg}, QWORD PTR [rbp - 64]"));// restore the converted float for boxing
+                emitter.instruction(&format!("movsd {result_reg}, QWORD PTR [rbp - 64]")); // restore the converted float for boxing
             } else {
-                emitter.instruction(&format!("mov {result_reg}, QWORD PTR [rbp - 64]"));// restore the converted integer for boxing
+                emitter.instruction(&format!("mov {result_reg}, QWORD PTR [rbp - 64]")); // restore the converted integer for boxing
             }
             crate::codegen::emit_box_current_value_as_mixed(emitter, &slot.ty);
-            emitter.instruction("mov r11, QWORD PTR [rbp - 72]");              // recover the wrapper after Mixed allocation
-            emitter.instruction("mov r10, QWORD PTR [r11 + 8]");               // snapshot its displaced child
-            emitter.instruction("mov QWORD PTR [r11 + 8], rax");               // publish the replacement before cleanup
-            emitter.instruction("mov rax, r10");                               // retire the previous boxed child
-            emitter.instruction("call __rt_decref_mixed");
-            emitter.instruction(&format!("jmp {done}"));
+            emitter.instruction("mov r11, QWORD PTR [rbp - 72]");               // recover the wrapper after Mixed allocation
+            emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                // snapshot its displaced child
+            emitter.instruction("mov QWORD PTR [r11 + 8], rax");                // publish the replacement before cleanup
+            emitter.instruction("mov rax, r10");                                // retire the previous boxed child
+            emitter.instruction("call __rt_decref_mixed");                      // release the displaced boxed child
+            emitter.instruction(&format!("jmp {done}"));                        // join after canonical replacement
             emitter.label(&raw);
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");              // recover the native object
-            emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot.offset));// recover its raw reference cell
+            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // recover the native object
+            emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot.offset)); // recover its raw reference cell
             if slot.ty.codegen_repr() == PhpType::Float {
-                emitter.instruction(&format!("movsd {result_reg}, QWORD PTR [rbp - 64]"));// restore the converted float
-                emitter.instruction(&format!("movsd QWORD PTR [r11], {result_reg}"));// publish through the legacy float layout
+                emitter.instruction(&format!("movsd {result_reg}, QWORD PTR [rbp - 64]")); // restore the converted float
+                emitter.instruction(&format!("movsd QWORD PTR [r11], {result_reg}")); // publish through the legacy float layout
             } else {
-                emitter.instruction(&format!("mov {result_reg}, QWORD PTR [rbp - 64]"));// restore the converted integer
-                emitter.instruction(&format!("mov QWORD PTR [r11], {result_reg}"));// publish through the legacy integer layout
+                emitter.instruction(&format!("mov {result_reg}, QWORD PTR [rbp - 64]")); // restore the converted integer
+                emitter.instruction(&format!("mov QWORD PTR [r11], {result_reg}")); // publish through the legacy integer layout
             }
-            emitter.instruction("mov QWORD PTR [r11 + 8], 0");                 // clear its typed-property marker
+            emitter.instruction("mov QWORD PTR [r11 + 8], 0");                  // clear its typed-property marker
         }
     }
     emitter.label(&done);
