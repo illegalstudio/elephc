@@ -442,15 +442,19 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
                 .set_curl_easy_write_mode(table_id, truthy, false);
             return values.bool_value(ffi::easy_setopt_long(raw, opt, i64::from(truthy)));
         }
-        // CURLOPT_PRIVATE (10103): retained and stored, read back by
-        // `curl_getinfo(..., CURLINFO_PRIVATE)`. `set_curl_easy_private` retains its own
-        // independent reference — see that method's doc for why storing the caller's bare
-        // (unretained) `value` cell here would be a use-after-free as soon as the caller's
-        // own variable is unset or reassigned.
+        // CURLOPT_PRIVATE (10103): retain an independent owner, publish it, then release
+        // the detached predecessor after the resource-table borrow ends.
         if option == 10103 {
-            let stored = context
+            let retained = values.retain(value)?;
+            let (stored, detached) = context
                 .stream_resources_mut()
-                .set_curl_easy_private(table_id, value, values)?;
+                .replace_curl_easy_private(table_id, retained);
+            elephc_memoir::runtime_owners::release_all(
+                detached,
+                elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+                elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+                |owner| eval_release_value(context, values, owner),
+            )?;
             return values.bool_value(stored);
         }
         // CURLOPT_SAFE_UPLOAD (-1): always on, matching php-src's own rejection of a

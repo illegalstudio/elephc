@@ -61,7 +61,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the string length to append
     emitter.instruction("call __rt_array_push_str");                            // persist and append the string, returning the updated array payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed string-array owner
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rax, r10");                                        // return the boxed string-array owner to Rust
     emitter.instruction("jmp __elephc_eval_value_string_array_push_done_x86");  // skip the malformed-input null result
     emitter.label("__elephc_eval_value_string_array_push_fail_x86");
@@ -113,7 +113,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the borrowed object pointer as the pushed child; rdi already holds the array payload
     emitter.instruction("call __rt_array_push_refcounted");                     // retain the object and append it, keeping the object value_type stamp
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed object-array owner
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rax, r10");                                        // return the boxed object-array owner to Rust
     emitter.instruction("jmp __elephc_eval_value_object_array_push_done_x86");  // skip the malformed-input null result
     emitter.label("__elephc_eval_value_object_array_push_fail_x86");

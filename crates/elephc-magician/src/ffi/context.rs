@@ -14,6 +14,7 @@ use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ElephcEvalScope, ABI_VERSION};
 use crate::context::native_frame_called_class_override_bytes;
 use crate::errors::EvalStatus;
+use crate::value::RuntimeCellHandle;
 #[cfg(not(test))]
 use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
 #[cfg(not(test))]
@@ -458,28 +459,12 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// Consumes a context owner and returns any owned persistent-value destructor exception.
 ///
 /// Generated code raises the returned Throwable after this Rust call returns. The final ABI
-/// owner drains static locals, static properties and materialized class constants while the
-/// dynamic destructor registry is still live. PCNTL registrations defer final reclamation.
+/// owner detaches all context and resource cell owners before invoking their release
+/// callbacks. PCNTL registrations can still defer final reclamation.
 ///
-/// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
-/// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
-/// `EvalStreamResources::release_curl_easy_private_values`'s own doc for why that release
-/// cannot happen inside `Drop` itself and has to live here instead.
-/// `ElephcRuntimeOps::new()` needs no live eval call or
-/// context to construct — it is a stateless adapter over generated runtime C-ABI symbols —
-/// so it is safe to build one ad hoc for this one release pass even though this function
-/// itself receives no `RuntimeValueOps` parameter.
-///
-/// ORDER IS LOAD-BEARING: the curl-private release runs BEFORE
-/// `context.unregister_dynamic_object_context()` below, not after. A retained
-/// `CURLOPT_PRIVATE` value can be (or transitively reference, through an array/object
-/// graph) an eval-declared object with a `__destruct()` method; releasing it to a
-/// zero refcount runs that destructor, and dispatching it correctly depends on this
-/// context still being registered as the object's owner
-/// (`crate::ffi::dynamic_destructors::dynamic_object_owner_context`). Releasing AFTER
-/// unregistering would let that lookup fail for exactly this one teardown-time release,
-/// silently skipping (or misrouting) a `__destruct()` call every other release path in
-/// this crate correctly triggers.
+/// This drain must run while the dynamic destructor registry is live. Any retained cell can
+/// transitively reach an eval-declared object with `__destruct()`, whose dispatch still needs
+/// `crate::ffi::dynamic_destructors::dynamic_object_owner_context` to resolve this context.
 ///
 /// # Safety
 /// `ctx` must be null or a pointer returned by `__elephc_eval_context_new`
@@ -513,7 +498,7 @@ pub(super) unsafe fn release_eval_context(
     let mut context = unsafe { Box::from_raw(ctx) };
     let mut thrown = incoming.or_else(|| context.take_pending_throw());
     loop {
-        let cells = context.take_persistent_cell_owners();
+        let cells = take_eval_context_cell_owners(&mut context);
         if cells.is_empty() {
             break;
         }
@@ -546,6 +531,13 @@ pub(super) unsafe fn release_eval_context(
     thrown
 }
 
+/// Detaches every context-owned and resource-owned PHP cell before cleanup can re-enter.
+fn take_eval_context_cell_owners(context: &mut ElephcEvalContext) -> Vec<RuntimeCellHandle> {
+    let mut cells = context.take_context_cell_owners();
+    cells.extend(context.stream_resources_mut().take_php_cell_owners());
+    cells
+}
+
 /// Unregisters every process-global callback into one context, then drops it immediately.
 ///
 /// PCNTL calls this only after the last retained signal handler stops referencing
@@ -572,10 +564,20 @@ fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
     {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
         context.release_pcntl_foreign_callables(&mut values);
-        #[cfg(feature = "curl")]
-        context
-            .stream_resources_mut()
-            .release_curl_easy_private_values(&mut values);
+        let mut thrown = None;
+        loop {
+            let cells = take_eval_context_cell_owners(&mut context);
+            if cells.is_empty() {
+                break;
+            }
+            thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown);
+        }
+        if let Some(pending) = context.take_pending_throw() {
+            thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending));
+        }
+        if let Some(thrown) = thrown {
+            let _ = crate::runtime_hooks::release::release_native_cells([thrown], None);
+        }
     }
     if context.has_abi_owners() {
         // Cleanup above can run a PHP destructor that publishes a new buffer callback.

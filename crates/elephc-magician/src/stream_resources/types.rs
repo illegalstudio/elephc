@@ -304,10 +304,9 @@ pub(super) struct EvalCurlEasyHandle {
     pub(super) return_transfer: bool,
     /// Mirrors `CurlHandle::$__elephc_write_user`.
     pub(super) write_user: bool,
-    /// Mirrors `CurlHandle::$__elephc_private` (`CURLOPT_PRIVATE`'s stored value).
-    /// `None` until first set, read back as PHP `false` — matching the AOT property's
-    /// `false` default.
-    pub(super) private_value: Option<RuntimeCellHandle>,
+    /// Owns `CurlHandle::$__elephc_private` until replacement or handle teardown.
+    /// An empty owner slot reads back as PHP `false`, matching the AOT property default.
+    pub(super) private_value: RuntimeOwnerSlot,
     /// Mirrors `CurlHandle::$__elephc_callbacks`, indexed by `crate::curl_ffi`'s `SLOT_*`.
     /// THE ROOT for every installed callback: the bridge's own slot holds only two opaque
     /// integers (the slot index and this handle's eval table key), never the callable, so
@@ -372,7 +371,7 @@ pub(super) struct EvalCurlShareHandle {
 
 /// Stream context metadata tracked by eval.
 pub(super) struct EvalStreamContext {
-    pub(super) options: Option<RuntimeCellHandle>,
+    pub(super) options: RuntimeOwnerSlot,
 }
 
 /// Parsed PHP fopen mode used to configure `OpenOptions`.

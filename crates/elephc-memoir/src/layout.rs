@@ -117,3 +117,62 @@ pub fn emit_load_mixed_low(emitter: &mut impl crate::TargetAbi, dest: &str, cell
 pub fn emit_load_mixed_high(emitter: &mut impl crate::TargetAbi, dest: &str, cell: &str) {
     emitter.emit_load_from_address(dest, cell, 16);
 }
+
+/// Stores the tag into an already selected raw Mixed cell.
+pub fn emit_store_mixed_tag(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
+    emitter.emit_store_to_address(value, cell, 0);
+}
+
+/// Stores the first payload word into an already selected raw Mixed cell.
+pub fn emit_store_mixed_low(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
+    emitter.emit_store_to_address(value, cell, 8);
+}
+
+/// Stores the second payload word into an already selected raw Mixed cell.
+pub fn emit_store_mixed_high(emitter: &mut impl crate::TargetAbi, value: &str, cell: &str) {
+    emitter.emit_store_to_address(value, cell, 16);
+}
+
+/// Stores an immediate tag without exposing target-specific Mixed layout instructions.
+pub fn emit_store_mixed_tag_immediate(
+    emitter: &mut impl crate::TargetAbi,
+    tag: i64,
+    cell: &str,
+) {
+    let scratch = [
+        emitter.secondary_scratch_reg(),
+        emitter.symbol_scratch_reg(),
+        emitter.tertiary_scratch_reg(),
+    ]
+    .into_iter()
+    .find(|register| *register != cell)
+    .expect("the target ABI must expose a tag scratch register");
+    emitter.emit_load_int_immediate(scratch, tag);
+    emit_store_mixed_tag(emitter, scratch, cell);
+}
+
+/// Clears the unused high word of a pointer-backed Mixed value.
+pub fn emit_clear_mixed_high(emitter: &mut impl crate::TargetAbi, cell: &str) {
+    emitter.emit_store_zero_to_address(cell, 16);
+}
+
+/// Publishes a complete pointer-backed Mixed value with its unused high word cleared.
+pub fn emit_publish_mixed_pointer(
+    emitter: &mut impl crate::TargetAbi,
+    cell: &str,
+    tag: i64,
+    payload: &str,
+) {
+    let scratch = [
+        emitter.secondary_scratch_reg(),
+        emitter.symbol_scratch_reg(),
+        emitter.tertiary_scratch_reg(),
+    ]
+    .into_iter()
+    .find(|register| *register != cell && *register != payload)
+    .expect("the target ABI must expose a publication scratch register");
+    emitter.emit_load_int_immediate(scratch, tag);
+    emit_store_mixed_tag(emitter, scratch, cell);
+    emit_store_mixed_low(emitter, payload, cell);
+    emit_clear_mixed_high(emitter, cell);
+}

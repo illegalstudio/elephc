@@ -329,7 +329,7 @@ pub(super) fn lower_mixed_array_splice_aarch64(
     ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x10");
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
@@ -363,7 +363,7 @@ pub(super) fn lower_mixed_array_splice_x86_64(
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");

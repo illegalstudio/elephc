@@ -70,7 +70,7 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("bl __rt_hash_append");                                 // insert at PHP's next automatic integer key
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
-    emitter.instruction("str x0, [x9, #8]");                                    // publish the possibly reallocated hash pointer
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("b __rt_mixed_array_append_done");                      // value ownership was consumed by hash_append
 
     emitter.label("__rt_mixed_array_append_autovivify");
@@ -152,7 +152,7 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, 7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("call __rt_hash_append");                               // insert at PHP's next automatic integer key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly reallocated hash pointer
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("jmp __rt_mixed_array_append_done");                    // value ownership was consumed by hash_append
 
     emitter.label("__rt_mixed_array_append_autovivify");

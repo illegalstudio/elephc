@@ -114,7 +114,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_to_mixed");                              // split shared arrays and normalize slots before writing Mixed values
     emitter.instruction("str x0, [sp, #32]");                                   // save the unique array pointer
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell after the helper call
-    emitter.instruction("str x0, [x10, #8]");                                   // publish the unique array pointer back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x10");
     emitter.instruction("ldr x11, [x0]");                                       // load the post-conversion logical length
     emitter.instruction("str x11, [sp, #48]");                                  // preserve the original length for overwrite and extension checks
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
@@ -172,7 +172,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, #8]");                                    // pass the associative payload to its COW boundary
     emitter.instruction("bl __rt_hash_ensure_unique");                          // detach shared hash storage before examining reference slots
     emitter.instruction("ldr x9, [sp, #0]");                                    // recover the concrete owning cell
-    emitter.instruction("str x0, [x9, #8]");                                    // publish the unique hash before any keyed write
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("mov x0, x9");                                          // restore the owning cell for associative dispatch
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the associative-array hash pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_set_autovivify");
@@ -202,7 +202,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("bl __rt_hash_set");                                    // insert or update the hash entry, preserving PHP key semantics
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the owning Mixed cell after hash mutation
-    emitter.instruction("str x0, [x10, #8]");                                   // publish the possibly-reallocated hash table back to the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x10");
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after mutating the associative array
 
     emitter.label("__rt_mixed_array_set_object");
@@ -431,7 +431,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_to_mixed");                            // split shared arrays and normalize slots before writing Mixed values
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the unique array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell after the helper call
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the unique array pointer back into the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the post-conversion logical length
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // preserve the original length for overwrite and extension checks
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
@@ -486,7 +486,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // pass the associative payload to its COW boundary
     emitter.instruction("call __rt_hash_ensure_unique");                        // detach shared hash storage before examining reference slots
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // recover the concrete owning cell
-    emitter.instruction("mov QWORD PTR [rdi + 8], rax");                        // publish the unique hash before any keyed write
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "rdi");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the associative-array hash pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_set_autovivify");
     emitter.instruction("mov rdi, r10");                                        // look up the existing hash slot before replacement
@@ -515,7 +515,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 7");                                           // runtime value tag 7 = boxed Mixed
     emitter.instruction("call __rt_hash_set");                                  // insert or update the hash entry, preserving PHP key semantics
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell after hash mutation
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly-reallocated hash table back to the Mixed cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after mutating the associative array
 
     emitter.label("__rt_mixed_array_set_object");

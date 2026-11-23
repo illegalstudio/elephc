@@ -26,8 +26,9 @@ helper-owner retirement.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. The compiler enables Memoir's `codegen` feature to emit the
 assembly `__rt_*` helpers. Magician enables `runtime` for the eval buffer registry,
-cell retirement observers, owned object edges and output handlers. The Rust code
-is linked through the Magician archive when a program needs the bridge. Eval
+cell retirement observers, allocation-bound weak metadata, stable owner slots,
+detached-batch cleanup, owned object edges and output handlers. The Rust code is
+linked through the Magician archive when a program needs the bridge. Eval
 buffer slots and their libc allocations are independent of the emitted buffer
 table and heap. EIR ownership analysis and optimization remain in the compiler,
 together with PHP type/reference validation, resource identity policy,
@@ -103,6 +104,15 @@ and expose their actual slots to GC.
 The common eval argument cleanup keeps the result visible to GC until its
 arguments have been released. It preserves the call error or the first cleanup
 error and detaches a result that cleanup prevents from being returned.
+Persistent eval values use the same runtime ownership contract. Stream-context
+options and cURL private values publish independent owners through
+`RuntimeOwnerSlot`; replacement detaches the predecessor before any release can
+reenter Magician. Context teardown first removes constants, enum values, static
+storage, handler stacks, stream wrappers, stream contexts and cURL callback roots,
+then releases the complete detached batch. Array cursor metadata uses the exact
+observed cell lifetime, so an allocator-reused address cannot inherit the retired
+cell's cursor. Compiler-side Mixed mutation uses Memoir's tag, payload and cleared
+high-word publication helpers while the compiler retains PHP layout decisions.
 A native reference commit publishes the validated owner before it retires the
 displaced value and any snapshot lease, reporting cleanup exceptions through the
 caller's context. String writes can use

@@ -1,13 +1,13 @@
 //! Purpose:
-//! Owns Elephc's emitted memory-management helpers and Magician's eval buffer storage.
+//! Owns Elephc's emitted memory-management helpers and Magician's eval ownership protocols.
 //!
 //! Called from:
 //! - Elephc enables `codegen` and supplies an emitter and target ABI.
-//! - Magician enables `runtime` and supplies PHP argument and diagnostic handling.
+//! - Magician enables `runtime` and supplies PHP cells, release callbacks and diagnostics.
 //!
 //! Key details:
 //! - Cargo can build each consumer with just its own feature.
-//! - The codegen module forbids unsafe code. The eval allocator contains its libc calls.
+//! - The codegen module forbids unsafe code. Only the eval allocator calls libc directly.
 
 #![deny(unsafe_code)]
 

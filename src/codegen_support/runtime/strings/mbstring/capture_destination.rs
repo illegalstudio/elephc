@@ -73,18 +73,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("mov x9, #7");                                      // subsequent captures can mix strings, false, and preserved elements
         emitter.instruction("str x9, [x0, #16]");                               // declare heterogeneous hash payloads
         emitter.instruction("ldr x9, [sp]");                                    // recover the existing terminal Mixed cell
-        emitter.instruction("str x0, [x9, #8]");                                // transfer the new hash owner before releasing the indexed payload
-        emitter.instruction("mov x10, #5");                                     // publish the boxed associative-array representation
-        emitter.instruction("str x10, [x9]");                                   // preserve every alias to this same cell
-        emitter.instruction("str xzr, [x9, #16]");                              // clear the indexed representation's unused high payload
+        elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
+        elephc_memoir::layout::emit_store_mixed_tag_immediate(emitter, 5, "x9");
+        elephc_memoir::layout::emit_clear_mixed_high(emitter, "x9");
         emitter.instruction("ldr x0, [sp, #8]");                                // consume the old container after all children acquired new owners
     } else {
         emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the new owned hash across old-container release
         emitter.instruction("mov QWORD PTR [rax + 16], 7");                     // subsequent captures use heterogeneous entry tags
         emitter.instruction("mov r10, QWORD PTR [rsp]");                        // recover the existing terminal Mixed cell
-        emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // transfer the new hash owner before releasing the old payload
-        emitter.instruction("mov QWORD PTR [r10], 5");                          // publish the associative-array tag through the existing cell identity
-        emitter.instruction("mov QWORD PTR [r10 + 16], 0");                     // clear the unused high payload
+        elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
+        elephc_memoir::layout::emit_store_mixed_tag_immediate(emitter, 5, "r10");
+        elephc_memoir::layout::emit_clear_mixed_high(emitter, "r10");
         emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // consume the old indexed owner after every child was retained
     }
     abi::emit_call_label(emitter, "__rt_decref_any");

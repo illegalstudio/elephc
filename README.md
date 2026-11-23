@@ -853,7 +853,7 @@ crates/
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
-├── elephc-memoir/       # Memory-management emitters and Magician eval buffer storage
+├── elephc-memoir/       # Memory-management emitters and Magician ownership protocols
 ├── elephc-mbstring/     # Shared PHP 8.5.10 mbstring engine and native bridge
 ├── elephc-monitoring-contract/ # Typed monitoring policy shared by the compiler and bridges
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge

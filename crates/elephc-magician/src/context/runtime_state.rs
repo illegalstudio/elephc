@@ -106,11 +106,18 @@ impl ElephcEvalContext {
     }
 
     /// Detaches persistent value owners before native releases can reenter the context.
-    pub(crate) fn take_persistent_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
-        self.static_locals.drain().map(|(_, cell)| cell)
+    pub(crate) fn take_context_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
+        self.enum_cases.drain().map(|(_, cell)| cell)
+            .chain(self.enum_case_values.drain().map(|(_, cell)| cell))
+            .chain(self.constants.drain().map(|(_, cell)| cell))
+            .chain(self.static_locals.drain().map(|(_, cell)| cell))
             .chain(self.static_properties.drain().map(|(_, cell)| cell))
             .chain(self.class_constants.drain().map(|(_, cell)| cell))
             .chain(self.instance_defaults.drain().map(|(_, cell)| cell))
+            .chain(self.error_handler.take().map(|handler| handler.callback))
+            .chain(self.error_handler_stack.drain(..).flatten().map(|handler| handler.callback))
+            .chain(self.exception_handler.take())
+            .chain(self.exception_handler_stack.drain(..).flatten())
             .collect()
     }
 
@@ -239,8 +246,7 @@ impl ElephcEvalContext {
     /// freshly built array points at its first element.
     pub fn array_cursor(&self, array: RuntimeCellHandle) -> EvalArrayCursor {
         self.array_cursors
-            .get(&(array.as_ptr() as usize))
-            .copied()
+            .get(array.as_ptr() as usize)
             .unwrap_or(EvalArrayCursor::Position(0))
     }
 
@@ -251,10 +257,10 @@ impl ElephcEvalContext {
     pub fn set_array_cursor(&mut self, array: RuntimeCellHandle, cursor: EvalArrayCursor) {
         let key = array.as_ptr() as usize;
         if cursor == EvalArrayCursor::Position(0) {
-            self.array_cursors.remove(&key);
+            let _ = self.array_cursors.remove(key);
             return;
         }
-        self.array_cursors.insert(key, cursor);
+        let _ = self.array_cursors.insert(key, cursor);
     }
 
     /// Returns true when an eval include key was already loaded by this context.
@@ -839,15 +845,55 @@ mod persistent_owner_tests {
         context.set_static_local("function", "local", first);
         context.set_static_property("Owner", "value", first);
         context.set_class_constant_cell("Owner", "TOKEN", second);
-        let cells = context.take_persistent_cell_owners();
+        let cells = context.take_context_cell_owners();
         assert_eq!(cells.iter().filter(|cell| **cell == first).count(), 2);
         assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 1);
         assert!(context.static_local("function", "local").is_none());
         assert!(context.static_property("Owner", "value").is_none());
         assert!(context.class_constant_cell("Owner", "TOKEN").is_none());
-        assert!(context.take_persistent_cell_owners().is_empty());
+        assert!(context.take_context_cell_owners().is_empty());
         context.set_static_property("Owner", "replacement", second);
-        assert_eq!(context.take_persistent_cell_owners(), vec![second]);
+        assert_eq!(context.take_context_cell_owners(), vec![second]);
+    }
+
+    /// Dynamic declarations and local handler stacks participate in the same owner drain.
+    #[test]
+    fn context_cell_drain_includes_constants_enums_and_handlers() {
+        let mut context = ElephcEvalContext::new();
+        let cells = (1..=7)
+            .map(|address| RuntimeCellHandle::from_raw(address as *mut crate::value::RuntimeCell))
+            .collect::<Vec<_>>();
+        context.constants.insert("dynamic".to_string(), cells[0]);
+        context.enum_cases.insert(("State".to_string(), "Open".to_string()), cells[1]);
+        context.enum_case_values.insert(("State".to_string(), "Open".to_string()), cells[2]);
+        context.error_handler = Some(EvalErrorHandlerState { callback: cells[3], levels: -1 });
+        context.error_handler_stack.push(Some(EvalErrorHandlerState {
+            callback: cells[4], levels: -1,
+        }));
+        context.exception_handler = Some(cells[5]);
+        context.exception_handler_stack.push(Some(cells[6]));
+
+        let drained = context.take_context_cell_owners();
+        for cell in cells {
+            assert_eq!(drained.iter().filter(|owner| **owner == cell).count(), 1);
+        }
+        assert!(context.take_context_cell_owners().is_empty());
+    }
+
+    /// A newly allocated cell cannot inherit the cursor of a retired cell at the same address.
+    #[test]
+    fn array_cursor_is_bound_to_the_exact_cell_lifetime() {
+        let mut context = ElephcEvalContext::new();
+        let address = usize::MAX - 211;
+        let cell = RuntimeCellHandle::from_raw(address as *mut crate::value::RuntimeCell);
+        context.set_array_cursor(cell, EvalArrayCursor::Position(4));
+        assert_eq!(context.array_cursor(cell), EvalArrayCursor::Position(4));
+
+        elephc_memoir::cell_retirement::retire(address);
+        assert_eq!(context.array_cursor(cell), EvalArrayCursor::Position(0));
+        context.set_array_cursor(cell, EvalArrayCursor::Position(2));
+        assert_eq!(context.array_cursor(cell), EvalArrayCursor::Position(2));
+        elephc_memoir::cell_retirement::retire(address);
     }
 
     /// Destructor callbacks cannot recursively claim a context already undergoing teardown.

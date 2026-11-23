@@ -114,20 +114,13 @@ pub(in crate::interpreter) fn release_function_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let cells = context.pop_function_args();
-    let mut released = Ok(());
-    for cell in cells {
-        let cleanup = eval_release_value(context, values, cell);
-        if released.is_ok() { released = cleanup; }
-    }
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let result = result.map(elephc_memoir::runtime_owners::RuntimeOwnerSlot::new);
+    let owners = context.pop_function_args().into_iter()
+        .map(elephc_memoir::runtime_owners::RuntimeOwnerSlot::new)
+        .collect::<Vec<_>>();
+    finish_eval_argument_slots(result, &owners, context, values, |owner, context, values| {
+        eval_release_value(context, values, owner.take())
+    })
 }
 
 /// Computes PHP's `func_num_args()` count and positional surplus length before binding.

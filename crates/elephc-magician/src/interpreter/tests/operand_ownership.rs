@@ -705,6 +705,39 @@ fn activation_surplus_snapshot_releases_its_own_lease() {
     assert!(context.current_function_args().is_none());
 }
 
+/// Activation cleanup retires every surplus owner and the unpublished result after an error.
+#[test]
+fn activation_surplus_cleanup_continues_after_the_first_release_error() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let first = values.string("first-extra").unwrap();
+    let second = values.string("second-extra").unwrap();
+    let result = values.int(42).unwrap();
+    let binding = bind_evaluated_function_args_with_ref_mode(
+        "f",
+        "f",
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        positional_args(vec![first.borrowed(), second.borrowed()]),
+        EvalByRefBindingMode::RequireTarget,
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    context.push_function_args(binding.frame);
+    values.fail_release_call = Some(values.releases.len());
+
+    assert_eq!(
+        release_function_args(Ok(result), &mut context, &mut values),
+        Err(EvalStatus::UncaughtThrowable)
+    );
+    assert_eq!(values.releases, vec![first, second, result]);
+    assert!(context.current_function_args().is_none());
+}
+
 /// Borrowed reads acquire a temporary lease while freshly allocated scalar operands are consumed.
 #[test]
 fn scalar_operand_cleanup_preserves_borrowed_scope_owners() {

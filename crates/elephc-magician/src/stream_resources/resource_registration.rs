@@ -33,7 +33,9 @@ impl EvalStreamResources {
 
     /// Opens a stream context resource with optional persisted options.
     pub(crate) fn open_stream_context(&mut self, options: Option<RuntimeCellHandle>) -> i64 {
-        self.insert_stream_context(EvalStreamContext { options })
+        self.insert_stream_context(EvalStreamContext {
+            options: options.map(RuntimeOwnerSlot::new).unwrap_or_default(),
+        })
     }
 
     /// Registers a user stream wrapper protocol and class in eval-local state.

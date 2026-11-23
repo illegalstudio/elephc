@@ -58,7 +58,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the string payload to append
     emitter.instruction("bl __rt_array_push_str");                              // persist and append the string, returning the updated array payload
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the boxed string-array owner
-    emitter.instruction("str x0, [x9, #8]");                                    // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("mov x0, x9");                                          // return the boxed string-array owner to Rust
     emitter.instruction("b __elephc_eval_value_string_array_push_done");        // skip the malformed-input null result
     emitter.label("__elephc_eval_value_string_array_push_fail");
@@ -109,7 +109,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the borrowed object pointer as the pushed child
     emitter.instruction("bl __rt_array_push_refcounted");                       // retain the object and append it, keeping the object value_type stamp
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the boxed object-array owner
-    emitter.instruction("str x0, [x9, #8]");                                    // update the boxed payload in case the array grew
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("mov x0, x9");                                          // return the boxed object-array owner to Rust
     emitter.instruction("b __elephc_eval_value_object_array_push_done");        // skip the malformed-input null result
     emitter.label("__elephc_eval_value_object_array_push_fail");

@@ -280,10 +280,10 @@ fn emit_mixed_splice_replacement_insert(
     ctx.load_value_to_reg(array, cell_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [x10, #8]");                       // republish the possibly-relocated indexed array into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // republish the possibly-relocated indexed array into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
         }
     }
     if replacement.owns_temporary_array() {

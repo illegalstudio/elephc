@@ -67,6 +67,11 @@ impl Eq for RuntimeCellHandle {}
 /// One actual Rust owner whose address remains stable across the native call and cleanup.
 pub struct RuntimeOwnerSlot(Cell<RuntimeCellHandle>);
 
+// Every mutation is one complete `Cell::replace`, so unwinding can observe only the old or
+// new owner record, never a partially published cleanup obligation.
+impl std::panic::RefUnwindSafe for RuntimeOwnerSlot {}
+impl std::panic::UnwindSafe for RuntimeOwnerSlot {}
+
 /// Borrows actual owning fields while a frozen activation cannot mutate its inventory.
 pub trait RuntimeOwners {
     /// Reports each independent lease without acquiring a reference or executing PHP.
@@ -117,6 +122,16 @@ impl<T: RuntimeOwners> RuntimeOwners for Option<T> {
 }
 
 impl RuntimeOwnerSlot {
+    /// Returns the borrowed null sentinel used for a slot without an owner.
+    fn vacant() -> RuntimeCellHandle {
+        RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed()
+    }
+
+    /// Creates an owner slot that currently publishes no cleanup obligation.
+    pub fn empty() -> Self {
+        Self::new(Self::vacant())
+    }
+
     /// Moves one cleanup obligation, preserving borrowed provenance when no lease exists.
     pub fn new(value: RuntimeCellHandle) -> Self { Self(Cell::new(value)) }
 
@@ -125,13 +140,31 @@ impl RuntimeOwnerSlot {
 
     /// Detaches the owner before release can execute PHP or suspend again.
     pub fn take(&self) -> RuntimeCellHandle {
-        self.0.replace(RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed())
+        self.0.replace(Self::vacant())
+    }
+
+    /// Detaches the owner while representing an already-empty slot as `None`.
+    pub fn take_optional(&self) -> Option<RuntimeCellHandle> {
+        let value = self.take();
+        (!value.is_null()).then_some(value)
+    }
+
+    /// Publishes an optional replacement before returning the detached previous obligation.
+    pub fn replace(&self, value: Option<RuntimeCellHandle>) -> Option<RuntimeCellHandle> {
+        let value = value.unwrap_or_else(Self::vacant);
+        let previous = self.0.replace(value);
+        (!previous.is_null()).then_some(previous)
     }
 
     /// Reports whether this slot has already relinquished its lease.
     pub fn is_empty(&self) -> bool {
         self.0.get().is_null()
     }
+}
+
+impl Default for RuntimeOwnerSlot {
+    /// Starts with no owner so resource records can fill their slots transactionally.
+    fn default() -> Self { Self::empty() }
 }
 
 impl RuntimeOwners for RuntimeOwnerSlot {
@@ -191,6 +224,50 @@ pub fn release_owned_cells(
     ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
 }
 
+/// Direction in which a detached batch retires its independent owners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseOrder {
+    /// Retires owners in the order supplied by the caller.
+    Forward,
+    /// Retires the most recently supplied owner first.
+    Reverse,
+}
+
+/// Selects which cleanup error survives after every owner has been retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CleanupErrorPolicy {
+    /// Preserves the first cleanup error while continuing through the batch.
+    First,
+    /// Preserves the last cleanup error while continuing through the batch.
+    Last,
+    /// Discards cleanup errors after attempting every release.
+    Ignore,
+}
+
+/// Releases a detached owner batch under an explicit ordering and error policy.
+pub fn release_all<T, E>(
+    owners: impl IntoIterator<Item = T>,
+    order: ReleaseOrder,
+    errors: CleanupErrorPolicy,
+    mut release: impl FnMut(T) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut owners = owners.into_iter().collect::<Vec<_>>();
+    if order == ReleaseOrder::Reverse {
+        owners.reverse();
+    }
+    let mut retained_error = None;
+    for owner in owners {
+        if let Err(error) = release(owner) {
+            match errors {
+                CleanupErrorPolicy::First if retained_error.is_none() => retained_error = Some(error),
+                CleanupErrorPolicy::Last => retained_error = Some(error),
+                CleanupErrorPolicy::Ignore | CleanupErrorPolicy::First => {}
+            }
+        }
+    }
+    retained_error.map_or(Ok(()), Err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +307,51 @@ mod tests {
         );
         assert_eq!(outcome, Err(5));
         assert_eq!(released, [1, 2, 3, 4, 1]);
+    }
+
+    /// Releases every owner while honoring direction and retained-error selection.
+    #[test]
+    fn release_all_applies_explicit_order_and_error_policy() {
+        let mut released = Vec::new();
+        let outcome = release_all(
+            [1, 2, 3], ReleaseOrder::Reverse, CleanupErrorPolicy::First,
+            |owner| { released.push(owner); Err(owner) },
+        );
+        assert_eq!(released, [3, 2, 1]);
+        assert_eq!(outcome, Err(3));
+
+        released.clear();
+        let outcome = release_all(
+            [1, 2, 3], ReleaseOrder::Forward, CleanupErrorPolicy::Last,
+            |owner| { released.push(owner); Err(owner) },
+        );
+        assert_eq!(released, [1, 2, 3]);
+        assert_eq!(outcome, Err(3));
+
+        released.clear();
+        let outcome = release_all(
+            [1, 2, 3],
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::Ignore,
+            |owner| {
+                released.push(owner);
+                Err(owner)
+            },
+        );
+        assert_eq!(released, [1, 2, 3]);
+        assert_eq!(outcome, Ok(()));
+    }
+
+    /// Publishes a replacement owner before handing the preceding lease to cleanup.
+    #[test]
+    fn owner_slot_replacement_detaches_the_previous_owner() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let slot = RuntimeOwnerSlot::new(first);
+        assert_eq!(slot.replace(Some(second)), Some(first));
+        assert_eq!(slot.borrowed(), second.borrowed());
+        assert_eq!(slot.take_optional(), Some(second));
+        assert_eq!(slot.take_optional(), None);
+        assert!(slot.is_empty());
     }
 }

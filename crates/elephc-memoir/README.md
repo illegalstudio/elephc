@@ -2,14 +2,16 @@
 
 Memoir is the Rust `rlib` for Elephc memory management. The compiler enables
 `codegen` to generate the `__rt_*` assembly helpers. Magician enables `runtime`
-for its Rust eval buffer registry, which travels in the existing Magician static
-archive when a compiled PHP program uses that bridge. Memoir has no default
-features, standalone bridge archive or `--with-memoir` capability.
+for its Rust ownership and eval-storage protocols, which travel in the existing
+Magician static archive when a compiled PHP program uses that bridge. Memoir has
+no default features, standalone bridge archive or `--with-memoir` capability.
 
-The runtime registry owns thread-local buffer handles, generation validation,
-zeroed payload allocation and removal before free. Magician keeps cell decoding
-and PHP diagnostics. Eval and compiled buffers retain separate handle namespaces
-and their existing allocators.
+The runtime side owns thread-local buffer handles, generation validation, zeroed
+payload allocation and removal before free. It also owns stable cell-owner slots,
+complete batch-release policy and weak metadata tied to an exact native-cell
+allocation rather than a reusable address. Magician keeps PHP semantics, cell
+decoding, resource identity and diagnostics. Eval and compiled buffers retain
+separate handle namespaces and their existing allocators.
 
 ## Boundary
 
@@ -35,7 +37,9 @@ non-owning observer caches, hash-entry reference promotion and borrowed payload 
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
 container boxing, Mixed symbol publication through persistent reference children,
 external owner record publication, contained foreign-owner release and conditional
-retirement of independently acquired helper owners, bounded cleanup invocation,
+retirement of independently acquired helper owners, persistent eval owner slots,
+complete detached-batch cleanup, allocation-bound weak metadata, canonical Mixed
+tag/payload publication, bounded cleanup invocation,
 borrowed reference chains, scratch growth in `implode`, nested C export scratch
 rewind, guarded callback-result ownership, staged reference pins and the Zend
 storage transfers used by pack and unpack. Memoir also marks transient concat

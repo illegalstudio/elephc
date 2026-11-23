@@ -105,3 +105,34 @@ return true;"#,
     values.release(second).expect("release second options result");
     assert_eq!(values.cell_owners.get(&options_identity), Some(&1));
 }
+
+/// Stored options survive caller-variable release and replacement retires the previous owner.
+#[test]
+fn stream_context_options_hold_independent_persistent_owners() {
+    let program = parse_fragment(
+        br#"$options = ["http" => ["method" => "POST"]];
+$ctx = stream_context_create($options);
+unset($options);
+$replacement = ["ssl" => ["verify_peer" => false]];
+stream_context_set_option($ctx, $replacement);
+unset($replacement);
+$stored = stream_context_get_options($ctx);
+echo $stored["ssl"]["verify_peer"] === false ? "owned" : "bad";
+return true;"#,
+    )
+    .expect("parse persistent stream-context ownership probe");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute persistent stream-context ownership probe");
+
+    assert_eq!(values.output, "owned");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    let stored = scope.visible_cell("stored").expect("stored options local");
+    assert_eq!(
+        values.cell_owners.get(&(stored.as_ptr() as usize)),
+        Some(&2),
+        "the table and the visible local must hold independent owners"
+    );
+}

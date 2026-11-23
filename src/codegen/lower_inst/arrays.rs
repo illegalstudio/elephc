@@ -962,10 +962,7 @@ fn promote_indexed_payload_into_mixed_cell(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the owning Mixed cell
-            ctx.emitter.instruction("mov x10, #5");                             // runtime tag 5 publishes associative hash storage
-            ctx.emitter.instruction("str x10, [x9]");                           // publish the hash tag before the old payload is released
-            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash into the cell
-            ctx.emitter.instruction("str xzr, [x9, #16]");                      // clear the unused high payload word
+            elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "x9", 5, "x0");
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the indexed owner the published hash replaced
             abi::emit_call_label(ctx.emitter, "__rt_decref_array");
@@ -987,9 +984,7 @@ fn promote_indexed_payload_into_mixed_cell(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdi, rax");                            // widen the promoted hash entries to boxed Mixed
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the owning Mixed cell
-            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish the hash tag before the old payload is released
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash into the cell
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // clear the unused high payload word
+            elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "r10", 5, "rax");
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // the indexed owner the published hash replaced
             abi::emit_call_label(ctx.emitter, "__rt_decref_array");
@@ -1038,10 +1033,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
 
     ctx.emitter.label(&fetch_label);
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the owning Mixed box after container conversion
-    ctx.emitter.instruction("mov x10, #5");                                     // runtime tag 5 publishes associative hash storage
-    ctx.emitter.instruction("str x10, [x9]");                                   // update the box tag before exposing the replacement hash
-    ctx.emitter.instruction("str x0, [x9, #8]");                                // write the normalized hash back into the parent entry box
-    ctx.emitter.instruction("str xzr, [x9, #16]");                              // clear the unused high payload word
+    elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "x9", 5, "x0");
     abi::emit_push_reg(ctx.emitter, "x0");
     super::hashes::materialize_hash_key_aarch64(ctx, index)?;
     abi::emit_pop_reg(ctx.emitter, "x0");
@@ -1068,7 +1060,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Mixed) as i64);
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.emitter.instruction("ldr x9, [sp]");                                // republish a hash pointer changed by insertion growth
-        ctx.emitter.instruction("str x0, [x9, #8]");                            // keep the owning Mixed cell synchronized
+        elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x9");
         abi::emit_push_reg(ctx.emitter, "x0");
         super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "x0");
@@ -1123,9 +1115,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
 
     ctx.emitter.label(&fetch_label);
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the owning Mixed box after container conversion
-    ctx.emitter.instruction("mov QWORD PTR [r10], 5");                          // publish associative hash storage in the Mixed tag
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // write the normalized hash back into the parent entry box
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");                     // clear the unused high payload word
+    elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "r10", 5, "rax");
     abi::emit_push_reg(ctx.emitter, "rax");
     super::hashes::materialize_hash_key_x86_64(ctx, index)?;
     abi::emit_pop_reg(ctx.emitter, "rdi");
@@ -1153,7 +1143,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Mixed) as i64);
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // republish a hash pointer changed by insertion growth
-        ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                // keep the owning Mixed cell synchronized
+        elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
         abi::emit_push_reg(ctx.emitter, "rax");
         super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "rdi");

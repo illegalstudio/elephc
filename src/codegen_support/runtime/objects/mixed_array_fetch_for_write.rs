@@ -157,7 +157,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_gfw_indexed_ready");
     emitter.instruction("str x0, [sp, #24]");                                   // save the unique array pointer
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the receiver cell after the helper call
-    emitter.instruction("str x0, [x10, #8]");                                   // publish the unique array pointer back into the cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x10");
     emitter.instruction("ldr x11, [x0]");                                       // load the post-conversion logical length
     emitter.instruction("str x11, [sp, #40]");                                  // preserve the original length for the extension path
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
@@ -182,7 +182,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_gfw_extend");
     selection.emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
-    emitter.instruction("ldr x11, [sp, #40]");                                   // start filling at the captured logical length
+    emitter.instruction("ldr x11, [sp, #40]");                                  // start filling at the captured logical length
     packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("b __rt_mixed_array_gfw_fill_slot");                    // install the autovivified element into the new slot
 
@@ -214,7 +214,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_ensure_unique");                          // separate ordinary shared hashes before replacing a child cell
     emitter.label("__rt_mixed_array_gfw_assoc_ready");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning receiver cell after COW
-    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique hash before looking up the child
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
@@ -251,7 +251,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_set_shared");                             // mutate the exact pre-callback selected payload
     emitter.label("__rt_mixed_array_gfw_assoc_set_done");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell after hash mutation
-    emitter.instruction("str x0, [x9, #8]");                                    // publish the possibly-reallocated hash back into the cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "x0", "x9");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the installed child cell
     emitter.instruction("bl __rt_incref");                                      // retain the installed cell so the caller owns the returned result
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
@@ -393,7 +393,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_gfw_indexed_ready");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the unique array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after the helper call
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the unique array pointer back into the cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the post-conversion logical length
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the original length for the extension path
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
@@ -450,7 +450,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_ensure_unique");                        // separate ordinary shared hashes before replacing a child cell
     emitter.label("__rt_mixed_array_gfw_assoc_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning receiver cell after COW
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique hash before looking up the child
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rdi, rax");                                        // pass the unique hash to key lookup
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
@@ -490,7 +490,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_set_shared");                           // mutate the exact pre-callback selected payload
     emitter.label("__rt_mixed_array_gfw_assoc_set_done");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after hash mutation
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly-reallocated hash back into the cell
+    elephc_memoir::layout::emit_store_mixed_low(emitter, "rax", "r10");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the installed child cell
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the installed cell so the caller owns the returned result

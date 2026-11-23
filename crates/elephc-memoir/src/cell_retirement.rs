@@ -42,6 +42,74 @@ impl CellLifetime {
     }
 }
 
+/// One metadata value bound to an exact native-cell allocation rather than its address alone.
+struct WeakCellMetadataEntry<T> {
+    value: T,
+    lifetime: CellLifetime,
+}
+
+/// Non-owning metadata whose entries disappear when their exact cell allocation retires.
+pub struct WeakCellMetadata<T> {
+    entries: HashMap<usize, WeakCellMetadataEntry<T>>,
+    retirements: CellRetirements,
+}
+
+impl<T> Default for WeakCellMetadata<T> {
+    /// Creates an empty metadata table with its own deferred retirement queue.
+    fn default() -> Self {
+        Self { entries: HashMap::new(), retirements: CellRetirements::default() }
+    }
+}
+
+impl<T> WeakCellMetadata<T> {
+    /// Removes metadata invalidated before native storage reuse.
+    fn prune(&mut self) {
+        for address in self.retirements.take() {
+            let _ = self.entries.remove(&address);
+        }
+    }
+
+    /// Publishes metadata for the exact allocation currently occupying `address`.
+    pub fn insert(&mut self, address: usize, value: T) -> Option<T> {
+        self.prune();
+        let lifetime = observe(address, &self.retirements);
+        self.entries
+            .insert(address, WeakCellMetadataEntry { value, lifetime })
+            .map(|entry| entry.value)
+    }
+
+    /// Removes one address-bound value without retaining or retiring the native cell.
+    pub fn remove(&mut self, address: usize) -> Option<T> {
+        self.prune();
+        self.entries.remove(&address).map(|entry| entry.value)
+    }
+
+    /// Removes every non-owning value while leaving native-cell lifetimes untouched.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        let _ = self.retirements.take();
+    }
+}
+
+impl<T: Copy> WeakCellMetadata<T> {
+    /// Returns metadata only while the exact observed allocation remains live.
+    pub fn get(&self, address: usize) -> Option<T> {
+        self.entries.get(&address)
+            .filter(|entry| entry.lifetime.is_live())
+            .map(|entry| entry.value)
+    }
+
+    /// Copies live metadata to another exact allocation, replacing its previous value.
+    pub fn copy(&mut self, source: usize, target: usize) -> Option<T> {
+        let value = self.get(source);
+        let _ = self.remove(target);
+        if let Some(value) = value {
+            let _ = self.insert(target, value);
+        }
+        value
+    }
+}
+
 /// Returns the weak registry without retaining runtime allocations or their eval contexts.
 fn cell_observers() -> &'static Mutex<HashMap<usize, CellObservers>> {
     CELL_OBSERVERS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -81,5 +149,39 @@ pub fn retire(cell: usize) {
         for retirements in entry.retirements.into_iter().filter_map(|queue| queue.upgrade()) {
             retirements.lock().unwrap_or_else(|error| error.into_inner()).push(cell);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Address reuse receives a fresh lifetime and cannot inherit retired metadata.
+    #[test]
+    fn weak_metadata_rejects_values_from_a_retired_allocation() {
+        let address = usize::MAX - 91;
+        let mut metadata = WeakCellMetadata::default();
+        assert_eq!(metadata.insert(address, 7), None);
+        assert_eq!(metadata.get(address), Some(7));
+
+        retire(address);
+        assert_eq!(metadata.get(address), None);
+        assert_eq!(metadata.insert(address, 9), None);
+        assert_eq!(metadata.get(address), Some(9));
+        retire(address);
+    }
+
+    /// Copying metadata observes the target allocation independently of its source.
+    #[test]
+    fn weak_metadata_copy_tracks_the_target_lifetime() {
+        let source = usize::MAX - 101;
+        let target = usize::MAX - 102;
+        let mut metadata = WeakCellMetadata::default();
+        let _ = metadata.insert(source, 3);
+        assert_eq!(metadata.copy(source, target), Some(3));
+        retire(source);
+        assert_eq!(metadata.get(source), None);
+        assert_eq!(metadata.get(target), Some(3));
+        retire(target);
     }
 }

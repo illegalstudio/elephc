@@ -23,17 +23,28 @@ pub(in crate::interpreter) fn eval_stream_context_create_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() > 2 {
-        return Err(EvalStatus::RuntimeFatal);
+    match args {
+        [] => eval_stream_context_create_result(None, context, values),
+        [options] => with_eval_operands(
+            &[options],
+            context,
+            scope,
+            values,
+            |operands, context, _, values| {
+                eval_stream_context_create_result(Some(operands[0].borrowed()), context, values)
+            },
+        ),
+        [options, params] => with_eval_operands(
+            &[options, params],
+            context,
+            scope,
+            values,
+            |operands, context, _, values| {
+                eval_stream_context_create_result(Some(operands[0].borrowed()), context, values)
+            },
+        ),
+        _ => Err(EvalStatus::RuntimeFatal),
     }
-    let options = match args.first() {
-        Some(options) => Some(eval_expr(options, context, scope, values)?),
-        None => None,
-    };
-    if let Some(params) = args.get(1) {
-        eval_expr(params, context, scope, values)?;
-    }
-    eval_stream_context_create_result(options, context, values)
 }
 
 /// Creates a stream context resource from already evaluated optional options.
@@ -75,5 +86,9 @@ pub(in crate::interpreter) fn eval_stream_context_options_arg(
     if !values.is_array_like(options)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    Ok(Some(options))
+    if options.is_borrowed() {
+        values.retain(options).map(Some)
+    } else {
+        Ok(Some(options))
+    }
 }

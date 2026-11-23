@@ -481,7 +481,7 @@ impl ElephcEvalContext {
     pub(crate) fn clear_array_metadata(&mut self, array: RuntimeCellHandle) {
         let identity = array.as_ptr() as usize;
         self.array_element_aliases.remove(&identity);
-        self.array_cursors.remove(&identity);
+        let _ = self.array_cursors.remove(identity);
     }
 
     /// Copies array references and cursor state to an independently owned array box.
@@ -489,12 +489,8 @@ impl ElephcEvalContext {
         let source_id = source.as_ptr() as usize;
         let target_id = target.as_ptr() as usize;
         if source_id == target_id { return; }
-        let cursor = self.array_cursors.get(&source_id).copied();
         self.clone_array_element_aliases(source, target, None);
-        self.array_cursors.remove(&target_id);
-        if let Some(cursor) = cursor {
-            self.array_cursors.insert(target_id, cursor);
-        }
+        let _ = self.array_cursors.copy(source_id, target_id);
     }
 
     /// Drops only retired allocation records, preserving any newer allocation at the same address.

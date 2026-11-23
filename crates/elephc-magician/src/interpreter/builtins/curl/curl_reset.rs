@@ -55,13 +55,15 @@ fn eval_curl_reset_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (table_id, raw) = eval_curl_easy_handle("curl_reset", handle, context, values)?;
     ffi::easy_reset(raw);
-    context
+    let detached = context
         .stream_resources_mut()
-        .reset_curl_easy_mirror(table_id, values)?;
-    // The bridge's own `elephc_curl_easy_reset` already ran `callbacks::clear_all`, which
-    // dropped every libcurl-side registration; this drops the eval-side ROOTS to match, so a
-    // reset handle holds no retained callable — php-src frees its handler callables in
-    // `curl_reset()` for the same reason.
-    eval_curl_clear_callbacks(table_id, context, values)?;
+        .take_curl_easy_reset_owners(table_id)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    elephc_memoir::runtime_owners::release_all(
+        detached,
+        elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+        elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+        |owner| eval_release_value(context, values, owner),
+    )?;
     values.null()
 }

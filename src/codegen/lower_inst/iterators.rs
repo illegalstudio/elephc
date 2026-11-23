@@ -1194,17 +1194,14 @@ fn convert_mixed_indexed_source_for_ref(
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed payload to hash promotion
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("mov x10, #5");                             // runtime Mixed tag 5 identifies associative hash storage
-            ctx.emitter.instruction("str x10, [x9]");                           // publish the promoted container's new runtime tag
-            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash pointer into the Mixed cell
+            elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "x9", 5, "x0");
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed indexed payload to hash promotion
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish associative-hash as the new runtime Mixed tag
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash pointer into the Mixed cell
+            elephc_memoir::layout::emit_publish_mixed_pointer(ctx.emitter, "r10", 5, "rax");
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }
@@ -1221,13 +1218,13 @@ fn convert_mixed_hash_source_for_ref(
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed hash payload to the Mixed conversion helper
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the unique converted hash pointer into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "x0", "x9");
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the unique converted hash pointer into the Mixed cell
+            elephc_memoir::layout::emit_store_mixed_low(ctx.emitter, "rax", "r10");
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }

@@ -254,9 +254,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
         } else {
             EvalCurlCallbackSlot::Empty
         };
-        context
-            .stream_resources_mut()
-            .set_curl_easy_callback(table_id, slot, cleared, values)?;
+        eval_curl_publish_callback_state(table_id, slot, cleared, context, values)?;
         if slot == ffi::SLOT_WRITE as usize {
             // php-src keeps ONE write mode and `CURLOPT_WRITEFUNCTION => null` restores
             // STDOUT — never whatever `CURLOPT_RETURNTRANSFER` was set to earlier (measured
@@ -305,9 +303,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
     // ROOTED ONLY AFTER THE BRIDGE ACCEPTED IT, matching the AOT prelude's ordering — the
     // caller's `value` cell is still live until this returns, so nothing can be released
     // between the two steps.
-    context
-        .stream_resources_mut()
-        .set_curl_easy_callback(table_id, slot, installed, values)?;
+    eval_curl_publish_callback_state(table_id, slot, installed, context, values)?;
     if slot == ffi::SLOT_WRITE as usize {
         // Installing `CURLOPT_WRITEFUNCTION` selects php-src's `PHP_CURL_USER`, which
         // deselects `PHP_CURL_RETURN`: with a write callback installed last, `curl_exec()`
@@ -384,24 +380,35 @@ pub(in crate::interpreter) fn eval_curl_copy_callbacks(
         if register {
             eval_curl_apply_bridge_slot(copy_raw, copy_id, slot, state);
         }
-        context
-            .stream_resources_mut()
-            .set_curl_easy_callback(copy_id, slot, state, values)?;
+        eval_curl_publish_callback_state(copy_id, slot, state, context, values)?;
     }
     Ok(())
 }
 
-/// Clears every callback slot on a handle, on both sides — `curl_reset()`'s counterpart to
-/// `crates/elephc-curl/src/callbacks.rs`'s `clear_all` (which the bridge's own
-/// `elephc_curl_easy_reset` already ran; this drops the eval-side roots to match).
-pub(in crate::interpreter) fn eval_curl_clear_callbacks(
+/// Retains and publishes one callback state before releasing the detached preceding owner.
+fn eval_curl_publish_callback_state(
     table_id: i64,
+    slot: usize,
+    state: EvalCurlCallbackSlot,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    context
+) -> Result<bool, EvalStatus> {
+    let state = match state {
+        EvalCurlCallbackSlot::Callable(cell) => {
+            EvalCurlCallbackSlot::Callable(values.retain(cell)?)
+        }
+        other => other,
+    };
+    let (published, detached) = context
         .stream_resources_mut()
-        .clear_curl_easy_callbacks(table_id, values)
+        .replace_curl_easy_callback(table_id, slot, state);
+    elephc_memoir::runtime_owners::release_all(
+        detached,
+        elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+        elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
+        |owner| eval_release_value(context, values, owner),
+    )?;
+    Ok(published)
 }
 
 /// Runs `transfer` with an active callback frame covering `handles`, so any callback libcurl
