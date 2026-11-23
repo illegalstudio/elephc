@@ -14,6 +14,8 @@ use crate::types::{
     is_unboxed_scalar_type, merge_array_key_types, normalized_array_key_type, PhpType,
 };
 
+use super::checked_literal_int_division_type;
+
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
@@ -636,18 +638,6 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
 }
 
 /// Returns PHP's exact result type for a division of two integer literals.
-fn checked_literal_int_division_type(left: &Expr, right: &Expr) -> Option<PhpType> {
-    let lhs = int_literal_value(left)?;
-    let rhs = int_literal_value(right)?;
-    if rhs == 0 {
-        return None;
-    }
-    if lhs == i64::MIN && rhs == -1 {
-        return Some(PhpType::Float);
-    }
-    Some(if lhs % rhs == 0 { PhpType::Int } else { PhpType::Float })
-}
-
 /// Returns whether PHP's `int ** int` keeps an integer result for these literals.
 ///
 /// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):

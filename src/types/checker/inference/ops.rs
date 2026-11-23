@@ -18,6 +18,7 @@ use crate::span::Span;
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
+use super::checked_literal_int_division_type;
 use super::syntactic::infer_return_type_syntactic;
 
 impl Checker {
@@ -1825,18 +1826,6 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
 ///
 /// A zero divisor has no compile-time value (it raises `DivisionByZeroError` at run time),
 /// so it falls back to the generic representation.
-fn checked_literal_int_division_type(left: &Expr, right: &Expr) -> Option<PhpType> {
-    let lhs = int_literal_value(left)?;
-    let rhs = int_literal_value(right)?;
-    if rhs == 0 {
-        return None;
-    }
-    if lhs == i64::MIN && rhs == -1 {
-        return Some(PhpType::Float);
-    }
-    Some(if lhs % rhs == 0 { PhpType::Int } else { PhpType::Float })
-}
-
 /// Returns whether PHP's `int ** int` keeps an integer result for these literals.
 ///
 /// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):
