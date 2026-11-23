@@ -915,6 +915,33 @@ var_dump((new Mw())->check(new Req()));
         assert!(checker.filled_array_facts.is_none());
     }
 
+    /// A call in a `switch` case expression runs inside the fill proof's scope and clears it.
+    #[test]
+    fn switch_case_call_invalidates_the_fill_fact() {
+        use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+        use crate::span::Span;
+
+        let mut checker = checker_with_fill_fact();
+        let argument = Expr::new(ExprKind::Variable("x".to_string()), Span::dummy());
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: "array_pop".into(),
+                args: vec![argument],
+            },
+            Span::dummy(),
+        );
+        let stmt = Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(1),
+                cases: vec![(vec![call], Vec::new())],
+                default: None,
+            },
+            Span::dummy(),
+        );
+        checker.invalidate_filled_arrays(&stmt);
+        assert!(checker.filled_array_facts.is_none());
+    }
+
     /// A whole-array rebind nested in an assignment's value replaces the filled storage even
     /// though the statement's target is an unrelated local.
     #[test]

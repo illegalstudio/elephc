@@ -285,7 +285,14 @@ fn stmt_direct_expressions<'a>(
             }
         }
         StmtKind::Foreach { array, .. } => visitor(array),
-        StmtKind::Switch { subject, .. } => visitor(subject),
+        StmtKind::Switch { subject, cases, .. } => {
+            visitor(subject);
+            for (case_expressions, _) in cases {
+                for expression in case_expressions {
+                    visitor(expression);
+                }
+            }
+        }
         StmtKind::Include { path, .. } => visitor(path),
         StmtKind::Return(Some(value)) => visitor(value),
         _ => {}
