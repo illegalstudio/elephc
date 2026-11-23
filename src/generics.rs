@@ -207,7 +207,7 @@ where
         if checked.is_err() && !demotions.is_empty() && demote_ref_array_params(&mut program, &demotions) > 0 {
             continue;
         }
-        let result = match checked {
+        let mut result = match checked {
             Ok(result) => result,
             Err(error) if rounds == 0 => return Err((Some(program), error)),
             Err(error) => return Err((None, error)),
@@ -256,7 +256,15 @@ where
         let (with_clones, clone_added) =
             promotable_clones::splice_promotable_clones(program, clone_work);
         program = with_clones;
-        if added == 0 && method_added == 0 && clone_added == 0 && !class_work {
+        if added == 0 && method_added == 0 && !class_work {
+            // Typed clones alone do not make another round. The checker published, resolved and
+            // checked each clone under the very declaration the splice adds (same name, positions
+            // and source identity), so its answers already cover them; checking the whole program
+            // again only repeated them, and cost two extra checks on the Symfony Demo. The one
+            // answer read off the AST rather than the checker is rebuilt on the spliced program.
+            if clone_added > 0 {
+                result.return_alias_summaries = crate::types::collect_return_alias_summaries(&program);
+            }
             break result;
         }
         // The bodies just spliced in were written against `T` and are concrete now, so a
@@ -1486,5 +1494,43 @@ mod tests {
             instantiated_type(first_name),
             decode_ignoring_memo(first_name)
         );
+    }
+
+    /// A typed clone of an untyped parameter does not check the whole program again: the round
+    /// that asked for it already checked it (two extra full checks on the Symfony Demo).
+    #[test]
+    fn promotable_clones_do_not_cost_another_check() {
+        let source = r#"<?php
+function shift_into($p, $k) {
+    $n = count($p);
+    for ($i = 0; $i < $n; $i++) { $j = $i + $k; $p[$j] = $p[$i]; }
+    return $p;
+}
+function run(int $n) {
+    $a = [1, 2, 3];
+    for ($i = 0; $i < 2; $i++) { $j = $i + 1; $a[$j] = $a[$i]; }
+    $b = shift_into($a, $n);
+    return count($b);
+}
+echo run(1);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokens");
+        let program = crate::parser::parse(&tokens).expect("program");
+        let program = crate::name_resolver::resolve(program).expect("resolved names");
+        let mut checks = 0;
+        let (program, result) = crate::generics::monomorphize(program, |program, context| {
+            checks += 1;
+            crate::types::check_with_options_and_bounds(program, Default::default(), context)
+        })
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(result.requested_promotable_clones.len(), 1, "the clone must be requested");
+        let clone = &result.requested_promotable_clones[0].clone;
+        assert!(
+            program.iter().any(|stmt| matches!(&stmt.kind,
+                crate::parser::ast::StmtKind::FunctionDecl { name, .. } if name == clone)),
+            "the clone must be spliced"
+        );
+        assert!(result.functions.contains_key(clone), "the clone must be typed");
+        assert_eq!(checks, 1, "a clone must not check the program again");
     }
 }
