@@ -61,8 +61,8 @@ fn test_strict_array_keys_audits_safe_folded_keys_before_target_pruning() {
 
     let source = r#"<?php
 if (PHP_OS_FAMILY === 'Windows') {
-    $values = [(match (1) { 1 => -2 }) => [], 'ab'];
-    $values[-1][false] = 'x';
+    $values = [-2 => 'ab', ([-2 => -2, 9][-2]) => [], 'tail'];
+    $values[-2][false] = 'x';
 }
 "#;
     StrictFixture::new(source).assert_error(

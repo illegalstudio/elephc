@@ -189,16 +189,19 @@ fn strict_array_key_source_validation_lowers_eval_magic_keys() {
 #[test]
 fn strict_array_key_source_validation_folds_safe_target_guard_keys() {
     let _profile = select_php_version(PhpVersion::Php82);
-    for (key, lookup) in [
+    for (key, expected) in [
         (r#"\Vendor\Thing::class"#, r#"'Vendor\Thing'"#),
-        ("match (1) { 1 => -2 }", "-1"),
-        ("[-2][0]", "-1"),
+        ("match (1) { 1 => -2 }", "-2"),
+        ("[-2][0]", "-2"),
+        ("[-2 => -2, 9][-2]", "-2"),
     ] {
         let source = format!(
-            "<?php if (PHP_OS_FAMILY === 'Windows') {{ $values = [({key}) => [], 'ab']; $values[{lookup}][false] = 'x'; }}"
+            "<?php if (PHP_OS_FAMILY === 'Windows') {{ $values = [{expected} => 'ab', ({key}) => [], 'tail']; $values[{expected}][false] = 'x'; }}"
         );
-        let error = crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
-            .expect_err("safe source folds must retain the invalid guarded receiver");
+        let error = match crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile()) {
+            Ok(()) => panic!("safe source folds must retain the invalid guarded receiver: {source}"),
+            Err(error) => error,
+        };
         assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
     }
 }

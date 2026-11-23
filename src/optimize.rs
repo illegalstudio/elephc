@@ -10,8 +10,8 @@
 
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+    ArrayEntry, BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
+    ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
 use crate::codegen_support::platform::Target;
@@ -102,6 +102,15 @@ fn source_array_key_is_fold_safe(expr: &Expr) -> bool {
         ExprKind::ArrayLiteral(items) => items.iter().all(source_array_key_is_fold_safe),
         ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
             source_array_key_is_fold_safe(key) && source_array_key_is_fold_safe(value)
+        }),
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
+            ArrayEntry::Keyed(key, value) => {
+                source_array_key_is_fold_safe(key) && source_array_key_is_fold_safe(value)
+            }
+            ArrayEntry::Value(value) => source_array_key_is_fold_safe(value),
+            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => {
+                false
+            }
         }),
         ExprKind::ClassConstant {
             receiver: crate::parser::ast::StaticReceiver::Named(name),
