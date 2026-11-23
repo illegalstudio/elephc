@@ -76,6 +76,7 @@ pub(crate) mod regex;
 pub(crate) mod regex_compiled;
 pub(crate) mod regex_errors;
 pub(crate) mod setlocale;
+mod regex_match_window;
 pub(crate) mod round_mode;
 pub(crate) mod serialize;
 pub(crate) mod spl;

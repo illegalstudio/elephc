@@ -57,6 +57,7 @@ mod codegen {
     mod preg_errors_grep;
     mod uri_php_src;
     mod uri;
+    mod preg_match_window;
     mod serialize;
     mod random;
     mod dom_html;

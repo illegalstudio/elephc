@@ -123223,6 +123223,20 @@
           "name": "matches",
           "optional": true,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 2,
@@ -123232,7 +123246,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match",
-    "description": "Performs a regular expression match.",
+    "description": "Performs a regular expression match. `$flags` accepts `PREG_OFFSET_CAPTURE` and `PREG_UNMATCHED_AS_NULL`; `$offset` starts the search at a byte offset (negative counts from the end) while anchors and lookbehind still see the whole subject.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -123271,11 +123285,18 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 2,
       "runtime_builtin_id": null,
-      "signature_override_reason": "additional-optional-parameters",
+      "signature_override_reason": "runtime-default-representation",
       "supported": true,
       "variadic": null
     },
@@ -123379,6 +123400,20 @@
           "name": "matches",
           "optional": true,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "int|false",
@@ -123419,6 +123454,13 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 2,
@@ -123428,7 +123470,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match_all",
-    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
+    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. `$offset` starts the search at a byte offset (negative counts from the end). AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -123465,6 +123507,13 @@
           "by_ref": false,
           "default": "0",
           "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
           "optional": true,
           "type": "int"
         }
@@ -123580,6 +123629,13 @@
           "by_ref": false,
           "default": "0",
           "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
           "optional": true,
           "type": "int"
         }

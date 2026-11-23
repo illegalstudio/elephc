@@ -94,6 +94,7 @@ mod array_builtin_args;
 mod array_push_spread;
 mod borrowed_string_args;
 mod boxed_iterable_source;
+mod preg_match_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
