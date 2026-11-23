@@ -1291,7 +1291,8 @@ pieces must stay in agreement:
    throw, `named_args::check_supplied_scalar_params_before_defaults` runs the
    checks of the supplied named arguments before the trailing defaults; an
    omitted parameter declared before the last supplied one is filled first (a
-   by-reference one only when its default can throw, pinned over the checks), as
+   by-reference one only when its default can throw, pinned until the trailing
+   defaults ran, its record retired in owner-stack order), as
    PHP fills it before the callee checks anything (`f(b: $null)` for
    `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`). Both raise the
    pending by-reference property checks of earlier parameters first

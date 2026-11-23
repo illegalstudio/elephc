@@ -137,15 +137,11 @@ pub(super) fn lower_named_args_with_signature_options(
                 operands.push(source_values[*source_index]);
             }
             crate::types::call_args::PlannedRegularArg::Default(_) if leading_defaults[param_index].is_some() => {
-                operands.push(match leading_defaults[param_index].take().expect("leading default lowered") {
-                    LeadingDefault::Rooted(value) => value,
-                    // The checks are done: retire the pin without releasing, and pass the
-                    // default as the ordinary pass would have, owned by the call as before.
-                    LeadingDefault::Pinned(value, pins) => {
-                        let span = ctx.call_site_span.unwrap_or_else(Span::dummy);
-                        super::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
-                        value
-                    }
+                operands.push(match leading_defaults[param_index].as_ref().expect("leading default lowered") {
+                    LeadingDefault::Rooted(value) => *value,
+                    // Pass the default as the ordinary pass would have, owned by the call as
+                    // before; its pin is retired once the trailing defaults ran.
+                    LeadingDefault::Pinned { value, .. } => *value,
                 });
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
@@ -154,6 +150,9 @@ pub(super) fn lower_named_args_with_signature_options(
             crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => unreachable!(),
         }
     }
+    // A pinned by-reference default stays protected while the trailing defaults run (one can
+    // throw), and is the call's own operand from here on.
+    unpin_leading_reference_defaults(ctx, &leading_defaults);
     if sig.variadic.is_some() {
         if crate::func_args::sig_has_hidden_argc_param(sig) {
             let actual_count = named_plan_actual_arg_count(&plan.source_values);
@@ -186,7 +185,62 @@ enum LeadingDefault {
     Rooted(crate::ir::ValueId),
     /// A by-reference default that can throw, kept as the call's operand and pinned (without a
     /// retain) in the unwind chain while the checks run.
-    Pinned(crate::ir::ValueId, Vec<super::call_operand_owners::PinnedInFlightOwner>),
+    Pinned {
+        value: crate::ir::ValueId,
+        pins: Vec<super::call_operand_owners::PinnedInFlightOwner>,
+        /// How many owners the call's evaluation ledger held when the pin was published.
+        ledger_mark: usize,
+    },
+}
+
+/// Returns the owner slots of the current call's argument-evaluation ledger, in publication order.
+fn current_ledger_owner_slots(ctx: &LoweringContext<'_, '_>) -> Vec<(crate::ir::LocalSlotId, Span)> {
+    ctx.call_argument_evaluation_scopes.last()
+        .filter(|scope| scope.expression_depth == ctx.expression_depth)
+        .map(|scope| scope.owners.iter().map(|owner| (owner.slot, owner.span)).collect())
+        .unwrap_or_default()
+}
+
+/// Retires the pins of the leading by-reference defaults once the checks and the trailing
+/// defaults ran.
+///
+/// Owner records form a stack, and the checks published more of them after a pin (a converted
+/// `Stringable`'s string, a later default's root), which the call's ledger retires only after
+/// the call. Popping a pin alone would remove the newest record instead, leaving that string
+/// unprotected if a trailing default throws. So every record published since the first pin is
+/// popped in stack order, the pins are cleared without release, and the ledger's records are
+/// published again in their original order.
+fn unpin_leading_reference_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    leading_defaults: &[Option<LeadingDefault>],
+) {
+    let pinned = leading_defaults.iter().flatten().filter_map(|default| match default {
+        LeadingDefault::Pinned { pins, ledger_mark, .. } => Some((pins.clone(), *ledger_mark)),
+        LeadingDefault::Rooted(_) => None,
+    }).collect::<Vec<_>>();
+    let Some(first_mark) = pinned.first().map(|(_, mark)| *mark) else { return };
+    let span = ctx.call_site_span.unwrap_or_else(Span::dummy);
+    let owners = current_ledger_owner_slots(ctx);
+    // Rebuild the publication order since the first pin: each pin, then the ledger owners
+    // published after it and before the next pin.
+    enum Record { Pin(super::call_operand_owners::PinnedInFlightOwner), Ledger(crate::ir::LocalSlotId, Span) }
+    let mut records = Vec::new();
+    for (index, (pins, mark)) in pinned.iter().enumerate() {
+        records.extend(pins.iter().cloned().map(Record::Pin));
+        let end = pinned.get(index + 1).map_or(owners.len(), |(_, next)| *next);
+        records.extend(owners[*mark..end].iter().map(|(slot, span)| Record::Ledger(*slot, *span)));
+    }
+    for record in records.into_iter().rev() {
+        match record {
+            Record::Pin(pin) => super::call_operand_owners::unpin_in_flight_owners(ctx, vec![pin], span),
+            Record::Ledger(slot, owner_span) => {
+                super::call_operand_owners::unregister_owned_call_operand(ctx, slot, owner_span);
+            }
+        }
+    }
+    for (slot, owner_span) in &owners[first_mark..] {
+        super::call_operand_owners::register_owned_call_operand(ctx, *slot, *owner_span);
+    }
 }
 
 /// Runs the runtime scalar-parameter checks of the supplied named arguments before an omitted
@@ -246,8 +300,9 @@ fn check_supplied_scalar_params_before_defaults(
                 continue;
             }
             let value = lower_arg_with_signature(ctx, sig, param_index, default);
+            let ledger_mark = current_ledger_owner_slots(ctx).len();
             let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[value], Span::dummy());
-            leading_defaults[param_index] = Some(LeadingDefault::Pinned(value, pins));
+            leading_defaults[param_index] = Some(LeadingDefault::Pinned { value, pins, ledger_mark });
             continue;
         }
         let value = lower_arg_with_signature(ctx, sig, param_index, default);

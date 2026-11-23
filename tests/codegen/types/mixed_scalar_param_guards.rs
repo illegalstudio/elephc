@@ -1823,3 +1823,28 @@ echo "next\n";
     assert_eq!(output.stdout, format!("{round}{round}{round}next\n"));
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A pinned leading by-reference default stays protected, in owner-stack order, while a later
+/// check converts a `Stringable` and a trailing default throws: `f(b: box(new Name()))` for
+/// `f(array &$a = [PHP_INT_SIZE], string $b, int $d = 1 % 0)` releases both the default array
+/// and the converted string (`--heap-debug` leak summary clean), and an accepted call still binds
+/// the default by reference.
+#[test]
+fn test_named_pinned_by_reference_default_survives_a_converted_string_and_a_throwing_default() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Name { public function __toString(): string { return str_repeat("n", 20); } }
+function box(mixed $v): mixed { return $v; }
+function f(array &$a = [PHP_INT_SIZE], string $b = 'x', int $d = 1 % 0) { echo "f body\n"; }
+function g(array &$a = [PHP_INT_SIZE], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; echo "g ", count($a), " ", strlen($b), "\n"; }
+for ($i = 0; $i < 3; $i++) {
+    try { f(b: box(new Name())); } catch (DivisionByZeroError $e) { echo "dz\n"; }
+    g(b: box(new Name()));
+}
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "dz\ng 2 20\ndz\ng 2 20\ndz\ng 2 20\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
