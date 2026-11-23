@@ -21,6 +21,7 @@ mod easy_tls;
 mod eval;
 mod http_fixture;
 mod monitoring;
+mod read_callback_php86;
 mod multi;
 mod multipart;
 mod share;

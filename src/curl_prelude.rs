@@ -781,6 +781,17 @@ function __elephc_curl_sync_read_slot(CurlHandle $handle): bool {
             // php-src passes the CURLOPT_INFILE stream (or null) as the second argument,
             // NOT the `$fd` libcurl handed the trampoline.
             $produced = call_user_func($user, $ch, $source, $length);
+            if (is_int($produced)) {
+                // PHP 8.6 validates the integer return: only 0, CURL_READFUNC_ABORT and
+                // CURL_READFUNC_PAUSE are meaningful. The string-only bridge adapter still
+                // maps 0 to end-of-data; every other integer raises php-src's ValueError
+                // (the abort/pause codes are carried by the string path for now).
+                if (PHP_VERSION_ID >= 80600 && $produced !== 0
+                    && $produced !== 268435456 && $produced !== 268435457) {
+                    throw new ValueError("The CURLOPT_READFUNCTION callback must return a string or CURL_READFUNC_ABORT or CURL_READFUNC_PAUSE");
+                }
+                return "";
+            }
             if (!is_string($produced)) {
                 // php-src treats a non-string return as end-of-data.
                 return "";

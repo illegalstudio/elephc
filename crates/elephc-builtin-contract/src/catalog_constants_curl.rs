@@ -667,6 +667,7 @@ pub(crate) static CURL_CONSTANTS: &[ConstantContract] = &[
     constant!("CURL_PREREQFUNC_OK", Curl, ConstValue::Int(0), since: Php84),
     constant!("CURL_PUSH_DENY", Curl, ConstValue::Int(1)),
     constant!("CURL_PUSH_OK", Curl, ConstValue::Int(0)),
+    constant!("CURL_READFUNC_ABORT", Curl, ConstValue::Int(268435456)),
     constant!("CURL_READFUNC_PAUSE", Curl, ConstValue::Int(268435457)),
     constant!("CURL_REDIR_POST_301", Curl, ConstValue::Int(1)),
     constant!("CURL_REDIR_POST_302", Curl, ConstValue::Int(2)),
