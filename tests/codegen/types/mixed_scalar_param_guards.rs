@@ -1764,10 +1764,10 @@ echo "next\n";
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
 
-/// A leading omitted by-reference parameter's default (`array &$a = []`) is a fresh value the
-/// call owns: it stays rooted while the supplied named arguments are checked and a trailing
-/// default runs, so a refused check or the throwing default releases it, and an accepted call
-/// still binds it by reference (`--heap-debug` leak summary clean).
+/// A leading omitted by-reference parameter's default (`array &$a = []`) is not lowered ahead of
+/// the supplied named arguments' checks: a refused check leaves nothing to release, an accepted
+/// call still binds it by reference, and a callee that throws still releases it (`--heap-debug`
+/// leak summary clean).
 #[test]
 fn test_named_leading_by_reference_default_is_released_on_refusal() {
     let output = compile_and_run_with_heap_debug(
@@ -1776,18 +1776,19 @@ function box(mixed $v): mixed { return $v; }
 function f(array &$a = [], string $b = 'x', int $d = 1 % 0) { echo "f body\n"; }
 function g(array &$a = [1, 2], string $b = 'x', int $d = 1 % 0) { echo "g body\n"; }
 function k(array &$a = [3, 4], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; echo "k ", implode(",", $a), " ", $d, "\n"; }
+function t(array &$a = [5, 6], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; throw new Exception("t " . count($a)); }
 $n = 0;
 for ($i = 0; $i < 3; $i++) {
     try { f(b: box(null)); } catch (TypeError $e) { $n++; }
     try { g(b: box(null)); } catch (TypeError $e) { $n++; }
-    try { g(b: box("s")); } catch (DivisionByZeroError $e) { $n += 10; }
     try { k(b: box(null)); } catch (TypeError $e) { $n += 100; }
     k(b: box(str_repeat("z", 3)));
+    try { t(b: box("ok")); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
 }
 echo $n, "\n";
 "#,
     );
     assert!(output.success, "{}", output.stderr);
-    assert_eq!(output.stdout, "k 3,4,zzz 8\nk 3,4,zzz 8\nk 3,4,zzz 8\n336\n");
+    assert_eq!(output.stdout, "k 3,4,zzz 8\nt 3\nk 3,4,zzz 8\nt 3\nk 3,4,zzz 8\nt 3\n306\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }

@@ -215,9 +215,13 @@ fn check_supplied_scalar_params_before_defaults(
     let last_supplied = supplied.last().map_or(0, |(param_index, _)| *param_index);
     for (param_index, arg) in plan.regular_args.iter().enumerate().take(last_supplied) {
         let crate::types::call_args::PlannedRegularArg::Default(default) = arg else { continue };
-        // A default is a fresh value even for a by-reference parameter (no caller place to
-        // keep), so it is rooted like the supplied values: a refused check or a throwing
-        // trailing default would otherwise leak `array &$a = []`.
+        // A by-reference parameter's default stays in the ordinary operand pass: an owned
+        // default bound by reference has no root that survives into the call, so lowering it
+        // here leaked it when a check refused or the callee threw. Its evaluation order is only
+        // observable for a default that can throw, which a by-reference parameter rarely has.
+        if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+            continue;
+        }
         let value = lower_arg_with_signature(ctx, sig, param_index, default);
         let lowered = lowered_value_from_id(ctx, value);
         leading_defaults[param_index] =
