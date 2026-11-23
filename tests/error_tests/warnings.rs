@@ -564,3 +564,32 @@ fn test_array_walk_object_deprecation_php86() {
     );
     elephc::codegen::set_compile_profile(PhpVersion::default(), false);
 }
+
+/// PHP 8.6 deprecates passing an object in `mb_convert_variables()` `$vars`.
+#[test]
+fn test_mb_convert_variables_object_deprecation_php86() {
+    use elephc::php_version::PhpVersion;
+
+    let source = "<?php class C { public string $a = 'x'; } $c = new C(); mb_convert_variables('UTF-8', 'auto', $c);";
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full(source).expect("must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Passing an object for argument #3 ($vars) to mb_convert_variables() is deprecated, call get_object_vars() first instead")),
+        "{:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full(source).expect("must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("mb_convert_variables() is deprecated")),
+        "PHP 8.5 must not deprecate the object argument"
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
