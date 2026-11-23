@@ -202,7 +202,21 @@ impl Checker {
             for trait_name in used.unwrap_or_default() {
                 let key = generics::methods::template_key(trait_name, &twin);
                 if let Some(template) = self.method_templates.get(&key) {
-                    return Some(template.clone());
+                    // A class that redeclares the trait's method keeps its own (the trait's is
+                    // not imported): the method it runs must be the very one the twin describes.
+                    let runs_the_trait_method = self
+                        .classes
+                        .get(owner)
+                        .and_then(|class| {
+                            class
+                                .method_decls
+                                .iter()
+                                .find(|decl| decl.name.eq_ignore_ascii_case(method))
+                        })
+                        .is_some_and(|decl| decl.span == template.span);
+                    if runs_the_trait_method {
+                        return Some(template.clone());
+                    }
                 }
             }
         }
@@ -291,6 +305,11 @@ impl Checker {
             }
             ordered.get(param).cloned().flatten()
         };
+        // Whether the call may run at all is the ordinary route's to settle (visibility, `__call`,
+        // abstract and interface receivers): only a public method is read, so nothing is skipped.
+        if !self.doc_method_is_public(class_name, method, is_static) {
+            return Ok(DocNarrowing::None);
+        }
         match template.proof {
             generics::methods::DocProof::None => Ok(DocNarrowing::None),
             generics::methods::DocProof::Identity { param } => {
@@ -330,11 +349,10 @@ impl Checker {
                 }
                 // The call stays (its receiver has an effect, or the string has an owner): its
                 // boxed result holds exactly the argument, which a scalar reads back as is.
-                if native.codegen_repr() == PhpType::Mixed {
-                    Ok(DocNarrowing::Retype(ty))
-                } else {
-                    Ok(DocNarrowing::None)
-                }
+                // Proven, so the call's type is its own argument's whatever the method's native
+                // result is read as while the program is still being settled (it joins every
+                // call's argument, and an early pass must not hand one call another's type).
+                Ok(DocNarrowing::Retype(ty))
             }
             generics::methods::DocProof::NewClass { param } => {
                 let Some(arg) = provably(param) else {
@@ -365,6 +383,20 @@ impl Checker {
                 Ok(DocNarrowing::Retype(precise))
             }
         }
+    }
+
+    /// Whether `method` is public on `class_name` (and so on every class sharing its implementation).
+    fn doc_method_is_public(&self, class_name: &str, method: &str, is_static: bool) -> bool {
+        let key = crate::names::php_symbol_key(method);
+        let Some(info) = self.classes.get(class_name.trim_start_matches('\\')) else {
+            return false;
+        };
+        let visibility = if is_static {
+            info.static_method_visibilities.get(&key)
+        } else {
+            info.method_visibilities.get(&key)
+        };
+        matches!(visibility, Some(crate::parser::ast::Visibility::Public))
     }
 
     /// Whether every class a receiver of `class_name` may be at run time resolves `method` to the

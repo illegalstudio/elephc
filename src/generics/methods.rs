@@ -82,6 +82,8 @@ pub struct MethodTemplate {
     pub return_type: Option<TypeExpr>,
     /// What the written method's body proves about its result (PHPDoc twins only).
     pub proof: DocProof,
+    /// Where the method is declared, which tells a trait's method from a class's own redeclaration.
+    pub span: Span,
 }
 
 /// The name of the hidden twin that carries the PHPDoc reading of the method `written`.
@@ -166,6 +168,7 @@ fn collect_declared(
                     .collect(),
                 variadic_type: method.variadic_type.clone(),
                 return_type: method.return_type.clone(),
+                span: method.span,
                 proof: if is_doc_twin(&method.name) {
                     DocProof::from_twin_body(
                         &method.body,

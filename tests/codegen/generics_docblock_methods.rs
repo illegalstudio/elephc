@@ -2133,3 +2133,518 @@ run(new Reg(), new P());
     assert_eq!(output.stdout, "232\n3\n6\n3|2.5|1.5\n5\nError:Typed property P::$t must not be accessed before initialization\n4\n12\n10201\n1\n8\n4\n5\n40\n149\n");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Drops the file path of a diagnostic (`... in /path/main.php on line 7` becomes `... on line 7`),
+/// which is the one part of a php message a test directory changes.
+fn strip_diagnostic_paths(output: &str) -> String {
+    output
+        .lines()
+        .map(|line| match (line.rfind(" in "), line.rfind(" on line ")) {
+            (Some(start), Some(end)) if start < end => format!("{}{}", &line[..start], &line[end..]),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The identity-call contexts of `foreachref`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_foreachref() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$a = [1, 2]; foreach ($r->same($a) as &$v) { $v += $n; } unset($v); echo json_encode($a), "\n";
+foreach ($r->same($a) as $k => $w) { $a[] = $w; } echo json_encode($a), "\n";
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "[1,2]\n[1,2,1,2]"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `gener`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_gener() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+foreach ($r->gen($n) as $v) { var_dump($v); }
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "int(1)"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `loop`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_loop() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$i = 0; while ($r->same($i++) < 3) { echo $i; } for ($j = 0; $r->same($j) < 3; $j = $r->same($j) + 1) echo $j; echo "\n";
+function rec(Reg $r, int $k): int { return $k ? $r->same($k) + rec($r, $k - 1) + $r->same($k) : 0; } echo rec($r, 4), "\n";
+$c = fn(int $z) => $r->same($z) * 2; echo $c($n), "\n";
+try { echo $r->same(intdiv($n, $n - 1)); } catch (Error $e) { echo $e->getMessage(), "\n"; } finally { echo $r->same($n), "\n"; }
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "123012\n20\n2\nDivision by zero\n1"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `nullrecv`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_nullrecv() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$q = $n > 5 ? new Reg : null;
+try { echo $q->same($n); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo $q?->same($n) ?? 'nul', "\n";
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "Call to a member function same() on null\nnul"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `propwrite`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_propwrite() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$o = new P; $r->same($o)->p = 4; $r->same($o)->p++; echo $o->p, "\n";
+$a = ['k' => $n]; echo $r->same($a)['k'] ?? 'no', isset($r->same($a)['z']) ? 'y' : 'n', "\n";
+$b = $r->same($a); $b['k'] = 3; echo $a['k'], $b['k'], "\n";
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "5\n1n\n13"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `refassign`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_refassign() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$x = $n; $y = &$r->same($x); $y = 8; echo $x, $y, "\n";
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "18"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in ["Notice: Only variables should be assigned by reference on line 31"] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `strs`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_strs() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+$s = str_repeat("a", $n); function app(string &$z) { $z .= "!"; }
+app($r->same($s)); echo $s, "\n"; $t = $r->same($s); $t[0] = 'z'; echo $s, $t, "\n";
+$f = $r->same(1.5 * $n); var_dump($f); var_dump($r->same((bool)$n)); var_dump($r->same(null));
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "a\naz\nfloat(1.5)\nbool(true)\nNULL"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in ["Notice: Only variables should be passed by reference on line 32"] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `visib`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_visib() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class P { public int $p = 1; public int $u; }
+class Reg {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public static function st($v) { return $v; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function gen($v) { yield $v; }
+}
+$r = new Reg;
+$n = $argc;
+try { echo $r->hid($n); } catch (Error $e) { echo get_class($e), $e->getMessage(), "\n"; }
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "ErrorCall to private method Reg::hid() from global scope"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// The identity-call contexts of `audit`: the output equals `php -n`'s, line numbers of notices
+/// included (visibility, by-reference assignment, string by-reference parameters, generators,
+/// loops, writes through the result, null receivers, inherited, trait, enum and override receivers).
+#[test]
+fn test_docblock_method_identity_call_matches_php_audit() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+declare(strict_types=1);
+abstract class Base {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+}
+class Kid extends Base {}
+class Over extends Base { public function same($v) { return 99; } }
+enum E: int {
+    case A = 1;
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+}
+trait T {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function tsame($v) { return $v; }
+}
+class UT { use T; }
+class UT2 { use T; public function tsame($v) { return -$v; } }
+class Magic {
+    public function __call($name, $args) { return "magic" . $name; }
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    private function hid($v) { return $v; }
+}
+class Prot {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    protected function pr($v) { return $v; }
+    public function viaInside(int $n) { return $this->pr($n); }
+}
+class Sub extends Prot { public function viaSub(int $n) { return $this->pr($n); } }
+class Misc {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function same($v) { return $v; }
+}
+function run(Base $b, Kid $k, Over $o, UT $u, UT2 $u2, Magic $m, Prot $p, Sub $s, Misc $x, ?Misc $q, int $n) {
+    echo $b->same($n), $k->same($n), $o->same($n), "\n";
+    echo E::A->same($n), $u->tsame($n), $u2->tsame($n), "\n";
+    try { echo $p->pr($n), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    echo $p->viaInside($n), $s->viaSub($n), "\n";
+    $f = $x->same(...);
+    echo $f($n), "\n";
+    echo $x->same(v: $n), "\n";
+    echo $x->same(...[$n]), "\n";
+    echo $x->same($n, 2), "\n";
+    echo $q?->same($n) ?? 'nul', "\n";
+    echo $x->same($n) + 1, "\n";
+}
+run(new Kid(), new Kid(), new Over(), new UT(), new UT2(), new Magic(), new Prot(), new Sub(), new Misc(), new Misc(), 3);
+"#);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        strip_diagnostic_paths(&output.stdout).trim_end(),
+        "3399\n33-3\nCall to protected method Prot::pr() from global scope\n33\n3\n3\n3\n3\n3\n4"
+    );
+    let diagnostics = strip_diagnostic_paths(&output.stderr);
+    for expected in [] as [&str; 0] {
+        assert!(diagnostics.contains(expected), "{expected} missing from {diagnostics}");
+    }
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

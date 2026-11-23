@@ -124,8 +124,11 @@ fn publish_call_site(
     // Local retirement cannot emit its own PHP warning. A nested destructor publishes its
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
-    let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
-        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ReleaseRawLocalSlot);
+    // An explicit `Warn` raises php's own notice at its own source line (`$y = &$call()`), whether
+    // or not a call that published the line stands before it.
+    let warns_at_call_site = (inst.effects.contains(crate::ir::Effects::MAY_WARN)
+        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ReleaseRawLocalSlot))
+        || inst.op == Op::Warn;
     // The file this instruction's code came from: an included or autoloaded file's spans carry
     // its source identity. `None` is the entry file, `_script_source_file`.
     let span_file = ctx.span_source_file(inst.span).map(str::to_string);
