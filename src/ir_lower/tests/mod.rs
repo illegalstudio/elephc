@@ -472,20 +472,35 @@ function consume(string $line, int &$cursor): bool
 $c = 0;
 var_dump(consume("   x", $c), $c);
 "#;
-    // A fresh thread per run, as each compile is a fresh process: the synthetic source identities
-    // the preludes take are numbered per thread, and a second run on the same one continues them.
-    let run = || {
-        std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(move || print_module(&lower_source(source)))
-            .expect("lowering thread")
-            .join()
-            .expect("lowering run")
-    };
+    // Compiler-made spans draw their line from one counter for the whole process, which the tests
+    // running beside this one advance too. Each is renumbered by first appearance, so the runs must
+    // still agree on every instruction, on its order and on which spans are the same one.
+    let run = || number_synthetic_spans(&print_module(&lower_source(source)));
     let first = run();
     for _ in 0..3 {
         assert_eq!(run(), first);
     }
+}
+
+/// Replaces each compiler-made span line of printed EIR with the rank of its first appearance.
+fn number_synthetic_spans(text: &str) -> String {
+    let mut ranks: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut pieces = text.split("span: ");
+    let mut out = pieces.next().unwrap_or_default().to_string();
+    for piece in pieces {
+        let digits = piece.len() - piece.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let (line, rest) = piece.split_at(digits);
+        out.push_str("span: ");
+        // The fixture has a few dozen lines; a larger one is a compiler-made position.
+        if line.parse::<u64>().is_ok_and(|line| line > 1_000) {
+            let next = ranks.len();
+            out.push_str(&format!("#{}", ranks.entry(line).or_insert(next)));
+        } else {
+            out.push_str(line);
+        }
+        out.push_str(rest);
+    }
+    out
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
