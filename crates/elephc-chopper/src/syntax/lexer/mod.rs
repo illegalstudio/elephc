@@ -22,6 +22,9 @@ pub use token::{SpannedToken, Token, TokenMetadata};
 pub(crate) use cursor::Cursor;
 pub(crate) use qualified_names::has_glued_name_suffix;
 pub(crate) use literals::word_token;
+pub(crate) use literals::{
+    decode_backtick_body, decode_double_quoted_body, scan_heredoc, single_quoted_token,
+};
 pub(crate) use scan::{byte_token, operator_token};
 
 use crate::syntax::errors::CompileError;

@@ -13,7 +13,8 @@
 
 use crate::scanner::operator;
 use crate::syntax::lexer::{
-    byte_token, operator_token, word_token, Cursor, SpannedToken, Token, TokenMetadata,
+    byte_token, decode_backtick_body, decode_double_quoted_body, operator_token, scan_heredoc,
+    single_quoted_token, word_token, Cursor, SpannedToken, Token, TokenMetadata,
 };
 use crate::syntax::span::Span;
 
@@ -42,28 +43,32 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         return None;
     }
     let text = std::str::from_utf8(source).ok()?;
-    let might_have_label = text.as_bytes().contains(&b':');
     let mut cursor = Cursor::new_in_source(text, 0);
     let mut projected = Vec::with_capacity(tokens.len() + 2);
     let mut previous_significant = 0i64;
+    let mut pending_label = false;
     projected.push((
         Token::OpenTag,
         TokenMetadata::new(Span::new_in_source(1, 1, 0)),
     ));
 
-    for (index, token) in tokens.iter().enumerate() {
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
         if token.pos() < cursor.position() {
             return None;
         }
         if token.id() == tok::T_DOUBLE_COLON && next_significant_is_brace(tokens, index) {
             return None;
         }
-        if might_have_label
-            && token.id() == tok::T_STRING
-            && next_significant_is_colon(tokens, index)
-            && !matches!(previous_significant, id if id == i64::from(b'(') || id == i64::from(b','))
-        {
-            return None;
+        if pending_label {
+            if token.id() == i64::from(b':') {
+                return None;
+            }
+            pending_label = false;
+        }
+        if token.id() == tok::T_STRING && label_boundary(previous_significant) {
+            pending_label = true;
         }
         cursor.skip_bytes(token.pos() - cursor.position());
         let start = cursor.span();
@@ -77,9 +82,33 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
                 | tok::T_DOC_COMMENT
         ) {
             cursor.skip_bytes(token.len());
+            index += 1;
             continue;
         }
         let token_text = text.get(token.pos()..token.pos() + token.len())?;
+        if id == tok::T_CONSTANT_ENCAPSED_STRING
+            || id == tok::T_START_HEREDOC
+            || id == i64::from(b'"')
+            || id == i64::from(b'`')
+        {
+            let parts = project_literal(id, token_text, &mut cursor, start)?;
+            projected.extend(parts);
+            while index < tokens.len() && tokens[index].pos() < cursor.position() {
+                index += 1;
+            }
+            previous_significant = tok::T_STRING;
+            continue;
+        }
+        if matches!(
+            id,
+            tok::T_NAME_FULLY_QUALIFIED | tok::T_NAME_QUALIFIED | tok::T_NAME_RELATIVE
+        ) {
+            let parts = project_qualified_name(id, token_text, &mut cursor)?;
+            projected.extend(parts);
+            previous_significant = tok::T_STRING;
+            index += 1;
+            continue;
+        }
         let projected_token = project(id, token_text, start)?;
         cursor.skip_bytes(token.len());
         let end = cursor.span();
@@ -98,6 +127,7 @@ pub(super) fn build<T: SourceToken>(source: &[u8], tokens: &[T]) -> Option<Token
         if !matches!(id, tok::T_WHITESPACE | tok::T_COMMENT | tok::T_DOC_COMMENT) {
             previous_significant = id;
         }
+        index += 1;
     }
 
     if cursor.position() < text.len() {
@@ -161,9 +191,6 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
         | tok::T_GOTO
         | tok::T_ELLIPSIS
         | tok::T_HALT_COMPILER
-        | tok::T_NAME_FULLY_QUALIFIED
-        | tok::T_NAME_QUALIFIED
-        | tok::T_NAME_RELATIVE
         | tok::T_NS_SEPARATOR
         | tok::T_STRING_CAST
         | tok::T_UNSET_CAST
@@ -194,6 +221,109 @@ fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
     None
 }
 
+/// Projects one supported literal token through the existing literal decoders.
+fn project_literal(
+    id: i64,
+    text: &str,
+    cursor: &mut Cursor,
+    start: Span,
+) -> Option<Vec<SpannedToken>> {
+    if id == tok::T_CONSTANT_ENCAPSED_STRING {
+        if text.starts_with('"') {
+            cursor.skip_bytes(1);
+            return decode_double_quoted_body(cursor, start).ok();
+        }
+        if text.starts_with('\'') {
+            let token = single_quoted_token(text, text.ends_with('\''), start).ok()?;
+            cursor.skip_bytes(text.len());
+            let span = Span::with_end_from(start, cursor.span());
+            return Some(vec![(token, TokenMetadata::new(span))]);
+        }
+        return None;
+    }
+    if id == tok::T_START_HEREDOC {
+        if !text.starts_with("<<<") {
+            return None;
+        }
+        cursor.skip_bytes(3);
+        return scan_heredoc(cursor).ok();
+    }
+    if id == i64::from(b'"') {
+        cursor.skip_bytes(1);
+        return decode_double_quoted_body(cursor, start).ok();
+    }
+    if id == i64::from(b'`') {
+        cursor.skip_bytes(1);
+        return decode_backtick_body(cursor, start).ok();
+    }
+    None
+}
+
+/// Splits a native qualified-name token into Backslash and Identifier tokens.
+fn project_qualified_name(
+    id: i64,
+    text: &str,
+    cursor: &mut Cursor,
+) -> Option<Vec<SpannedToken>> {
+    let mut parts = Vec::new();
+    let mut offset = 0usize;
+    if id == tok::T_NAME_FULLY_QUALIFIED {
+        if text.as_bytes().first() != Some(&b'\\') {
+            return None;
+        }
+        let start = cursor.span();
+        cursor.skip_bytes(1);
+        parts.push((
+            Token::Backslash,
+            TokenMetadata::new(Span::with_end_from(start, cursor.span())),
+        ));
+        offset = 1;
+    }
+
+    let mut first = true;
+    while offset < text.len() {
+        let rest = &text[offset..];
+        let segment_end = rest.find('\\').map_or(text.len(), |position| offset + position);
+        let segment = &text[offset..segment_end];
+        if segment.is_empty() {
+            return None;
+        }
+        let start = cursor.span();
+        cursor.skip_bytes(segment.len());
+        let segment_span = Span::with_end_from(start, cursor.span());
+        let relative_prefix = id == tok::T_NAME_RELATIVE && first;
+        let token = if relative_prefix {
+            if !segment.eq_ignore_ascii_case("namespace") {
+                return None;
+            }
+            Token::Namespace
+        } else {
+            Token::Identifier(segment.to_owned())
+        };
+        let metadata = if relative_prefix && token.canonical_word_spelling() != Some(segment) {
+            TokenMetadata::with_source_spelling(segment_span, segment)
+        } else {
+            TokenMetadata::new(segment_span)
+        };
+        parts.push((token, metadata));
+        first = false;
+        offset = segment_end;
+        if offset < text.len() {
+            if text.as_bytes()[offset] != b'\\' {
+                return None;
+            }
+            let start = cursor.span();
+            cursor.skip_bytes(1);
+            parts.push((
+                Token::Backslash,
+                TokenMetadata::new(Span::with_end_from(start, cursor.span())),
+            ));
+            offset += 1;
+        }
+    }
+    Some(parts)
+}
+
 /// Rejects an early unsupported token before allocating the full projection.
 ///
 /// A string-heavy source usually exposes a quote in its first statement; sampling the
@@ -203,27 +333,16 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
         let id = token.id();
         if id < 256 {
             let byte = u8::try_from(id).unwrap_or(0);
-            return !matches!(byte, b'"' | b'\'' | b'`' | b'$' | b'\\');
+            return !matches!(byte, b'$' | b'\\');
         }
         !matches!(
             id,
             tok::T_DNUMBER
-                | tok::T_CONSTANT_ENCAPSED_STRING
-                | tok::T_START_HEREDOC
-                | tok::T_END_HEREDOC
-                | tok::T_ENCAPSED_AND_WHITESPACE
-                | tok::T_NUM_STRING
-                | tok::T_STRING_VARNAME
-                | tok::T_CURLY_OPEN
-                | tok::T_DOLLAR_OPEN_CURLY_BRACES
                 | tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
                 | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
                 | tok::T_GOTO
                 | tok::T_ELLIPSIS
                 | tok::T_HALT_COMPILER
-                | tok::T_NAME_FULLY_QUALIFIED
-                | tok::T_NAME_QUALIFIED
-                | tok::T_NAME_RELATIVE
                 | tok::T_NS_SEPARATOR
                 | tok::T_STRING_CAST
                 | tok::T_UNSET_CAST
@@ -232,20 +351,20 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
     })
 }
 
-/// Returns whether the next significant token after `index` is `:`.
-fn next_significant_is_colon<T: SourceToken>(tokens: &[T], index: usize) -> bool {
-    let mut next = index + 1;
-    while tokens.get(next).is_some_and(|token| {
-        matches!(
-            token.id(),
-            tok::T_WHITESPACE | tok::T_COMMENT | tok::T_DOC_COMMENT
-        )
-    }) {
-        next += 1;
-    }
-    tokens
-        .get(next)
-        .is_some_and(|token| token.id() == i64::from(b':'))
+/// Returns whether a significant token can precede a statement label.
+fn label_boundary(id: i64) -> bool {
+    id == 0
+        || id == i64::from(b';')
+        || id == i64::from(b'{')
+        || id == i64::from(b'}')
+        || id == i64::from(b')')
+        || id == i64::from(b':')
+        || id == tok::T_OPEN_TAG
+        || id == tok::T_CLOSE_TAG
+        || id == tok::T_ELSE
+        || id == tok::T_DO
+        || id == tok::T_TRY
+        || id == tok::T_FINALLY
 }
 
 /// Returns whether the next significant token after `index` is `{`.

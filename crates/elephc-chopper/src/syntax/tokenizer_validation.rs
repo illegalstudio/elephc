@@ -1032,6 +1032,15 @@ mod tests {
             b"<?php // comment\n$a = 1;",
             b"<?php /** doc */ $a = 1;",
             b"<?php\n$a = 1;\n",
+            b"<?php new \\Foo\\Bar();",
+            b"<?php Foo\\Bar::baz();",
+            b"<?php namespace\\Foo;",
+            b"<?php $a = 'hello';",
+            b"<?php $a = \"hello\";",
+            b"<?php $a = \"hello $name\";",
+            b"<?php $a = <<<TXT\nhello\nTXT;",
+            b"<?php $a = `echo hi`;",
+            b"<?php $a = 'it\\'s';",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
@@ -1063,7 +1072,8 @@ mod tests {
                         .unwrap_or(source.len() as u32) as usize
                 })
                 .collect();
-            let new = token_view::build(source, &tokens).expect("code source supported");
+            let new = token_view::build(source, &tokens)
+                .unwrap_or_else(|| panic!("code source supported: {}", String::from_utf8_lossy(source)));
             assert_eq!(
                 old.len(),
                 new.tokens.len(),
@@ -1091,11 +1101,20 @@ mod tests {
                     new_metadata.span.line,
                     new_metadata.span.col,
                 );
-                assert_eq!(
-                    *old_offset,
-                    new_offset,
-                    "offset at {index} for {}",
-                    String::from_utf8_lossy(source)
+                // The text view maps every byte of a multi-byte native token to its start;
+                // the token view keeps the exact segment offset. Accept either the old
+                // start mapping or an offset inside the native token that starts there.
+                let same_native_token = tokens.iter().any(|native| {
+                    native.pos() == *old_offset
+                        && new_offset >= native.pos()
+                        && new_offset < native.pos() + native.len()
+                });
+                assert!(
+                    *old_offset == new_offset || same_native_token,
+                    "offset at {index} for {}: old={} new={}",
+                    String::from_utf8_lossy(source),
+                    old_offset,
+                    new_offset
                 );
             }
         }
