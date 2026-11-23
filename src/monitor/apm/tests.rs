@@ -46,6 +46,26 @@ fn scratch(tag: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Pins `store::now_ms` on this thread to noon UTC of today until the guard is
+/// dropped, and returns the guard with that time: windows placed a minute or
+/// an hour before it then fall on today whatever time the test runs (#2513).
+fn pin_noon_today() -> (PinnedNow, u64) {
+    let day = 86_400_000u64;
+    let noon = store::now_ms() / day * day + day / 2;
+    store::PINNED_NOW_MS.with(|now| now.set(Some(noon)));
+    (PinnedNow, noon)
+}
+
+/// Unpins `store::now_ms` when dropped, a failed assertion included.
+struct PinnedNow;
+
+impl Drop for PinnedNow {
+    /// Gives this thread back the wall clock.
+    fn drop(&mut self) {
+        store::PINNED_NOW_MS.with(|now| now.set(None));
+    }
+}
+
 /// Two snapshots of one run make the window between them; a restart makes the
 /// new run's own counters the window, spanning from the restart.
 #[test]
@@ -1224,13 +1244,12 @@ fn a_shared_store_rates_and_names_each_service() {
 
 /// A page over a store two services write to keeps their `GET /` apart, and
 /// its chart points and terminal trends count the seconds both covered once:
-/// each service's 10 requests a second read 10/s, and both together 20/s
-/// (review G2, G3).
+/// each service's 10 requests a second read 10/s, and both together 20/s.
 #[test]
 fn a_shared_store_page_and_trends_rate_each_service() {
     let dir = scratch("shared-page");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 2).unwrap();
-    let now = store::now_ms();
     let window = |source: &str, t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
@@ -1588,8 +1607,8 @@ fn collectors_of_lookalike_targets_do_not_share_a_lock() {
 #[test]
 fn stored_ranges_read_only_what_was_appended() {
     let dir = scratch("ranges");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
-    let now = store::now_ms();
     let day = 86_400_000u64;
     let yesterday_noon = (now / day - 1) * day + day / 2;
     let service = |t: u64| Window {
