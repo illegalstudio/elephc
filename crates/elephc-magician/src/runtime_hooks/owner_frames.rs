@@ -11,7 +11,7 @@
 //! - Native exception boundaries return through Rust before this record is detached.
 
 use crate::value::{RuntimeCell, RuntimeCellHandle};
-pub(crate) use elephc_memoir::runtime_owners::{RuntimeOwnerSlot, RuntimeOwners};
+pub(crate) use elephc_memoir::runtime_owners::{RuntimeOwnerSlot, RuntimeOwners, StagedRuntimeOwners};
 #[cfg(not(test))]
 use std::{cell::UnsafeCell, ffi::c_void, marker::{PhantomData, PhantomPinned}, pin::Pin};
 #[cfg(not(test))]

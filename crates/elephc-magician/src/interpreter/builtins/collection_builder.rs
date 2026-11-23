@@ -11,10 +11,12 @@
 use crate::errors::EvalStatus;
 use crate::interpreter::RuntimeValueOps;
 use crate::value::RuntimeCellHandle;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::release_staged_cells;
 
 /// Owns one result array until it is returned to the caller or abandoned on error.
 pub(in crate::interpreter) struct EvalArrayBuilder<'a, V: RuntimeValueOps> {
-    cell: Option<RuntimeCellHandle>,
+    cell: RuntimeOwnerSlot,
     values: &'a mut V,
 }
 
@@ -31,9 +33,15 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         Ok(Self::from_owned(values, cell))
     }
 
+    /// Allocates a direct object array for Reflection's compiled readers.
+    pub(in crate::interpreter) fn objects(values: &'a mut V, capacity: usize) -> Result<Self, EvalStatus> {
+        let cell = values.object_array_new(capacity)?;
+        Ok(Self::from_owned(values, cell))
+    }
+
     /// Takes over an existing owned result without retaining it again.
     pub(in crate::interpreter) fn from_owned(values: &'a mut V, cell: RuntimeCellHandle) -> Self {
-        Self { cell: Some(cell), values }
+        Self { cell: RuntimeOwnerSlot::new(cell), values }
     }
 
     /// Temporarily lends the runtime operations while keeping the result array owned.
@@ -68,32 +76,50 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         value: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
         key: impl FnOnce(&mut V, RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>,
     ) -> Result<(), EvalStatus> {
-        let value = value(self.values)?;
-        let key = match key(self.values, value) {
-            Ok(key) => key,
-            Err(status) => {
-                let _ = self.values.release(value);
-                return Err(status);
-            }
-        };
-        let inserted = self.values.array_set(self.cell.unwrap(), key, value);
-        let key_released = self.values.release(key);
-        let value_released = self.values.release(value);
-        self.cell = Some(inserted?);
-        key_released?;
-        value_released
+        let key_owner = RuntimeOwnerSlot::empty();
+        let value_owner = RuntimeOwnerSlot::empty();
+        with_runtime_owners(&(&self.cell, (&key_owner, &value_owner)), || {
+            let inserted = (|| {
+                let value = value(self.values)?;
+                value_owner.replace(Some(value));
+                let key = key(self.values, value)?;
+                key_owner.replace(Some(key));
+                let array = self.values.array_set(self.cell.borrowed(), key, value)?;
+                // The setter returns the same receiver lease after any payload relocation.
+                self.cell.update_receiver(array);
+                Ok(())
+            })();
+            let cells = [&key_owner, &value_owner].into_iter().map(RuntimeOwnerSlot::take);
+            release_staged_cells(inserted, cells, |cell| self.values.release(cell))
+        })
+    }
+
+    /// Constructs and appends an object while the partially populated result stays rooted.
+    pub(in crate::interpreter) fn object(
+        &mut self,
+        construct: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        let owner = RuntimeOwnerSlot::empty();
+        with_runtime_owners(&(&self.cell, &owner), || {
+            let object = construct(self.values)?;
+            owner.replace(Some(object));
+            let appended = self.values.object_array_push(self.cell.borrowed(), object).map(|updated| {
+                self.cell.update_receiver(updated);
+            });
+            release_staged_cells(appended, [owner.take()], |cell| self.values.release(cell))
+        })
     }
 
     /// Transfers the finished array to the caller without releasing its entries.
-    pub(in crate::interpreter) fn finish(mut self) -> RuntimeCellHandle {
-        self.cell.take().unwrap()
+    pub(in crate::interpreter) fn finish(self) -> RuntimeCellHandle {
+        self.cell.take()
     }
 }
 
 impl<V: RuntimeValueOps> Drop for EvalArrayBuilder<'_, V> {
     /// Releases unfinished arrays on early returns, including nested builder failures.
     fn drop(&mut self) {
-        if let Some(cell) = self.cell.take() {
+        if let Some(cell) = self.cell.take_optional() {
             let _ = self.values.release(cell);
         }
     }

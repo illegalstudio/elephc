@@ -311,8 +311,11 @@ unsafe fn dynamic_object_property_set_inner(
     if value_block.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let throwable_out = value_block;
-    let value = unsafe { *value_block.add(2) };
+    use elephc_memoir::owner_layout::EvalPropertyWriteWords as WriteWords;
+
+    let bytes = value_block.cast::<u8>();
+    let throwable_out = unsafe { bytes.add(WriteWords::THROWABLE).cast::<*mut RuntimeCell>() };
+    let value = unsafe { *bytes.add(WriteWords::VALUE).cast::<*mut RuntimeCell>() };
     unsafe { *throwable_out = std::ptr::null_mut(); }
     if object.is_null() || value.is_null() {
         return Ok(0);

@@ -10,6 +10,7 @@
 //! - Construction owns operand leases until insertion finishes, including failure paths.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
 
 /// Recognizes only normalized native-default metadata, not PHP-visible function calls.
 pub(super) fn native_default_array_spread(element: &EvalArrayElement) -> Option<&EvalExpr> {
@@ -26,31 +27,35 @@ pub(super) fn eval_indexed_array(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut array = values.array_new(elements.len())?;
+    let array = values.array_new(elements.len())?;
     context.clear_array_metadata(array);
-    let mut operands = Vec::new();
-    let result = (|| {
-        for (index, element) in elements.iter().enumerate() {
-            let index = values.int(index as i64)?;
-            operands.push(index);
-            let (value, target) = match element {
-                EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
-                EvalArrayElement::Reference(element) => {
-                    eval_reference_array_element_value(element, context, scope, values)?
+    let output = RuntimeOwnerSlot::new(array);
+    let operands = StagedRuntimeOwners::default();
+    with_runtime_owners(&(&output, &operands), || {
+        let result = (|| {
+            for (index, element) in elements.iter().enumerate() {
+                let index = values.int(index as i64)?;
+                operands.stage(index);
+                let (value, target) = match element {
+                    EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
+                    EvalArrayElement::Reference(element) => {
+                        eval_reference_array_element_value(element, context, scope, values)?
+                    }
+                    EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    }
+                };
+                operands.stage(value);
+                let array = values.array_set(output.borrowed(), index, value)?;
+                output.update_receiver(array);
+                if let Some(target) = target {
+                    bind_array_element_reference(context, array, index, target, values)?;
                 }
-                EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
-                    return Err(EvalStatus::UnsupportedConstruct);
-                }
-            };
-            operands.push(value);
-            array = values.array_set(array, index, value)?;
-            if let Some(target) = target {
-                bind_array_element_reference(context, array, index, target, values)?;
             }
-        }
-        Ok(())
-    })();
-    finish_array_literal(array, result, operands, context, values)
+            Ok(())
+        })();
+        operands.finish(result, &output, |cell| eval_release_value(context, values, cell))
+    })
 }
 
 /// Evaluates an associative array literal into a boxed runtime Mixed hash.
@@ -60,81 +65,86 @@ pub(super) fn eval_assoc_array(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut array = values.assoc_new(elements.len())?;
+    let array = values.assoc_new(elements.len())?;
     context.clear_array_metadata(array);
+    let output = RuntimeOwnerSlot::new(array);
+    let operands = StagedRuntimeOwners::default();
     let mut next_key = None;
-    let mut operands = Vec::new();
-    let result = (|| {
-        for element in elements {
-            if let Some(source) = native_default_array_spread(element) {
-                let source = eval_owned_expr(source, context, scope, values)?;
-                operands.push(source);
-                if !matches!(values.type_tag(source)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                    return throwables::eval_throw_error("Only arrays can be unpacked in constant expression", context, values);
+    with_runtime_owners(&(&output, &operands), || {
+        let result = (|| {
+            for element in elements {
+                if let Some(source) = native_default_array_spread(element) {
+                    let source = eval_owned_expr(source, context, scope, values)?;
+                    operands.stage(source);
+                    if !matches!(values.type_tag(source)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                        return throwables::eval_throw_error("Only arrays can be unpacked in constant expression", context, values);
+                    }
+                    let len = values.array_len(source)?;
+                    for position in 0..len {
+                        let source_key = values.array_iter_key(source, position)?;
+                        let source_key = if source_key.is_borrowed() { values.retain(source_key)? } else { source_key };
+                        operands.stage(source_key);
+                        let value = values.array_get(source, source_key)?;
+                        operands.stage(value);
+                        let key = if values.type_tag(source_key)? == EVAL_TAG_STRING {
+                            source_key
+                        } else {
+                            let key = take_next_array_key(&mut next_key, &operands, values)?;
+                            validate_array_append_key(key, context, values)?;
+                            key
+                        };
+                        let array = values.array_set(output.borrowed(), key, value)?;
+                        output.update_receiver(array);
+                    }
+                    continue;
                 }
-                let len = values.array_len(source)?;
-                for position in 0..len {
-                    let source_key = values.array_iter_key(source, position)?;
-                    let source_key = if source_key.is_borrowed() { values.retain(source_key)? } else { source_key };
-                    operands.push(source_key);
-                    let value = values.array_get(source, source_key)?;
-                    if !value.is_borrowed() { operands.push(value); }
-                    let key = if values.type_tag(source_key)? == EVAL_TAG_STRING {
-                        source_key
-                    } else {
-                        let key = take_next_array_key(&mut next_key, &mut operands, values)?;
-                        validate_array_append_key(key, context, values)?;
-                        key
-                    };
-                    array = values.array_set(array, key, value)?;
+                let (explicit_key, value, by_ref) = match element {
+                    EvalArrayElement::Value(value) => (None, value, false),
+                    EvalArrayElement::Reference(value) => (None, value, true),
+                    EvalArrayElement::KeyValue { key, value } => (Some(key), value, false),
+                    EvalArrayElement::KeyReference { key, value } => (Some(key), value, true),
+                };
+                let key = if let Some(key) = explicit_key {
+                    let key = eval_owned_expr(key, context, scope, values)?;
+                    operands.stage(key);
+                    next_key = eval_array_next_key_after_explicit_key(key, next_key, &operands, values)?;
+                    key
+                } else {
+                    take_next_array_key(&mut next_key, &operands, values)?
+                };
+                let (value, target) = if by_ref {
+                    eval_reference_array_element_value(value, context, scope, values)?
+                } else {
+                    (eval_owned_expr(value, context, scope, values)?, None)
+                };
+                operands.stage(value);
+                if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
+                let array = values.array_set(output.borrowed(), key, value)?;
+                output.update_receiver(array);
+                if let Some(target) = target {
+                    bind_array_element_reference(context, array, key, target, values)?;
                 }
-                continue;
             }
-            let (explicit_key, value, by_ref) = match element {
-                EvalArrayElement::Value(value) => (None, value, false),
-                EvalArrayElement::Reference(value) => (None, value, true),
-                EvalArrayElement::KeyValue { key, value } => (Some(key), value, false),
-                EvalArrayElement::KeyReference { key, value } => (Some(key), value, true),
-            };
-            let key = if let Some(key) = explicit_key {
-                let key = eval_owned_expr(key, context, scope, values)?;
-                operands.push(key);
-                next_key = eval_array_next_key_after_explicit_key(key, next_key, &mut operands, values)?;
-                key
-            } else {
-                take_next_array_key(&mut next_key, &mut operands, values)?
-            };
-            let (value, target) = if by_ref {
-                eval_reference_array_element_value(value, context, scope, values)?
-            } else {
-                (eval_owned_expr(value, context, scope, values)?, None)
-            };
-            operands.push(value);
-            if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
-            array = values.array_set(array, key, value)?;
-            if let Some(target) = target {
-                bind_array_element_reference(context, array, key, target, values)?;
-            }
-        }
-        Ok(())
-    })();
-    finish_array_literal(array, result, operands, context, values)
+            Ok(())
+        })();
+        operands.finish(result, &output, |cell| eval_release_value(context, values, cell))
+    })
 }
 
 /// Advances the shared next-index state for ordinary entries and unpacked integer keys.
 fn take_next_array_key(
-    next_key: &mut Option<RuntimeCellHandle>, operands: &mut Vec<RuntimeCellHandle>,
+    next_key: &mut Option<RuntimeCellHandle>, operands: &StagedRuntimeOwners,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let key = if let Some(key) = *next_key { key } else {
         let key = values.int(0)?;
-        operands.push(key);
+        operands.stage(key);
         key
     };
     let one = values.int(1)?;
-    operands.push(one);
+    operands.stage(one);
     let next = values.add(key, one)?;
-    operands.push(next);
+    operands.stage(next);
     *next_key = Some(next);
     Ok(key)
 }
@@ -149,26 +159,6 @@ fn validate_array_append_key(
         );
     }
     Ok(())
-}
-
-/// Releases construction leases and abandons the partial array on evaluation or insertion failure.
-fn finish_array_literal(
-    array: RuntimeCellHandle,
-    result: Result<(), EvalStatus>,
-    operands: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = result;
-    for operand in operands {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    if let Err(status) = result {
-        let _ = eval_release_value(context, values, array);
-        return Err(status);
-    }
-    Ok(array)
 }
 
 /// Acquires a by-reference array element lease and captures its writable source target.
@@ -230,7 +220,7 @@ pub(in crate::interpreter) fn eval_array_reference_key(
 fn eval_array_next_key_after_explicit_key(
     key: RuntimeCellHandle,
     current_next_key: Option<RuntimeCellHandle>,
-    operands: &mut Vec<RuntimeCellHandle>,
+    operands: &StagedRuntimeOwners,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let key = match values.type_tag(key)? {
@@ -241,23 +231,23 @@ fn eval_array_next_key_after_explicit_key(
                 return Ok(current_next_key);
             };
             let key = values.int(key)?;
-            operands.push(key);
+            operands.stage(key);
             key
         }
         EVAL_TAG_NULL => return Ok(current_next_key),
         _ => {
             let key = values.cast_int(key)?;
-            operands.push(key);
+            operands.stage(key);
             key
         }
     };
     let one = values.int(1)?;
-    operands.push(one);
+    operands.stage(one);
     let candidate = values.add(key, one)?;
-    operands.push(candidate);
+    operands.stage(candidate);
     let replace = if let Some(current_next_key) = current_next_key {
         let is_greater = values.compare(EvalBinOp::Gt, candidate, current_next_key)?;
-        operands.push(is_greater);
+        operands.stage(is_greater);
         values.truthy(is_greater)?
     } else {
         true

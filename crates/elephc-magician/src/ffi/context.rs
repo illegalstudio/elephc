@@ -486,32 +486,116 @@ pub(super) unsafe fn release_eval_context(
     let Some(context) = (unsafe { ctx.as_mut() }) else {
         return incoming;
     };
-    if !context.release_abi_owner() || context.teardown_active()
-        || crate::context::pcntl_runtime::defer_context_free(ctx)
-        || !context.begin_teardown()
-    {
+    if !context.release_abi_owner() {
         return incoming;
     }
-    // Reclaim the allocation while callback-sensitive releases run. Nested ABI teardown observes
-    // `teardown_active` and returns without taking a second Box, while this owner keeps the context
-    // live across every destructor callback.
+    unsafe { finish_eval_context(ctx, incoming) }
+}
+
+/// Detaches every context-owned and resource-owned PHP cell before cleanup can re-enter.
+fn take_eval_context_cell_owners(context: &mut ElephcEvalContext) -> Vec<RuntimeCellHandle> {
+    let mut cells = context.take_context_cell_owners();
+    cells.extend(context.stream_resources_mut().take_php_cell_owners());
+    cells
+}
+
+/// Retires a detached PCNTL context after the last signal handler or active use releases it.
+///
+/// # Safety
+/// The caller must own the retired PCNTL registration or active-use claim for this heap context.
+pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    let thrown = unsafe { retire_detached_pcntl_context(ctx, None) };
+    #[cfg(not(test))]
+    let _ = crate::runtime_hooks::release::release_native_cells(thrown, None);
+    #[cfg(test)]
+    let _ = thrown;
+}
+
+/// Finalizes an unpinned PCNTL context, returning any destructor exception to the caller.
+///
+/// # Safety
+/// A non-null context must be live, and the caller must have claimed its detached registration.
+pub(crate) unsafe fn retire_detached_pcntl_context(
+    ctx: *mut ElephcEvalContext,
+    pending: Option<RuntimeCellHandle>,
+) -> Option<RuntimeCellHandle> {
+    let Some(context) = (unsafe { ctx.as_mut() }) else { return pending; };
+    if !context.teardown_active() {
+        crate::context::pcntl_runtime::retain_for_request_shutdown(context);
+    }
+    unsafe { finish_eval_context(ctx, pending) }
+}
+
+/// Runs the same detached-owner drain for ordinary and PCNTL-deferred context release.
+///
+/// # Safety
+/// A non-null pointer must refer to a live heap context. The caller must have retired its
+/// ABI owner or claimed its detached PCNTL registration before entering.
+unsafe fn finish_eval_context(
+    ctx: *mut ElephcEvalContext,
+    incoming: Option<RuntimeCellHandle>,
+) -> Option<RuntimeCellHandle> {
+    let Some(context) = (unsafe { ctx.as_mut() }) else { return incoming; };
+    if context.has_abi_owners() || context.teardown_active() || defer_eval_context(ctx, context) {
+        return incoming;
+    }
+    if !context.begin_teardown() {
+        return incoming;
+    }
+    // The exclusive teardown owner keeps the allocation and destructor registries live.
     let mut context = unsafe { Box::from_raw(ctx) };
-    let mut thrown = incoming.or_else(|| context.take_pending_throw());
-    loop {
-        let cells = take_eval_context_cell_owners(&mut context);
-        if cells.is_empty() {
-            break;
-        }
+    let pending = incoming.or_else(|| context.take_pending_throw());
+    let mut thrown = drain_eval_context(&mut context, pending);
+    if !context.has_abi_owners() && !defer_eval_context(ctx, &mut context) {
         #[cfg(not(test))]
         {
-            thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown);
+            let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(ctx);
+            context.release_pcntl_foreign_callables(&mut values);
         }
-        #[cfg(test)]
-        {
-            let _ = cells;
-        }
+        thrown = drain_eval_context(&mut context, thrown);
     }
-    // Teardown callbacks can also schedule a context-local exception.
+    if context.has_abi_owners() || defer_eval_context(ctx, &mut context) {
+        context.end_teardown();
+        let _ = Box::into_raw(context);
+    } else {
+        context.unregister_dynamic_object_context();
+        crate::context::untrack_reflection_identities_for_context(ctx);
+        crate::context::unregister_live_native_context(ctx);
+    }
+    thrown
+}
+
+/// Preserves the context while PCNTL still references it and anchors its persistent PHP cells.
+fn defer_eval_context(ctx: *mut ElephcEvalContext, context: &mut ElephcEvalContext) -> bool {
+    if crate::context::pcntl_runtime::defer_context_free(ctx) {
+        crate::context::pcntl_runtime::retain_for_request_shutdown(context);
+        true
+    } else {
+        false
+    }
+}
+
+/// Releases enough batches to account for owners published by destructor callbacks.
+fn drain_eval_context(
+    context: &mut ElephcEvalContext,
+    pending: Option<RuntimeCellHandle>,
+) -> Option<RuntimeCellHandle> {
+    let mut thrown = elephc_memoir::runtime_owners::drain_owned_cell_batches(
+        context,
+        pending,
+        take_eval_context_cell_owners,
+        |cells, pending| {
+            #[cfg(not(test))]
+            {
+                crate::runtime_hooks::release::release_native_cells(cells, pending)
+            }
+            #[cfg(test)]
+            {
+                let _ = cells;
+                pending
+            }
+        },
+    );
     if let Some(pending) = context.take_pending_throw() {
         #[cfg(not(test))]
         {
@@ -522,72 +606,42 @@ pub(super) unsafe fn release_eval_context(
             thrown = Some(pending);
         }
     }
-    if context.has_abi_owners() || crate::context::pcntl_runtime::defer_context_free(ctx) {
-        context.end_teardown();
-        let _ = Box::into_raw(context);
-    } else {
-        drop_eval_context_box(context);
-    }
     thrown
 }
 
-/// Detaches every context-owned and resource-owned PHP cell before cleanup can re-enter.
-fn take_eval_context_cell_owners(context: &mut ElephcEvalContext) -> Vec<RuntimeCellHandle> {
-    let mut cells = context.take_context_cell_owners();
-    cells.extend(context.stream_resources_mut().take_php_cell_owners());
-    cells
-}
+/// Shuts down eval signal handlers and releases contexts kept alive by request-persistent cells.
+///
+/// The assembly adapter propagates any owned Throwable only after the Rust call returns.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_pcntl_shutdown_v2() -> *mut crate::value::RuntimeCell {
+    use crate::context::{EvalPcntlSignalHandler, pcntl_runtime};
+    use crate::runtime_hooks::release::release_native_cells;
+    use elephc_pcntl::{PCNTL_SIGNAL_OWNER_EVAL, elephc_pcntl_signal, elephc_pcntl_signal_owner};
 
-/// Unregisters every process-global callback into one context, then drops it immediately.
-///
-/// PCNTL calls this only after the last retained signal handler stops referencing
-/// a context whose normal ABI teardown was deferred.
-///
-/// # Safety
-/// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
-/// and no process-global PCNTL handler may still reference it.
-pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
-    let Some(context) = (unsafe { ctx.as_mut() }) else {
-        return;
-    };
-    if context.has_abi_owners() || context.teardown_active() || !context.begin_teardown() {
-        return;
+    if !pcntl_runtime::begin_request_shutdown() {
+        return ptr::null_mut();
     }
-    let context = unsafe { Box::from_raw(ctx) };
-    drop_eval_context_box(context);
-}
-
-/// Finalizes one exclusively owned context while recursive teardown remains blocked.
-fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
-    let ctx = context.as_mut() as *mut ElephcEvalContext;
-    #[cfg(not(test))]
-    {
-        let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
-        context.release_pcntl_foreign_callables(&mut values);
-        let mut thrown = None;
-        loop {
-            let cells = take_eval_context_cell_owners(&mut context);
-            if cells.is_empty() {
-                break;
+    let mut thrown = None;
+    loop {
+        if let Some((signal, entry)) = pcntl_runtime::take_shutdown_handler() {
+            // An AOT installer may already have replaced the eval disposition in the OS.
+            if elephc_pcntl_signal_owner(signal) == PCNTL_SIGNAL_OWNER_EVAL {
+                elephc_pcntl_signal(signal, 0, 1, PCNTL_SIGNAL_OWNER_EVAL);
             }
-            thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown);
-        }
-        if let Some(pending) = context.take_pending_throw() {
-            thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending));
-        }
-        if let Some(thrown) = thrown {
-            let _ = crate::runtime_hooks::release::release_native_cells([thrown], None);
+            if let EvalPcntlSignalHandler::Callable(callback) = entry.handler {
+                thrown = release_native_cells([callback], thrown);
+            }
+            if pcntl_runtime::take_collectable_context(entry.context) {
+                thrown = unsafe { finish_eval_context(entry.context, thrown) };
+            }
+        } else if let Some(context) = pcntl_runtime::take_request_owner() {
+            thrown = unsafe { release_eval_context(context, thrown) };
+        } else {
+            break;
         }
     }
-    if context.has_abi_owners() {
-        // Cleanup above can run a PHP destructor that publishes a new buffer callback.
-        context.end_teardown();
-        let _ = Box::into_raw(context);
-        return;
-    }
-    context.unregister_dynamic_object_context();
-    crate::context::untrack_reflection_identities_for_context(ctx);
-    crate::context::unregister_live_native_context(ctx);
+    thrown.map_or(ptr::null_mut(), RuntimeCellHandle::as_ptr)
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

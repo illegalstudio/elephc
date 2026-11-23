@@ -10,10 +10,24 @@
 
 use super::*;
 use crate::context::{pcntl_runtime, EvalPcntlSignalHandler};
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::release_staged_cells;
 use elephc_pcntl::{ElephcPcntlSigInfo, ElephcPcntlSignalMask};
 
 /// Pins one handler-owner context across every fallible step of callback dispatch.
 struct EvalHandlerDispatchGuard(*mut ElephcEvalContext);
+
+impl EvalHandlerDispatchGuard {
+    /// Retires the dispatch lease and forwards a finalizer exception before resuming eval.
+    fn finish(mut self, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+        let owner = std::mem::replace(&mut self.0, std::ptr::null_mut());
+        if pcntl_runtime::end_handler_dispatch(owner) {
+            finish_detached_context(owner, context)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 impl Drop for EvalHandlerDispatchGuard {
     /// Releases the active-dispatch pin and finalizes a now-unreferenced detached context.
@@ -170,7 +184,7 @@ fn eval_pcntl_signal(
         context as *mut ElephcEvalContext,
         stored,
     ) {
-        release_replaced_pcntl_handler(previous, values)?;
+        release_replaced_pcntl_handler(previous, context, values)?;
     }
     values.bool_value(true)
 }
@@ -481,54 +495,78 @@ fn eval_pcntl_dispatch_masked_snapshot(
         else {
             continue;
         };
-        let _dispatch_guard = EvalHandlerDispatchGuard(entry.context);
+        let dispatch_guard = EvalHandlerDispatchGuard(entry.context);
         let EvalPcntlSignalHandler::Callable(handler) = entry.handler else {
             continue;
         };
-        let callback = values.retain(handler)?;
-        let signal = values.int(info.signo)?;
-        let info = eval_pcntl_siginfo_array(&info, values)?;
-        let current_context = context as *mut ElephcEvalContext;
-        let owner_context = if entry.context.is_null() {
-            current_context
-        } else {
-            entry.context
-        };
-        let result = unsafe {
-            eval_call_user_func_with_values(
-                vec![callback, signal, info],
-                &mut *owner_context,
-                values,
-            )
-        };
-        let result = match result {
-            Ok(result) => values.release(result),
-            Err(status) => {
-                if owner_context != current_context {
-                    if let Some(thrown) = unsafe { &mut *owner_context }.take_pending_throw() {
-                        context.set_pending_throw(thrown);
+        let owners = [RuntimeOwnerSlot::empty(), RuntimeOwnerSlot::empty(), RuntimeOwnerSlot::empty()];
+        let dispatched = with_runtime_owners(&owners.as_slice(), || {
+            let result = (|| {
+                let callback = values.retain(handler)?;
+                owners[0].replace(Some(callback));
+                let signal = values.int(info.signo)?;
+                owners[1].replace(Some(signal));
+                let info = eval_pcntl_siginfo_array(&info, values)?;
+                owners[2].replace(Some(info));
+                let current_context = context as *mut ElephcEvalContext;
+                let owner_context = if entry.context.is_null() {
+                    current_context
+                } else {
+                    entry.context
+                };
+                let args = owners.iter().map(RuntimeOwnerSlot::borrowed).collect();
+                let result = unsafe {
+                    eval_call_user_func_with_values(args, &mut *owner_context, values)
+                };
+                match result {
+                    Ok(result) => values.release(result),
+                    Err(status) => {
+                        if owner_context != current_context {
+                            if let Some(thrown) = unsafe { &mut *owner_context }.take_pending_throw() {
+                                context.set_pending_throw(thrown);
+                            }
+                        }
+                        Err(status)
                     }
                 }
-                Err(status)
-            }
-        };
-        let callback_release = values.release(callback);
-        callback_release?;
-        result?;
+            })();
+            release_staged_cells(result, owners.iter().map(RuntimeOwnerSlot::take), |cell| values.release(cell))
+        });
+        let finalized = dispatch_guard.finish(context);
+        dispatched.and(finalized)?;
     }
 }
 
 /// Releases a replaced callable and reclaims its detached owner after the last handler leaves it.
 fn release_replaced_pcntl_handler(
     previous: pcntl_runtime::EvalPcntlSignalEntry,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if let EvalPcntlSignalHandler::Callable(callback) = previous.handler {
-        values.release(callback)?;
-    }
-    if pcntl_runtime::take_collectable_context(previous.context) {
-        unsafe {
-            crate::ffi::context::drop_eval_context_now(previous.context);
+    let released = match previous.handler {
+        EvalPcntlSignalHandler::Callable(callback) => values.release(callback),
+        EvalPcntlSignalHandler::Disposition(_) => Ok(()),
+    };
+    let finalized = if pcntl_runtime::take_collectable_context(previous.context) {
+        finish_detached_context(previous.context, context)
+    } else {
+        Ok(())
+    };
+    released.and(finalized)
+}
+
+/// Keeps the dispatcher's pending Throwable alive through detached-owner finalization.
+fn finish_detached_context(
+    owner: *mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let pending = context.take_pending_throw();
+    // The PCNTL registry already surrendered this context's final dispatch/registration pin.
+    let thrown = unsafe { crate::ffi::context::retire_detached_pcntl_context(owner, pending) };
+    if let Some(thrown) = thrown {
+        context.set_pending_throw(thrown);
+        if Some(thrown) != pending {
+            return Err(EvalStatus::UncaughtThrowable);
         }
     }
     Ok(())

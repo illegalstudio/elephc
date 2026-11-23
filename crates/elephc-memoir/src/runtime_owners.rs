@@ -8,7 +8,7 @@
 //! - Handles carry Rust-only result provenance; native ABI slots contain raw pointers only.
 //! - Copying a handle does not retain its cell. Borrowed reads must acquire a lease before cleanup.
 
-use std::{cell::Cell, ffi::c_void};
+use std::{cell::{Cell, RefCell}, ffi::c_void};
 
 /// Opaque pointer to an elephc runtime cell.
 pub type RuntimeCell = c_void;
@@ -156,6 +156,25 @@ impl RuntimeOwnerSlot {
         (!previous.is_null()).then_some(previous)
     }
 
+    /// Updates an existing owner after a mutation returned its receiver without a new lease.
+    pub fn update_receiver(&self, receiver: RuntimeCellHandle) {
+        debug_assert!(!self.is_empty() && !self.0.get().is_borrowed());
+        self.0.set(RuntimeCellHandle::from_raw(receiver.as_ptr()));
+    }
+
+    /// Transfers the result lease or discards it when construction or cleanup failed.
+    pub fn finish<E>(
+        &self,
+        operation: Result<(), E>,
+        release: impl FnOnce(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<RuntimeCellHandle, E> {
+        let output = self.take();
+        if operation.is_err() && !output.is_null() && !output.is_borrowed() {
+            let _ = release(output);
+        }
+        operation.map(|()| output)
+    }
+
     /// Reports whether this slot has already relinquished its lease.
     pub fn is_empty(&self) -> bool {
         self.0.get().is_null()
@@ -207,6 +226,64 @@ pub fn finish_argument_cleanup<'a, T: 'a, E: Copy, S>(
     }
 }
 
+/// Temporary leases accumulated as a construction performs fallible native calls.
+/// A collector may inspect the live slots between stages and during retirement.
+#[derive(Default)]
+pub struct StagedRuntimeOwners(RefCell<Vec<RuntimeOwnerSlot>>);
+
+impl StagedRuntimeOwners {
+    /// Records an owned temporary for later cleanup and returns the cell for borrowing.
+    pub fn stage(&self, cell: RuntimeCellHandle) -> RuntimeCellHandle {
+        if !cell.is_borrowed() && !cell.is_null() {
+            self.0.borrow_mut().push(RuntimeOwnerSlot::new(cell));
+        }
+        cell
+    }
+
+    /// Consumes every staged lease in acquisition order, retaining the first cleanup failure.
+    pub fn release<E>(
+        &self,
+        operation: Result<(), E>,
+        release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let count = self.0.borrow().len();
+        let cells = (0..count).map(|index| self.0.borrow()[index].take());
+        release_staged_cells(operation, cells, release)
+    }
+
+    /// Drains the temporaries, transferring the result only if construction and cleanup succeed.
+    pub fn finish<E>(
+        &self,
+        operation: Result<(), E>,
+        result: &RuntimeOwnerSlot,
+        mut release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<RuntimeCellHandle, E> {
+        let operation = self.release(operation, &mut release);
+        result.finish(operation, release)
+    }
+}
+
+impl RuntimeOwners for StagedRuntimeOwners {
+    /// Makes only the outstanding leases visible to a pure collector visitor.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        self.0.borrow().visit_owned_slots(visit);
+    }
+}
+
+/// Retires detached temporaries in the supplied order, retaining the original failure.
+pub fn release_staged_cells<E>(
+    mut operation: Result<(), E>,
+    cells: impl IntoIterator<Item = RuntimeCellHandle>,
+    mut release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+) -> Result<(), E> {
+    for cell in cells {
+        if !cell.is_null() && !cell.is_borrowed() {
+            operation = operation.and(release(cell));
+        }
+    }
+    operation
+}
+
 /// Consumes every lease through a contained native callback, accumulating its owned Throwable.
 ///
 /// The callback returns whether this release failed. Previously accumulated exceptions can
@@ -222,6 +299,22 @@ pub fn release_owned_cells(
         caught |= release(cell.as_ptr(), &mut thrown);
     }
     ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
+}
+
+/// Drains detached owner batches until release callbacks leave the source empty.
+pub fn drain_owned_cell_batches<S, P>(
+    source: &mut S,
+    mut pending: P,
+    mut take: impl FnMut(&mut S) -> Vec<RuntimeCellHandle>,
+    mut release: impl FnMut(Vec<RuntimeCellHandle>, P) -> P,
+) -> P {
+    loop {
+        let owners = take(source);
+        if owners.is_empty() {
+            return pending;
+        }
+        pending = release(owners, pending);
+    }
 }
 
 /// Direction in which a detached batch retires its independent owners.
@@ -307,6 +400,57 @@ mod tests {
         );
         assert_eq!(outcome, Err(5));
         assert_eq!(released, [1, 2, 3, 4, 1]);
+    }
+
+    /// Retires every staged lease and drops an unpublished result even when cleanup fails.
+    #[test]
+    fn staged_cleanup_preserves_operation_error_and_releases_partial_result() {
+        let cell = |address| RuntimeCellHandle::from_raw(address as *mut RuntimeCell);
+        let first = cell(8usize);
+        let second = cell(16usize);
+        let output = RuntimeOwnerSlot::new(cell(24usize));
+        let owners = StagedRuntimeOwners::default();
+        owners.stage(first);
+        owners.stage(cell(32usize).borrowed());
+        owners.stage(second);
+        let mut released = Vec::new();
+
+        let outcome = owners.finish(Err("construction"), &output, |retired| {
+            let mut visible = 0;
+            owners.visit_owned_slots(&mut |_| visible += 1);
+            if retired == first {
+                assert_eq!(visible, 1);
+                assert!(!output.is_empty());
+            }
+            released.push(retired);
+            Err("cleanup")
+        });
+        assert_eq!(outcome, Err("construction"));
+        assert_eq!(released, [first, second, cell(24usize)]);
+        assert!(output.is_empty());
+    }
+
+    /// Reentrant release callbacks can publish a second batch without leaking it.
+    #[test]
+    fn detached_cell_batches_drain_to_quiescence() {
+        use std::collections::VecDeque;
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let pending = RefCell::new(VecDeque::from([vec![first]]));
+        let mut released = Vec::new();
+
+        drain_owned_cell_batches(
+            &mut &pending,
+            (),
+            |pending| pending.borrow_mut().pop_front().unwrap_or_default(),
+            |batch, ()| {
+                if batch == [first] {
+                    pending.borrow_mut().push_back(vec![second]);
+                }
+                released.extend(batch);
+            },
+        );
+        assert_eq!(released, [first, second]);
     }
 
     /// Releases every owner while honoring direction and retained-error selection.

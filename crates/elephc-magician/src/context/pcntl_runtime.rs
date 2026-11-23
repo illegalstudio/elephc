@@ -8,11 +8,11 @@
 //! - Signal dispositions are process-global, so callable ownership cannot live
 //!   in one transient function-frame eval context.
 //! - Contexts referenced by active handlers are detached at frame teardown and
-//!   reclaimed after their last handler is replaced.
+//!   reclaimed after their last reference, or at shutdown if they own PHP statics.
 
 use super::{ElephcEvalContext, EvalPcntlSignalHandler};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
-use std::collections::{HashMap, HashSet};
+use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use std::sync::{Mutex, OnceLock};
 
 /// One process-global eval handler plus the context that owns its callable metadata.
@@ -339,4 +339,57 @@ fn stored_to_entry(
         context: stored.context as *mut ElephcEvalContext,
         handler,
     })
+}
+
+/// Heap contexts with PHP declaration cells that must survive handler replacement.
+#[derive(Default)]
+struct RequestOwners {
+    contexts: Vec<usize>,
+    shutting_down: bool,
+}
+
+thread_local! {
+    static REQUEST_OWNERS: RefCell<RequestOwners> = RefCell::new(RequestOwners::default());
+}
+
+/// Adds one request lease so losing the final handler does not destroy its PHP statics.
+pub(crate) fn retain_for_request_shutdown(context: &mut ElephcEvalContext) {
+    if !context.has_pcntl_request_cells() {
+        return;
+    }
+    let address = context as *mut ElephcEvalContext as usize;
+    REQUEST_OWNERS.with(|owners| {
+        let mut owners = owners.borrow_mut();
+        if !owners.shutting_down && !owners.contexts.contains(&address)
+            && context.retain_abi_owner().is_ok()
+        {
+            owners.contexts.push(address);
+        }
+    });
+}
+
+/// Enters the terminal shutdown path once, before any signal callback owners are released.
+#[cfg(not(test))]
+pub(crate) fn begin_request_shutdown() -> bool {
+    REQUEST_OWNERS.with(|owners| {
+        !std::mem::replace(&mut owners.borrow_mut().shutting_down, true)
+    })
+}
+
+/// Detaches one request lease for release while its context registries are still live.
+#[cfg(not(test))]
+pub(crate) fn take_request_owner() -> Option<*mut ElephcEvalContext> {
+    REQUEST_OWNERS.with(|owners| {
+        owners.borrow_mut().contexts.pop().map(|address| address as *mut ElephcEvalContext)
+    })
+}
+
+/// Detaches one registration and disables automatic eval dispatch during request shutdown.
+#[cfg(not(test))]
+pub(crate) fn take_shutdown_handler() -> Option<(i32, EvalPcntlSignalEntry)> {
+    let mut state = pcntl_runtime().lock().ok()?;
+    state.async_signals = false;
+    let signal = *state.handlers.keys().min()?;
+    let stored = state.handlers.remove(&signal)?;
+    stored_to_entry(stored, false).map(|entry| (signal, entry))
 }

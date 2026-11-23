@@ -792,6 +792,10 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.uses_pcntl_signal_handlers() {
         abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
     }
+    if ctx.module.required_runtime_features.eval_bridge {
+        let shutdown = ctx.emitter.target.extern_symbol("__elephc_eval_pcntl_shutdown");
+        abi::emit_call_label(ctx.emitter, &shutdown);
+    }
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);

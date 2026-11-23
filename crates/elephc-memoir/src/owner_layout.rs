@@ -178,3 +178,61 @@ const _: () = {
     assert!(size_of::<ArgumentPin>() == 48);
     assert!(core::mem::align_of::<ArgumentPin>() == 8);
 };
+
+/// A native count word followed by that many borrowed cell addresses.
+pub struct EvalMethodArgPack;
+
+impl EvalMethodArgPack {
+    /// Number of bytes before the first cell address.
+    pub const HEADER: usize = size_of::<usize>();
+
+    /// Offset of a cell address relative to the first cell address.
+    pub const fn cell_offset(index: usize) -> usize {
+        index * size_of::<usize>()
+    }
+
+    /// Total record size for a count known to fit the native stack.
+    pub const fn bytes(count: usize) -> usize {
+        Self::HEADER + Self::cell_offset(count)
+    }
+
+    /// Reads the cells of a native pack as borrowed handles.
+    ///
+    /// # Safety
+    /// A non-null, aligned pack must point to a readable count followed by that many
+    /// initialized cell pointers in the same allocation. Their leases belong to the caller.
+    #[cfg(feature = "runtime")]
+    #[allow(unsafe_code)]
+    pub unsafe fn decode(pack: *const usize) -> Option<Vec<crate::runtime_owners::RuntimeCellHandle>> {
+        use crate::runtime_owners::{RuntimeCell, RuntimeCellHandle};
+
+        if pack.is_null() || !pack.is_aligned() {
+            return None;
+        }
+        let count = unsafe { *pack };
+        if count > (isize::MAX as usize - Self::HEADER) / size_of::<usize>() {
+            return None;
+        }
+        let cells = unsafe {
+            core::slice::from_raw_parts(pack.add(1).cast::<*mut RuntimeCell>(), count)
+        };
+        Some(cells.iter().map(|&cell| RuntimeCellHandle::from_raw(cell).borrowed()).collect())
+    }
+}
+
+/// A dynamic property write's borrowed cell and writable Throwable slot.
+#[repr(C)]
+pub struct EvalPropertyWriteWords {
+    throwable: u64,
+    reserved: u64,
+    value: u64,
+}
+
+impl EvalPropertyWriteWords {
+    /// Offset of the Throwable slot initialized and written by the bridge.
+    pub const THROWABLE: usize = offset_of!(Self, throwable);
+    /// Offset of the borrowed input cell.
+    pub const VALUE: usize = offset_of!(Self, value);
+    /// Stack space reserved for the record, including native stack alignment.
+    pub const STACK_BYTES: usize = (size_of::<Self>() + 15) & !15;
+}

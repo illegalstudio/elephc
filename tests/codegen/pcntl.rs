@@ -1921,6 +1921,95 @@ fn test_pcntl_eval_handler_survives_registering_function_frame() {
     assert_eq!(out, "handled|done");
 }
 
+/// Signal replacement releases the callback while eval-declared statics live until shutdown.
+#[test]
+fn test_pcntl_eval_replaced_handler_preserves_function_static_until_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+        function register_eval_shutdown_owner(): void {
+            eval('
+                class DeferredPcntlCleanupProbe {
+                    public function __destruct() { echo "released|"; }
+                }
+                class ReplacedPcntlCaptureProbe {
+                    public function __destruct() { echo "callback|"; }
+                }
+                function initialize_pcntl_owned_static(): void {
+                    static $held = null;
+                    $held = new DeferredPcntlCleanupProbe();
+                }
+                initialize_pcntl_owned_static();
+                $capture = new ReplacedPcntlCaptureProbe();
+                pcntl_signal(SIGUSR1, function() use ($capture): void {});
+                unset($capture);
+            ');
+        }
+        register_eval_shutdown_owner();
+        echo "registered|";
+        eval('pcntl_signal(SIGUSR1, SIG_DFL);');
+        echo "done";"#,
+    );
+    assert_eq!(out, "registered|callback|donereleased|");
+}
+
+/// Shutdown drains eval registrations even if the program never replaced its signal handler.
+#[test]
+fn test_pcntl_eval_installed_handler_releases_function_static_at_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+        function install_eval_handler_with_static(): void {
+            eval('
+                class InstalledPcntlCleanupProbe {
+                    public function __destruct() { echo "released|"; }
+                }
+                function initialize_installed_pcntl_static(): void {
+                    static $held = null;
+                    $held = new InstalledPcntlCleanupProbe();
+                }
+                initialize_installed_pcntl_static();
+                pcntl_signal(SIGUSR1, function(): void {});
+            ');
+        }
+        install_eval_handler_with_static();
+        echo "done|";"#,
+    );
+    assert_eq!(out, "done|released|");
+}
+
+/// A throwing capture does not discard the registration's remaining shutdown work.
+#[test]
+fn test_pcntl_eval_replacement_throw_keeps_declared_static_for_shutdown() {
+    let out = compile_and_run(
+        r#"<?php
+        function register_pcntl_throwing_capture(): void {
+            eval('
+                class ThrowingPcntlCapture {
+                    public function __destruct() { throw new RuntimeException("caught|"); }
+                }
+                class PcntlStaticAfterThrow {
+                    public function __destruct() { echo "released|"; }
+                }
+                function keep_pcntl_static_after_throw(): void {
+                    static $held = null;
+                    $held = new PcntlStaticAfterThrow();
+                }
+                keep_pcntl_static_after_throw();
+                $capture = new ThrowingPcntlCapture();
+                pcntl_signal(SIGUSR1, function() use ($capture): void {});
+                unset($capture);
+            ');
+        }
+        register_pcntl_throwing_capture();
+        try {
+            eval('pcntl_signal(SIGUSR1, SIG_DFL);');
+        } catch (RuntimeException $error) {
+            echo $error->getMessage();
+        }
+        echo "done|";"#,
+    );
+    assert_eq!(out, "caught|done|released|");
+}
+
 /// Returns a detached eval handler as a callable from a later eval context.
 #[test]
 fn test_pcntl_eval_get_detached_handler_remains_callable() {

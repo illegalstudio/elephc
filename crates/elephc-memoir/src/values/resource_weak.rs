@@ -296,3 +296,156 @@ pub fn emit_mark_closed_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("neg r11");                                             // closed payload sentinel = -id
     emitter.instruction(&format!("mov QWORD PTR [r10 + {PAYLOAD_OFFSET}], r11")); // discard the invalid native payload
 }
+
+/// Synchronizes the subtype or closed state by canonical cell address.
+/// The caller already closed the native handle when the subtype argument is negative.
+pub fn emit_update_canonical_cell(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_resource_inventory_head", 0);
+            emitter.label("__elephc_eval_resource_state_next");
+            emitter.instruction("cbz x9, __elephc_eval_resource_state_done");   // an untracked or retired cell requires no update
+            emitter.instruction(&format!("ldr x10, [x9, #{CELL_OFFSET}]"));     // compare the canonical identity, never a recycled handle
+            emitter.instruction("cmp x10, x0");                                 // is this the resource's weak inventory node?
+            emitter.instruction("b.eq __elephc_eval_resource_state_found");     // update its shared metadata
+            emitter.instruction("ldr x9, [x9]");                                // inspect the next incarnation
+            emitter.instruction("b __elephc_eval_resource_state_next");         // continue identity lookup
+            emitter.label("__elephc_eval_resource_state_found");
+            emitter.instruction("cmp x1, #0");                                  // negative subtype requests an explicit close
+            emitter.instruction("b.lt __elephc_eval_resource_state_closed");    // preserve the ID in a closed sentinel
+            emitter.instruction(&format!("str x1, [x9, #{SUBTYPE_OFFSET}]"));   // publish the eval resource's exact PHP subtype
+            crate::layout::emit_store_mixed_high(emitter, "x1", "x0");          // keep canonical boxed type metadata in sync
+            emitter.instruction("b __elephc_eval_resource_state_done");         // complete an open resource update
+            emitter.label("__elephc_eval_resource_state_closed");
+            emitter.instruction(&format!("mov x10, #{CLOSED}"));                // mark this incarnation closed
+            emitter.instruction(&format!("str x10, [x9, #{STATE_OFFSET}]"));    // exclude it from open-resource filters
+            emitter.instruction(&format!("ldr x10, [x9, #{ID_OFFSET}]"));       // read its stable PHP ID
+            emitter.instruction("neg x10, x10");                                // encode the closed identity as a negative payload
+            emitter.instruction(&format!("str x10, [x9, #{PAYLOAD_OFFSET}]"));  // invalidate the inventory's raw handle
+            crate::layout::emit_store_mixed_low(emitter, "x10", "x0");          // all aliases observe the same closed state
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_resource_inventory_head", 0);
+            emitter.label("__elephc_eval_resource_state_next");
+            emitter.instruction("test r10, r10");                               // detect the end of the weak inventory
+            emitter.instruction("jz __elephc_eval_resource_state_done");        // no update for untracked or retired cells
+            emitter.instruction(&format!("cmp QWORD PTR [r10 + {CELL_OFFSET}], rdi")); // match canonical identity, never a recycled descriptor
+            emitter.instruction("je __elephc_eval_resource_state_found");       // update shared metadata
+            emitter.instruction("mov r10, QWORD PTR [r10]");                    // inspect the next incarnation
+            emitter.instruction("jmp __elephc_eval_resource_state_next");       // continue identity lookup
+            emitter.label("__elephc_eval_resource_state_found");
+            emitter.instruction("test rsi, rsi");                               // negative subtype requests an explicit close
+            emitter.instruction("js __elephc_eval_resource_state_closed");      // preserve the ID in a closed sentinel
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {SUBTYPE_OFFSET}], rsi")); // publish the precise eval resource subtype
+            crate::layout::emit_store_mixed_high(emitter, "rsi", "rdi");        // keep the canonical cell consistent
+            emitter.instruction("jmp __elephc_eval_resource_state_done");       // complete an open resource update
+            emitter.label("__elephc_eval_resource_state_closed");
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {STATE_OFFSET}], {CLOSED}")); // exclude closed resources from open filters
+            emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {ID_OFFSET}]")); // read the stable PHP resource ID
+            emitter.instruction("neg r11");                                     // encode closed identity as a negative payload
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {PAYLOAD_OFFSET}], r11")); // invalidate the inventory's raw handle
+            crate::layout::emit_store_mixed_low(emitter, "r11", "rdi");         // update every retained alias through its canonical cell
+        }
+    }
+    emitter.label("__elephc_eval_resource_state_done");
+    emitter.instruction("ret");                                                 // the eval resource owner has already performed the actual close
+}
+
+/// Partitions the inventory, publishes the live chain, and reclaims every detached orphan.
+/// The callback receives an open orphan's subtype in the native result register.
+/// It may close the handle and publish new resources before the node itself is reclaimed.
+pub fn emit_prune<E: Emitter>(emitter: &mut E, emit_close_orphan: impl FnOnce(&mut E)) {
+    let value = emitter.int_result_reg();
+    let scratch = emitter.secondary_scratch_reg();
+    emitter.emit_load_symbol_to_reg(value, "_resource_inventory_head", 0);
+    emitter.store_at_offset(value, 8);
+    for offset in [16, 24, 32, 40] { emitter.emit_store_zero_to_local_slot(offset); }
+    emitter.label("__rt_web_inventory_scan");
+    emitter.load_at_offset(value, 8);
+    emitter.emit_branch_if_int_result_zero("__rt_web_inventory_publish");
+    emitter.store_at_offset(value, 48);
+    emitter.emit_load_from_address(scratch, value, 0);
+    emitter.store_at_offset(scratch, 8);
+    emitter.emit_store_zero_to_address(value, 0);
+    emitter.emit_load_from_address(value, value, STATE_OFFSET);
+    emitter.emit_branch_if_int_result_nonzero("__rt_web_inventory_orphan");
+    emitter.load_at_offset(value, 48);
+    emitter.emit_load_from_address(value, value, CELL_OFFSET);
+    emitter.emit_branch_if_int_result_zero("__rt_web_inventory_orphan");
+    append(emitter, 24, 32, "live");
+    emitter.emit_jump("__rt_web_inventory_scan");
+    emitter.label("__rt_web_inventory_orphan");
+    append(emitter, 16, 40, "dead");
+    emitter.emit_jump("__rt_web_inventory_scan");
+
+    // -- make retained resources visible before close hooks can inspect the inventory --
+    emitter.label("__rt_web_inventory_publish");
+    for (offset, symbol) in [(24, "_resource_inventory_head"), (32, "_resource_inventory_tail")] {
+        emitter.load_at_offset(value, offset);
+        emitter.emit_store_reg_to_symbol(value, symbol, 0);
+    }
+    emitter.load_at_offset(value, 16);
+    emitter.store_at_offset(value, 8);
+    emitter.label("__rt_web_inventory_retire");
+    emitter.load_at_offset(value, 8);
+    emitter.emit_branch_if_int_result_zero("__rt_web_inventory_done");
+    emitter.store_at_offset(value, 48);
+    emitter.emit_load_from_address(scratch, value, 0);
+    emitter.store_at_offset(scratch, 8);
+    emitter.emit_store_zero_to_address(value, 0);
+    emitter.emit_load_from_address(value, value, STATE_OFFSET);
+    emitter.emit_branch_if_int_result_nonzero("__rt_web_inventory_free");
+    emitter.load_at_offset(value, 48);
+    emitter.emit_load_from_address(value, value, SUBTYPE_OFFSET);
+    emit_close_orphan(emitter);
+
+    // -- isolate the legacy node free without losing callback-created resources or IDs --
+    emitter.label("__rt_web_inventory_free");
+    for (offset, symbol) in [(56, "_resource_inventory_head"), (64, "_resource_inventory_tail"), (72, "_resource_id_next")] {
+        emitter.emit_load_symbol_to_reg(value, symbol, 0);
+        emitter.store_at_offset(value, offset);
+    }
+    emitter.load_at_offset(value, 48);
+    emitter.emit_store_reg_to_symbol(value, "_resource_inventory_head", 0);
+    emitter.emit_store_reg_to_symbol(value, "_resource_inventory_tail", 0);
+    emitter.emit_call_label("__rt_resource_inventory_reset");
+    for (offset, symbol) in [(56, "_resource_inventory_head"), (64, "_resource_inventory_tail"), (72, "_resource_id_next")] {
+        emitter.load_at_offset(value, offset);
+        emitter.emit_store_reg_to_symbol(value, symbol, 0);
+    }
+    emitter.emit_jump("__rt_web_inventory_retire");
+}
+
+/// Appends the node in slot 48 to a local chain without allocating or invoking PHP.
+fn append(emitter: &mut impl Emitter, head: usize, tail: usize, suffix: &str) {
+    let value = abi::int_result_reg(emitter);
+    let node = abi::secondary_scratch_reg(emitter);
+    let first = format!("__rt_web_inventory_{suffix}_first");
+    let done = format!("__rt_web_inventory_{suffix}_appended");
+    emitter.load_at_offset(value, tail);
+    emitter.emit_branch_if_int_result_zero(&first);
+    emitter.load_at_offset(node, 48);
+    emitter.emit_store_to_address(node, value, 0);
+    emitter.emit_jump(&done);
+    emitter.label(&first);
+    emitter.load_at_offset(node, 48);
+    emitter.store_at_offset(node, head);
+    emitter.label(&done);
+    emitter.store_at_offset(node, tail);
+}
+
+/// Loads the current orphan's native payload after a close policy checks its subtype.
+pub fn emit_load_orphan_payload(emitter: &mut impl Emitter) {
+    let value = emitter.int_result_reg();
+    emitter.load_at_offset(value, 48);
+    emitter.emit_load_from_address(value, value, PAYLOAD_OFFSET);
+}
+
+/// Marks the current orphan closed before calling a potentially reentrant close hook.
+pub fn emit_mark_orphan_closed(emitter: &mut impl Emitter) {
+    let node = emitter.secondary_scratch_reg();
+    emitter.load_at_offset(node, 48);
+    let flag = if emitter.arch() == Arch::AArch64 { "x12" } else { "r11" };
+    emitter.emit_load_int_immediate(flag, CLOSED as i64);
+    emitter.emit_store_to_address(flag, node, STATE_OFFSET);
+}

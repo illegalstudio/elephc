@@ -432,6 +432,14 @@ pub fn emit_load_packed_word(emitter: &mut impl Emitter, destination: &str, arra
     emitter.emit_load_from_address(destination, array, PACKED_PAYLOAD_OFFSET + word * 8);
 }
 
+/// Borrows the two words of a checked packed slot, in payload order.
+pub fn emit_load_packed_pair(
+    emitter: &mut impl Emitter, low: &str, high: &str, array: &str, slot: usize,
+) {
+    emit_load_packed_word(emitter, low, array, slot * 2);
+    emit_load_packed_word(emitter, high, array, slot * 2 + 1);
+}
+
 /// Forms the AArch64 payload base from a validated packed array pointer.
 pub fn emit_packed_payload_aarch64(emitter: &mut impl Emitter, destination: &str, array: &str) {
     emitter.instruction(&format!("add {destination}, {array}, #{PACKED_PAYLOAD_OFFSET}")); // skip the packed array header

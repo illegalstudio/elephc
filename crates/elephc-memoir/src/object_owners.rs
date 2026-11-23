@@ -37,3 +37,34 @@ pub fn child(identity: u64, index: usize) -> Option<usize> {
 pub fn take(identity: u64) -> Option<Vec<usize>> {
     owners().lock().ok()?.remove(&identity)
 }
+
+/// Tracks the context to notify when a native identity is retired.
+/// Neither the identity nor the registered context is kept alive by this table.
+#[derive(Default)]
+pub struct WeakIdentityOwners(HashMap<u64, usize>);
+
+impl WeakIdentityOwners {
+    /// Records the context of the current identity registration.
+    pub fn register(&mut self, identity: u64, context: usize) {
+        self.0.insert(identity, context);
+    }
+
+    /// Detaches the registered context before invoking its retirement hook.
+    pub fn take(&mut self, identity: u64) -> Option<usize> {
+        self.0.remove(&identity)
+    }
+
+    /// Clears a registration only if it still belongs to the calling context.
+    pub fn clear_if_owned(&mut self, identity: u64, context: usize) {
+        if let std::collections::hash_map::Entry::Occupied(entry) = self.0.entry(identity) {
+            if *entry.get() == context {
+                entry.remove();
+            }
+        }
+    }
+
+    /// Untracks a context before the caller reclaims its storage.
+    pub fn untrack_context(&mut self, context: usize) {
+        self.0.retain(|_, owner| *owner != context);
+    }
+}

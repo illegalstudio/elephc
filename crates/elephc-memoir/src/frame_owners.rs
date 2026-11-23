@@ -177,3 +177,12 @@ pub fn emit_visit_frame_slot(emitter: &mut impl Emitter, offset: usize, tag: i64
     emit_load_visit_context(emitter);
     emitter.emit_call_label("__rt_gc_frame_owner_slot");
 }
+
+/// Releases a temporary Mixed lease while preserving the caller's scalar result.
+pub fn emit_release_stacked_mixed_preserving_result(emitter: &mut impl TargetAbi, offset: usize) {
+    let result = emitter.int_result_reg();
+    emitter.emit_push_reg(result);
+    emitter.emit_load_temporary_stack_slot(result, offset + 16);
+    emitter.emit_call_label("__rt_decref_mixed");
+    emitter.emit_pop_reg(result);
+}

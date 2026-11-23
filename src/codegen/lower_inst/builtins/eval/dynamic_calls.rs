@@ -242,7 +242,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     abi::emit_call_label(ctx.emitter, &symbol);
     let mut adapter_boxes = vec![(object, EVAL_TEMP_CELL_OFFSET)];
     adapter_boxes.extend(inst.operands.iter().skip(1).enumerate().map(|(index, &value)| {
-        (value, args_offset + 8 + index * 8)
+        (value, args_offset + EvalMethodArgPack::HEADER + EvalMethodArgPack::cell_offset(index))
     }));
     retire_eval_metadata_operand_boxes(ctx, &adapter_boxes)?;
     emit_eval_status_check(ctx);
@@ -312,7 +312,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_context_free_method_c
             .iter()
             .skip(1)
             .enumerate()
-            .map(|(index, &value)| (value, args_offset + 8 + index * 8)),
+            .map(|(index, &value)| (value, args_offset + EvalMethodArgPack::HEADER + EvalMethodArgPack::cell_offset(index))),
     );
     retire_eval_metadata_operand_boxes(ctx, &adapter_boxes)?;
     emit_eval_status_check(ctx);
@@ -338,7 +338,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
     method_name: &str,
 ) -> Result<()> {
     let args_offset = EVAL_STACK_BYTES;
-    let stack_bytes = eval_static_method_call_stack_bytes(inst.operands.len());
+    let stack_bytes = eval_method_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
     store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
@@ -361,7 +361,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
         .target
         .extern_symbol("__elephc_eval_static_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
-    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + 8)?;
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + EvalMethodArgPack::HEADER)?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -379,7 +379,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
     done_label: &str,
 ) -> Result<()> {
     let args_offset = EVAL_STACK_BYTES;
-    let stack_bytes = eval_static_method_call_stack_bytes(inst.operands.len());
+    let stack_bytes = eval_method_call_stack_bytes(inst.operands.len());
     let miss_stack_label = ctx.next_label("eval_native_frame_static_method_miss");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
@@ -415,7 +415,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
         .target
         .extern_symbol("__elephc_eval_native_frame_static_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
-    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + 8)?;
+    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + EvalMethodArgPack::HEADER)?;
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);

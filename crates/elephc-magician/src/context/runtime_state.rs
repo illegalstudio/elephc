@@ -105,6 +105,17 @@ impl ElephcEvalContext {
         self.closures.contains_key(name)
     }
 
+    /// Reports whether losing a PCNTL callback would destroy request-persistent declarations.
+    pub(crate) fn has_pcntl_request_cells(&self) -> bool {
+        !self.static_locals.is_empty()
+            || !self.static_properties.is_empty()
+            || !self.constants.is_empty()
+            || !self.class_constants.is_empty()
+            || !self.enum_cases.is_empty()
+            || !self.enum_case_values.is_empty()
+            || !self.instance_defaults.is_empty()
+    }
+
     /// Detaches persistent value owners before native releases can reenter the context.
     pub(crate) fn take_context_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
         self.enum_cases.drain().map(|(_, cell)| cell)

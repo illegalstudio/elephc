@@ -459,30 +459,22 @@ pub trait RuntimeValueOps {
             EVAL_TAG_ASSOC => self.assoc_new(len)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         };
-        let mut operands = Vec::new();
-        let mut copied = (|| {
-            for position in 0..len {
-                let key = self.array_iter_key(array, position)?;
-                operands.push(key);
-                let value = self.array_get_for_structural_copy(array, key)?;
-                operands.push(value);
-                self.array_set(result, key, value)?;
-            }
-            Ok(())
-        })();
-        for operand in operands {
-            if !operand.is_borrowed() {
-                let released = self.release(operand);
-                if copied.is_ok() { copied = released; }
-            }
-        }
-        match copied {
-            Ok(()) => Ok(result),
-            Err(status) => {
-                let _ = self.release(result);
-                Err(status)
-            }
-        }
+        use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
+
+        let output = RuntimeOwnerSlot::new(result);
+        let temporaries = StagedRuntimeOwners::default();
+        with_runtime_owners(&(&output, &temporaries), || {
+            let copied = (|| {
+                for position in 0..len {
+                    let key = temporaries.stage(self.array_iter_key(array, position)?);
+                    let value = temporaries.stage(self.array_get_for_structural_copy(array, key)?);
+                    let updated = self.array_set(output.borrowed(), key, value)?;
+                    output.update_receiver(updated);
+                }
+                Ok(())
+            })();
+            temporaries.finish(copied, &output, |cell| self.release(cell))
+        })
     }
 
     /// Reads a named property from a runtime object held in a boxed Mixed cell.

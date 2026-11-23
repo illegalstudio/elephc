@@ -10,6 +10,7 @@
 //! - PHP-visible errors and missing-member results are preserved at this boundary.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Handles eval-backed `ReflectionClass::implementsInterface()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
@@ -553,16 +554,13 @@ pub(in crate::interpreter) fn eval_reflection_enum_methods_result(
                     .collect::<Vec<_>>();
                 (case_names, eval_reflection_enum_case_owner_kind(&enum_name, context)?)
             };
-            let mut result = values.object_array_new(case_names.len())?;
+            let mut result = EvalArrayBuilder::objects(values, case_names.len())?;
             for case_name in &case_names {
-                let case_object = eval_reflection_enum_case_object_result(
-                    owner_kind, &enum_name, case_name, context, values,
-                )?;
-                result = crate::interpreter::reflection::owned_collections::push_owned_object(
-                    values, result, case_object,
-                )?;
+                result.object(|values| {
+                    eval_reflection_enum_case_object_result(owner_kind, &enum_name, case_name, context, values)
+                })?;
             }
-            Ok(Some(result))
+            Ok(Some(result.finish()))
         }
         "isbacked" => {
             eval_reflection_bind_no_args(evaluated_args)?;

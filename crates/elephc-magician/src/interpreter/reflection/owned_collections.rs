@@ -5,7 +5,7 @@
 //! - Reflection owner and attribute metadata materialization.
 //!
 //! Key details:
-//! - Runtime array_set and object_array_push borrow all inputs and transfer no additional
+//! - Runtime array_set borrows all inputs and transfers no additional
 //!   receiver owner.
 //! - Failure retires both operands and the partially populated temporary array.
 //! - Reflector lists (`getMethods()`, `getParameters()`, ...) are direct object arrays, the
@@ -51,26 +51,4 @@ pub(in crate::interpreter) fn insert_retained_element(
         value
     };
     insert_owned_element(values, array, key, value)
-}
-
-/// Appends one owned reflector object to a direct object array, releasing the caller's owner
-/// on every outcome; failure also retires the partially populated array.
-pub(in crate::interpreter) fn push_owned_object(
-    values: &mut impl RuntimeValueOps,
-    array: RuntimeCellHandle,
-    object: RuntimeCellHandle,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let pushed = values.object_array_push(array, object);
-    let released = values.release(object);
-    match pushed {
-        Ok(array) => {
-            released?;
-            Ok(array)
-        }
-        Err(status) => {
-            let _ = released;
-            let _ = values.release(array);
-            Err(status)
-        }
-    }
 }

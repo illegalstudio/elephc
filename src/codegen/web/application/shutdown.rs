@@ -19,6 +19,10 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     let scope = Scope { arm: 0, x86: 16 };
     let value = abi::int_result_reg(emitter);
     scope.begin(emitter);
+    if module.required_runtime_features.eval_bridge {
+        let shutdown = emitter.target.extern_symbol("__elephc_eval_pcntl_shutdown");
+        scope.call(emitter, &shutdown, false);
+    }
     // -- detach persistent roots before their destructors can reenter application code --
     for (index, record) in data.static_locals().iter().enumerate() {
         let skip = format!("__rt_web_app_shutdown_static_{index}");

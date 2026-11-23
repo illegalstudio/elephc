@@ -2503,10 +2503,10 @@ fn emit_push_boxed_string_callable_array_slot(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let tag_reg = abi::int_result_reg(ctx.emitter);
-    let offset = 24 + slot * 16;
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, offset + 8);
+    elephc_memoir::values::packed_slots::emit_load_packed_pair(
+        ctx.emitter, ptr_reg, len_reg, array_reg, slot,
+    );
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     abi::emit_load_int_immediate(ctx.emitter, tag_reg, MIXED_TAG_STRING);
     abi::emit_push_reg(ctx.emitter, tag_reg);
@@ -2539,10 +2539,10 @@ fn emit_push_string_callable_array_slot(
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let offset = 24 + slot * 16;
     ctx.load_value_to_reg(callable, array_reg)?;
-    abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, offset + 8);
+    elephc_memoir::values::packed_slots::emit_load_packed_pair(
+        ctx.emitter, ptr_reg, len_reg, array_reg, slot,
+    );
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     Ok(())
 }
@@ -2576,16 +2576,9 @@ fn emit_unbox_mixed_callable_array_slot(
     slot: usize,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let offset = 24 + slot * 8;
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); // load the boxed callable-array selector slot
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); // load the boxed callable-array selector slot
-        }
-    }
+    let result = abi::int_result_reg(ctx.emitter);
+    elephc_memoir::values::packed_slots::emit_load_packed_word(ctx.emitter, result, array_reg, slot);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     Ok(())
 }
