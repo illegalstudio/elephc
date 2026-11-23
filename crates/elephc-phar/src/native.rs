@@ -15,14 +15,14 @@ use super::*;
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
 #[cfg(test)]
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
-    parse_native_phar_archive_with_public_key(data, None)
+    parse_native_phar_archive_with_public_key(data, None, false, false)
 }
 
-/// Parses a native PHAR and authenticates an OpenSSL trailer with `public_key`.
-pub(super) fn parse_native_phar_archive_with_public_key(
-    data: &[u8],
-    public_key: Option<&rsa::RsaPublicKey>,
-) -> Option<Archive> {
+/// Locates the native manifest just past the `__HALT_COMPILER();` stub marker.
+///
+/// The parser and the signature-only probe share this offset so signing and
+/// verification never disagree about where the manifest begins.
+pub(super) fn native_manifest_start(data: &[u8]) -> Option<usize> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
     let mut p = halt_idx + halt.len();
@@ -31,18 +31,34 @@ pub(super) fn parse_native_phar_archive_with_public_key(
             p += 1;
         }
     }
+    Some(p)
+}
 
-    let manifest_start = p;
+/// Parses a native PHAR and authenticates an OpenSSL trailer with `public_key`.
+///
+/// `openssl_expected` reports the adjacent `<archive>.pubkey` sidecar; when set,
+/// a keyless hash signature is rejected instead of trusted. `require_hash`
+/// mirrors `phar.require_hash`: when true, an unsigned archive is rejected.
+pub(super) fn parse_native_phar_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
+) -> Option<Archive> {
+    let manifest_start = native_manifest_start(data)?;
     let stub = data.get(..manifest_start)?.to_vec();
     let manifest_len = le32(data, manifest_start)? as usize;
     let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
     data.get(..data_section)?;
+
     let num_files = le32(data, manifest_start + 4)?;
     let global_flags = le32(data, manifest_start + 10)?;
     verify_native_phar_signature(
         data,
         global_flags & PHAR_HDR_SIGNATURE != 0,
         public_key,
+        openssl_expected,
+        require_hash,
     )?;
     let mut q = manifest_start + 8 + 2 + 4;
     let alias_len = le32(data, q)? as usize;
@@ -93,6 +109,11 @@ pub(super) fn parse_native_phar_archive_with_public_key(
         format: ArchiveFormat::NativePhar,
         metadata,
         stub,
+        signature_flag: if global_flags & PHAR_HDR_SIGNATURE != 0 {
+            Some(le32(data, data.len().checked_sub(8)?)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -105,6 +126,8 @@ pub(super) fn parse_native_phar_entry_with_public_key(
     data: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Vec<u8>> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
@@ -125,6 +148,8 @@ pub(super) fn parse_native_phar_entry_with_public_key(
         data,
         global_flags & PHAR_HDR_SIGNATURE != 0,
         public_key,
+        openssl_expected,
+        require_hash,
     )?;
     let mut q = manifest_start.checked_add(8 + 2 + 4)?;
     let alias_len = le32(data, q)? as usize;
@@ -240,6 +265,9 @@ pub(super) fn set_file_metadata_bytes(
     metadata: &[u8],
 ) -> Option<()> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     let entry = archive.entries.iter_mut().find(|e| e.name == entry_name)?;
     entry.metadata.clear();
@@ -271,17 +299,24 @@ pub(super) fn remove_entry(entries: &mut Vec<ArchiveEntry>, entry_name: &[u8]) -
     Some(())
 }
 
-/// Builds a SHA1-signed native PHAR archive from decoded entries.
+/// Builds a native PHAR archive from decoded entries, signed with
+/// `signature_flag` when present.
 pub(super) fn build_native_phar_archive(
     entries: &[ArchiveEntry],
     metadata: &[u8],
     stub: &[u8],
+    signature_flag: Option<u32>,
 ) -> Option<Vec<u8>> {
     let mut manifest = Vec::new();
     let mut stored_entries = Vec::with_capacity(entries.len());
     manifest.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());
     manifest.extend_from_slice(&[0x11, 0x00]);
-    manifest.extend_from_slice(&PHAR_HDR_SIGNATURE.to_le_bytes());
+    let global_flags = if signature_flag.is_some() {
+        PHAR_HDR_SIGNATURE
+    } else {
+        0
+    };
+    manifest.extend_from_slice(&global_flags.to_le_bytes());
     manifest.extend_from_slice(&0u32.to_le_bytes());
     // Global metadata field: length-prefixed serialized blob (empty when unset).
     manifest.extend_from_slice(&u32::try_from(metadata.len()).ok()?.to_le_bytes());
@@ -317,7 +352,12 @@ pub(super) fn build_native_phar_archive(
     for stored in stored_entries {
         out.extend_from_slice(&stored);
     }
-    append_sha1_signature(&mut out);
+    if let Some(flag) = signature_flag {
+        let digest = compute_signature(flag, None, &out)?;
+        out.extend_from_slice(&digest);
+        out.extend_from_slice(&flag.to_le_bytes());
+        out.extend_from_slice(b"GBMB");
+    }
     Some(out)
 }
 

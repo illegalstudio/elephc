@@ -13,7 +13,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
     SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT,
-    TAGGED_SCALAR_TAG_NULL,
+    TAGGED_SCALAR_TAG_NULL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 
 /// Emits x86_64 object-property storage and parsed-hash conversion helpers.
@@ -108,6 +108,10 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "r10", "rdi", "r11", "__rt_obj_store_prop_inline_slot",
     );
+    emitter.instruction("mov rax, r9");                                         // copy the property tag
+    emitter.instruction("and rax, 255");                                        // storage flags never participate in value dispatch
+    emitter.instruction("cmp rax, 6");                                          // is this a typed object property?
+    emitter.instruction("je __rt_obj_store_prop_object");                       // publish the replacement before releasing the old owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the property tag across the previous-value release
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // preserve the slot address across the previous-value release
@@ -134,6 +138,29 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hand the parsed box to the post-store finisher
     emitter.instruction("call __rt_unser_finish_stored_prop");                  // release or retain the box after the slot took its value
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_object");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the parsed value box
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // previous object payload
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // previous slot metadata word
+    emitter.instruction("mov r11, QWORD PTR [rcx + 8]");                        // replacement object payload
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the replacement first
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // mark the typed property initialized
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp rdx, r11");                                        // was the typed slot uninitialized?
+    emitter.instruction("je __rt_obj_store_prop_object_done");                  // no old owner to release
+    emitter.instruction("cmp rax, r11");                                        // is the payload the uninitialized marker?
+    emitter.instruction("je __rt_obj_store_prop_object_done");                  // nothing to release
+    emitter.instruction("test rax, rax");                                       // a null payload owns no object
+    emitter.instruction("jz __rt_obj_store_prop_object_done");                  // skip the release
+    emitter.instruction("sub rsp, 16");                                         // preserve the parsed box across a throwing destructor
+    emitter.instruction("mov QWORD PTR [rsp], rcx");                            // save the parsed value box
+    emitter.instruction("call __rt_decref_any");                                // release the old owner after the slot points at the replacement
+    emitter.instruction("mov rcx, QWORD PTR [rsp]");                            // recover the parsed value box
+    emitter.instruction("add rsp, 16");                                         // release the preservation slot
+    emitter.label("__rt_obj_store_prop_object_done");
+    emitter.instruction("mov rax, rcx");                                        // hand the parsed box to the post-store finisher
+    emitter.instruction("call __rt_unser_finish_stored_prop");                  // retain/defer the replacement container
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int or null reaches this arm; the declared-type check above already raised the

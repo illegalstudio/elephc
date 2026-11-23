@@ -4,9 +4,9 @@
 //
 // fopen("phar://<archive>/<entry>", "w") returns a write stream; fwrite() buffers
 // the entry content, and fclose() assembles a native PHAR — PHP stub, a one-file
-// manifest, the entry bytes, and a SHA1 signature trailer — and writes it to disk.
+// manifest, the entry bytes, and a SHA-256 signature trailer — and writes it to disk.
 //
-// The archive sets the PHAR_HDR_SIGNATURE flag and carries a real SHA1 signature,
+// The archive sets the PHAR_HDR_SIGNATURE flag and carries a real SHA-256 signature,
 // so the resulting .phar is accepted by real PHP (which requires a hash by
 // default), e.g.:
 //

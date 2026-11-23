@@ -50,9 +50,15 @@ pub(super) fn write_tar_body(
 /// The signature is computed over the data records (everything before the
 /// signature entry's header), then the signature entry is appended as the last
 /// record before the trailing zero blocks, matching php-src `phar_tar_flush`.
-pub(super) fn sign_tar_archive(archive: &Archive, flag: u32, key: Option<&[u8]>) -> Option<Vec<u8>> {
+pub(super) fn sign_tar_archive(
+    entries: &[ArchiveEntry],
+    metadata: &[u8],
+    stub: &[u8],
+    flag: u32,
+    key: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    write_tar_body(&mut out, &archive.entries, &archive.metadata, &archive.stub)?;
+    write_tar_body(&mut out, entries, metadata, stub)?;
     let sig = compute_signature(flag, key, &out)?;
     write_tar_entry(&mut out, PHAR_SIGNATURE_ENTRY, &signature_bin_payload(flag, &sig)?)?;
     out.extend_from_slice(&[0u8; 1024]);

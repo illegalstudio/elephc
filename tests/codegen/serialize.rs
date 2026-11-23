@@ -576,6 +576,43 @@ echo serialize(new S()), "\n";
     assert_eq!(out, "O:1:\"S\":2:{s:1:\"x\";i:1;s:4:\"\0S\0z\";i:3;}\n");
 }
 
+/// Hostile internal-object payloads must not populate typed slots or crash lazy readers.
+#[test]
+fn test_unserialize_hostile_internal_object_payloads_stay_inert() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class AttackedArrayObject extends ArrayObject { public array $a; public int $b; }
+$payload = 'O:19:"AttackedArrayObject":4:{i:0;i:0;i:1;a:0:{}i:2;a:2:{s:1:"a";O:8:"stdClass":0:{}s:1:"b";s:3:"zzz";}i:3;N;}';
+$o = unserialize($payload);
+try { echo 'count=', count($o), '|'; } catch (Throwable $error) { echo 'count=EX|'; }
+try { foreach ($o as $value) { echo $value; } echo 'iter=ok|'; } catch (Throwable $error) { echo 'iter=EX|'; }
+try { $it = $o->getIterator(); echo 'it=ok|'; } catch (Throwable $error) { echo 'it=EX|'; }
+try { $o->append('y'); echo 'append=ok|'; } catch (Throwable $error) { echo 'append=EX|'; }
+try { echo 'a=', gettype($o->a), '|'; } catch (Throwable $error) { echo 'a=EX|'; }
+class TypedTarget { public int $b; }
+try { unserialize('O:11:"TypedTarget":1:{s:1:"b";s:3:"zzz";}'); echo 'typed=accepted|'; }
+catch (TypeError $error) { echo 'typed=rejected|'; }
+$n = "\x00";
+$e = unserialize('O:9:"Exception":1:{s:16:"' . $n . 'Exception' . $n . 'trace";O:8:"stdClass":0:{}}');
+echo get_class($e), '|', $e->getTraceAsString(), '|';
+unset($o, $e);
+echo 'survived';
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "count=count=EX|iter=EX|it=EX|append=EX|a=a=EX|typed=rejected|Exception||survived",
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies object unserialization via the `__unserialize()` magic method (Stage C):
 /// the `O:` body is parsed into an associative array and passed to
 /// `__unserialize($this, $data)`, which restores the object. Round-trips an int

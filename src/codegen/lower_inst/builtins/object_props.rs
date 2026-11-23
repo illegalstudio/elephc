@@ -112,6 +112,60 @@ pub(crate) fn lower_object_prop_value(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_unserialize_store_property(object, key, value)` to the decoder's
+/// `__rt_obj_store_prop` helper.
+///
+/// A non-object operand reports `false` without calling the helper. The value is
+/// coerced to an owned `Mixed` box first, then handed to the property store, which
+/// applies the same mangled-key, visibility and declared-type checks as ordinary
+/// unserialize injection.
+pub(crate) fn lower_unserialize_store_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_unserialize_store_property", 3)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_unserialize_store_property()");
+    let object = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let missing = ctx.next_label("unser_store_property_not_object");
+    let done = ctx.next_label("unser_store_property_done");
+    let arm = ctx.emitter.target.arch == Arch::AArch64;
+    emit_object_pointer_from_operand(ctx, object)?;
+    emit_branch_if_result_zero(ctx, &missing);
+    if arm {
+        abi::emit_push_reg(ctx.emitter, "x0");
+        ctx.load_string_value_to_regs(key, "x1", "x2")?;
+        abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+        let loaded = ctx.load_value_to_result(value)?;
+        super::super::coerce_loaded_local_to_result_type(ctx, &loaded, &PhpType::Mixed)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach the value from the caller's $data hash
+        ctx.emitter.instruction("mov x3, x0");                                  // bridge arg 3 = owned boxed value
+        abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                        // restore the key pointer and length
+        abi::emit_pop_reg(ctx.emitter, "x0");                                   // restore the object receiver
+        abi::emit_call_label(ctx.emitter, "__rt_obj_store_prop");
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 1);
+    } else {
+        abi::emit_push_reg(ctx.emitter, "rax");
+        ctx.load_string_value_to_regs(key, "rsi", "rdx")?;
+        abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+        let loaded = ctx.load_value_to_result(value)?;
+        super::super::coerce_loaded_local_to_result_type(ctx, &loaded, &PhpType::Mixed)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach the value from the caller's $data hash
+        ctx.emitter.instruction("mov rcx, rax");                                // bridge arg 3 = owned boxed value
+        abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                      // restore the key pointer and length
+        abi::emit_pop_reg(ctx.emitter, "rdi");                                  // restore the object receiver
+        abi::emit_call_label(ctx.emitter, "__rt_obj_store_prop");
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 1);
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&missing);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Materializes the object pointer in the first argument register and the property
 /// index in the second, evaluating the index FIRST so the object pointer is not
 /// clobbered by the index load.

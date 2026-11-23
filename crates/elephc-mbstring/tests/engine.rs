@@ -40,6 +40,8 @@ mod detect_many;
 mod detected_conversion;
 #[path = "encoding_list_order.rs"]
 mod encoding_list_order;
+#[path = "encoding_names.rs"]
+mod encoding_names;
 #[path = "entities.rs"]
 mod entities;
 #[path = "euctw.rs"]

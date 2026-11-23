@@ -3502,6 +3502,287 @@ echo "end\n";
     assert_eq!(out, "first\nConstant DATE_RFC7231 @8\nConstant DATE_RFC7231 @8\nsecond\nConstant SUNFUNCS_RET_STRING @10\nConstant DATE_RFC7231 @10\nthird\nConstant DATE_RFC7231 @14\nConstant DATE_RFC7231 @14\nfourth\nConstant SUNFUNCS_RET_STRING @17\nConstant DATE_RFC7231 @17\nConstant SUNFUNCS_RET_STRING @17\nConstant DATE_RFC7231 @17\nagain\nConstant SUNFUNCS_RET_STRING @19\nConstant DATE_RFC7231 @19\nConstant DateTimeInterface::RFC7231 @20\n21\nnew NC\nConstant DATE_RFC7231 @25\n21\n21\nConstant DATE_RFC7231 @28\n21\n21\nConstant MT_RAND_PHP @33\n1\nend\n");
 }
 
+/// PHP-serialized DateTime payloads validate their timezone field before hydrating.
+#[test]
+fn test_datetime_unserialize_validates_php_payload_timezone() {
+    let out = compile_and_run(
+        r#"<?php
+$date = "2020-01-01 00:00:00.000000";
+$valid = 'O:8:"DateTime":3:{s:4:"date";s:26:"' . $date . '";s:13:"timezone_type";i:1;s:8:"timezone";s:6:"+00:00";}';
+$bad = 'O:8:"DateTime":3:{s:4:"date";s:26:"' . $date . '";s:13:"timezone_type";i:1;s:8:"timezone";s:7:"+2 days";}';
+try { $d = unserialize($valid); echo $d->format("Y-m-d H:i:s"), '|', $d->getTimestamp(), '|'; }
+catch (Throwable $error) { echo 'valid-EX|'; }
+try { unserialize($bad); echo 'accepted|'; }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+try { unserialize('O:8:"DateTime":0:{}'); echo 'accepted'; }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020-01-01 00:00:00|1577836800|Invalid serialization data for DateTime object|Invalid serialization data for DateTime object"
+    );
+}
+
+/// Inherited DateTime/DateTimeImmutable hydration preserves subclass properties.
+#[test]
+fn test_datetime_unserialize_preserves_subclass_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class D extends DateTime {
+    public string $label = 'default';
+    private string $secret = 'default';
+    protected int $count = 1;
+    public function setSecret(string $value): void { $this->secret = $value; }
+    public function getSecret(): string { return $this->secret; }
+    public function setCount(int $value): void { $this->count = $value; }
+    public function getCount(): int { return $this->count; }
+}
+$d = new D('2020-01-01 00:00:00 UTC');
+$d->label = 'changed';
+$d->setSecret('hidden');
+$d->setCount(42);
+$u = unserialize(serialize($d));
+echo $u->label, '|', $u->getSecret(), '|', $u->getCount(), '|', $u->getTimestamp(), '|';
+class I extends DateTimeImmutable { public string $label = 'default'; }
+$i = new I('2021-02-03 04:05:06 UTC');
+$i->label = 'immutable';
+$v = unserialize(serialize($i));
+echo $v->label, '|', $v->getTimestamp(), '|';
+class T extends DateTime { public int $n = 0; }
+try {
+    unserialize('O:1:"T":4:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";s:1:"n";s:3:"zzz";}');
+    echo 'accepted';
+} catch (TypeError $error) { echo 'typed'; }
+"#,
+    );
+    assert_eq!(out, "changed|hidden|42|1577836800|immutable|1612325106|typed");
+}
+
+/// Mixed receivers from unserialize() reach the lowered DateTime instance surface.
+#[test]
+fn test_datetime_unserialize_mixed_receiver_dispatches_instance_methods() {
+    let out = compile_and_run(
+        r#"<?php
+function hydrate(): mixed {
+    return unserialize('O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";}');
+}
+$x = hydrate();
+echo $x->format('Y-m-d'), '|';
+echo $x->getTimestamp(), '|';
+echo $x->modify('+1 day')->format('Y-m-d'), '|';
+echo $x->setDate(2021, 2, 3)->format('Y-m-d');
+"#,
+    );
+    assert_eq!(out, "2020-01-01|1577836800|2020-01-02|2021-02-03");
+}
+
+/// A hydrated DateTime supports the full instance surface through mixed dispatch.
+#[test]
+fn test_datetime_unserialize_supports_non_interface_methods() {
+    let out = compile_and_run(
+        r#"<?php
+$d = unserialize('O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";}');
+echo $d->modify('+1 day')->format('Y-m-d'), '|';
+$d->setDate(2021, 2, 3);
+echo $d->format('Y-m-d'), '|';
+echo $d->diff(new DateTime('2020-02-03'))->days, '|';
+echo $d->setTimezone(new DateTimeZone('Europe/Paris'))->format('H:i'), '|';
+echo $d->add(new DateInterval('P1D'))->format('Y-m-d');
+"#,
+    );
+    assert_eq!(out, "2020-01-02|2021-02-03|366|01:00|2021-02-04");
+}
+
+/// PHP-shaped timezone abbreviations restore their fixed offsets.
+#[test]
+fn test_datetime_unserialize_restores_timezone_abbreviations() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['DateTime', 'DateTimeImmutable'] as $class) {
+    foreach (['CEST' => 1577829600, 'EST' => 1577854800, 'UTC' => 1577836800, 'MET' => 1577833200, 'MEST' => 1577829600] as $abbr => $expected) {
+        $wire = 'O:' . strlen($class) . ':"' . $class . '":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:2;s:8:"timezone";s:' . strlen($abbr) . ':"' . $abbr . '";}';
+        $d = unserialize($wire);
+        echo $d->getTimestamp(), '|', $d->format('P'), '|', $d->format('e'), '|', $d->format('T'), '|', $d->getTimezone()->getName(), ';';
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1577829600|+02:00|CEST|CEST|CEST;1577854800|-05:00|EST|EST|EST;1577836800|+00:00|UTC|UTC|UTC;1577833200|+01:00|MET|MET|MET;1577829600|+02:00|MEST|MEST|MEST;1577829600|+02:00|CEST|CEST|CEST;1577854800|-05:00|EST|EST|EST;1577836800|+00:00|UTC|UTC|UTC;1577833200|+01:00|MET|MET|MET;1577829600|+02:00|MEST|MEST|MEST;"
+    );
+}
+
+/// A subclass constructor never runs while __unserialize() restores the date.
+#[test]
+fn test_datetime_unserialize_skips_subclass_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class D extends DateTime {
+    public function __construct(string $required) {
+        parent::__construct('1999-01-01 00:00:00', new DateTimeZone('UTC'));
+        echo 'ctor-ran|';
+    }
+}
+$d = unserialize('O:1:"D":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";}');
+echo $d->format('Y-m-d H:i:s'), '|', $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2020-01-01 00:00:00|UTC");
+}
+
+/// PHP-shaped numeric offsets restore the right instant and wall clock.
+#[test]
+fn test_datetime_unserialize_restores_numeric_timezone_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['DateTime', 'DateTimeImmutable'] as $class) {
+    foreach (['+02:00', '-05:00', '+05:30'] as $zone) {
+        $wire = 'O:' . strlen($class) . ':"' . $class . '":3:{s:4:"date";s:26:"2020-01-01 00:00:00.123456";s:13:"timezone_type";i:1;s:8:"timezone";s:' . strlen($zone) . ':"' . $zone . '";}';
+        $d = unserialize($wire);
+        echo $d->format('U'), '|', $d->format('Y-m-d H:i:s'), '|', $d->format('u'), '|', $d->format('P'), '|', $d->getTimestamp(), '|', $d->getTimezone()->getName(), ';';
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1577829600|2020-01-01 00:00:00|123456|+02:00|1577829600|+02:00;1577854800|2020-01-01 00:00:00|123456|-05:00|1577854800|-05:00;1577817000|2020-01-01 00:00:00|123456|+05:30|1577817000|+05:30;1577829600|2020-01-01 00:00:00|123456|+02:00|1577829600|+02:00;1577854800|2020-01-01 00:00:00|123456|-05:00|1577854800|-05:00;1577817000|2020-01-01 00:00:00|123456|+05:30|1577817000|+05:30;"
+    );
+}
+
+/// Invalid values in elephc's own DateTime wire shape are rejected, not hydrated.
+#[test]
+fn test_datetime_unserialize_rejects_invalid_wire_shape_values() {
+    let out = compile_and_run(
+        r#"<?php
+$payloads = [
+    ['timestamp' => 0, 'timezone_name' => '', 'microsecond' => 0],
+    ['timestamp' => 0, 'timezone_name' => 'Europe/Paris ', 'microsecond' => 0],
+    ['timestamp' => 0, 'timezone_name' => "UTC\n", 'microsecond' => 0],
+    ['timestamp' => 0, 'timezone_name' => 'UTC', 'microsecond' => 1000000],
+    ['timestamp' => 0, 'timezone_name' => 'UTC', 'microsecond' => -1],
+];
+foreach ($payloads as $payload) {
+    $d = new DateTime('2020-01-01 00:00:00 UTC');
+    try {
+        $d->__unserialize($payload);
+        echo 'accepted|';
+    } catch (Error $error) {
+        echo 'rejected|';
+    }
+}
+"#,
+    );
+    assert_eq!(out, "rejected|rejected|rejected|rejected|rejected|");
+}
+
+/// Direct __unserialize() calls release replaced properties without a decoder boundary.
+#[test]
+fn test_datetime_direct_unserialize_releases_replaced_properties() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class D extends DateTime { public mixed $value = null; }
+$d = new D('2020-01-01 00:00:00 UTC');
+for ($i = 0; $i < 32; $i++) {
+    $d->__unserialize([
+        'timestamp' => 0,
+        'timezone_name' => 'UTC',
+        'microsecond' => 0,
+        'value' => new stdClass(),
+    ]);
+}
+unset($d);
+echo 'done';
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A throwing destructor in a replaced property cannot run before the replacement is stored.
+#[test]
+fn test_datetime_direct_unserialize_survives_throwing_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class Bomb {
+    public function __destruct(): void { throw new RuntimeException('boom'); }
+}
+class D extends DateTime { public mixed $value = null; }
+$d = new D('2020-01-01 00:00:00 UTC');
+$d->value = new Bomb();
+try {
+    $d->__unserialize([
+        'timestamp' => 0,
+        'timezone_name' => 'UTC',
+        'microsecond' => 0,
+        'value' => new stdClass(),
+    ]);
+    echo 'no-throw|';
+} catch (RuntimeException $error) {
+    echo $error->getMessage(), '|';
+}
+echo get_class($d->value), '|';
+unset($d);
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "boom|stdClass|done");
+}
+
+/// A typed object property is replaced before its old owner's throwing destructor runs.
+#[test]
+fn test_datetime_direct_unserialize_replaces_typed_object_before_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class Bomb extends stdClass {
+    public function __destruct(): void { throw new RuntimeException('boom'); }
+}
+class D extends DateTime { public stdClass $value; }
+$d = new D('2020-01-01 00:00:00 UTC');
+$d->value = new Bomb();
+try {
+    $d->__unserialize([
+        'timestamp' => 0,
+        'timezone_name' => 'UTC',
+        'microsecond' => 0,
+        'value' => new stdClass(),
+    ]);
+    echo 'no-throw|';
+} catch (RuntimeException $error) {
+    echo $error->getMessage(), '|';
+}
+echo get_class($d->value), '|';
+unset($d);
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "boom|stdClass|done");
+}
+
+/// Oversized offset-like suffixes are rejected instead of rewriting the year.
+#[test]
+fn test_datetime_create_rejects_oversized_offset_suffixes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["2020-01-01 00:00:00 +999999", "2020-01-01 00:00:00 +99"] as $input) {
+    try {
+        $date = date_create($input);
+        echo $date === false ? "false|" : $date->format("c") . '|';
+    } catch (DateMalformedStringException $error) { echo "rejected|"; }
+}
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "rejected|rejected|done");
+}
+
 /// `eval()` matches the same trait-collision, class-constant, and interface-default notices as
 /// compiled code.
 #[test]

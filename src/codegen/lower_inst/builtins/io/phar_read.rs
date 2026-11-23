@@ -420,6 +420,15 @@ pub(super) fn publish_phar_set_metadata_function_pointer(ctx: &mut FunctionConte
     publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
+/// Publishes the archive validity probe used by the OOP constructor.
+pub(super) fn publish_phar_archive_valid_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_archive_valid",
+        "_elephc_phar_archive_valid_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
 /// Publishes the archive stub read bridge.
 pub(super) fn publish_phar_get_stub_function_pointer(ctx: &mut FunctionContext<'_>) {
     const ENTRIES: &[(&str, &str)] = &[("elephc_phar_get_stub", "_elephc_phar_get_stub_fn")];
@@ -477,6 +486,16 @@ pub(super) fn publish_phar_decompress_archive_function_pointer(ctx: &mut Functio
 pub(super) fn publish_phar_sign_openssl_function_pointer(ctx: &mut FunctionContext<'_>) {
     const ENTRIES: &[(&str, &str)] =
         &[("elephc_phar_sign_openssl", "_elephc_phar_sign_openssl_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the OpenSSL signing bridge variant that selects SHA-1, SHA-256, or
+/// SHA-512 from its algorithm argument.
+pub(super) fn publish_phar_sign_openssl_algo_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_sign_openssl_algo",
+        "_elephc_phar_sign_openssl_algo_fn",
+    )];
     publish_phar_bridge_entries(ctx, ENTRIES);
 }
 

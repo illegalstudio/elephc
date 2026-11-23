@@ -1771,7 +1771,19 @@ impl WhatWgUri {
     }
 
     /// Serializes the URL in ASCII or Unicode mode, optionally excluding the fragment.
-    pub fn to_string(&self, unicode: bool, exclude_fragment: bool) -> String {
+    pub fn try_to_string(&self, unicode: bool, exclude_fragment: bool) -> Option<String> {
+        // The pre-allocation guard is exact only when the serialized URL is returned
+        // unchanged. Unicode hosts, the long-host/file-path overrides and fragment
+        // exclusion can all shorten or lengthen the result, so those modes rely on the
+        // final check instead of rejecting a URL whose requested output still fits.
+        if !unicode
+            && !exclude_fragment
+            && self.long_host.is_none()
+            && self.file_path.is_none()
+            && !crate::charge::within_php_uri_len(self.url.as_str().len())
+        {
+            return None;
+        }
         let mut text = if unicode {
             self.unicode_string()
         } else {
@@ -1784,7 +1796,8 @@ impl WhatWgUri {
         if let Some(path) = &self.file_path {
             text = replace_serialized_path(&text, path);
         }
-        strip_fragment(text, exclude_fragment)
+        let text = strip_fragment(text, exclude_fragment);
+        crate::charge::within_php_uri_len(text.len()).then_some(text)
     }
 
     /// Replaces the ASCII host with its Unicode form in the serialized URL.
@@ -1827,7 +1840,13 @@ impl WhatWgUri {
 
     /// Returns whether two URLs are equivalent under normalized comparison.
     pub fn equals(&self, other: &WhatWgUri, include_fragment: bool) -> bool {
-        self.to_string(false, !include_fragment) == other.to_string(false, !include_fragment)
+        match (
+            self.try_to_string(false, !include_fragment),
+            other.try_to_string(false, !include_fragment),
+        ) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
     }
 
     /// Writes one string-or-null component into a clone of this URL.
@@ -2520,7 +2539,22 @@ mod tests {
     fn resolved(reference: &str, base: Option<&str>) -> String {
         let base = base.map(|input| parse(input, None).expect("base parses").0);
         let (url, _) = parse(reference, base.as_ref()).expect("reference resolves");
-        url.to_string(false, false)
+        url.try_to_string(false, false).expect("serialized URL")
+    }
+
+    /// Excluding the fragment shortens the serialized URL, so the full-URL length guard
+    /// must not reject a URL whose fragment-free output still fits.
+    #[test]
+    fn fragment_exclusion_shortens_the_serialized_url() {
+        let (url, _) = parse("https://example.com/path#fragment", None).expect("url parses");
+        assert_eq!(
+            url.try_to_string(false, false).as_deref(),
+            Some("https://example.com/path#fragment")
+        );
+        assert_eq!(
+            url.try_to_string(false, true).as_deref(),
+            Some("https://example.com/path")
+        );
     }
 
     /// Verifies extra solidi against a `file:` base stay path bytes instead of becoming a host.
@@ -2547,10 +2581,10 @@ mod tests {
     fn https_relative_drive_keeps_with_path_writable() {
         let base = parse("https://example.com/", None).expect("base parses").0;
         let (url, _) = parse("c|/x", Some(&base)).expect("reference resolves");
-        assert_eq!(url.to_string(false, false), "https://example.com/c|/x");
+        assert_eq!(url.try_to_string(false, false).expect("serialized URL"), "https://example.com/c|/x");
         let changed = url
             .with_component(COMPONENT_PATH, Some("/new"))
             .expect("path write succeeds");
-        assert_eq!(changed.to_string(false, false), "https://example.com/new");
+        assert_eq!(changed.try_to_string(false, false).as_deref(), Some("https://example.com/new"));
     }
 }

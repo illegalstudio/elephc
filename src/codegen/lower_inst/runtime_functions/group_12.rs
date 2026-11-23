@@ -72,6 +72,11 @@ pub(super) fn lower(
         RuntimeFnId::Unserialize => Some({
             crate::codegen::lower_inst::builtins::serialize::lower_unserialize(ctx, inst)
         }),
+        RuntimeFnId::ElephcUnserializeStoreProperty => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_unserialize_store_property(
+                ctx, inst,
+            )
+        }),
         RuntimeFnId::Usleep => Some({
             crate::codegen::lower_inst::builtins::system::lower_usleep(ctx, inst)
         }),

@@ -1615,6 +1615,27 @@ catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
     );
 }
 
+/// Verifies overlong and malformed UTF-8 in a percent-encoded host is rejected rather than
+/// IDNA-mapped to a different ASCII host.
+#[test]
+fn test_uri_whatwg_rejects_overlong_host_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+// Overlong encodings of "evil.com" and "127.0.0.1", plus an invalid continuation byte.
+foreach ([
+    "http://%C1%A5%C1%B6%C1%A9%C1%AC.com/",
+    "http://%C0%B1%C0%B2%C0%B7%C0%AE%C0%B0%C0%AE%C0%B0%C0%AE%C0%B1/",
+    "http://%C0%65%C0%76%C0%69%C0%6C.com/",
+] as $input) {
+    echo Uri\WhatWg\Url::parse($input) === null ? "null|" : "accepted|";
+    try { new Uri\WhatWg\Url($input); echo "constructed\n"; }
+    catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "null|rejected\nnull|rejected\nnull|rejected\n");
+}
+
 /// Verifies `withHost()` keeps percent escapes on a non-special host while still rejecting a
 /// literal forbidden byte, and still rejects a decoded slash on a special host.
 #[test]

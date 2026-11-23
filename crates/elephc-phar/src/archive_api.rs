@@ -21,8 +21,27 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
     let data = std::fs::read(path).ok()?;
+    let openssl_expected = archive_public_key_path(path).exists();
     let public_key = read_archive_public_key(path);
-    extract_archive_entry(&data, entry, public_key.as_ref())
+    extract_archive_entry(&data, entry, public_key.as_ref(), openssl_expected, require_hash())
+}
+
+/// Reports whether a path is readable under the current `phar.require_hash` policy.
+///
+/// A missing path is valid because `Phar`/`PharData` create new archives. An existing
+/// archive that fails signature validation is not, so the OOP constructor can raise
+/// php-src's `UnexpectedValueException` instead of silently presenting an empty
+/// archive. Data archives (`PharData`) stay unsigned in PHP, so `is_data` relaxes the
+/// require-hash policy while keeping a present signature authenticated.
+pub fn archive_is_valid(archive_path: &[u8], is_data: bool) -> bool {
+    let Some(path) = std::str::from_utf8(archive_path).ok() else {
+        return false;
+    };
+    let path = std::path::Path::new(path);
+    if !path.exists() {
+        return true;
+    }
+    crate::compression::archive_signature_is_valid(path, is_data)
 }
 
 /// Extracts `entry` from already-loaded archive bytes.
@@ -32,7 +51,7 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
 /// filesystem path from which to load `<archive>.pubkey`; use [`extract_url_bytes`]
 /// when signature authentication is required.
 pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    extract_archive_entry(archive, entry, None)
+    extract_archive_entry(archive, entry, None, false, false)
 }
 
 /// Extracts one entry after authenticating and dispatching the archive family.
@@ -43,20 +62,34 @@ fn extract_archive_entry(
     archive: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Vec<u8>> {
     // Whole-archive gzip/bzip2 wrappers are decoded transparently before extraction.
     if archive.starts_with(b"\x1f\x8b") {
-        return extract_archive_entry(&decompress_gzip_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_gzip_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+            require_hash,
+        );
     }
     if archive.starts_with(b"BZh") {
-        return extract_archive_entry(&decompress_bzip2_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_bzip2_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+            require_hash,
+        );
     }
     if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
-        parse_zip_entry_with_public_key(archive, entry, public_key)
+        parse_zip_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else if archive.get(257..262) == Some(b"ustar") {
-        parse_tar_entry_with_public_key(archive, entry, public_key)
+        parse_tar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else {
-        parse_native_phar_entry_with_public_key(archive, entry, public_key)
+        parse_native_phar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     }
 }
 
@@ -92,15 +125,15 @@ pub fn put_entry_bytes(
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    // A `.pubkey` sidecar expects an OpenSSL signature; this implicit rebuild
+    // would replace it with SHA1 and leave the sidecar in place.
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = if path.exists() {
         parse_archive_path(path)?
     } else {
-        Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        }
+        empty_archive_for_path(path)
     };
     upsert_entry(&mut archive.entries, entry_name, payload);
     let out = build_archive_value(&archive)?;
@@ -130,6 +163,9 @@ pub fn delete_entry_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<()> 
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     remove_entry(&mut archive.entries, entry_name)?;
     let out = build_archive_value(&archive)?;
@@ -154,6 +190,9 @@ pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> 
     let compression = compression_from_php_constant(compression_code)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     if matches!(archive.format, ArchiveFormat::Tar) {
         return None;
@@ -189,6 +228,9 @@ pub(super) fn get_stub_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
 pub(super) fn set_metadata_bytes(archive_path: &[u8], metadata: &[u8]) -> Option<()> {
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.metadata = metadata.to_vec();
     std::fs::write(path, build_archive_value(&archive)?).ok()?;
@@ -205,8 +247,17 @@ pub(super) fn set_stub_bytes(archive_path: &[u8], stub: &[u8]) -> Option<()> {
     }
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.stub = stub.to_vec();
+    // A stub makes this an executable phar. PHP signs new executable archives with its
+    // default algorithm; a `PharData` container keeps `None` because it never persists a
+    // stub on construction.
+    if archive.signature_flag.is_none() {
+        archive.signature_flag = Some(PHAR_SHA256_SIGNATURE_TYPE);
+    }
     std::fs::write(path, build_archive_value(&archive)?).ok()?;
     Some(())
 }
@@ -216,11 +267,28 @@ pub(super) fn read_or_new_archive(path: &std::path::Path) -> Option<Archive> {
     if path.exists() {
         parse_archive_path(path)
     } else {
-        Some(Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        })
+        Some(empty_archive_for_path(path))
+    }
+}
+
+/// Builds the empty archive a missing path would create.
+///
+/// A native `.phar` is an executable archive by convention, so it starts with PHP's
+/// default SHA-256 signature. Tar and ZIP containers start unsigned: a `PharData`
+/// entry write is an explicit data archive, and PHP never signs those unless
+/// `setSignatureAlgorithm()` is called. Executable `Phar` construction in a tar/ZIP
+/// path persists its default stub through [`set_stub_bytes`], which adds the same
+/// default signature. Unsigned legacy archives stay readable only while
+/// `phar.require_hash` is relaxed.
+pub(super) fn empty_archive_for_path(path: &std::path::Path) -> Archive {
+    let format = format_for_new_archive_path(path);
+    let signature_flag = matches!(format, ArchiveFormat::NativePhar)
+        .then_some(PHAR_SHA256_SIGNATURE_TYPE);
+    Archive {
+        entries: Vec::new(),
+        format,
+        metadata: Vec::new(),
+        stub: Vec::new(),
+        signature_flag,
     }
 }

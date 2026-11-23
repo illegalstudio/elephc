@@ -194,7 +194,19 @@ impl RfcUri {
     }
 
     /// Recomposes the URI in the requested mode, optionally dropping the fragment.
-    pub fn to_string(&self, normalized: bool, exclude_fragment: bool) -> String {
+    ///
+    /// Returns `None` when the result would reach PHP's `int`-sized string
+    /// ceiling, matching `ext/uri`'s "Cannot recompose ... to a string" error
+    /// (GHSA-mg3p-mxj9-g2mm).
+    pub fn try_to_string(&self, normalized: bool, exclude_fragment: bool) -> Option<String> {
+        // Raw output length is known before allocating, so the cheap guard is exact.
+        // Normalization may decode percent escapes (`%41` -> `A`) and shorten the
+        // result below the ceiling; reject only after rebuilding in that mode.
+        if !normalized
+            && !crate::charge::within_php_uri_len(self.recomposed_raw_len(exclude_fragment))
+        {
+            return None;
+        }
         let mut out = String::new();
         if let Some(scheme) = &self.scheme {
             if normalized {
@@ -254,12 +266,61 @@ impl RfcUri {
                 out.push_str(&normalize::normalize_component(fragment, normalized));
             }
         }
-        out
+        crate::charge::within_php_uri_len(out.len()).then_some(out)
+    }
+
+    /// Returns the exact raw recomposed length before allocating it.
+    ///
+    /// This is used only for the raw mode. Raw output reproduces every stored
+    /// component verbatim except an IPv6 host, which goes through
+    /// [`normalize::serialize_ipv6`] in both the estimate and the rebuild (the
+    /// eight-group form can be shorter or longer than the input text). Normalized
+    /// output may shrink when a percent-encoded unreserved byte is decoded, so it
+    /// cannot use this length as a rejection bound and relies on the final check.
+    fn recomposed_raw_len(&self, exclude_fragment: bool) -> usize {
+        let mut len = 0usize;
+        if let Some(scheme) = &self.scheme {
+            len = len.saturating_add(scheme.len()).saturating_add(1);
+        }
+        if let Some(authority) = &self.authority {
+            len = len.saturating_add(2);
+            if let Some(userinfo) = &authority.userinfo {
+                len = len.saturating_add(userinfo.len()).saturating_add(1);
+            }
+            len = match authority.host.kind {
+                HostKind::Ipv6 => len
+                    .saturating_add(normalize::serialize_ipv6(&authority.host.text).len())
+                    .saturating_add(2),
+                HostKind::IpvFuture => len
+                    .saturating_add(authority.host.text.len())
+                    .saturating_add(2),
+                HostKind::RegName => len.saturating_add(authority.host.text.len()),
+            };
+            if let Some(port) = &authority.port {
+                len = len.saturating_add(1).saturating_add(port.len());
+            }
+        }
+        len = len.saturating_add(self.path.len());
+        if let Some(query) = &self.query {
+            len = len.saturating_add(1).saturating_add(query.len());
+        }
+        if !exclude_fragment {
+            if let Some(fragment) = &self.fragment {
+                len = len.saturating_add(1).saturating_add(fragment.len());
+            }
+        }
+        len
     }
 
     /// Returns whether two references are equivalent under normalized comparison.
     pub fn equals(&self, other: &RfcUri, include_fragment: bool) -> bool {
-        self.to_string(true, !include_fragment) == other.to_string(true, !include_fragment)
+        match (
+            self.try_to_string(true, !include_fragment),
+            other.try_to_string(true, !include_fragment),
+        ) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
     }
 
     /// Resolves `reference` against this URI as the base, per RFC 3986 section 5.2.
@@ -347,6 +408,21 @@ mod tests {
         let base = parse::parse(b"http://example.com/base").expect("base parses");
         let reference = parse::parse(b"x:a/../b").expect("reference parses");
         let resolved = base.resolve(&reference).expect("reference resolves");
-        assert_eq!(resolved.to_string(true, true), "x:b");
+        assert_eq!(resolved.try_to_string(true, true).as_deref(), Some("x:b"));
+    }
+
+    /// Normalized output can decode percent escapes and become shorter than the raw text,
+    /// so the raw-length pre-allocation guard must not apply to normalized serialization.
+    #[test]
+    fn normalized_recomposition_can_shrink_percent_escapes() {
+        let uri = parse::parse(b"http://example.com/%41%42%43").expect("uri parses");
+        assert_eq!(
+            uri.try_to_string(false, false).as_deref(),
+            Some("http://example.com/%41%42%43")
+        );
+        assert_eq!(
+            uri.try_to_string(true, false).as_deref(),
+            Some("http://example.com/ABC")
+        );
     }
 }

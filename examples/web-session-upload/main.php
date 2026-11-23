@@ -1,12 +1,18 @@
 <?php
-// elephc-web: session.upload_progress — real streaming upload progress.
+// elephc-web: session.upload_progress — streaming upload progress.
 //
 // Compile: cargo run -- build --web examples/web-session-upload/main.php
-// Run:     ./examples/web-session-upload/main --listen 127.0.0.1:8080
+// Run:     ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED=1 \
+//          ./examples/web-session-upload/main --listen 127.0.0.1:8080
 // Try:     open http://127.0.0.1:8080/ in a browser, pick a file of a few MB,
 //          and watch the progress bar fill from the concurrent /progress poll.
 //          Over a real (or throttled) connection the bar climbs; on a fast
 //          loopback the transfer may finish before the first poll lands.
+//
+// Note: upload progress tracking is opt-in since PHP 8.5.13, whose
+// `session.upload_progress.enabled` default is `0`. Without the environment
+// variable above the server accepts the upload but never writes a progress
+// entry, so the bar stays at 0%.
 //
 // Note: each request buffers its whole body in the per-request heap, so keep
 // demo uploads to a few MB (larger files exhaust the heap). The server also
