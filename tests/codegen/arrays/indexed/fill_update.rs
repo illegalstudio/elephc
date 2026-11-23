@@ -142,3 +142,28 @@ echo run(4 + $argc), "\n";
 "#;
     assert_eq!(compile_and_run(source), "20\n");
 }
+
+/// A static hash-forcing key wins over a keyed float candidate on the same local: the
+/// counter-shaped write must not keep the fast storage contract after `$a[-3] = 1` or a
+/// literal string key has already moved the array to hash storage.
+#[test]
+fn test_static_hash_key_wins_over_keyed_float_candidate() {
+    let source = r#"<?php
+$a = [];
+$a[-3] = 1;
+$a[] = 2;
+for ($i = 0; $i < 3; $i++) {
+    $a[$i] = 0.0;
+}
+echo implode(",", array_keys($a)), "\n";
+echo implode(",", $a), "\n";
+$b = [];
+for ($i = 0; $i < 2; $i++) {
+    $b["k"] = 1.0;
+    $b[$i] = 2.0;
+}
+echo implode(",", array_keys($b)), "\n";
+echo implode(",", $b), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "-3,-2,0,1,2\n1,2,0,0,0\nk,0,1\n1,2,2\n");
+}

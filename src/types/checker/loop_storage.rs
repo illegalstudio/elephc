@@ -325,7 +325,7 @@ fn apply_array_write_evidence(
         let array_is_still_empty =
             matches!(&current, PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never));
         let keyed_candidate = promotable_candidates.keyed(write.name);
-        let forces_hash = !keyed_candidate && write.index.is_some_and(|index| {
+        let forces_hash = write.index.is_some_and(|index| {
             let literal_string_key = matches!(key_type.as_ref(), Some(PhpType::Str))
                 && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null);
             // The same rule `check_array_assign` applies, and it has to be applied HERE too: this
@@ -348,7 +348,10 @@ fn apply_array_write_evidence(
                 && array_is_still_empty
                 && !index_is_trusted_counter(index, packed_counter, foreach_keys)
                 && array_key_contiguity_is_unproven(index);
-            literal_string_key || unbounded_integer_key
+            // A keyed candidate only defers the counter-shaped clause: a literal string key or
+            // another write's static key fixes the storage now, exactly as `check_array_assign`
+            // decides it, so the loop contract must widen to the hash the writes really produce.
+            literal_string_key || (!keyed_candidate && unbounded_integer_key)
         });
         // `check_array_assign` keeps a promotable candidate's `array<int>` storage under a boxed
         // or unbounded key when the value is an integer or `?int` (codegen promotes the storage at

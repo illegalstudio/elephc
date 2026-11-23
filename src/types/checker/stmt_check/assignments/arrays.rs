@@ -129,9 +129,9 @@ pub(super) fn check_array_assign(
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && !keyed_candidate
                 && (static_array_key_forces_hash_storage(index)
-                    || (matches!(normalized_idx_ty, PhpType::Int)
+                    || (!keyed_candidate
+                        && matches!(normalized_idx_ty, PhpType::Int)
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
                         && array_key_contiguity_is_unproven(index))));
@@ -149,7 +149,10 @@ pub(super) fn check_array_assign(
         // A candidate `array<int>` local written under a key nothing bounds stays typed instead:
         // codegen keeps the packed write for a key in range and promotes the storage to a hash
         // only when the key really skips a slot, so the loop keeps raw integer slots where
-        // widening to `Array(Mixed)` would box every one of them.
+        // widening to `Array(Mixed)` would box every one of them. Only that unbounded-integer
+        // clause is deferred for a keyed candidate: a static key that forces hash storage
+        // (`$a[-1] = ...`, `$a[5] = ...`) decides the local's storage immediately, and another
+        // write's counter-shaped key must not mask it.
         let promotable = !forces_hash
             && checker.promotable_array_write(
                 array, index, elem_ty, &idx_ty, &normalized_idx_ty, index_is_foreach_key, &val_ty,
