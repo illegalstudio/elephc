@@ -1051,6 +1051,18 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let result = check_assign_value_type(self, name, value, span, env, false);
         if result.is_ok() { self.definitely_bound_locals.insert(name.to_string()); }
+        // The statement form (`check_assign`) marks a local holding a pointer, packed record or
+        // buffer word as a pointer-word local, so an earlier `$p = null` keeps address 0 in a
+        // pointer slot. An assignment in expression position (`$o?->take($p = $rows[0])`) binds
+        // the same local the same way and needs the same mark, or the null seed boxes the slot
+        // as `Mixed` and the pointer-typed read-back has no unbox from it.
+        if result.is_ok()
+            && env.get(name).is_some_and(|ty| {
+                matches!(ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_) | PhpType::Buffer(_))
+            })
+        {
+            self.pointer_word_locals.insert((self.current_loop_storage_scope.clone(), name.to_string()));
+        }
         result
     }
 }
