@@ -814,6 +814,25 @@ pub(super) fn load_published_container(
     value
 }
 
+/// Publishes an operand while exposing only a borrowed view to a retaining consumer.
+///
+/// A consumer such as `MixedBox` or a retaining container write acquires its own lease. Passing
+/// the `Acquire` returned by `root_owned_call_operand` directly would also let that consumer
+/// release the lease already held by the published slot, then slot retirement would release it a
+/// second time. Reloading through the slot gives the consumer a stable, explicitly borrowed view.
+pub(super) fn root_borrowed_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let (value, owner) = root_owned_call_operand(ctx, value, span);
+    let php_type = ctx.builder.value_php_type(value.value);
+    let borrowed = owner
+        .map(|slot| load_published_container(ctx, slot, php_type, span))
+        .unwrap_or(value);
+    (borrowed, owner)
+}
+
 /// Transfers a completed container out of its published construction slot.
 pub(super) fn take_published_container(
     ctx: &mut LoweringContext<'_, '_>,

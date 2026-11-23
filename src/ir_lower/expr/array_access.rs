@@ -611,7 +611,7 @@ fn lower_array_access_from_values_with_receiver_pins(
         && (!matches!(ctx.builder.value_php_type(index_value.value), PhpType::Int | PhpType::Str)
             || value_is_nullable(ctx, index_value.value))
     {
-        let (source, source_owner) = root_owned_call_operand(ctx, index_value, index.span);
+        let (source, source_owner) = root_borrowed_call_operand(ctx, index_value, index.span);
         index_value = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(index.span));
         if let Some(owner) = source_owner { retire_owned_call_operand(ctx, owner, index.span); }
     }
