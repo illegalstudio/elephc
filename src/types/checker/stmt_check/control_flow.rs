@@ -1395,7 +1395,13 @@ impl Checker {
     /// Saves the normal back edge separately from break and continue snapshots.
     fn check_loop_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
         Self::purge_property_narrowings(env);
+        // Every loop body gets a proof scope, matching the fill or not: an inner consumer's
+        // read is re-executed by each enclosing iteration, so a removal after the inner loop
+        // must unmark it even when the outer loop does not consume the fact itself.
+        let fill_scope_depth = self.active_fill_read_scopes.len();
+        self.active_fill_read_scopes.push(HashSet::new());
         let errors = self.check_body(body, env);
+        self.active_fill_read_scopes.truncate(fill_scope_depth);
         self.record_loop_body_end(env, !self.body_cannot_fall_through(body));
         errors
     }

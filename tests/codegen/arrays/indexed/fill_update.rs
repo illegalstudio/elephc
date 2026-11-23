@@ -255,3 +255,25 @@ echo $sum, "|", $n, "\n";
     // The completed update loop keeps its two raw reads; the sum loop after the call boxes.
     assert_eq!(main.matches("F64 php=float = array_get").count(), 2, "{main}");
 }
+
+/// An enclosing loop that does not match the fill still repeats the inner consumer, so a pop in
+/// its body must unmark the inner read for the next outer iteration.
+#[test]
+fn test_enclosing_loop_carried_removal_unmarks_inner_reads() {
+    let source = r#"<?php
+$count = 3 + $argc;
+$x = [];
+for ($i = 0; $i < $count; $i++) {
+    $x[$i] = 1.5;
+}
+$last = null;
+for ($outer = 0; $outer < 2; $outer++) {
+    for ($i = 0; $i < $count; $i++) {
+        $last = $x[$i];
+    }
+    array_pop($x);
+}
+var_export($last);
+"#;
+    assert_eq!(compile_and_run(source), "NULL");
+}
