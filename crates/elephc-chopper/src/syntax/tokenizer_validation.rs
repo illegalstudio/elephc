@@ -15,10 +15,12 @@ use crate::scanner::HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE;
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
 use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 mod diagnostics;
 mod parser_view;
 mod prechecks;
+mod token_view;
 
 use diagnostics::*;
 use parser_view::*;
@@ -344,6 +346,19 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     );
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
+    if token_view_enabled() {
+        if let Some(view) = token_view::build(source, tokens) {
+            return validate_token_view(
+                source,
+                tokens,
+                view,
+                presence.list,
+                precheck,
+                precheck_names,
+                encoding_warnings,
+            );
+        }
+    }
     let (view, map, reference_error) =
         parser_view(source, tokens, source.len(), &reference_delimiters);
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
@@ -418,6 +433,113 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
             }
         },
     }
+}
+
+/// Returns whether the source-spanned token-view prototype is enabled.
+fn token_view_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("ELEPHC_TOKEN_VIEW")
+            .and_then(|value| value.to_str().map(str::to_owned))
+            .is_some_and(|value| value == "1" || value == "token")
+    })
+}
+
+/// Validates one source through the source-spanned token-view prototype.
+fn validate_token_view<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    view: token_view::TokenProjection,
+    has_list: bool,
+    precheck: Option<ValidationError>,
+    precheck_names: Vec<usize>,
+    encoding_warnings: Vec<ValidationWarning>,
+) -> ValidationFeedback {
+    let token_view::TokenProjection {
+        tokens: view_tokens,
+        reference_error,
+    } = view;
+    let (result, names) = crate::syntax::parser::parse_with_tokenizer_feedback(&view_tokens);
+    match result {
+        Ok(_) => {
+            if let Some(precheck) = prefer_reference_error(precheck, reference_error) {
+                return ValidationFeedback {
+                    names: Vec::new(),
+                    error: Some(precheck),
+                    warnings: encoding_warnings,
+                };
+            }
+            let error = if has_list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
+            let mut names = if error.is_some() || names.is_empty() {
+                Vec::new()
+            } else {
+                mapped_names_source(source, names)
+            };
+            if error.is_none() {
+                names.extend(precheck_names);
+                names.sort_unstable();
+                names.dedup();
+            }
+            ValidationFeedback {
+                names,
+                error,
+                warnings: encoding_warnings,
+            }
+        }
+        Err(error) => {
+            let mapped = parser_error_source(source, tokens, &error);
+            let error = unclosed_delimiter_error(source, tokens, mapped.pos, &error.message)
+                .or_else(|| diagnostic_override(source, tokens, &mapped, &error.message))
+                .unwrap_or(mapped);
+            ValidationFeedback {
+                names: Vec::new(),
+                error: Some(earlier_error(source, precheck, error, reference_error)),
+                warnings: encoding_warnings,
+            }
+        }
+    }
+}
+
+/// Maps parser feedback spans from source coordinates to byte offsets.
+fn mapped_names_source(source: &[u8], names: Vec<(Span, String)>) -> Vec<usize> {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Vec::new();
+    };
+    let lines = line_starts(text);
+    let positions: Vec<(u32, u32)> = names.iter().map(|(span, _)| (span.line, span.col)).collect();
+    let offsets = view_offsets(text, &lines, &positions);
+    let mut result: Vec<usize> = names
+        .into_iter()
+        .zip(offsets)
+        .filter_map(|((_, spelling), source_pos)| {
+            let source_pos = source_pos.min(source.len());
+            let text = source.get(source_pos..)?;
+            text.get(..spelling.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(spelling.as_bytes()))
+                .then_some(source_pos)
+        })
+        .collect();
+    result.sort_unstable();
+    result.dedup();
+    result
+}
+
+/// Maps one parser error span from source coordinates to a source-token diagnostic.
+fn parser_error_source<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    error: &CompileError,
+) -> ValidationError {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return token_error_at(source, tokens, source.len());
+    };
+    let lines = line_starts(text);
+    let source_pos = view_offset(text, &lines, error.span.line, error.span.col);
+    token_error_at(source, tokens, source_pos)
 }
 
 /// Preserves parser errors inside a reference base while refining a rejected `readonly` name.
@@ -878,4 +1000,104 @@ fn line_starts(view: &str) -> Vec<usize> {
 /// Returns whether a token is trivia for halt-compiler header accounting.
 fn is_trivia(id: i64) -> bool {
     id == tok::T_WHITESPACE || id == tok::T_COMMENT || id == tok::T_DOC_COMMENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Scans one source into the reduced token view used by validation.
+    fn scan_tokens(source: &[u8]) -> Vec<TokenView> {
+        crate::scanner::scan(source)
+            .expect("scan")
+            .tokens
+            .into_iter()
+            .map(|token| TokenView {
+                id: token.id,
+                pos: token.pos,
+                len: token.len,
+            })
+            .collect()
+    }
+
+    /// Verifies the source-spanned token view matches the text parser view for supported code.
+    #[test]
+    fn token_view_matches_text_view_on_code_sources() {
+        let sources: &[&[u8]] = &[
+            b"<?php $a = 1; $b = $a + 2;",
+            b"<?php class C { public int $x = 0; }",
+            b"<?php #[Attr] class C { public int $x = 0 { get => $this->x; set => $value; } }",
+            b"<?php echo 1; ?>html",
+            b"<?= 1 ?>",
+            b"<?php // comment\n$a = 1;",
+            b"<?php /** doc */ $a = 1;",
+            b"<?php\n$a = 1;\n",
+        ];
+        for source in [
+            b"<?php done: echo 1;".as_slice(),
+            b"<?php if (1) done: echo 1;",
+        ] {
+            let tokens = scan_tokens(source);
+            assert!(
+                token_view::build(source, &tokens).is_none(),
+                "label source must fall back: {}",
+                String::from_utf8_lossy(source)
+            );
+        }
+        for source in sources {
+            let tokens = scan_tokens(source);
+            let (view, map, _) =
+                parser_view(source, &tokens, source.len(), &OnceCell::new());
+            let old = crate::syntax::lexer::tokenize(&view).expect("old view");
+            let old_lines = line_starts(&view);
+            let positions: Vec<(u32, u32)> = old
+                .iter()
+                .map(|(_, metadata)| (metadata.span.line, metadata.span.col))
+                .collect();
+            let offsets = view_offsets(&view, &old_lines, &positions);
+            let old_offsets: Vec<usize> = offsets
+                .iter()
+                .map(|position| {
+                    map.get(*position)
+                        .copied()
+                        .unwrap_or(source.len() as u32) as usize
+                })
+                .collect();
+            let new = token_view::build(source, &tokens).expect("code source supported");
+            assert_eq!(
+                old.len(),
+                new.tokens.len(),
+                "token count for {}",
+                String::from_utf8_lossy(source)
+            );
+            let source_text = std::str::from_utf8(source).expect("valid fixture");
+            let new_lines = line_starts(source_text);
+            for (index, (pairs, old_offset)) in old
+                .iter()
+                .zip(new.tokens.iter())
+                .zip(old_offsets.iter())
+                .enumerate()
+            {
+                let ((old_token, _), (new_token, new_metadata)) = pairs;
+                assert_eq!(
+                    old_token,
+                    new_token,
+                    "kind at {index} for {}",
+                    String::from_utf8_lossy(source)
+                );
+                let new_offset = view_offset(
+                    source_text,
+                    &new_lines,
+                    new_metadata.span.line,
+                    new_metadata.span.col,
+                );
+                assert_eq!(
+                    *old_offset,
+                    new_offset,
+                    "offset at {index} for {}",
+                    String::from_utf8_lossy(source)
+                );
+            }
+        }
+    }
 }

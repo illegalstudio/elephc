@@ -44,7 +44,7 @@ pub(in crate::syntax::lexer) fn variable_token(name: &str, cursor: &Cursor) -> R
 const MAX_WORD_LEN: usize = 19;
 
 /// Classifies a scanned word, including constants and compiler-specific keywords.
-pub(in crate::syntax::lexer) fn word_token(word: &str) -> Token {
+pub(crate) fn word_token(word: &str) -> Token {
     match word {
         "INF" => return Token::Inf,
         "NAN" => return Token::Nan,

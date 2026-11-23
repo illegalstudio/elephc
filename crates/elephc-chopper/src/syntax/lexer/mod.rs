@@ -19,7 +19,10 @@ mod scan;
 pub mod token;
 
 pub use token::{SpannedToken, Token, TokenMetadata};
+pub(crate) use cursor::Cursor;
 pub(crate) use qualified_names::has_glued_name_suffix;
+pub(crate) use literals::word_token;
+pub(crate) use scan::{byte_token, operator_token};
 
 use crate::syntax::errors::CompileError;
 use crate::syntax::source::SourceMode;
