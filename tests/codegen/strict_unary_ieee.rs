@@ -38,6 +38,17 @@ echo ieeeZeroSign(ieeeTypedPlus($negative)), ieeeZeroSign(ieeeMixedPlus($negativ
     }
 }
 
+/// Permissive integer parameters promote `-PHP_INT_MIN` to float instead of wrapping.
+#[test]
+fn test_permissive_integer_parameter_negation_promotes_php_int_min() {
+    let output = compile_and_run(r#"<?php
+function negateBoundary(int $value): mixed { return -$value; }
+$value = $argc > 0 ? PHP_INT_MIN : 0;
+$result = negateBoundary($value);
+var_dump(is_float($result), $result > 9.223372036854e18);
+"#);
+    assert_eq!(output, "bool(true)\nbool(true)\n");
+}
 
 /// The versioned native unary ABI keeps exact payloads, atomic failures and borrowed owners.
 #[test]

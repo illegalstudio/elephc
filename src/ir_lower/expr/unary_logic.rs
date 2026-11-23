@@ -40,13 +40,13 @@ pub(super) fn lower_numeric_unary(
             }
             // A replay-proven integer counter cannot reach PHP_INT_MIN on its admitted loop
             // backedge. Keep its negate in the scalar region just like a safe literal. Other
-            // integer variables can still hold PHP_INT_MIN, whose negation promotes to float,
-            // so they retain the boxed PHP overflow helper below.
+            // integer values can still hold PHP_INT_MIN, whose negation promotes to float, so
+            // they retain the boxed PHP overflow helper below.
             let replay_proved_counter = matches!(&inner.kind,
                 ExprKind::Variable(name) if ctx.is_int_seed_binding(name));
-            if replay_proved_counter
-                || fallback_expr_type(expr, ctx.semantic_profile).codegen_repr() == PhpType::Int
-            {
+            let safe_literal =
+                matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN);
+            if replay_proved_counter || safe_literal {
                 return ctx.emit_value(Op::INeg, vec![value.value], None, PhpType::Int, Op::INeg.default_effects(), Some(expr.span));
             }
         }
