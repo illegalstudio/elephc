@@ -94,7 +94,7 @@ fn strict_conditional_results_trusted_sources_keep_separate_policies() {
     let parse = |source, mode| crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
     let mut program = parse("<?php $usr = fn(bool $pick) => $pick ? 9007199254740993 : 2.5;", SourceMode::Php);
     program.extend(parse("<?php $lib = fn(bool $pick) => $pick ? 9007199254740993 : 2.5;", SourceMode::Internal));
-    program.extend(parse("<?php echo is_int($usr(true)) ? 'I' : 'X'; echo is_float($lib(true)) ? 'F' : 'X';", SourceMode::Php));
+    program.extend(parse("<?php echo gettype($usr(true)), ':', $usr(true), '|'; echo gettype($lib(true)), ':', $lib(true);", SourceMode::Php));
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
@@ -112,7 +112,7 @@ fn strict_conditional_results_trusted_sources_keep_separate_policies() {
         let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
         let output = super::native_module::run(&module);
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert_eq!(output.stdout, b"IF");
+        assert_eq!(output.stdout, b"integer:9007199254740993|integer:9007199254740993");
         assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
     }
 }
