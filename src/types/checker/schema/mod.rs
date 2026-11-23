@@ -28,4 +28,4 @@ pub(crate) use classes::validate_trait_property_defaults;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;
-pub(crate) use enum_traits::validate_enum_trait_requirements;
+pub(crate) use enum_traits::{validate_class_trait_requirements, validate_enum_trait_requirements};
