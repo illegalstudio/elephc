@@ -234,6 +234,7 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("backingPath", TypeExpr::Str),
         protected_storage_property("stream", mixed_type()),
         protected_storage_property("lines", array_type()),
+        protected_storage_property("lineOffsets", TypeExpr::Array(Box::new(TypeExpr::Int))),
         protected_storage_property("lineNumber", TypeExpr::Int),
         protected_storage_property("flags", TypeExpr::Int),
         protected_storage_property("delimiter", TypeExpr::Str),
@@ -428,7 +429,7 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Int),
             spl_file_object_fseek_body(),
         ),
-        method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))]),
+        method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), spl_file_object_seek_body()),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
         method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))]),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),
@@ -713,6 +714,11 @@ fn file_lines_expr() -> Expr {
     property_access(this_expr(), "lines")
 }
 
+/// Returns `$this->lineOffsets`.
+fn file_line_offsets_expr() -> Expr {
+    property_access(this_expr(), "lineOffsets")
+}
+
 /// Returns `$this->lineNumber`.
 fn file_line_number_expr() -> Expr {
     property_access(this_expr(), "lineNumber")
@@ -880,11 +886,24 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
 fn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "lines", empty_array_expr()),
+        property_assign_stmt(this_expr(), "lineOffsets", empty_array_expr()),
+        assign_stmt("offset", int_expr(0)),
         foreach_stmt(
             function_call("file", vec![path]),
             None,
             "line",
-            vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
+            vec![
+                property_array_push_stmt(this_expr(), "lineOffsets", var_expr("offset")),
+                assign_stmt(
+                    "offset",
+                    binary_expr(
+                        var_expr("offset"),
+                        BinOp::Add,
+                        function_call("strlen", vec![var_expr("line")]),
+                    ),
+                ),
+                property_array_push_stmt(this_expr(), "lines", var_expr("line")),
+            ],
         ),
     ]
 }
@@ -1308,12 +1327,33 @@ fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
         if_stmt(
             binary_expr(function_call("strlen", vec![temp_buffer_arg_expr()]), BinOp::StrictEq, int_expr(0)),
             Vec::new(),
-            Some(vec![foreach_stmt(
-                function_call("explode", vec![string_expr("\n"), temp_buffer_arg_expr()]),
-                None,
-                "line",
-                vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
-            )]),
+            Some(vec![
+                assign_stmt(
+                    "parts",
+                    function_call("explode", vec![string_expr("\n"), temp_buffer_arg_expr()]),
+                ),
+                assign_stmt("last", binary_expr(count_expr(var_expr("parts")), BinOp::Sub, int_expr(1))),
+                foreach_stmt(
+                    var_expr("parts"),
+                    Some("index"),
+                    "line",
+                    vec![
+                        // `explode()` yields a trailing empty element for a buffer that ends
+                        // with a newline; `file()` does not, so drop it to keep the inherited
+                        // line count (and therefore seek()'s EOF clamp) aligned with a real
+                        // file.
+                        if_stmt(
+                            binary_expr(
+                                binary_expr(var_expr("index"), BinOp::StrictNotEq, var_expr("last")),
+                                BinOp::Or,
+                                binary_expr(var_expr("line"), BinOp::StrictNotEq, string_expr("")),
+                            ),
+                            vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
+                            None,
+                        ),
+                    ],
+                ),
+            ]),
         ),
     ]
 }
@@ -1321,6 +1361,17 @@ fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
 /// Builds SplFileObject current() with lightweight READ_CSV support.
 fn spl_file_object_current_body() -> Vec<Stmt> {
     vec![
+        // PHP 8.6 re-reads from the current stream position; once the position has
+        // reached EOF there is no line to return, matching php-src's `false`.
+        if_stmt(
+            binary_expr(
+                file_line_number_expr(),
+                BinOp::GtEq,
+                count_expr(file_lines_expr()),
+            ),
+            return_body(bool_expr(false)),
+            None,
+        ),
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
             return_body(function_call(
@@ -1336,13 +1387,137 @@ fn spl_file_object_current_body() -> Vec<Stmt> {
     ]
 }
 
-/// Builds SplFileObject next().
+/// Builds SplFileObject next() with PHP 8.6's EOF and stream-position rules.
+///
+/// 8.6 no longer increments `key()` without bound past EOF, and it advances the stream when
+/// no `current()` call cached a line. The line offsets are precomputed at load time, so the
+/// stream can be repositioned to the new current line in O(1).
 fn spl_file_object_next_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(
-        this_expr(),
-        "lineNumber",
-        binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
-    )]
+    if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php86 {
+        return vec![property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        )];
+    }
+    vec![
+        if_stmt(
+            binary_expr(
+                file_line_number_expr(),
+                BinOp::GtEq,
+                count_expr(file_lines_expr()),
+            ),
+            vec![return_void_stmt()],
+            None,
+        ),
+        property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        ),
+        if_stmt(
+            binary_expr(file_stream_expr(), BinOp::StrictNotEq, null_expr()),
+            vec![if_stmt(
+                binary_expr(
+                    file_line_number_expr(),
+                    BinOp::Lt,
+                    count_expr(file_lines_expr()),
+                ),
+                vec![expr_stmt(function_call(
+                    "fseek",
+                    vec![
+                        file_stream_expr(),
+                        cast_expr(
+                            crate::parser::ast::CastType::Int,
+                            array_access(file_line_offsets_expr(), file_line_number_expr()),
+                        ),
+                    ],
+                ))],
+                Some(vec![expr_stmt(function_call(
+                    "fseek",
+                    vec![
+                        file_stream_expr(),
+                        int_expr(0),
+                        Expr::new(
+                            ExprKind::ConstRef(crate::names::Name::unqualified("SEEK_END")),
+                            crate::span::Span::dummy(),
+                        ),
+                    ],
+                ))]),
+            )],
+            None,
+        ),
+    ]
+}
+
+/// Builds SplFileObject seek() with PHP 8.6's EOF clamping and stream repositioning.
+///
+/// Seeking past EOF now produces the same `key()` as SplTempFileObject (one past the last
+/// line), and the stream is repositioned so a following `fgets()` reads the selected line.
+/// A negative line keeps php-src's ValueError.
+fn spl_file_object_seek_body() -> Vec<Stmt> {
+    let span = crate::span::Span::dummy();
+    let eof = count_expr(file_lines_expr());
+    vec![
+        if_stmt(
+            binary_expr(var_expr("line"), BinOp::Lt, int_expr(0)),
+            vec![throw_stmt(Expr::new(
+                ExprKind::NewObject {
+                    class_name: crate::names::Name::unqualified("ValueError"),
+                    args: vec![string_expr(
+                        "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0",
+                    )],
+                },
+                span,
+            ))],
+            None,
+        ),
+        if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+            property_assign_stmt(
+                this_expr(),
+                "lineNumber",
+                crate::synthetic_class::e_ternary(
+                    binary_expr(var_expr("line"), BinOp::Lt, eof.clone()),
+                    var_expr("line"),
+                    eof.clone(),
+                ),
+            )
+        } else {
+            property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))
+        },
+        if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+            if_stmt(
+                binary_expr(file_stream_expr(), BinOp::StrictNotEq, null_expr()),
+                vec![if_stmt(
+                    binary_expr(file_line_number_expr(), BinOp::Lt, eof),
+                    vec![expr_stmt(function_call(
+                        "fseek",
+                        vec![
+                            file_stream_expr(),
+                            cast_expr(
+                            crate::parser::ast::CastType::Int,
+                            array_access(file_line_offsets_expr(), file_line_number_expr()),
+                        ),
+                        ],
+                    ))],
+                    Some(vec![expr_stmt(function_call(
+                        "fseek",
+                        vec![
+                            file_stream_expr(),
+                            int_expr(0),
+                            Expr::new(
+                                ExprKind::ConstRef(crate::names::Name::unqualified("SEEK_END")),
+                                span,
+                            ),
+                        ],
+                    ))]),
+                )],
+                None,
+            )
+        } else {
+            expr_stmt(int_expr(0))
+        },
+    ]
 }
 
 /// Builds SplFileObject rewind().
