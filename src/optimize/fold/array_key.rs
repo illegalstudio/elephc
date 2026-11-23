@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::optimize::fold::ops`
+//! - `crate::types::deferred_defaults` (float key check before a literal array decides a branch)
 //!
 //! Key details:
 //! - The neutral string classifier owns PHP normalization and exact byte-preserving identity.
@@ -43,6 +44,11 @@ pub(super) fn array_key(value: &ScalarValue) -> Option<ArrayKey> {
             StringKey::String(_) => ArrayKey::Str(value.clone()),
         }),
     }
+}
+
+/// Whether PHP converts float array key `value` to an int without any diagnostic.
+pub(crate) fn float_key_is_silent(value: f64) -> bool {
+    float_array_key(value).is_some()
 }
 
 /// Normalizes a float array key, declining every value PHP 8.1+ deprecates.

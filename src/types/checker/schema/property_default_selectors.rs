@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - `super::defaults::validate_deferred_declaration_defaults()` after schemas are complete.
+//! - `super::enum_backing` (constant binding only) while backed enum case values are folded.
+//! - `crate::types::checker::driver` (global constant collection) before enums are built.
 //!
 //! Key details:
 //! - Only property copies containing deferred errors are rewritten; callable source defaults stay intact.
@@ -129,11 +131,13 @@ pub(super) fn normalize(checker: &mut Checker, program: &Program) {
 }
 
 /// Retains canonical source constants without evaluating runtime `define()` calls.
-fn collect_globals(program: &Program, globals: &mut HashMap<String, Expr>) {
+pub(crate) fn collect_globals(program: &Program, globals: &mut HashMap<String, Expr>) {
     for statement in program {
         match &statement.kind {
             StmtKind::ConstDecl { name, value } => { globals.insert(name.clone(), value.clone()); }
-            StmtKind::NamespaceBlock { body, .. } => collect_globals(body, globals),
+            // A `require_once`d file's declarations stay inside its include guard.
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => collect_globals(body, globals),
             _ => {}
         }
     }
@@ -595,8 +599,16 @@ fn replace_unresolved_constants(
 }
 
 /// Binds canonical source constants into a property default and folds literal branches.
-fn bind_constants(
+pub(super) fn bind_constants(
     expr: &mut Expr, owner: &str, checker: &Checker, globals: &HashMap<String, Expr>, depth: usize,
+) {
+    bind_constant_reads(expr, owner, checker, globals, depth, true);
+}
+
+/// Resolves constant reads, optionally preserving their enclosing operations for strict checks.
+pub(super) fn bind_constant_reads(
+    expr: &mut Expr, owner: &str, checker: &Checker, globals: &HashMap<String, Expr>,
+    depth: usize, fold: bool,
 ) {
     if depth > 64 { return; }
     let replacement = match &expr.kind {
@@ -621,12 +633,12 @@ fn bind_constants(
         _ => None,
     };
     if let Some((scope, mut value)) = replacement {
-        bind_constants(&mut value, &scope, checker, globals, depth + 1);
+        bind_constant_reads(&mut value, &scope, checker, globals, depth + 1, fold);
         value.span = expr.span;
         *expr = value;
         return;
     }
-    let mut visit = |value: &mut Expr| bind_constants(value, owner, checker, globals, depth + 1);
+    let mut visit = |value: &mut Expr| bind_constant_reads(value, owner, checker, globals, depth + 1, fold);
     match &mut expr.kind {
         ExprKind::ArrayLiteral(items) | ExprKind::NewObject { args: items, .. }
         | ExprKind::NewScopedObject { args: items, .. } => items.iter_mut().for_each(&mut visit),
@@ -653,6 +665,8 @@ fn bind_constants(
         | ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => visit(value),
         _ => {}
     }
-    *expr = crate::optimize::fold_constant_expression(expr.clone());
-    prune_literal_branches(expr);
+    if fold {
+        *expr = crate::optimize::fold_constant_expression(expr.clone());
+        prune_literal_branches(expr);
+    }
 }

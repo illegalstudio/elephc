@@ -1029,6 +1029,102 @@ class C {
     );
 }
 
+/// A backed-case value must still be a constant expression of the backing type: a string
+/// constant cannot back an int enum, and a function call is rejected as PHP does.
+#[test]
+fn test_error_enum_case_value_must_fold_to_the_backing_type() {
+    expect_error(
+        r#"<?php
+final class Codes { public const NAME = 'n'; }
+enum Level: int { case Low = Codes::NAME; }
+"#,
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        r#"<?php
+enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
+"#,
+        "Constant expression contains invalid operations",
+    );
+}
+
+/// A literal array decides a condition only when building it is clean: an array key is PHP's
+/// fatal "Illegal offset type", a fractional float or `null` key raises a deprecation and a float
+/// outside the `i64` range a warning, so such an array is not dropped as a known-true condition
+/// and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
+    for key in [
+        "[]", "[1]", "1.5", "null", "9223372036854775808.0", "-9223372036854777856.0", "1e300",
+        "INF",
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = [{key} => 1] ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = ['k' => [[] => 1]] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = [1, 'a' => 2, 1.5 => 3] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+}
+
+/// After an int key of `PHP_INT_MAX` PHP has no next key, so an append throws "Cannot add
+/// element to the array as the next element is already occupied": such an array is not a
+/// known-true condition and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_overflowing_the_next_key_undecided() {
+    for array in [
+        "[PHP_INT_MAX => 1, 2]",
+        "[9223372036854775807 => 1, 2]",
+        "['9223372036854775807' => 1, 2]",
+        "[9223372036854775806 => 1, 2, 3]",
+        "[9223372036854775807 => 1, 1 => 'k', 2]",
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = {array} ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+}
+
+/// A backed-case value is checked for PHP's forbidden constant-expression forms before folding
+/// prunes a branch: a class or user constant does not decide a branch at compile time, so a
+/// variable or call in the branch it skips is still rejected, with PHP's messages.
+#[test]
+fn test_error_enum_case_value_rejects_forbidden_constant_expression_forms() {
+    let invalid = "Constant expression contains invalid operations";
+    for source in [
+        "<?php\nclass C { const YES = true; }\nenum E: int { case A = C::YES ? 1 : $x; }\n",
+        "<?php\nconst Z = true;\nenum E: int { case A = Z ? 1 : strlen('a'); }\n",
+        "<?php\nenum E: string { case A = 'a' . $x; }\n",
+        "<?php\nenum E: int { case A = [1, 2][$i]; }\n",
+        "<?php\nenum E: int { case A = (1 ? 1 : 2) + $x; }\n",
+    ] {
+        expect_error(source, invalid);
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = PHP_INT_SIZE ? new stdClass : 1; }\n",
+        "New expressions are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = static::X; }\n",
+        "\"static::\" is not allowed in compile-time constants",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = (object) []; }\n",
+        "Object casts are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = function () { return 1; }; }\n",
+        "Closures in constant expressions must be static",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

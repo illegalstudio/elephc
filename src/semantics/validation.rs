@@ -28,12 +28,23 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
         if profile.contains(StrictFeature::ArrayKeys) {
             super::array_keys::validate_source_writes(program, profile)?;
         }
-        let mut validator = SourceValidator { depth: 0, error: None, profile,
-            source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new(),
-            eval_source_paths: Vec::new() };
+        let mut validator = SourceValidator::new(profile);
         walk_program(program, &mut validator);
         validator.error.map_or(Ok(()), Err)
     })
+}
+
+/// Checks a declaration's resolved constant operands before binding can fold them away.
+pub(crate) fn validate_bound_expression(expr: Expr, profile: SemanticProfile) -> Result<(), CompileError> {
+    if !SOURCE_GUARANTEES.iter().copied().any(|feature| profile.contains(feature)) { return Ok(()); }
+    let source = expr.source_profile;
+    let span = expr.span;
+    let mut statement = Stmt::new(StmtKind::ExprStmt(expr), span);
+    statement.source_mode = source.mode;
+    statement.strict_types = source.strict_types;
+    let mut validator = SourceValidator::new(profile);
+    crate::ast_visit::walk_statements(std::slice::from_ref(&statement), &mut validator);
+    validator.error.map_or(Ok(()), Err)
 }
 
 /// Tracks nested literal source independently of compiler-global configuration.
@@ -46,6 +57,15 @@ struct SourceValidator {
     quiet_frames: Vec<usize>,
     /// Inherits the physical call-site file through recursively parsed eval fragments.
     eval_source_paths: Vec<Option<String>>,
+}
+
+impl SourceValidator {
+    /// Starts validation with no enclosing source or quiet-access state.
+    fn new(profile: SemanticProfile) -> Self {
+        Self { depth: 0, error: None, profile,
+            source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new(),
+            eval_source_paths: Vec::new() }
+    }
 }
 
 impl AstVisitor for SourceValidator {

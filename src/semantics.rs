@@ -21,6 +21,7 @@ pub(crate) mod reflection;
 mod numeric_constants;
 mod validation;
 pub use validation::validate_source;
+pub(crate) use validation::validate_bound_expression;
 
 /// Lists guarantees whose compiler/runtime implementation is still being integrated.
 /// Rejecting these during staged implementation prevents silently permissive binaries.

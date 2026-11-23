@@ -17,6 +17,8 @@ mod property_default_selectors;
 mod interfaces;
 mod classes;
 mod enums;
+mod const_expr_forms;
+mod enum_backing;
 mod enum_traits;
 mod enum_factories;
 
@@ -26,6 +28,7 @@ pub(crate) use defaults::validate_deferred_declaration_defaults;
 pub(crate) use strict_defaults::validate_noncoercive_defaults;
 pub(crate) use defaults::normalize_signature_default_receivers;
 pub(crate) use defaults::normalize_lexical_callable_default;
+pub(crate) use property_default_selectors::collect_globals as collect_global_constants;
 pub(crate) use classes::validate_trait_property_defaults;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
