@@ -96,6 +96,20 @@ fn test_strict_array_keys_match_ignores_later_unreachable_patterns() {
     }
 }
 
+/// Evaluates earlier match patterns before a later known match in the same arm.
+#[test]
+fn test_strict_array_keys_match_preserves_earlier_pattern_effects() {
+    let source = r#"<?php
+function checkMatchPattern(): int { echo 'checked|'; return 9; }
+$values = [(match (1) { checkMatchPattern(), 1 => -2, default => 0 }) => 'value'];
+echo $values[-2];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--php-version", "8.2", "--strict-array-keys"]),
+        "checked|value"
+    );
+}
+
 /// Folds a selected short-ternary key before PHP 8.2 computes the literal append cursor.
 #[test]
 fn test_strict_array_keys_php82_selected_short_ternary_uses_literal_cursor() {

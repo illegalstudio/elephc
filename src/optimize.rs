@@ -191,7 +191,6 @@ pub(crate) fn select_match_array_key_for_source(
     let subject = fold::expr::fold_expr(prepare_source_array_key_for_fold(subject, profile)?);
     let subject = scalar_value(&subject)?;
     for (patterns, value) in arms {
-        let mut has_unknown = false;
         for pattern in patterns {
             let pattern = fold::expr::fold_expr(prepare_source_array_key_for_fold(
                 pattern, profile,
@@ -199,11 +198,8 @@ pub(crate) fn select_match_array_key_for_source(
             match pattern_matches_scalar(&subject, &pattern, CaseComparison::Strict) {
                 Some(true) => return Some(value.clone()),
                 Some(false) => {}
-                None => has_unknown = true,
+                None => return None,
             }
-        }
-        if has_unknown {
-            return None;
         }
     }
     default.as_deref().cloned()

@@ -344,19 +344,15 @@ pub(crate) fn classify_case_patterns(
     patterns: &[Expr],
     comparison: CaseComparison,
 ) -> CaseMatch {
-    let mut has_unknown = false;
     for pattern in patterns {
         match pattern_matches_scalar(subject, pattern, comparison) {
             Some(true) => return CaseMatch::Matches,
             Some(false) => {}
-            None => has_unknown = true,
+            // Earlier patterns can evaluate code before a later pattern matches.
+            None => return CaseMatch::Unknown,
         }
     }
-    if has_unknown {
-        CaseMatch::Unknown
-    } else {
-        CaseMatch::NoMatch
-    }
+    CaseMatch::NoMatch
 }
 
 /// Determines if a case pattern matches a scalar subject value under the given comparison mode.
