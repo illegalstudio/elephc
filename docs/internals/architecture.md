@@ -342,7 +342,8 @@ parser view and its second scanner as the automatic fallback; the token view is
 never a second grammar. The scoped mode discards each parsed statement and
 collects PHP diagnostics and semi-reserved-word feedback. `ELEPHC_TOKEN_VIEW`
 accepts `text`, `off`, or `0` to force the legacy text view while rolling out or
-comparing the two paths.
+comparing the two paths. `scripts/bench/token_view.py` alternates both views on
+generated fixtures and reports median nanoseconds per validation.
 
 The full parser-enabled engine can be measured with
 `scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use
