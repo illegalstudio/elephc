@@ -22,7 +22,9 @@ pub(super) fn eval_reflection_function_method_target(
         let closure_target = context
             .eval_reflection_function_closure_target(identity)
             .cloned();
-        if let Some(closure) = context.closure(name) {
+        let function_name = closure_target.as_ref().is_none_or(eval_reflection_target_uses_function_name)
+            .then_some(name);
+        if let Some(closure) = function_name.and_then(|name| context.closure(name)) {
             let function = closure.function();
             let is_variadic = function.parameter_is_variadic().iter().any(|flag| *flag);
             let parameters = eval_reflection_function_parameters(
@@ -61,8 +63,8 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
-        let lookup_name = name.to_ascii_lowercase();
-        if let Some(function) = context.function(&lookup_name) {
+        let lookup_name = function_name.map(str::to_ascii_lowercase);
+        if let Some(function) = lookup_name.as_deref().and_then(|name| context.function(name)) {
             let is_variadic = function
                 .parameter_is_variadic()
                 .iter()
@@ -102,7 +104,7 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
-        if let Some(function) = context.native_function(&lookup_name) {
+        if let Some(function) = lookup_name.as_deref().and_then(|name| context.native_function(name)) {
             let parameters = eval_reflection_native_function_parameters(name, &function);
             let is_variadic =
                 (0..function.param_count()).any(|index| function.param_variadic(index));

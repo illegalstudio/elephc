@@ -2600,11 +2600,11 @@ class EvalReflectClosureMetaAotBox {
 echo eval('function eval_reflect_closure_meta_dump(string $label, $closure): string {
     try {
         $ref = new ReflectionFunction($closure);
-        $this = $ref->getClosureThis();
+        $boundThis = $ref->getClosureThis();
         $scope = $ref->getClosureScopeClass();
         $called = $ref->getClosureCalledClass();
         return $label . ":" .
-            (is_object($this) ? get_class($this) : "null") . ":" .
+            (is_object($boundThis) ? get_class($boundThis) : "null") . ":" .
             ($scope ? $scope->getName() : "null") . ":" .
             ($called ? $called->getName() : "null") . ":" .
             ($ref->isStatic() ? "S" : "s");
