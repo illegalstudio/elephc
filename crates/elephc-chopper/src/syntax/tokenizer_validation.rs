@@ -1050,6 +1050,25 @@ mod tests {
             .collect()
     }
 
+    /// Verifies a goto statement is projected directly instead of forcing the text fallback.
+    #[test]
+    fn token_view_supports_goto_statements() {
+        let source = b"<?php goto done;";
+        let tokens = scan_tokens(source);
+        let view = token_view::build(source, &tokens, &OnceCell::new()).expect("goto is projected");
+        assert!(view
+            .tokens
+            .iter()
+            .any(|(token, _)| *token == crate::syntax::lexer::Token::Goto));
+        let old = crate::syntax::parser::with_tokenizer_validation(|| {
+            validate_in_scope_with(source, &tokens, false)
+        });
+        let new = crate::syntax::parser::with_tokenizer_validation(|| {
+            validate_in_scope_with(source, &tokens, true)
+        });
+        assert_eq!(old, new);
+    }
+
     /// Verifies both validation paths produce the same diagnostics and identifier feedback.
     #[test]
     fn token_view_feedback_matches_text_view() {
@@ -1138,6 +1157,9 @@ mod tests {
             b"<?php $a = &$b ? 1 : 2;",
             b"<?php $a = &$b && $c;",
             b"<?php $a = [&C::match()]; $b = [&$o->list];",
+            b"<?php function f(...$xs) {}",
+            b"<?php foo(...$xs);",
+            b"<?php $a = [...$xs];",
         ];
         for source in [
             b"<?php done: echo 1;".as_slice(),
@@ -1168,7 +1190,7 @@ mod tests {
         for index in 0..40 {
             late_fallback.push_str(&format!("$x{index} = 1; "));
         }
-        late_fallback.push_str("goto done;");
+        late_fallback.push_str("__halt_compiler();");
         let late_tokens = scan_tokens(late_fallback.as_bytes());
         assert!(
             token_view::build(late_fallback.as_bytes(), &late_tokens, &OnceCell::new()).is_none(),

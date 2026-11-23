@@ -45,7 +45,7 @@ fn source(shape: &str) -> String {
             for index in 0..10_000 {
                 source.push_str(&format!("$x{index} = $a + $b * 2;\n"));
             }
-            source.push_str("goto done;\ndone:\n");
+            source.push_str("__halt_compiler();\n");
         }
         _ => panic!("unknown shape: {shape}"),
     }

@@ -81,9 +81,15 @@ def main() -> None:
     for shape in shapes:
         text_samples = []
         token_samples = []
-        for _ in range(arguments.samples):
-            text_samples.append(run_once(binary, shape, arguments.rounds, "text"))
-            token_samples.append(run_once(binary, shape, arguments.rounds, "token"))
+        for sample in range(arguments.samples):
+            # Alternate the order so a slow drift in the machine does not always penalize
+            # the same view.
+            if sample % 2 == 0:
+                text_samples.append(run_once(binary, shape, arguments.rounds, "text"))
+                token_samples.append(run_once(binary, shape, arguments.rounds, "token"))
+            else:
+                token_samples.append(run_once(binary, shape, arguments.rounds, "token"))
+                text_samples.append(run_once(binary, shape, arguments.rounds, "text"))
         text = statistics.median(text_samples)
         token = statistics.median(token_samples)
         reduction = (text - token) / text * 100 if text else 0.0

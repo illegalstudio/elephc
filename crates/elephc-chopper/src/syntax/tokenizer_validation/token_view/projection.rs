@@ -198,10 +198,13 @@ pub(super) fn project(id: i64, text: &str, span: Span) -> Option<Projected> {
         | tok::T_STRING_VARNAME
         | tok::T_CURLY_OPEN
         | tok::T_DOLLAR_OPEN_CURLY_BRACES
-        | tok::T_GOTO
-        | tok::T_ELLIPSIS
-        | tok::T_HALT_COMPILER
-        | tok::T_NS_SEPARATOR => return None,
+        | tok::T_HALT_COMPILER => return None,
+        tok::T_NS_SEPARATOR => {
+            if text != "\\" {
+                return None;
+            }
+            return Some(Projected::Token(Token::Backslash, false));
+        }
         _ => {}
     }
 

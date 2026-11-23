@@ -376,13 +376,7 @@ fn early_supported<T: SourceToken>(tokens: &[T]) -> bool {
             let byte = u8::try_from(id).unwrap_or(0);
             return !matches!(byte, b'$' | b'\\');
         }
-        !matches!(
-            id,
-            tok::T_GOTO
-                | tok::T_ELLIPSIS
-                | tok::T_HALT_COMPILER
-                | tok::T_NS_SEPARATOR
-        )
+        !matches!(id, tok::T_HALT_COMPILER)
     })
 }
 
