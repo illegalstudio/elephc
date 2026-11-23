@@ -1,7 +1,24 @@
 {
   "schema": 1,
-  "checkpoint": "a2ebb3da96836c56bbddfee9c4c71c6aaf037c3d",
-  "pending": {},
+  "checkpoint": "3190a3b35cb0de2225ed96f49be9c2d9d6e10da9",
+  "pending": {
+    "6847559636ab4b45c56cd112aeef34134dd518f0": {
+      "first_seen": 1795447612,
+      "attempts": 0
+    },
+    "bfe08fe54b1bb69263df96744f5e7b79d506ce8c": {
+      "first_seen": 1795447612,
+      "attempts": 0
+    },
+    "577a768fee35e786bb04b25b7d5fcc3da25ec49a": {
+      "first_seen": 1795447612,
+      "attempts": 0
+    },
+    "3190a3b35cb0de2225ed96f49be9c2d9d6e10da9": {
+      "first_seen": 1795447612,
+      "attempts": 0
+    }
+  },
   "completed": [
     {
       "sha": "84952ae1e5baf43595e12462c9896459274a5bf6",
