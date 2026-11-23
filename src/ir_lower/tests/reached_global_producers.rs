@@ -50,25 +50,25 @@ fn reached_global_producers_native_values_and_owners() {
 /// The real interpreter uses the same reached source for every displaced binding role.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn reached_global_producers_opaque_scope_values_and_owners() {
+fn verify_opaque_scope_values_and_owners(locals: bool, optimize: bool) {
     let fragment = SOURCE.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $fragment=$argc>0?'{fragment}':'';eval($fragment);");
-    let expected = EXPECTED;
-    for locals in [false, true] {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
-        for optimize in [false, true] {
-            let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(), profile, optimize, SourceMode::Php);
-            assert!(module.required_runtime_features.eval_bridge);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "locals={locals}, opt={optimize}: {:?}; stdout={}; {stderr}", output.status, String::from_utf8_lossy(&output.stdout));
-            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "locals={locals}, opt={optimize}: {stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
-            assert!(!stderr.contains("Undefined variable"), "{stderr}");
-        }
-    }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
+    let module = super::semantic_sources::lower_capturing_arguments(
+        &source, Target::detect_host(), profile, optimize, SourceMode::Php,
+    );
+    assert!(module.required_runtime_features.eval_bridge);
+    let output = super::native_module::run(&module);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(),
+        "locals={locals}, opt={optimize}: {:?}; stdout={stdout}; {stderr}", output.status);
+    assert_eq!(stdout, EXPECTED, "locals={locals}, opt={optimize}: {stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    assert!(!stderr.contains("Undefined variable"), "{stderr}");
 }
+
+opaque_eval_profile_cases!(reached_global_producers_opaque_scope, verify_opaque_scope_values_and_owners);
 
 /// A displaced string parameter cannot make a closed integer global accept a string store.
 #[test]

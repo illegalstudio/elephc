@@ -90,20 +90,21 @@ refreshedPacked(); refreshedTyped();
 /// Real eval may keep promoted aliases after constructor key operands and scopes have retired.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn owned_reference_keys_native_eval_escape_and_owners() {
+fn verify_owned_reference_keys_native_eval(coordinated: bool, optimize: bool) {
     let (fragment, expected) = source(false);
     let fragment = fragment.strip_prefix("<?php\n").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
-    for coordinated in [false, true] {
-        for optimize in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, coordinated);
-            let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(), profile, optimize, SourceMode::Php);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "casts={coordinated} opt={optimize}: {:?}; {stderr}", output.status);
-            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "casts={coordinated} opt={optimize}: {stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={coordinated} opt={optimize}: {stderr}");
-        }
-    }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, coordinated);
+    let module = super::semantic_sources::lower_capturing_arguments(
+        &source, Target::detect_host(), profile, optimize, SourceMode::Php,
+    );
+    let output = super::native_module::run(&module);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "casts={coordinated} opt={optimize}: {:?}; {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected,
+        "casts={coordinated} opt={optimize}: {stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "casts={coordinated} opt={optimize}: {stderr}");
 }
+
+opaque_eval_profile_cases!(owned_reference_keys_native_eval_escape, verify_owned_reference_keys_native_eval);

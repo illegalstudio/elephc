@@ -215,20 +215,22 @@ fn strict_public_profiles_examples_emit_on_every_target() {
     }
 }
 
-/// Native source snapshots retain their own role and shared ABI on every supported target.
-#[test]
-fn strict_native_source_snapshot_roles_emit_on_every_target() {
-    let source="<?php $items=[1];$code=$argc>0?'echo count($items);':'';eval($code);";
-    for feature in [StrictFeature::Mixed,StrictFeature::ArrayTypes] {
-        for name in ["macos-aarch64","ios-arm64","ios-sim-arm64","linux-aarch64","linux-x86_64"] {
-            let profile=SemanticProfile::PERMISSIVE.with(feature,true);
-            let module=super::semantic_sources::lower_capturing_arguments(source,Target::parse(name).unwrap(),profile,false,SourceMode::Php);
-            crate::ir::validate_module(&module).unwrap();
-            assert!(module.functions.iter().flat_map(|function| &function.instructions).any(|instruction|
-                matches!(&instruction.immediate,Some(crate::ir::Immediate::EvalScopeStore(metadata))
-                    if metadata.role==crate::ir::EvalBindingRole::Source)));
-            let assembly=crate::codegen::generate_user_asm_from_ir(&module,false,false).unwrap();
-            assert!(assembly.contains("__elephc_eval_scope_source_type_v1"),"{feature:?}: {name}");
-        }
+/// Native source snapshots retain their own role and shared ABI on the selected target.
+fn verify_native_source_snapshot_roles(target_name: &str) {
+    let source = "<?php $items=[1];$code=$argc>0?'echo count($items);':'';eval($code);";
+    let target = Target::parse(target_name).unwrap();
+    for feature in [StrictFeature::Mixed, StrictFeature::ArrayTypes] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        let module = super::semantic_sources::lower_capturing_arguments(
+            source, target, profile, false, SourceMode::Php,
+        );
+        crate::ir::validate_module(&module).unwrap();
+        assert!(module.functions.iter().flat_map(|function| &function.instructions).any(|instruction|
+            matches!(&instruction.immediate, Some(crate::ir::Immediate::EvalScopeStore(metadata))
+                if metadata.role == crate::ir::EvalBindingRole::Source)));
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__elephc_eval_scope_source_type_v1"), "{feature:?}: {target_name}");
     }
 }
+
+supported_target_cases!(strict_native_source_snapshot_roles_emit_by_target, verify_native_source_snapshot_roles);

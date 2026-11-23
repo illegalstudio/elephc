@@ -26,23 +26,22 @@ fn escaped_property_sources_emit_on_every_target() {
 /// Real eval keeps aliases valid after caller scope teardown with either conversion policy.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn escaped_property_sources_native_eval_profiles_and_owners() {
+fn verify_escaped_property_sources_native_eval(casts: bool, optimize: bool) {
     let fragment = format!("{}escapedPromotedObservations();",
         include_str!("../../../tests/fixtures/strict/escaped_promoted_aliases.php")
             .strip_prefix("<?php\n").unwrap());
     let fragment = fragment.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
-    for casts in [false, true] {
-        for optimize in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts);
-            let module = super::semantic_sources::lower_capturing_arguments(&source,
-                Target::detect_host(), profile, optimize, SourceMode::Php);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "casts={casts} opt={optimize}: {:?}; {stderr}", output.status);
-            assert_eq!(String::from_utf8_lossy(&output.stdout), "3/7/11|4/8/12|5/9/13|", "casts={casts} opt={optimize}: {stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={casts} opt={optimize}: {stderr}");
-        }
-    }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts);
+    let module = super::semantic_sources::lower_capturing_arguments(
+        &source, Target::detect_host(), profile, optimize, SourceMode::Php,
+    );
+    let output = super::native_module::run(&module);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "casts={casts} opt={optimize}: {:?}; {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3/7/11|4/8/12|5/9/13|",
+        "casts={casts} opt={optimize}: {stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={casts} opt={optimize}: {stderr}");
 }
+
+opaque_eval_profile_cases!(escaped_property_sources_native_eval_profiles, verify_escaped_property_sources_native_eval);

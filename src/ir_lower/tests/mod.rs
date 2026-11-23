@@ -37,6 +37,28 @@ macro_rules! supported_target_cases {
     };
 }
 
+/// Schedules opaque eval with each profile and optimizer setting in its own native test.
+macro_rules! opaque_eval_profile_cases {
+    ($name:ident, $verify:ident) => {
+        #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+        mod $name {
+            /// Verifies permissive execution without optimization.
+            #[test]
+            fn permissive_unoptimized() { super::$verify(false, false); }
+            /// Verifies permissive execution with optimization.
+            #[test]
+            fn permissive_optimized() { super::$verify(false, true); }
+            /// Verifies strict execution without optimization.
+            #[test]
+            fn strict_unoptimized() { super::$verify(true, false); }
+            /// Verifies strict execution with optimization.
+            #[test]
+            fn strict_optimized() { super::$verify(true, true); }
+        }
+    };
+}
+
 mod aggregate_operand_owners;
 mod strict_comparator_callbacks;
 mod boxed_operators;
