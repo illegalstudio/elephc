@@ -19,7 +19,55 @@ use super::strings::{
     braced_interpolation, heredoc_closing, heredoc_opening, quoted_len, BracedInterpolation,
     HeredocProfile,
 };
-use super::{digits_len, id, identifier_len, newline_count, operator, Operator, Token};
+use super::{digits_len, identifier_len, newline_count, operator, Operator, Token};
+
+/// Compile-time PHP 8.5 token IDs used by the scanner.
+///
+/// Resolving them from the shared catalog here keeps every hot token comparison free of
+/// a runtime hash lookup.
+mod tok {
+    use elephc_builtin_contract::token_const_id as id;
+    pub(super) const T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG: i64 = id("T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG");
+    pub(super) const T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG: i64 = id("T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG");
+    pub(super) const T_ATTRIBUTE: i64 = id("T_ATTRIBUTE");
+    pub(super) const T_BAD_CHARACTER: i64 = id("T_BAD_CHARACTER");
+    pub(super) const T_CLOSE_TAG: i64 = id("T_CLOSE_TAG");
+    pub(super) const T_COMMENT: i64 = id("T_COMMENT");
+    pub(super) const T_CONSTANT_ENCAPSED_STRING: i64 = id("T_CONSTANT_ENCAPSED_STRING");
+    pub(super) const T_CURLY_OPEN: i64 = id("T_CURLY_OPEN");
+    pub(super) const T_DNUMBER: i64 = id("T_DNUMBER");
+    pub(super) const T_DOC_COMMENT: i64 = id("T_DOC_COMMENT");
+    pub(super) const T_DOLLAR_OPEN_CURLY_BRACES: i64 = id("T_DOLLAR_OPEN_CURLY_BRACES");
+    pub(super) const T_ENCAPSED_AND_WHITESPACE: i64 = id("T_ENCAPSED_AND_WHITESPACE");
+    pub(super) const T_END_HEREDOC: i64 = id("T_END_HEREDOC");
+    pub(super) const T_ENUM: i64 = id("T_ENUM");
+    pub(super) const T_EXIT: i64 = id("T_EXIT");
+    pub(super) const T_HALT_COMPILER: i64 = id("T_HALT_COMPILER");
+    pub(super) const T_INLINE_HTML: i64 = id("T_INLINE_HTML");
+    pub(super) const T_LNUMBER: i64 = id("T_LNUMBER");
+    pub(super) const T_NAME_FULLY_QUALIFIED: i64 = id("T_NAME_FULLY_QUALIFIED");
+    pub(super) const T_NAME_QUALIFIED: i64 = id("T_NAME_QUALIFIED");
+    pub(super) const T_NAME_RELATIVE: i64 = id("T_NAME_RELATIVE");
+    pub(super) const T_NS_SEPARATOR: i64 = id("T_NS_SEPARATOR");
+    pub(super) const T_NULLSAFE_OBJECT_OPERATOR: i64 = id("T_NULLSAFE_OBJECT_OPERATOR");
+    pub(super) const T_NUM_STRING: i64 = id("T_NUM_STRING");
+    pub(super) const T_OBJECT_OPERATOR: i64 = id("T_OBJECT_OPERATOR");
+    pub(super) const T_OPEN_TAG: i64 = id("T_OPEN_TAG");
+    pub(super) const T_OPEN_TAG_WITH_ECHO: i64 = id("T_OPEN_TAG_WITH_ECHO");
+    pub(super) const T_PRIVATE: i64 = id("T_PRIVATE");
+    pub(super) const T_PRIVATE_SET: i64 = id("T_PRIVATE_SET");
+    pub(super) const T_PROTECTED: i64 = id("T_PROTECTED");
+    pub(super) const T_PROTECTED_SET: i64 = id("T_PROTECTED_SET");
+    pub(super) const T_PUBLIC: i64 = id("T_PUBLIC");
+    pub(super) const T_PUBLIC_SET: i64 = id("T_PUBLIC_SET");
+    pub(super) const T_SL: i64 = id("T_SL");
+    pub(super) const T_START_HEREDOC: i64 = id("T_START_HEREDOC");
+    pub(super) const T_STRING: i64 = id("T_STRING");
+    pub(super) const T_STRING_VARNAME: i64 = id("T_STRING_VARNAME");
+    pub(super) const T_VARIABLE: i64 = id("T_VARIABLE");
+    pub(super) const T_WHITESPACE: i64 = id("T_WHITESPACE");
+    pub(super) const T_YIELD_FROM: i64 = id("T_YIELD_FROM");
+}
 
 /// One lexical diagnostic that TOKEN_PARSE must raise as a ParseError.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,7 +202,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             if self.halt_done {
                 let start = self.i;
                 self.i = self.source.len();
-                self.push(id("T_INLINE_HTML"), start, self.i);
+                self.push(tok::T_INLINE_HTML, start, self.i);
                 break;
             }
             let before = self.i;
@@ -183,7 +231,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         };
         let significant: Vec<&Token> = self.tokens[halt_index + 1..]
             .iter()
-            .filter(|token| !is_trivia(token.id) && token.id != id("T_INLINE_HTML"))
+            .filter(|token| !is_trivia(token.id) && token.id != tok::T_INLINE_HTML)
             .collect();
         let text = |token: &Token| &self.source[token.pos..token.pos + token.len];
         let Some(open) = significant.first() else {
@@ -222,7 +270,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             return;
         };
         // PHP also terminates the compiler halt at a closing tag: `__halt_compiler() ?>`.
-        if text(semicolon) != b";" && semicolon.id != id("T_CLOSE_TAG") {
+        if text(semicolon) != b";" && semicolon.id != tok::T_CLOSE_TAG {
             self.errors.push(LexError {
                 pos: semicolon.pos,
                 message: unexpected_expecting(self.source, semicolon, "\";\""),
@@ -233,7 +281,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
     /// Returns the index of the first `__halt_compiler` that is not a member/name segment.
     fn halt_statement_index(&self) -> Option<usize> {
         self.tokens.iter().enumerate().find_map(|(index, token)| {
-            (token.id == id("T_HALT_COMPILER") && !self.halt_is_member_name(index))
+            (token.id == tok::T_HALT_COMPILER && !self.halt_is_member_name(index))
                 .then_some(index)
         })
     }
@@ -252,9 +300,9 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         let mut stack = Vec::new();
         let mut heredoc_end = vec![None; self.tokens.len()];
         for index in 0..self.tokens.len() {
-            if self.tokens[index].id == id("T_START_HEREDOC") {
+            if self.tokens[index].id == tok::T_START_HEREDOC {
                 stack.push(index);
-            } else if self.tokens[index].id == id("T_END_HEREDOC") {
+            } else if self.tokens[index].id == tok::T_END_HEREDOC {
                 if let Some(start) = stack.pop() {
                     heredoc_end[start] = Some(index);
                     self.validate_heredoc_pair(start, index, &heredoc_end);
@@ -298,13 +346,13 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             // A heredoc nested inside an interpolation is validated by its own pair. Jump over
             // its whole token range so deeply nested heredocs stay linear instead of rescanning
             // every inner body from every outer pair.
-            if token.id == id("T_START_HEREDOC") {
+            if token.id == tok::T_START_HEREDOC {
                 if let Some(nested_end) = heredoc_end[cursor] {
                     cursor = nested_end + 1;
                     continue;
                 }
             }
-            if token.id == id("T_CURLY_OPEN") || token.id == id("T_DOLLAR_OPEN_CURLY_BRACES") {
+            if token.id == tok::T_CURLY_OPEN || token.id == tok::T_DOLLAR_OPEN_CURLY_BRACES {
                 if depth == 0 {
                     open = token.pos;
                 }
@@ -452,14 +500,14 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         }
         let Some((at, _)) = tag else {
             self.i = self.source.len();
-            self.push(id("T_INLINE_HTML"), start, self.i);
+            self.push(tok::T_INLINE_HTML, start, self.i);
             return;
         };
         if at > start {
-            self.push(id("T_INLINE_HTML"), start, at);
+            self.push(tok::T_INLINE_HTML, start, at);
         }
         if self.source[at + 2] == b'=' {
-            self.push(id("T_OPEN_TAG_WITH_ECHO"), at, at + 3);
+            self.push(tok::T_OPEN_TAG_WITH_ECHO, at, at + 3);
             self.i = at + 3;
             self.mode = Mode::Php;
             return;
@@ -472,7 +520,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 end += 1;
             }
         }
-        self.push(id("T_OPEN_TAG"), at, end);
+        self.push(tok::T_OPEN_TAG, at, end);
         self.i = end;
         self.mode = Mode::Php;
     }
@@ -485,9 +533,9 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         };
         let start = self.i;
         let end = start + len;
-        let name = match trivia {
-            Trivia::Whitespace => "T_WHITESPACE",
-            Trivia::LineComment => "T_COMMENT",
+        let token_id = match trivia {
+            Trivia::Whitespace => tok::T_WHITESPACE,
+            Trivia::LineComment => tok::T_COMMENT,
             Trivia::BlockComment => {
                 let text = &self.source[start..end];
                 if !text.ends_with(b"*/") {
@@ -497,13 +545,13 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                     });
                 }
                 if text.starts_with(b"/**") && text.get(3).is_some_and(|&byte| is_whitespace(byte)) {
-                    "T_DOC_COMMENT"
+                    tok::T_DOC_COMMENT
                 } else {
-                    "T_COMMENT"
+                    tok::T_COMMENT
                 }
             }
         };
-        self.push(id(name), start, end);
+        self.push(token_id, start, end);
         self.i = end;
         true
     }
@@ -535,7 +583,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             } else if self.source.get(end).is_some_and(|b| matches!(b, b'\n' | b'\r')) {
                 end += 1;
             }
-            self.push(id("T_CLOSE_TAG"), start, end);
+            self.push(tok::T_CLOSE_TAG, start, end);
             self.i = end;
             self.mode = Mode::InlineHtml;
             return;
@@ -545,7 +593,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             if C::ACTIVE {
                 self.emit_compiler(CompilerLexeme::Attribute, self.i + 2);
             } else {
-                self.push(id("T_ATTRIBUTE"), self.i, self.i + 2);
+                self.push(tok::T_ATTRIBUTE, self.i, self.i + 2);
                 self.i += 2;
             }
             return;
@@ -559,7 +607,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             if C::ACTIVE {
                 self.emit_compiler(CompilerLexeme::Variable, end);
             } else {
-                self.push(id("T_VARIABLE"), start, end);
+                self.push(tok::T_VARIABLE, start, end);
                 self.i = end;
             }
             return;
@@ -674,15 +722,12 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             let at = skip_trivia(self.source, self.i + 1);
             let by_ref = self.source.get(at) == Some(&b'$')
                 || self.source.get(at..at + 3) == Some(b"...");
-            self.push(
-                id(if by_ref {
-                    "T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG"
-                } else {
-                    "T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG"
-                }),
-                start,
-                start + 1,
-            );
+            let ampersand_id = if by_ref {
+                tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+            } else {
+                tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+            };
+            self.push(ampersand_id, start, start + 1);
             self.i += 1;
             return;
         }
@@ -717,7 +762,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         let fully_qualified = self.source[j] == b'\\';
         if fully_qualified {
             if !self.source.get(j + 1).is_some_and(|&byte| self.name_start(byte)) {
-                self.push(id("T_NS_SEPARATOR"), start, start + 1);
+                self.push(tok::T_NS_SEPARATOR, start, start + 1);
                 self.i += 1;
                 return;
             }
@@ -735,18 +780,19 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         }
         let text = &self.source[start..j];
         if fully_qualified {
-            self.push(id("T_NAME_FULLY_QUALIFIED"), start, j);
+            self.push(tok::T_NAME_FULLY_QUALIFIED, start, j);
             self.i = j;
             return;
         }
         if qualified {
             let head_end = text.iter().position(|b| *b == b'\\').unwrap_or(text.len());
             let relative = text[..head_end].eq_ignore_ascii_case(b"namespace");
-            self.push(
-                id(if relative { "T_NAME_RELATIVE" } else { "T_NAME_QUALIFIED" }),
-                start,
-                j,
-            );
+            let name_id = if relative {
+                tok::T_NAME_RELATIVE
+            } else {
+                tok::T_NAME_QUALIFIED
+            };
+            self.push(name_id, start, j);
             self.i = j;
             return;
         }
@@ -757,29 +803,29 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 && self.source.get(from..from + 4).is_some_and(|s| s.eq_ignore_ascii_case(b"from"))
                 && !self.source.get(from + 4).is_some_and(|b| is_label(*b))
             {
-                self.push(id("T_YIELD_FROM"), start, from + 4);
+                self.push(tok::T_YIELD_FROM, start, from + 4);
                 self.i = from + 4;
                 return;
             }
         }
 
         let mut token_id = if was_property {
-            id("T_STRING")
+            tok::T_STRING
         } else {
-            keyword_id(text).unwrap_or_else(|| id("T_STRING"))
+            keyword_id(text).unwrap_or_else(|| tok::T_STRING)
         };
 
-        if token_id == id("T_ENUM") && !was_property {
+        if token_id == tok::T_ENUM && !was_property {
             let at = skip_trivia(self.source, j);
             let rest = &self.source[at..];
             let starts_with_excluded = rest.get(..7).is_some_and(|s| s.eq_ignore_ascii_case(b"extends"))
                 || rest.get(..10).is_some_and(|s| s.eq_ignore_ascii_case(b"implements"));
             if !rest.first().is_some_and(|b| is_label_start(*b)) || starts_with_excluded {
-                token_id = id("T_STRING");
+                token_id = tok::T_STRING;
             }
         }
 
-        if !was_property && matches!(token_id, t if t == id("T_PUBLIC") || t == id("T_PRIVATE") || t == id("T_PROTECTED")) {
+        if !was_property && matches!(token_id, t if t == tok::T_PUBLIC || t == tok::T_PRIVATE || t == tok::T_PROTECTED) {
             if let Some((set_id, end)) = self.asymmetric_set(j) {
                 self.push(set_id, start, end);
                 self.i = end;
@@ -787,7 +833,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             }
         }
 
-        let follows_name_separator = token_id == id("T_HALT_COMPILER")
+        let follows_name_separator = token_id == tok::T_HALT_COMPILER
             && self
                 .tokens
                 .iter()
@@ -796,7 +842,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 .is_some_and(|previous| is_halt_name_separator(previous.id));
         self.push(token_id, start, j);
         self.i = j;
-        if !self.runtime && token_id == id("T_HALT_COMPILER") && !follows_name_separator {
+        if !self.runtime && token_id == tok::T_HALT_COMPILER && !follows_name_separator {
             self.halt = Some(3);
         }
     }
@@ -819,9 +865,9 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             return None;
         }
         let id = match self.source[self.i..].first() {
-            _ if self.source[self.i..].starts_with_ignore_ascii_case(b"public") => id("T_PUBLIC_SET"),
-            _ if self.source[self.i..].starts_with_ignore_ascii_case(b"private") => id("T_PRIVATE_SET"),
-            _ => id("T_PROTECTED_SET"),
+            _ if self.source[self.i..].starts_with_ignore_ascii_case(b"public") => tok::T_PUBLIC_SET,
+            _ if self.source[self.i..].starts_with_ignore_ascii_case(b"private") => tok::T_PRIVATE_SET,
+            _ => tok::T_PROTECTED_SET,
         };
         Some((id, j + 1))
     }
@@ -892,7 +938,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 pos: start,
                 message: format!("syntax error, unexpected character 0x{byte:02X}"),
             });
-            self.push(id("T_BAD_CHARACTER"), start, start + 1);
+            self.push(tok::T_BAD_CHARACTER, start, start + 1);
         } else {
             self.push_byte(start);
         }
@@ -903,7 +949,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
     fn number_token_id(&mut self, number: Number) -> i64 {
         let digits = &self.source[self.i..self.i + number.len];
         let value = match number.kind {
-            NumberKind::Float => return id("T_DNUMBER"),
+            NumberKind::Float => return tok::T_DNUMBER,
             NumberKind::Prefixed(radix) => parse_digits(&digits[2..], radix),
             NumberKind::LegacyOctal if digits.iter().any(|b| matches!(b, b'8' | b'9')) => {
                 self.errors.push(LexError { pos: self.i, message: "Invalid numeric literal".into() });
@@ -913,9 +959,9 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             NumberKind::Decimal => parse_digits(digits, 10),
         };
         if value.is_some_and(|v| v <= i64::MAX as u128) {
-            id("T_LNUMBER")
+            tok::T_LNUMBER
         } else {
-            id("T_DNUMBER")
+            tok::T_DNUMBER
         }
     }
 
@@ -927,11 +973,12 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             self.emit_compiler(CompilerLexeme::SingleQuoted { terminated: len.is_some() }, j);
             return;
         }
-        self.push(
-            id(if len.is_some() { "T_CONSTANT_ENCAPSED_STRING" } else { "T_ENCAPSED_AND_WHITESPACE" }),
-            start,
-            j,
-        );
+        let token_id = if len.is_some() {
+            tok::T_CONSTANT_ENCAPSED_STRING
+        } else {
+            tok::T_ENCAPSED_AND_WHITESPACE
+        };
+        self.push(token_id, start, j);
         self.i = j;
     }
 
@@ -959,7 +1006,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             if j < self.source.len() {
                 validate_unicode_escapes(self.source, quote + 1, j, &mut self.errors);
                 validate_octal_escapes(self.source, quote + 1, j, &mut self.warnings);
-                self.push(id("T_CONSTANT_ENCAPSED_STRING"), start, j + 1);
+                self.push(tok::T_CONSTANT_ENCAPSED_STRING, start, j + 1);
                 self.i = j + 1;
                 return;
             }
@@ -992,7 +1039,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         let j = label_source + opening.len;
         self.heredoc_label = opening.label.to_vec();
         self.nowdoc = opening.nowdoc;
-        self.push(id("T_START_HEREDOC"), start, j);
+        self.push(tok::T_START_HEREDOC, start, j);
         self.i = j;
         self.mode = Mode::Heredoc;
         self.heredoc_at_line = true;
@@ -1005,10 +1052,10 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             message: "syntax error, unexpected token \"<<\"".into(),
         });
         if start < opener {
-            self.push(id("T_STRING"), start, opener);
+            self.push(tok::T_STRING, start, opener);
             self.i = opener;
         } else {
-            self.push(id("T_SL"), start, start + 2);
+            self.push(tok::T_SL, start, start + 2);
             self.i = start + 2;
         }
     }
@@ -1071,7 +1118,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 validate_unicode_escapes(self.source, start, stop, &mut self.errors);
                 validate_octal_escapes(self.source, start, stop, &mut self.warnings);
             }
-            self.push(id("T_ENCAPSED_AND_WHITESPACE"), start, stop);
+            self.push(tok::T_ENCAPSED_AND_WHITESPACE, start, stop);
         }
         self.i = stop;
         if self.i >= self.source.len() {
@@ -1082,7 +1129,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             2 => self.scan_simple_interpolation(),
             3 => self.scan_dollar_brace(),
             4 => {
-                self.push(id("T_CURLY_OPEN"), self.i, self.i + 1);
+                self.push(tok::T_CURLY_OPEN, self.i, self.i + 1);
                 self.push_interpolation_frame(1);
             }
             _ => {}
@@ -1093,7 +1140,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
     fn finish_string(&mut self) {
         if self.mode == Mode::Heredoc {
             let length = heredoc_closing(&self.source[self.i..], &self.heredoc_label, HeredocProfile::Zend).map_or(0, |(len, _)| len);
-            self.push(id("T_END_HEREDOC"), self.i, self.i + length);
+            self.push(tok::T_END_HEREDOC, self.i, self.i + length);
             self.i += length;
         } else {
             self.push_byte(self.i);
@@ -1108,7 +1155,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         let start = self.i;
         let mut j = start + 1;
         j += identifier_len(&self.source[j..]);
-        self.push(id("T_VARIABLE"), start, j);
+        self.push(tok::T_VARIABLE, start, j);
         self.i = j;
         if self.source.get(self.i) == Some(&b'[') {
             self.push_byte(self.i);
@@ -1121,7 +1168,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             && self.source.get(self.i + 2) == Some(&b'>')
             && self.source.get(self.i + 3).is_some_and(|b| is_label_start(*b))
         {
-            self.push(id("T_NULLSAFE_OBJECT_OPERATOR"), self.i, self.i + 3);
+            self.push(tok::T_NULLSAFE_OBJECT_OPERATOR, self.i, self.i + 3);
             self.i += 3;
             self.scan_interpolation_property();
             return;
@@ -1130,7 +1177,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             && self.source.get(self.i + 1) == Some(&b'>')
             && self.source.get(self.i + 2).is_some_and(|b| is_label_start(*b))
         {
-            self.push(id("T_OBJECT_OPERATOR"), self.i, self.i + 2);
+            self.push(tok::T_OBJECT_OPERATOR, self.i, self.i + 2);
             self.i += 2;
             self.scan_interpolation_property();
         }
@@ -1141,7 +1188,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
         let name = self.i;
         let mut k = self.i;
         k += identifier_len(&self.source[k..]);
-        self.push(id("T_STRING"), name, k);
+        self.push(tok::T_STRING, name, k);
         self.i = k;
     }
 
@@ -1166,7 +1213,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 let variable = self.i;
                 let mut k = self.i + 1;
                 k += identifier_len(&self.source[k..]);
-                self.push(id("T_VARIABLE"), variable, k);
+                self.push(tok::T_VARIABLE, variable, k);
                 self.i = k;
                 first = false;
                 continue;
@@ -1184,7 +1231,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 // Zend matches `{LNUM}|{HNUM}|{BNUM}|{ONUM}` only, then lexes the remaining
                 // bytes as a label: `"$a[1e3]"` is T_NUM_STRING "1" + T_STRING "e3".
                 let k = scan_offset_number(self.source, self.i);
-                self.push(id("T_NUM_STRING"), number, k);
+                self.push(tok::T_NUM_STRING, number, k);
                 self.i = k;
                 first = false;
                 continue;
@@ -1193,7 +1240,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                 let name = self.i;
                 let mut k = self.i + 1;
                 k += identifier_len(&self.source[k..]);
-                self.push(id("T_STRING"), name, k);
+                self.push(tok::T_STRING, name, k);
                 self.i = k;
                 first = false;
                 continue;
@@ -1203,7 +1250,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                     pos: self.i,
                     message: "syntax error, unexpected string content \"\", expecting \"-\" or identifier or variable or number".into(),
                 });
-                self.push(id("T_ENCAPSED_AND_WHITESPACE"), self.i, self.i);
+                self.push(tok::T_ENCAPSED_AND_WHITESPACE, self.i, self.i);
                 return;
             }
             if is_bad_character(c) {
@@ -1218,7 +1265,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
                     ", expecting \"]\""
                 });
                 self.errors.push(LexError { pos: self.i, message });
-                self.push(id("T_BAD_CHARACTER"), self.i, self.i + 1);
+                self.push(tok::T_BAD_CHARACTER, self.i, self.i + 1);
                 self.i += 1;
                 first = false;
                 continue;
@@ -1242,8 +1289,8 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             && is_label_start(self.source[name_start])
             && matches!(self.source.get(j), Some(b'[' | b'}'))
         {
-            self.push(id("T_DOLLAR_OPEN_CURLY_BRACES"), start, start + 2);
-            self.push(id("T_STRING_VARNAME"), name_start, j);
+            self.push(tok::T_DOLLAR_OPEN_CURLY_BRACES, start, start + 2);
+            self.push(tok::T_STRING_VARNAME, name_start, j);
             self.i = j;
             if self.source.get(j) == Some(&b'}') {
                 self.push_byte(j);
@@ -1253,7 +1300,7 @@ impl<'a, C: CompilerOutput> Lexer<'a, C> {
             }
             return;
         }
-        self.push(id("T_DOLLAR_OPEN_CURLY_BRACES"), start, start + 2);
+        self.push(tok::T_DOLLAR_OPEN_CURLY_BRACES, start, start + 2);
         self.push_interpolation_frame(2);
     }
 
@@ -1426,9 +1473,9 @@ pub(crate) fn scan_compiler<C: CompilerOutput>(
 /// the `token` noun. `T_EXIT` is always spelled `exit`.
 fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String {
     let text = &source[token.pos..token.pos + token.len];
-    if token.id == id("T_STRING") {
+    if token.id == tok::T_STRING {
         format!("syntax error, unexpected identifier \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_EXIT") {
+    } else if token.id == tok::T_EXIT {
         // Zend names T_EXIT `exit` even when the source spells it `die`.
         format!("syntax error, unexpected token \"exit\", expecting {expected}")
     } else if token.id == id("T_LNUMBER") {
@@ -1503,7 +1550,7 @@ fn quoted_string_noun(text: &[u8]) -> (&'static str, &[u8]) {
 
 /// Returns whether a token belongs to PHP's trivia set for halt-compiler accounting.
 fn is_trivia(token_id: i64) -> bool {
-    [id("T_WHITESPACE"), id("T_COMMENT"), id("T_DOC_COMMENT"), id("T_OPEN_TAG")].contains(&token_id)
+    [tok::T_WHITESPACE, tok::T_COMMENT, tok::T_DOC_COMMENT, tok::T_OPEN_TAG].contains(&token_id)
 }
 
 /// Returns whether a token ID makes a following `__halt_compiler` an ordinary member/name.
@@ -1511,7 +1558,7 @@ fn is_trivia(token_id: i64) -> bool {
 /// `::` is deliberately absent: PHP 8.5 rejects `X::__halt_compiler` as a class-constant
 /// name, while `$o->__halt_compiler` and `namespace\__halt_compiler` are valid names.
 fn is_halt_name_separator(token_id: i64) -> bool {
-    token_id == id("T_OBJECT_OPERATOR") || token_id == id("T_NULLSAFE_OBJECT_OPERATOR")
+    token_id == tok::T_OBJECT_OPERATOR || token_id == tok::T_NULLSAFE_OBJECT_OPERATOR
 }
 
 /// Returns whether a byte is a bad character in PHP code.
