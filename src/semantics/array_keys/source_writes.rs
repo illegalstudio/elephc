@@ -563,23 +563,39 @@ fn source_literal_nullness(expr: &Expr) -> Option<bool> {
 
 /// Selects the expression PHP returns from a statically decided lazy value.
 fn statically_selected_source_expr(expr: &Expr) -> Option<&Expr> {
+    statically_selected_source_expr_with_assignments(expr, true)
+}
+
+/// Selects a lazy key branch without treating an evaluated assignment as key identity.
+fn statically_selected_lazy_key_expr(expr: &Expr) -> Option<&Expr> {
+    statically_selected_source_expr_with_assignments(expr, false)
+}
+
+/// Selects one executed lazy branch under the requested assignment-proof policy.
+fn statically_selected_source_expr_with_assignments(
+    expr: &Expr,
+    allow_assignments: bool,
+) -> Option<&Expr> {
     match &expr.kind {
-        ExprKind::Assignment { value, .. } => statically_selected_source_expr(value),
+        ExprKind::Assignment { value, .. } if allow_assignments => {
+            statically_selected_source_expr_with_assignments(value, allow_assignments)
+        }
+        ExprKind::Assignment { .. } => None,
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => match source_literal_truthiness(condition)? {
-            true => statically_selected_source_expr(then_expr),
-            false => statically_selected_source_expr(else_expr),
+            true => statically_selected_source_expr_with_assignments(then_expr, allow_assignments),
+            false => statically_selected_source_expr_with_assignments(else_expr, allow_assignments),
         },
         ExprKind::ShortTernary { value, default } => match source_literal_truthiness(value)? {
-            true => statically_selected_source_expr(value),
-            false => statically_selected_source_expr(default),
+            true => statically_selected_source_expr_with_assignments(value, allow_assignments),
+            false => statically_selected_source_expr_with_assignments(default, allow_assignments),
         },
         ExprKind::NullCoalesce { value, default } => match source_literal_nullness(value)? {
-            true => statically_selected_source_expr(default),
-            false => statically_selected_source_expr(value),
+            true => statically_selected_source_expr_with_assignments(default, allow_assignments),
+            false => statically_selected_source_expr_with_assignments(value, allow_assignments),
         },
         _ => Some(expr),
     }
@@ -4648,12 +4664,9 @@ fn planned_mixed_array_fact(
                 value,
             ),
             ArrayEntry::Keyed(key, value) => {
-                let folded = crate::optimize::fold_array_key_for_source(key, profile)?;
-                let key = match crate::types::literal_array_key(&folded, profile)? {
-                    StringKey::Integer(value) => ArrayKeyFact::Integer(value),
-                    StringKey::String(value) => {
-                        ArrayKeyFact::String(String::from_utf8_lossy(value).into_owned())
-                    }
+                let key = match crate::optimize::fold_array_key_for_source(key, profile) {
+                    Some(folded) => literal_array_key_fact(&folded, profile)?,
+                    None => lazy_source_array_key(key, profile)?,
                 };
                 (key, value)
             }
@@ -4671,7 +4684,18 @@ fn planned_mixed_array_fact(
 /// lookup is then a known missing slot whose nested write still receives array-key validation.
 fn source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
     let selected = statically_selected_source_expr(expr)?;
-    match crate::types::literal_array_key(selected, profile)? {
+    literal_array_key_fact(selected, profile)
+}
+
+/// Selects a lazy key without treating an evaluated assignment as a compile-time key proof.
+fn lazy_source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
+    let selected = statically_selected_lazy_key_expr(expr)?;
+    literal_array_key_fact(selected, profile)
+}
+
+/// Converts one literal key into the exact source fact shared by both planning paths.
+fn literal_array_key_fact(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
+    match crate::types::literal_array_key(expr, profile)? {
         StringKey::Integer(value) => Some(ArrayKeyFact::Integer(value)),
         StringKey::String(value) => Some(ArrayKeyFact::String(
             String::from_utf8_lossy(value).into_owned(),

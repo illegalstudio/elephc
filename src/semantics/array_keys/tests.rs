@@ -135,7 +135,13 @@ fn strict_array_key_source_validation_tracks_negative_append_keys() {
 #[test]
 fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     let _profile = select_php_version(PhpVersion::Php82);
-    for key in ["-2", "true ? -2 : 9", "false ?: -2", "null ?? -2"] {
+    for key in [
+        "-2",
+        "true ? -2 : 9",
+        "true ? -2 : intval(9)",
+        "false ?: -2",
+        "null ?? -2",
+    ] {
         let accepted = format!(
             "<?php $values = [({key}) => [], 'ab']; $values[0][false] = 'x';"
         );

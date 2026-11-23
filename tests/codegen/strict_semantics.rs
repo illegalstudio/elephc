@@ -37,6 +37,20 @@ echo $values[-1];
     );
 }
 
+/// A skipped lazy branch keeps PHP 8.2's negative literal append cursor.
+#[test]
+fn test_strict_array_keys_php82_lazy_key_uses_versioned_append() {
+    let source = r#"<?php
+$values = [(true ? -2 : intval(9)) => [], 'ab'];
+$values[0][false] = 'x';
+echo $values[0];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--php-version", "8.2", "--strict-array-keys"]),
+        "xb"
+    );
+}
+
 /// Defers magic constants and imported class names until their canonical resolution passes.
 #[test]
 fn test_strict_array_keys_defers_unresolved_literal_keys() {
