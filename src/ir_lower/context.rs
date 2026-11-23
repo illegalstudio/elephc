@@ -186,6 +186,10 @@ pub(crate) struct DeferredObjectParamCheck {
     /// For a by-reference parameter, the caller local whose CURRENT value is checked: PHP
     /// binds the reference first and reads it at the boundary, after later arguments ran.
     pub reference_local: Option<String>,
+    /// A non-reference declared `callable` parameter, whose binding check otherwise runs on
+    /// callee entry: the caller runs it here when another parameter of the same call is
+    /// checked at the call site, so the first invalid parameter is the one reported.
+    pub callable: bool,
 }
 
 /// Keeps one call's evaluation owners distinct from nested expression lowering.

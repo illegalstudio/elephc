@@ -364,9 +364,7 @@ pub(crate) fn guard_declared_callable_variadic_entry(
 
 /// Checks a value returned through a declared `callable` (or a union with `callable`) before
 /// it leaves the function, raising php's `f(): Return value must be of type T, U returned`
-/// `TypeError`. The value keeps its owner; the check reads a retained copy in a hidden temp.
-/// An owning temporary (a property read, a call result) is pinned across the check, so the
-/// throw releases it; the ok path retires the pin without a release and the caller keeps it.
+/// `TypeError`.
 pub(crate) fn guard_declared_callable_return(
     ctx: &mut LoweringContext<'_, '_>,
     function: &str,
@@ -374,16 +372,37 @@ pub(crate) fn guard_declared_callable_return(
     return_type: &PhpType,
     span: Span,
 ) {
+    let prefix = format!(
+        "{function}(): Return value must be of type {}, ",
+        diagnostic_type(return_type)
+    );
+    guard_declared_callable_value(ctx, value, return_type, prefix, " returned", span);
+}
+
+/// Checks `value` against a declared `callable` (or a union with `callable`), raising a
+/// `TypeError` whose message is `prefix`, the value's `get_debug_type()` spelling, then `suffix`.
+///
+/// The value keeps its owner; the check reads a retained copy in a hidden temp. An owning
+/// temporary (a property read, a call result) is pinned across the check, so the throw
+/// releases it; the ok path retires the pin without a release and the caller keeps it.
+pub(crate) fn guard_declared_callable_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared: &PhpType,
+    prefix: String,
+    suffix: &str,
+    span: Span,
+) {
     let value_type = ctx.builder.value_php_type(value.value);
     let temp = ctx.declare_hidden_temp(value_type.clone());
     let copy = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     store_value_into_temp(ctx, &temp, value_type, copy, span);
-    let returned = Expr::new(ExprKind::Variable(temp), span);
-    let Some(accepted) = accepts_type(return_type, &returned, span) else { return; };
+    let checked = Expr::new(ExprKind::Variable(temp), span);
+    let Some(accepted) = accepts_type(declared, &checked, span) else { return; };
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     let accepted = lower_expr(ctx, &accepted);
-    let ok = ctx.builder.create_named_block("callable.return.ok", Vec::new());
-    let bad = ctx.builder.create_named_block("callable.return.bad", Vec::new());
+    let ok = ctx.builder.create_named_block("callable.value.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("callable.value.bad", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: accepted.value, then_target: ok, then_args: Vec::new(),
         else_target: bad, else_args: Vec::new(),
@@ -391,11 +410,8 @@ pub(crate) fn guard_declared_callable_return(
     ctx.builder.position_at_end(bad);
     let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
     let message = concat(
-        literal(format!(
-            "{function}(): Return value must be of type {}, ",
-            diagnostic_type(return_type)
-        )),
-        concat(runtime_debug_type(&returned, span), literal(" returned".to_string()), span),
+        literal(prefix),
+        concat(runtime_debug_type(&checked, span), literal(suffix.to_string()), span),
         span,
     );
     throw_message(ctx, "TypeError", message, span);

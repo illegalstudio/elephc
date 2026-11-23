@@ -608,3 +608,74 @@ echo get_class($g), "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A non-reference `callable` parameter, checked on callee entry, keeps PHP's parameter order
+/// with the parameters the caller checks itself: `cT(callable $c, ?T $b)` with both invalid
+/// reports `$c`, by value or with `$b` by reference, positional or named, on a method too.
+#[test]
+fn test_callable_parameter_checks_keep_parameter_order() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T {}
+function lenOf(string $s): int { return strlen($s); }
+function m(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string {
+    $text = $e->getMessage();
+    $at = strpos($text, ', called in ');
+    return $at === false ? $text : substr($text, 0, $at) . " @" . substr($text, strrpos($text, " ") + 1);
+}
+function cT(callable $c, ?T $b) { echo "cT ", $c("ab"), "\n"; }
+function Tc(?T $b, callable $c) { echo "Tc ", $c("abc"), "\n"; }
+function cRT(callable $c, ?T &$b) { echo "cRT ", $c("abcd"), "\n"; }
+function only(callable $c, int $n) { echo "only ", $c("x"), "\n"; }
+class K { public function run(callable $c, ?T $b) { echo "run ", $c("k"), "\n"; } }
+$bad = m("nope");
+$fn = m("lenOf");
+$str = m("str");
+$nul = m(null);
+try { cT($bad, $str); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { cT(m("nope"), m("str")); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { cT($bad, $nul); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { cT($fn, $str); } catch (TypeError $e) { echo msg($e), "\n"; }
+cT($fn, $nul);
+cT(m(fn($s) => strtoupper($s)), m(new T()));
+try { Tc($str, $bad); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { Tc($nul, $bad); } catch (TypeError $e) { echo msg($e), "\n"; }
+Tc($nul, $fn);
+$x = m("str");
+try { cRT($bad, $x); } catch (TypeError $e) { echo msg($e), "\n"; }
+$y = m(null);
+cRT($fn, $y);
+try { cT(b: $str, c: $bad); } catch (TypeError $e) { echo msg($e), "\n"; }
+only($fn, 2);
+$k = new K();
+try { $k->run($bad, $str); } catch (TypeError $e) { echo msg($e), "\n"; }
+$k->run($fn, $nul);
+$z = m("nope");
+try { cT($z, $z = m("str")); } catch (TypeError $e) { echo msg($e), "\n"; }
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "cT(): Argument #1 ($c) must be of type callable, string given @19\n",
+            "cT(): Argument #1 ($c) must be of type callable, string given @20\n",
+            "cT(): Argument #1 ($c) must be of type callable, string given @21\n",
+            "cT(): Argument #2 ($b) must be of type ?T, string given @22\n",
+            "cT 2\n",
+            "cT AB\n",
+            "Tc(): Argument #1 ($b) must be of type ?T, string given @25\n",
+            "Tc(): Argument #2 ($c) must be of type callable, string given @26\n",
+            "Tc 3\n",
+            "cRT(): Argument #1 ($c) must be of type callable, string given @29\n",
+            "cRT 4\n",
+            "cT(): Argument #1 ($c) must be of type callable, string given @32\n",
+            "only 1\n",
+            "K::run(): Argument #1 ($c) must be of type callable, string given @35\n",
+            "run 1\n",
+            "cT(): Argument #1 ($c) must be of type callable, string given @38\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
