@@ -30,29 +30,43 @@ fn reflection_guarded_properties_lower_on_every_target() {
 /// Scalar parameter defaults and guarded by-value properties retain their values and owners.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-#[test]
-fn reflection_guarded_properties_native_preserve_defaults_and_owners() {
+fn verify_reflection_guarded_properties_native(coercions: bool, optimize: bool) {
     let reflection_source = SOURCE.split("class GuardedByValueBox").next().unwrap();
     let owned_source = SOURCE.replace("'GuardedByValueBox', 'vv'", "'GuardedByValueBox', str_repeat('v', 2)");
-    for coercions in [false, true] {
-        for optimize in [false, true] {
-            for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
-                let sources = if coercions && mode != SourceMode::Internal {
-                    vec![SOURCE, owned_source.as_str()]
-                } else { vec![reflection_source] };
-                for source in sources {
-                    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, coercions);
-                    let module = super::semantic_sources::lower(source, Target::detect_host(), profile, optimize, mode);
-                    let output = super::native_module::run(&module);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    assert!(output.status.success(), "{:?}: {:?}; {stderr}", output.status, String::from_utf8_lossy(&output.stdout));
-                    let expected = if coercions && mode != SourceMode::Internal {
-                        "GuardedReflectionSubject:tag|ok|Bvv|K|"
-                    } else { "GuardedReflectionSubject:tag|ok|" };
-                    assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "coercions={coercions}, mode={mode:?}: {stderr}");
-                    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "coercions={coercions}, optimize={optimize}, mode={mode:?}: {stderr}");
-                }
-            }
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, coercions);
+    for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+        let (sources, expected) = if coercions && mode != SourceMode::Internal {
+            (vec![SOURCE, owned_source.as_str()], "GuardedReflectionSubject:tag|ok|Bvv|K|")
+        } else { (vec![reflection_source], "GuardedReflectionSubject:tag|ok|") };
+        for source in sources {
+            let module = super::semantic_sources::lower(source, Target::detect_host(), profile, optimize, mode);
+            let output = super::native_module::run(&module);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{:?}: {:?}; {stderr}", output.status, String::from_utf8_lossy(&output.stdout));
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "coercions={coercions}, mode={mode:?}: {stderr}");
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "coercions={coercions}, optimize={optimize}, mode={mode:?}: {stderr}");
         }
     }
+}
+
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+mod native_profiles {
+    use super::verify_reflection_guarded_properties_native;
+
+    /// Runs the property and default checks without strict coercions or optimization.
+    #[test]
+    fn permissive_unoptimized() { verify_reflection_guarded_properties_native(false, false); }
+
+    /// Runs the property and default checks without strict coercions, with optimization.
+    #[test]
+    fn permissive_optimized() { verify_reflection_guarded_properties_native(false, true); }
+
+    /// Runs the strict coercion property and default checks without optimization.
+    #[test]
+    fn strict_unoptimized() { verify_reflection_guarded_properties_native(true, false); }
+
+    /// Runs the strict coercion property and default checks with optimization.
+    #[test]
+    fn strict_optimized() { verify_reflection_guarded_properties_native(true, true); }
 }
