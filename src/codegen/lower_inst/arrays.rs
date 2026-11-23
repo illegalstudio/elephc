@@ -1389,7 +1389,8 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     };
     // A promotable write normalizes a boxed key itself (numeric strings, string hash keys).
     let promotable_write = inst.immediate == Some(Immediate::PromotableArray)
-        && promotable_scalar_element(&elem_ty)
+        && (promotable_scalar_element(&elem_ty)
+            || matches!(elem_ty.codegen_repr(), PhpType::Never | PhpType::Void))
         && promotable_key;
     if !promotable_write {
         require_integer_like_index(ctx.value_php_type(index)?, inst)?;

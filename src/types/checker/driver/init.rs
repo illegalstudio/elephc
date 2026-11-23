@@ -132,6 +132,8 @@ impl Checker {
             proof_scope_invalidations: Vec::new(),
             body_exit_proofs: None,
             packed_loop_counter: None,
+            filled_array_facts: None,
+            nonnull_array_reads: None,
             eval_barrier_active: false,
             eval_native_callables_reachable: false,
             flow_typed_returns: HashMap::new(),

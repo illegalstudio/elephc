@@ -79,6 +79,7 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        self.invalidate_filled_arrays(stmt);
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
                 if self.check_empty_indexed_nested_append(stmts, env)? {

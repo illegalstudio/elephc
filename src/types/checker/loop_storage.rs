@@ -324,7 +324,8 @@ fn apply_array_write_evidence(
         });
         let array_is_still_empty =
             matches!(&current, PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never));
-        let forces_hash = write.index.is_some_and(|index| {
+        let keyed_candidate = promotable_candidates.keyed(write.name);
+        let forces_hash = !keyed_candidate && write.index.is_some_and(|index| {
             let literal_string_key = matches!(key_type.as_ref(), Some(PhpType::Str))
                 && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null);
             // The same rule `check_array_assign` applies, and it has to be applied HERE too: this
@@ -354,8 +355,8 @@ fn apply_array_write_evidence(
         // run time instead), so this pass must not widen the loop's contract to `mixed` either.
         let promotable_keep = !forces_hash
             && promotable_candidates.contains(write.name)
-            && matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
-            && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar)
+            && matches!(&current, PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Float))
+            && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::TaggedScalar)
             && write.index.is_some_and(|index| {
                 !matches!(&index.kind, ExprKind::Variable(name) if foreach_keys.contains(name.as_str()))
                     && !crate::types::nonempty_array_key_stays_in_range(index)

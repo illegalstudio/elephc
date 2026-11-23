@@ -235,6 +235,10 @@ pub(super) fn stabilize_loop_storage(
             .push(span);
     }
     let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
+    // A later walk of this same loop may produce fewer contracts than an earlier one (a filled
+    // array stays typed instead of widening). Remove the stale entries before recording the
+    // latest analysis, or EIR applies a contract the checker has since disproved.
+    recorded.clear();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);

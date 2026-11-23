@@ -24,6 +24,7 @@ use crate::parser::ast::{
 };
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::filled_arrays::NonnullArrayReads;
 use super::super::{Checker, SavedNarrowingOrigin};
 use super::loop_entry::stabilize_loop_storage;
 
@@ -952,6 +953,34 @@ impl Checker {
                 update,
                 body,
             } => {
+                let saved_nonnull_reads = self.nonnull_array_reads.take();
+                let mut wraps_matching_loop = false;
+                if let Some(fact) = self.filled_array_facts.clone() {
+                    let matches_this_loop = Self::loop_matches_fill_fact(
+                        init.as_deref(),
+                        condition.as_ref(),
+                        update.as_deref(),
+                        &fact,
+                    );
+                    wraps_matching_loop = matches!(
+                        body.as_slice(),
+                        [Stmt {
+                            kind: StmtKind::For { init, condition, update, .. },
+                            ..
+                        }] if Self::loop_matches_fill_fact(
+                            init.as_deref(),
+                            condition.as_ref(),
+                            update.as_deref(),
+                            &fact,
+                        )
+                    );
+                    if matches_this_loop || wraps_matching_loop {
+                        self.nonnull_array_reads = Some(NonnullArrayReads {
+                            counter: fact.counter,
+                            arrays: fact.arrays,
+                        });
+                    }
+                }
                 if let Some(s) = init {
                     // The initializer runs exactly once, unconditionally, whenever the `for`
                     // statement itself runs: `for ($i = 0; …)` binds `$i` exactly like `$i = 0;`
@@ -993,23 +1022,56 @@ impl Checker {
                     .packed_loop_counter
                     .as_ref()
                     .map(|counter| counter.name.clone());
-                stabilize_loop_storage(
-                    self,
-                    stmt.span,
-                    body,
-                    update.as_deref(),
-                    condition.as_ref(),
-                    env,
-                    packed_counter_name.as_deref(),
-                );
+                // An outer loop whose body is exactly one matching inner loop has nothing of
+                // its own to stabilize: running the analysis would widen the filled arrays
+                // from the inner read-modify-write before that inner loop can use the fact.
+                if !wraps_matching_loop {
+                    stabilize_loop_storage(
+                        self,
+                        stmt.span,
+                        body,
+                        update.as_deref(),
+                        condition.as_ref(),
+                        env,
+                        packed_counter_name.as_deref(),
+                    );
+                } else {
+                    // A contract from an earlier walk of this outer loop would still be applied
+                    // by EIR even though this walk proved the inner loop keeps the arrays raw.
+                    self.loop_storage_types
+                        .remove(&(self.current_loop_storage_scope.clone(), stmt.span));
+                }
                 super::loop_entry::prepare_for_update_reads(self, update.as_deref(), env);
                 // The rest of the arm re-walks this same body, so the counter stays registered
                 // through it — the storage decision must not come out differently on the second
                 // walk than on the first — and is restored on every exit, error paths included.
                 let outcome = self.check_for_tail(condition.as_ref(), update.as_deref(), body, env);
+                self.nonnull_array_reads = saved_nonnull_reads;
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 self.packed_loop_counter = saved_packed_counter;
+                if outcome.is_ok() && self.local_conditional_depth <= 1 {
+                    if let Some(fact) = Self::fill_loop_fact(
+                        init.as_deref(),
+                        condition.as_ref(),
+                        update.as_deref(),
+                        body,
+                    ) {
+                        self.record_fill_write_sites(body, &fact.counter);
+                        // The fill loop's own entry contract must carry the concrete element
+                        // type: a stale loop-storage contract otherwise leaves the EIR slot
+                        // boxed before the first raw write can run.
+                        for array in &fact.arrays {
+                            if let Some(ty @ PhpType::Array(_)) = env.get(array) {
+                                self.loop_storage_types
+                                    .entry((self.current_loop_storage_scope.clone(), stmt.span))
+                                    .or_default()
+                                    .insert(array.clone(), ty.clone());
+                            }
+                        }
+                        self.filled_array_facts = Some(fact);
+                    }
+                }
                 outcome
             }
             StmtKind::Throw(expr) => {

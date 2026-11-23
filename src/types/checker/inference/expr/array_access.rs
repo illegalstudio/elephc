@@ -66,6 +66,13 @@ impl Checker {
                 Ok(PhpType::Str)
             }
             PhpType::Array(elem_ty) => {
+                if **elem_ty != PhpType::Never {
+                    if let ExprKind::Variable(name) = &array.kind {
+                        if self.nonnull_array_read(name, index) {
+                            return Ok((**elem_ty).clone());
+                        }
+                    }
+                }
                 if normalized_idx_ty != PhpType::Int {
                     // A candidate `array<int>` local read under a boxed key reads as `?int`,
                     // the unboxed nullable integer its read already produces, instead of `mixed`:
@@ -73,7 +80,10 @@ impl Checker {
                     // and stores PHP's `null`), where `mixed` would box every slot.
                     if let ExprKind::Variable(name) = &array.kind {
                         if self.promotable_array_element_read(name, elem_ty, &idx_ty) {
-                            return Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]));
+                            return Ok(self.normalize_union_type(vec![
+                                (**elem_ty).clone(),
+                                PhpType::Void,
+                            ]));
                         }
                     }
                     // PHP allows string keys on indexed arrays: the array

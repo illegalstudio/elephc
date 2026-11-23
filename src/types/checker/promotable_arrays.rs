@@ -62,10 +62,10 @@ const SCOPE_BUILTINS: &[&str] = &["eval", "extract", "compact", "get_defined_var
 
 /// Returns whether an element type can stay raw in a run-time promoted hash.
 ///
-/// Limited to `int`: its reads already produce the nullable integer representation, so a key
-/// that misses still reads as PHP's `null`, and its slots are one word wide.
+/// `int` and `float` both fit one word: their reads produce the nullable scalar representation,
+/// so a key that misses still reads as PHP's `null`, and a promoted hash keeps the same slots.
 pub(crate) fn promotable_element(elem_ty: &PhpType) -> bool {
-    elem_ty.codegen_repr() == PhpType::Int
+    matches!(elem_ty.codegen_repr(), PhpType::Int | PhpType::Float)
 }
 
 /// Returns whether a boxed or counter key type reads a promotable local as its element type.
@@ -74,8 +74,8 @@ fn promotable_read_key(idx_ty: &PhpType) -> bool {
 }
 
 impl Checker {
-    /// Returns whether `$array[index] = value` keeps the candidate local's `array<int>` storage
-    /// and lets codegen promote it to a hash only if the key skips a slot at run time.
+    /// Returns whether `$array[index] = value` keeps the candidate local's `array<int|float>`
+    /// storage and lets codegen promote it to a hash only if the key skips a slot at run time.
     pub(crate) fn promotable_array_write(
         &self,
         array: &str,
@@ -86,6 +86,11 @@ impl Checker {
         index_is_foreach_key: bool,
         val_ty: &PhpType,
     ) -> bool {
+        let elem_ty = if matches!(elem_ty, PhpType::Never) {
+            val_ty
+        } else {
+            elem_ty
+        };
         if !self.promotable_array_candidates.contains(array)
             || self.ref_aliased_locals.contains(array)
             || !promotable_element(elem_ty)
@@ -689,15 +694,16 @@ impl Checker {
     }
 }
 
-/// Returns whether an element write's value may be an integer, the only value a promotable
-/// `array<int>` write stores: a string, float, bool, `null` or array literal, a concatenation and
-/// a cast to anything but `int` never are. Every other expression stays eligible, because its
-/// type is not syntactic and an element copy (`$a[$j + 1] = $a[$j]`) must keep the view.
-fn value_may_stay_int(value: &Expr) -> bool {
+/// Returns whether an element write's value may stay a raw scalar slot.
+///
+/// `int` and `float` both fit one word; a string, bool, `null` or array literal, a concatenation
+/// and a cast that produces a non-numeric value never do. Every other expression stays eligible
+/// because its type is not syntactic; the checker still rejects a write whose actual type cannot
+/// share the array's element type.
+fn value_may_stay_scalar(value: &Expr) -> bool {
     !matches!(
         &value.kind,
         ExprKind::StringLiteral(_)
-            | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null
             | ExprKind::ArrayLiteral(_)
@@ -705,7 +711,7 @@ fn value_may_stay_int(value: &Expr) -> bool {
             | ExprKind::ArrayLiteralMixed(_)
             | ExprKind::BinaryOp { op: BinOp::Concat, .. }
             | ExprKind::Cast {
-                target: CastType::String | CastType::Float | CastType::Bool | CastType::Array | CastType::Object,
+                target: CastType::String | CastType::Bool | CastType::Array | CastType::Object,
                 ..
             }
     )
@@ -717,7 +723,7 @@ struct Scan {
     /// Locals written through a statement-form element write or append.
     written: HashSet<String>,
     /// Locals with an element write that can make a candidate promotable: its key may skip a
-    /// slot (`Scan::key_may_skip`) and its value may stay an integer (`value_may_stay_int`).
+    /// slot (`Scan::key_may_skip`) and its value may stay a raw scalar (`value_may_stay_scalar`).
     keyed: HashSet<String>,
     /// `foreach` key variables, in source order: a name stays here after its loop until it is
     /// assigned again, exactly as `Checker::is_foreach_key` keeps it.
@@ -766,7 +772,7 @@ impl Scan {
         match &stmt.kind {
             StmtKind::ArrayAssign { array, index, value } => {
                 self.written.insert(array.clone());
-                if self.key_may_skip(index) && value_may_stay_int(value) {
+                if self.key_may_skip(index) && value_may_stay_scalar(value) {
                     self.keyed.insert(array.clone());
                 }
                 self.expr(index);

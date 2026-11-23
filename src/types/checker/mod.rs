@@ -29,6 +29,7 @@ pub(crate) mod clone_override_storage;
 pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod element_values;
+mod filled_arrays;
 mod extern_decl;
 mod functions;
 mod generic_bounds;
@@ -420,6 +421,10 @@ pub(crate) struct Checker {
     /// greater depth may be skipped and is not covered. `Some` only ever names a loop whose body
     /// also has no `continue` to skip the write with, and no second write to the counter.
     pub(crate) packed_loop_counter: Option<packed_counter::PackedLoopCounter>,
+    /// Arrays a preceding contiguous fill loop materialized, if the fact still holds.
+    pub(crate) filled_array_facts: Option<filled_arrays::FilledArrayFact>,
+    /// Non-null element reads active in the loop consuming `filled_array_facts`.
+    pub(crate) nonnull_array_reads: Option<filled_arrays::NonnullArrayReads>,
     /// Whether the active local statement stream has crossed an `eval()` call.
     ///
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because

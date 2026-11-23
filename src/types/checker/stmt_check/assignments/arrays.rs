@@ -125,9 +125,11 @@ pub(super) fn check_array_assign(
         // tag-dispatch, and pinning them to an `Int` hash key here would be a lie. The counter of
         // the `for` loop this write runs directly in IS bounded — it starts at 0 and advances one
         // slot per iteration — so `for ($i = 0; …; $i++) { $a[$i] = … }` keeps packed storage.
+        let keyed_candidate = checker.promotable_array_candidates.keyed(array);
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
+                && !keyed_candidate
                 && (static_array_key_forces_hash_storage(index)
                     || (matches!(normalized_idx_ty, PhpType::Int)
                         && !index_is_foreach_key
@@ -161,6 +163,9 @@ pub(super) fn check_array_assign(
                 && nonempty_array_key_forces_hash_storage(index));
         if promotable {
             checker.record_promotable_array_local(array);
+            if matches!(elem_ty.as_ref(), PhpType::Never) {
+                env.insert(array.to_string(), PhpType::Array(Box::new(val_ty.clone())));
+            }
         }
         let skips_nonempty_slot = !forces_hash
             && !promotable
