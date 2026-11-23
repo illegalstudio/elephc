@@ -4636,20 +4636,32 @@ fn inferred_mixed_array_fact(
 fn planned_mixed_array_fact(
     entries: &[ArrayEntry], profile: SemanticProfile, mut value_fact: impl FnMut(&Expr) -> ValueFact,
 ) -> Option<ArrayFact> {
-    let planned = crate::types::plan_mixed_literal_array_entries(
-        entries,
-        crate::codegen_support::compile_php_version(),
-        profile,
-    )?;
+    let php_version = crate::codegen_support::compile_php_version();
     let mut array = ArrayFact::empty();
-    for entry in planned {
-        let key = match entry.key {
-            StringKey::Integer(value) => ArrayKeyFact::Integer(value),
-            StringKey::String(value) => {
-                ArrayKeyFact::String(String::from_utf8_lossy(value).into_owned())
+    for entry in entries {
+        let (key, value) = match entry {
+            ArrayEntry::Value(value) => (
+                ArrayKeyFact::Integer(crate::types::next_literal_array_index(
+                    array.maximum_integer,
+                    php_version,
+                )?),
+                value,
+            ),
+            ArrayEntry::Keyed(key, value) => {
+                let folded = crate::optimize::fold_scalar_literal_for_source(key, profile)?;
+                let key = match crate::types::literal_array_key(&folded, profile)? {
+                    StringKey::Integer(value) => ArrayKeyFact::Integer(value),
+                    StringKey::String(value) => {
+                        ArrayKeyFact::String(String::from_utf8_lossy(value).into_owned())
+                    }
+                };
+                (key, value)
             }
+            ArrayEntry::Spread(_)
+            | ArrayEntry::Reference(_)
+            | ArrayEntry::KeyReference(_, _) => return None,
         };
-        array.insert(key, value_fact(entry.value));
+        array.insert(key, value_fact(value));
     }
     Some(array)
 }

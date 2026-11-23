@@ -53,6 +53,23 @@ pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
 pub use output::with_hosted_output;
 
+/// Folds one source expression only when the optimizer will replace it with a scalar literal.
+pub(crate) fn fold_scalar_literal_for_source(
+    expr: &Expr, profile: elephc_semantics::SemanticProfile,
+) -> Option<Expr> {
+    let _profile = scoped_semantic_profile(profile);
+    let folded = fold::expr::fold_expr(expr.clone());
+    matches!(
+        folded.kind,
+        ExprKind::Null
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+    )
+    .then_some(folded)
+}
+
 #[cfg(test)]
 mod tests;
 

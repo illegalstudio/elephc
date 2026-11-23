@@ -135,14 +135,25 @@ fn strict_array_key_source_validation_tracks_negative_append_keys() {
 #[test]
 fn strict_array_key_source_validation_uses_versioned_literal_append_keys() {
     let _profile = select_php_version(PhpVersion::Php82);
-    let accepted = "<?php $values = [-2 => [], 'ab']; $values[0][false] = 'x';";
-    crate::semantics::validate_source(&parse(accepted, SourceMode::Php), profile())
-        .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+    for key in ["-2", "true ? -2 : 9", "false ?: -2", "null ?? -2"] {
+        let accepted = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[0][false] = 'x';"
+        );
+        crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
 
-    let rejected = "<?php $values = [-2 => [], 'ab']; $values[-1][false] = 'x';";
-    let error = crate::semantics::validate_source(&parse(rejected, SourceMode::Php), profile())
-        .expect_err("PHP 8.2 leaves the missing -1 slot as an array write parent");
-    assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+        let rejected = format!(
+            "<?php $values = [({key}) => [], 'ab']; $values[-1][false] = 'x';"
+        );
+        let error = crate::semantics::validate_source(&parse(&rejected, SourceMode::Php), profile())
+            .expect_err("PHP 8.2 leaves the missing -1 slot as an array write parent");
+        assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+    }
+
+    let runtime =
+        "<?php $values = [(($key = -2)) => [], 'ab']; $values[-1][false] = 'x';";
+    crate::semantics::validate_source(&parse(runtime, SourceMode::Php), profile())
+        .unwrap_or_else(|error| panic!("{runtime}: {error:?}"));
 }
 
 /// Target pruning cannot hide invalid keys written through proven local or property arrays.

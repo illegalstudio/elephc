@@ -38,7 +38,7 @@ pub(crate) fn plan_literal_array_entries(
 }
 
 /// Plans one spread-free mixed literal for consumers that already hold its entry slice.
-pub(crate) fn plan_mixed_literal_array_entries(
+fn plan_mixed_literal_array_entries(
     entries: &[ArrayEntry], php_version: crate::php_version::PhpVersion, profile: SemanticProfile,
 ) -> Option<Vec<LiteralArrayEntryPlan<'_>>> {
     let mut planned = Vec::with_capacity(entries.len());
@@ -53,6 +53,18 @@ pub(crate) fn plan_mixed_literal_array_entries(
     plan_literal_entry_sequence(planned, php_version, profile)
 }
 
+/// Returns the implicit key selected by PHP's versioned literal-array cursor.
+pub(crate) fn next_literal_array_index(
+    maximum: Option<i64>, php_version: crate::php_version::PhpVersion,
+) -> Option<i64> {
+    match maximum {
+        None => Some(0),
+        Some(maximum) if maximum < 0 && php_version < crate::php_version::PhpVersion::Php83 =>
+            Some(0),
+        Some(maximum) => maximum.checked_add(1),
+    }
+}
+
 /// Assigns versioned implicit keys to one already classified literal entry sequence.
 fn plan_literal_entry_sequence<'a>(
     entries: Vec<(Option<&'a Expr>, &'a Expr)>, php_version: crate::php_version::PhpVersion,
@@ -63,11 +75,7 @@ fn plan_literal_entry_sequence<'a>(
     for (key_expr, value) in entries {
         let key = match key_expr {
             Some(key) => super::literal_array_key(key, profile)?,
-            None => StringKey::Integer(match max_int {
-                None => 0,
-                Some(max) if max < 0 && php_version < crate::php_version::PhpVersion::Php83 => 0,
-                Some(max) => max.checked_add(1)?,
-            }),
+            None => StringKey::Integer(next_literal_array_index(max_int, php_version)?),
         };
         if let StringKey::Integer(key) = key { max_int = Some(max_int.map_or(key, |max| max.max(key))); }
         result.push(LiteralArrayEntryPlan { key, key_expr, value });
