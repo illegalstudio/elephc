@@ -236,3 +236,54 @@ impl EvalPropertyWriteWords {
     /// Stack space reserved for the record, including native stack alignment.
     pub const STACK_BYTES: usize = (size_of::<Self>() + 15) & !15;
 }
+
+/// Result storage written by the eval bridge.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct EvalResultWords {
+    /// Status-specific result kind.
+    pub kind: u32,
+    /// Boxed value returned by a successful operation.
+    pub value_cell: *mut core::ffi::c_void,
+    /// Error payload or boxed Throwable, interpreted by the caller's status.
+    pub error: *mut core::ffi::c_void,
+}
+
+impl EvalResultWords {
+    /// Offset of the kind field.
+    pub const KIND: usize = offset_of!(Self, kind);
+    /// Offset of the value cell.
+    pub const VALUE_CELL: usize = offset_of!(Self, value_cell);
+    /// Offset of the error payload.
+    pub const ERROR: usize = offset_of!(Self, error);
+    /// Size of the complete result record.
+    pub const BYTES: usize = size_of::<Self>();
+
+    /// Resets result storage to the bridge's normal-null placeholder.
+    pub fn clear(&mut self) {
+        self.kind = 0;
+        self.value_cell = core::ptr::null_mut();
+        self.error = core::ptr::null_mut();
+    }
+}
+
+/// Borrowed name bytes and optional boxed constant payload for one dynamic declaration.
+#[repr(C)]
+#[derive(Default)]
+pub struct EvalInventoryWords {
+    /// Start of the name bytes.
+    pub name_ptr: *const u8,
+    /// Length of the name bytes.
+    pub name_len: u64,
+    /// Optional borrowed constant cell.
+    pub value_cell: *mut core::ffi::c_void,
+}
+
+impl EvalInventoryWords {
+    /// Offset of the borrowed name pointer.
+    pub const NAME_PTR: usize = offset_of!(Self, name_ptr);
+    /// Offset of the name length.
+    pub const NAME_LEN: usize = offset_of!(Self, name_len);
+    /// Offset of the borrowed cell.
+    pub const VALUE_CELL: usize = offset_of!(Self, value_cell);
+}

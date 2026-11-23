@@ -49,6 +49,11 @@ impl WeakIdentityOwners {
         self.0.insert(identity, context);
     }
 
+    /// Borrows the address of the current context without extending its lifetime.
+    pub fn owner(&self, identity: u64) -> Option<usize> {
+        self.0.get(&identity).copied()
+    }
+
     /// Detaches the registered context before invoking its retirement hook.
     pub fn take(&mut self, identity: u64) -> Option<usize> {
         self.0.remove(&identity)

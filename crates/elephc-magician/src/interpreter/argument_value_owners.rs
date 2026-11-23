@@ -10,21 +10,13 @@
 //! - The originating boundary unlinks consumed records or retires still-pending owners.
 
 use super::*;
-use std::cell::{RefCell, UnsafeCell};
-use std::rc::Rc;
-use elephc_memoir::owner_layout::ArgumentPin;
+use elephc_memoir::runtime_argument_owner::RuntimeArgumentOwner;
 use crate::runtime_hooks::owner_frames::{RuntimeOwners, RuntimeOwnerSlot};
 use crate::value::RuntimeCell;
 
 /// Shared provenance for one independently acquired source argument owner.
 #[derive(Clone)]
-pub(super) struct ArgumentValueOwner(Rc<RefCell<Option<ArgumentValueLease>>>);
-
-/// Holds the foreign owner and, after native entry, its stable mutable root record.
-struct ArgumentValueLease {
-    value: RuntimeCellHandle,
-    pin: Option<Box<UnsafeCell<ArgumentPin>>>,
-}
+pub(super) struct ArgumentValueOwner(RuntimeArgumentOwner);
 
 /// Keeps ordinary arguments allocation-free while reference candidates carry shared provenance.
 pub(super) enum ArgumentCleanupOwner {
@@ -55,19 +47,7 @@ impl RuntimeOwners for ArgumentCleanupOwner {
     fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
         match self {
             Self::Value(value) => value.visit_owned_slots(visit),
-            Self::Reference(owner) => {
-                let lease = owner.0.borrow();
-                if let Some(lease) = lease.as_ref() {
-                    if let Some(pin) = &lease.pin {
-                        // Native entry clears the actual owner slot when it consumes the lease.
-                        let slot = unsafe { std::ptr::addr_of!((*pin.get()).validation.owner) }
-                            .cast::<*mut RuntimeCell>();
-                        if !unsafe { *slot }.is_null() { visit(slot); }
-                    } else {
-                        lease.value.visit_owned_slots(visit);
-                    }
-                }
-            }
+            Self::Reference(owner) => owner.0.visit_owned_slots(visit),
         }
     }
 }
@@ -75,42 +55,30 @@ impl RuntimeOwners for ArgumentCleanupOwner {
 impl ArgumentValueOwner {
     /// Adopts one owner already acquired by argument evaluation without retaining it again.
     pub(super) fn new(value: RuntimeCellHandle) -> Self {
-        Self(Rc::new(RefCell::new(Some(ArgumentValueLease { value, pin: None }))))
+        Self(RuntimeArgumentOwner::new(value))
     }
 
     /// Reads only the lease identity; no Rust borrow survives a runtime operation.
     fn value(&self) -> Option<RuntimeCellHandle> {
-        self.0.borrow().as_ref().map(|lease| lease.value)
+        self.0.value()
     }
 
     /// Replaces a lease with a pending root whose visibility changes at native parameter entry.
     fn pin(&self, cell: u64, staging: *mut std::ffi::c_void, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
-        let value = {
-            let owner = self.0.borrow();
-            let Some(owner) = owner.as_ref() else { return Ok(()); };
-            if owner.pin.is_some() || owner.value.is_borrowed() { return Ok(()); }
-            owner.value
-        };
-        let pin = Box::new(UnsafeCell::new(ArgumentPin::default()));
-        if !values.pin_native_reference_argument_owner(value, pin.get().cast(), cell, staging)? {
-            return Ok(());
+        let previous = self.0.try_pin(cell, staging, |value, pin, cell, staging| {
+            values.pin_native_reference_argument_owner(value, pin, cell, staging)
+        })?;
+        match previous {
+            Some(value) => release_expr_result(value, context, values),
+            None => Ok(()),
         }
-        // Pin creation cannot invoke PHP. Publish the new owner before consuming the old one.
-        self.0.borrow_mut().as_mut().expect("argument lease remains live during pin creation").pin = Some(pin);
-        release_expr_result(value, context, values)
     }
 
     /// Clears shared metadata before releasing its unique foreign owner, including on failure.
     pub(super) fn release(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
-        let lease = self.0.borrow_mut().take();
-        let Some(lease) = lease else { return Ok(()); };
-        if let Some(pin) = lease.pin {
-            match values.take_native_reference_argument_owner(pin.get().cast())? {
-                Some(value) => release_expr_result(value, context, values),
-                None => Ok(()),
-            }
-        } else {
-            release_expr_result(lease.value, context, values)
+        match self.0.take(|pin| values.take_native_reference_argument_owner(pin))? {
+            Some(value) => release_expr_result(value, context, values),
+            None => Ok(()),
         }
     }
 }
@@ -216,33 +184,4 @@ mod tests {
         assert!(!slots.contains(&(arguments[2].value.owner_slot() as usize)));
     }
 
-    /// Pending native pins expose their actual owner field, and native consumption removes it.
-    #[test]
-    fn pending_argument_pin_owner_slot_disappears_at_native_consumption() {
-        let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
-        let pin = Box::new(UnsafeCell::new(ArgumentPin {
-            validation: Default::default(), native_cell: 16, staging: 32,
-        }));
-        let record = pin.get();
-        unsafe {
-            (*record).validation.owner = value.as_ptr() as u64;
-            (*record).validation.kind = ArgumentPin::PENDING as u64;
-        }
-        let owner = ArgumentCleanupOwner::Reference(ArgumentValueOwner(Rc::new(RefCell::new(
-            Some(ArgumentValueLease { value, pin: Some(pin) }),
-        ))));
-        let mut slots = Vec::new();
-        owner.visit_owned_slots(&mut |slot| {
-            assert_eq!(unsafe { *slot }, value.as_ptr());
-            slots.push(slot as usize);
-        });
-        assert_eq!(slots, [unsafe { record.cast::<u8>().add(ArgumentPin::OWNER) } as usize],
-            "only the native pin field owns the transferred source lease");
-        // This is the native activate transition, which clears before releasing the source.
-        unsafe {
-            (*record).validation.owner = 0;
-            (*record).validation.kind = ArgumentPin::ACTIVE as u64;
-        }
-        owner.visit_owned_slots(&mut |_| panic!("the consumed pin and stale descriptor own no value"));
-    }
 }

@@ -30,8 +30,13 @@ pub mod object_owners;
 #[cfg(feature = "runtime")]
 pub mod output_handlers;
 #[cfg(feature = "runtime")]
+pub mod runtime_argument_owner;
+#[cfg(feature = "runtime")]
 pub mod runtime_bytes;
 #[cfg(feature = "runtime")]
 pub mod runtime_invoker_slots;
+#[cfg(feature = "runtime")]
+#[allow(unsafe_code)]
+pub mod runtime_owner_frame;
 #[cfg(feature = "runtime")]
 pub mod runtime_owners;

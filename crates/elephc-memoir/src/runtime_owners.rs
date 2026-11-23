@@ -211,18 +211,35 @@ pub fn finish_argument_cleanup<'a, T: 'a, E: Copy, S>(
     mut release: impl FnMut(&mut S, &T) -> Result<(), E>,
     discard: impl FnOnce(&mut S, RuntimeCellHandle),
 ) -> Result<RuntimeCellHandle, E> {
-    let mut cleanup = Ok(());
-    for owner in owners {
-        let released = release(state, owner);
-        cleanup = cleanup.and(released);
-    }
+    finish_owner_cleanup(
+        result.as_ref().map_err(|status| *status),
+        owners,
+        CleanupErrorPolicy::First,
+        state,
+        &mut release,
+        |state, result| discard(state, result.take()),
+    )
+    .map(RuntimeOwnerSlot::take)
+}
+
+/// Retires owners in iterator order while the caller keeps its result rooted.
+/// The operation error takes precedence. A successful result is discarded on cleanup failure.
+pub fn finish_owner_cleanup<R, T, E, S>(
+    result: Result<R, E>,
+    owners: impl IntoIterator<Item = T>,
+    errors: CleanupErrorPolicy,
+    state: &mut S,
+    mut release: impl FnMut(&mut S, T) -> Result<(), E>,
+    discard: impl FnOnce(&mut S, R),
+) -> Result<R, E> {
+    let cleanup = release_in_order(owners, errors, |owner| release(state, owner));
     match (result, cleanup) {
-        (Err(status), _) => Err(*status),
+        (Err(status), _) => Err(status),
         (Ok(result), Err(status)) => {
-            discard(state, result.take());
+            discard(state, result);
             Err(status)
         }
-        (Ok(result), Ok(())) => Ok(result.take()),
+        (Ok(result), Ok(())) => Ok(result),
     }
 }
 
@@ -342,12 +359,21 @@ pub fn release_all<T, E>(
     owners: impl IntoIterator<Item = T>,
     order: ReleaseOrder,
     errors: CleanupErrorPolicy,
-    mut release: impl FnMut(T) -> Result<(), E>,
+    release: impl FnMut(T) -> Result<(), E>,
 ) -> Result<(), E> {
-    let mut owners = owners.into_iter().collect::<Vec<_>>();
+    let mut owners: Vec<_> = owners.into_iter().collect();
     if order == ReleaseOrder::Reverse {
         owners.reverse();
     }
+    release_in_order(owners, errors, release)
+}
+
+/// Retires owners in their supplied order without reallocating their storage.
+fn release_in_order<T, E>(
+    owners: impl IntoIterator<Item = T>,
+    errors: CleanupErrorPolicy,
+    mut release: impl FnMut(T) -> Result<(), E>,
+) -> Result<(), E> {
     let mut retained_error = None;
     for owner in owners {
         if let Err(error) = release(owner) {
@@ -400,6 +426,26 @@ mod tests {
         );
         assert_eq!(outcome, Err(5));
         assert_eq!(released, [1, 2, 3, 4, 1]);
+
+        released.clear();
+        let slot = RuntimeOwnerSlot::new(value);
+        let outcome = finish_owner_cleanup(
+            Ok(&slot),
+            [1, 2, 3].into_iter().rev(),
+            CleanupErrorPolicy::Last,
+            &mut released,
+            |released, owner| {
+                assert!(!slot.is_empty());
+                released.push(owner);
+                Err(owner)
+            },
+            |released, result| {
+                assert_eq!(result.take(), value);
+                released.push(4);
+            },
+        );
+        assert_eq!(outcome.err(), Some(1));
+        assert_eq!(released, [3, 2, 1, 4]);
     }
 
     /// Retires every staged lease and drops an unpublished result even when cleanup fails.

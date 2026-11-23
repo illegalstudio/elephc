@@ -9,6 +9,10 @@
 //! - Failed argument evaluation retires both completed values and receiver owners.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, RuntimeOwners, with_runtime_owners};
+use crate::value::RuntimeCell;
+use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+use std::cell::RefCell;
 
 /// Acquires each argument before later argument side effects can replace its source storage.
 pub(in crate::interpreter) fn eval_owned_call_arg_values(
@@ -165,29 +169,64 @@ pub(super) fn capture_abandoned_reference_owners(
     }
 }
 
+/// Describes the owned keys and receivers of a reference result during argument cleanup.
+struct ArgumentReferenceOwners(RefCell<Option<EvalReferenceTarget>>);
+
+impl RuntimeOwners for ArgumentReferenceOwners {
+    /// Visits only the operands that abandoning a reference would retire.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        if let Some(target) = self.0.borrow().as_ref() {
+            visit_argument_reference_owners(target, visit);
+        }
+    }
+}
+
+/// Reports the current primary owner fields for one reference target.
+fn visit_argument_reference_owners(target: &EvalReferenceTarget, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+    match target {
+        EvalReferenceTarget::ArrayElement { index, .. } => index.visit_owned_slots(visit),
+        EvalReferenceTarget::NestedArrayElement { array_target, index } => {
+            visit_argument_reference_owners(array_target, visit);
+            index.visit_owned_slots(visit);
+        }
+        EvalReferenceTarget::ObjectProperty { object, .. } => object.visit_owned_slots(visit),
+        _ => {}
+    }
+}
+
 /// Retires intermediate lvalue operands without losing an owned result or abandoned target on failure.
 pub(super) fn finish_argument_reference_owners(
     result: Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus>,
     owners: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let mut cleanup = Ok(());
-    for owner in owners.into_iter().rev() {
-        let released = release_expr_result(owner, context, values);
-        if cleanup.is_ok() { cleanup = released; }
+    if owners.is_empty() {
+        return result;
     }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok((value, mut target)), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            let mut abandoned = Vec::new();
-            capture_abandoned_reference_owners(target.as_mut(), &mut abandoned);
-            for owner in abandoned.into_iter().rev() {
-                let _ = release_expr_result(owner, context, values);
-            }
-            Err(status)
-        }
-        (Ok(result), Ok(())) => Ok(result),
-    }
+    let value = RuntimeOwnerSlot::empty();
+    let target = ArgumentReferenceOwners(RefCell::new(None));
+    let result = result.map(|(cell, metadata)| {
+        value.replace(Some(cell));
+        target.0.replace(metadata);
+    });
+    let owners = owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&(&owners, (&value, &target)), || {
+        finish_owner_cleanup(
+            result, owners.iter().rev(), CleanupErrorPolicy::First, &mut (context, values),
+            |(context, values), owner| release_expr_result(owner.take(), context, *values),
+            |(context, values), ()| {
+                let _ = release_expr_result(value.take(), context, *values);
+                let mut abandoned = Vec::new();
+                capture_abandoned_reference_owners(target.0.borrow_mut().as_mut(), &mut abandoned);
+                let abandoned = abandoned.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+                with_runtime_owners(&abandoned, || {
+                    for owner in abandoned.iter().rev() {
+                        let _ = release_expr_result(owner.take(), context, *values);
+                    }
+                });
+            },
+        )
+        .map(|()| (value.take(), target.0.take()))
+    })
 }
 
 /// Promotes a temporary XML selection to a reference that may escape without parent writeback.

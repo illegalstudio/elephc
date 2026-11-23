@@ -10,6 +10,7 @@
 //!   dispatch to refcount-aware runtime variants when payloads own heap values.
 //! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
+use elephc_memoir::values::array_splice_insert as splice_storage;
 use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, callable_descriptor, callable_dispatch, emit_box_current_owned_value_as_mixed,
@@ -253,14 +254,10 @@ fn emit_mixed_splice_replacement_insert(
     if !replacement.inserts_values() {
         return Ok(());
     }
-    let (removed_reg, at_reg) = splice_result_regs(ctx);
-    let (_dst_reg, index_reg, replacement_reg) = splice_insert_arg_regs(ctx);
     let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
-    // Temporary layout after both pushes: [0] = replacement array, [16] = removed array,
-    // [24] = normalized insertion index.
-    abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
+    splice_storage::emit_save_removal(ctx.emitter);
     emit_splice_replacement_pointer(ctx, replacement)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    splice_storage::emit_save_replacement(ctx.emitter);
     ctx.load_value_to_reg(array, cell_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -270,8 +267,7 @@ fn emit_mixed_splice_replacement_insert(
             ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // read the converted indexed array out of the Mixed cell
         }
     }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, index_reg, 24);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_reg, 0);
+    splice_storage::emit_load_replacement_args(ctx.emitter);
     emit_splice_boxing_tag(ctx, replacement);
     abi::emit_call_label(
         ctx.emitter,
@@ -287,13 +283,9 @@ fn emit_mixed_splice_replacement_insert(
         }
     }
     if replacement.owns_temporary_array() {
-        // `__rt_heap_free` reads its pointer from the INT RESULT register on both targets
-        // (`x0`/`rax`), not from the first argument register — those differ on x86_64.
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        splice_storage::emit_free_replacement_shell(ctx.emitter);
     }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    splice_storage::emit_finish_staging(ctx.emitter);
     Ok(())
 }
 
@@ -326,16 +318,12 @@ fn emit_splice_replacement_insert(
         return Ok(());
     }
     receiver.require_writable("array_splice replacement")?;
-    let (removed_reg, at_reg) = splice_result_regs(ctx);
-    let (dst_reg, index_reg, replacement_reg) = splice_insert_arg_regs(ctx);
-    // Temporary layout after both pushes: [0] = replacement array, [16] = removed array,
-    // [24] = normalized insertion index.
-    abi::emit_push_reg_pair(ctx.emitter, removed_reg, at_reg);
+    let dst_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    splice_storage::emit_save_removal(ctx.emitter);
     emit_splice_replacement_pointer(ctx, replacement)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    splice_storage::emit_save_replacement(ctx.emitter);
     ctx.load_value_to_reg(array, dst_reg)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, index_reg, 24);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_reg, 0);
+    splice_storage::emit_load_replacement_args(ctx.emitter);
     emit_splice_boxing_tag(ctx, replacement);
     abi::emit_call_label(
         ctx.emitter,
@@ -343,14 +331,10 @@ fn emit_splice_replacement_insert(
     );
     ctx.store_result_value(array)?;
     if replacement.owns_temporary_array() {
-        // `__rt_heap_free` reads its pointer from the INT RESULT register on both targets
-        // (`x0`/`rax`), not from the first argument register — those differ on x86_64.
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        splice_storage::emit_free_replacement_shell(ctx.emitter);
     }
     receiver.store_back(ctx, array, receiver_ty)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    splice_storage::emit_finish_staging(ctx.emitter);
     Ok(())
 }
 
@@ -795,24 +779,6 @@ fn sort_receiver_is_hash(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::AssocArray { .. }
     ))
-}
-
-/// The `__rt_array_splice_insert*` argument registers: destination, index, replacement.
-fn splice_insert_arg_regs(
-    ctx: &FunctionContext<'_>,
-) -> (&'static str, &'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x0", "x1", "x2"),
-        Arch::X86_64 => ("rdi", "rsi", "rdx"),
-    }
-}
-
-/// The registers `__rt_array_splice*` leaves the removed array and the insertion index in.
-fn splice_result_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x0", "x1"),
-        Arch::X86_64 => ("rax", "rdx"),
-    }
 }
 
 /// Wraps a bare string replacement in a one-element 16-byte-slot indexed array.

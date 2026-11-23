@@ -9,16 +9,7 @@
 //! - Native consumers copy names and retain cells before storing their snapshot.
 
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
-use crate::value::RuntimeCell;
-
-/// Borrowed UTF-8 name and optional boxed constant payload for one dynamic declaration.
-#[repr(C)]
-#[derive(Default)]
-pub struct ElephcEvalInventoryEntry {
-    pub name_ptr: *const u8,
-    pub name_len: u64,
-    pub value_cell: *mut RuntimeCell,
-}
+pub use elephc_memoir::owner_layout::EvalInventoryWords as ElephcEvalInventoryEntry;
 
 /// Enumerates eval-only functions (kind 0) or dynamic constants (kind 1).
 ///

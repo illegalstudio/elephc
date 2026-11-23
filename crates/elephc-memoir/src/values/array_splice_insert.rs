@@ -7,7 +7,45 @@
 //! Key details:
 //! - The caller stages the destination, replacement and index in the splice frame and populates the gap.
 
-use crate::{Arch, Emitter};
+use crate::{Arch, Emitter, TargetAbi};
+
+const REPLACEMENT: usize = 0;
+const REMOVED: usize = 16;
+const INSERTION_INDEX: usize = 24;
+const SCRATCH_BYTES: usize = 32;
+
+/// Preserves the removal results across preparation of the replacement shell.
+pub fn emit_save_removal(emitter: &mut impl TargetAbi) {
+    let removed = emitter.int_result_reg();
+    let index = match emitter.arch() {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    };
+    emitter.emit_push_reg_pair(removed, index);
+}
+
+/// Places the replacement pointer below the saved removal result.
+pub fn emit_save_replacement(emitter: &mut impl TargetAbi) {
+    emitter.emit_push_reg(emitter.int_result_reg());
+}
+
+/// Restores the staged index and replacement using the insertion helper's ABI.
+pub fn emit_load_replacement_args(emitter: &mut impl TargetAbi) {
+    emitter.emit_load_temporary_stack_slot(emitter.int_arg_reg_name(1), INSERTION_INDEX);
+    emitter.emit_load_temporary_stack_slot(emitter.int_arg_reg_name(2), REPLACEMENT);
+}
+
+/// Frees the temporary replacement shell without releasing its borrowed payload.
+pub fn emit_free_replacement_shell(emitter: &mut impl TargetAbi) {
+    emitter.emit_load_temporary_stack_slot(emitter.int_result_reg(), REPLACEMENT);
+    emitter.emit_call_label("__rt_heap_free");
+}
+
+/// Returns the removed array and releases both staging records after receiver writeback.
+pub fn emit_finish_staging(emitter: &mut impl TargetAbi) {
+    emitter.emit_load_temporary_stack_slot(emitter.int_result_reg(), REMOVED);
+    emitter.emit_release_temporary_stack(SCRATCH_BYTES);
+}
 
 /// Opens a gap in single-word storage and branches to the caller's splice copy label.
 pub fn emit_open_word_gap(emitter: &mut impl Emitter, prefix: &str) {

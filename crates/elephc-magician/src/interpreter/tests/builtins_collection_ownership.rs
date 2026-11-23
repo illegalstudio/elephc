@@ -354,12 +354,29 @@ fn reflection_metadata_insertion_releases_owned_operands() {
         let key = values.int(0).unwrap();
         let value = values.string("metadata").unwrap();
         if fail { values.fail_array_set_call(0); }
-        let result = crate::interpreter::reflection::owned_collections::insert_owned_element(
-            &mut values, array, key, value,
-        );
+        let mut builder = crate::interpreter::builtins::collection_builder::EvalArrayBuilder::from_owned(&mut values, array);
+        let result = builder.entry_key_first(|_| Ok(key), |_| Ok(value)).map(|()| builder.finish());
         assert_eq!(result, if fail { Err(EvalStatus::UnsupportedConstruct) } else { Ok(array) });
         assert_eq!(values.releases.iter().filter(|cell| **cell == key).count(), 1);
         assert_eq!(values.releases.iter().filter(|cell| **cell == value).count(), 1);
         assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), usize::from(fail));
+    }
+}
+
+/// A nested attribute failure retires both arrays and the outer element's boxed key.
+#[test]
+fn reflection_nested_attribute_failure_releases_partial_collections() {
+    use crate::eval_ir::EvalAttributeArg;
+    let mut values = FakeOps::default();
+    values.fail_array_set_call(1);
+    let args = [
+        EvalAttributeArg::Int(42),
+        EvalAttributeArg::Array(vec![EvalAttributeArg::Int(7)]),
+    ];
+    let result = crate::interpreter::eval_class_attribute_args_result(&args, &mut values);
+    assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+    for &id in values.values.keys() {
+        assert_eq!(values.releases.iter().filter(|cell| cell.as_ptr() as usize == id).count(), 1,
+            "each acquired temporary cell must be retired: {id}");
     }
 }

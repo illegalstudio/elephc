@@ -13,19 +13,26 @@
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub(crate) use elephc_memoir::runtime_owners::{RuntimeOwnerSlot, RuntimeOwners, StagedRuntimeOwners};
 #[cfg(not(test))]
-use std::{cell::UnsafeCell, ffi::c_void, marker::{PhantomData, PhantomPinned}, pin::Pin};
+use std::ffi::c_void;
 #[cfg(not(test))]
-use elephc_memoir::owner_layout::ExtendedActivation;
+use elephc_memoir::runtime_owner_frame::{OwnerFrameHooks, with_owner_frame};
 
 /// Keeps an immobile Rust inventory visible through native calls and explicit slot cleanup.
 pub(crate) fn with_runtime_owners<T: RuntimeOwners, R>(owners: &T, consume: impl FnOnce() -> R) -> R {
     #[cfg(not(test))]
-    let mut record = std::pin::pin!(NativeOwnerFrame { storage: UnsafeCell::default(), _pin: PhantomPinned });
-    #[cfg(not(test))]
-    let _guard = NativeOwnerFrameGuard::enter(record.as_mut(), owners);
+    {
+        // These hooks implement Memoir's activation layout on the current Fiber.
+        unsafe { with_owner_frame(owners, OwnerFrameHooks {
+            enter: __elephc_eval_owner_frame_enter_v1,
+            leave: __elephc_eval_owner_frame_leave_v1,
+            visit_slot: __elephc_eval_owner_frame_slot_v1,
+        }, consume) }
+    }
     #[cfg(test)]
-    let _ = owners;
-    consume()
+    {
+        let _ = owners;
+        consume()
+    }
 }
 
 /// A method scope can change during execution but is frozen while its Fiber is inspected.
@@ -63,17 +70,6 @@ pub(super) fn with_owned_runtime_cell<R>(
     result
 }
 
-/// Extended native activation prefix, pinned until its Rust owner has finished cleanup.
-#[cfg(not(test))]
-struct NativeOwnerFrame { storage: UnsafeCell<ExtendedActivation>, _pin: PhantomPinned }
-
-/// Detaches only its own activation after all native boundaries have returned through Rust.
-#[cfg(not(test))]
-struct NativeOwnerFrameGuard<'a, T: RuntimeOwners> {
-    record: *mut c_void,
-    _borrow: PhantomData<(&'a mut NativeOwnerFrame, &'a T)>,
-}
-
 #[cfg(not(test))]
 unsafe extern "C" {
     /// Links a complete stack activation with a pure Rust owner visitor.
@@ -85,34 +81,6 @@ unsafe extern "C" {
     fn __elephc_eval_owner_frame_leave_v1(record: *mut c_void);
     /// Forwards the real owning field to the collector's current slot-identity context.
     fn __elephc_eval_owner_frame_slot_v1(slot: *const *mut RuntimeCell, context: *mut c_void);
-}
-
-#[cfg(not(test))]
-impl<'a, T: RuntimeOwners> NativeOwnerFrameGuard<'a, T> {
-    /// Exposes a pinned record and its immobile owner only for this lexical borrow.
-    fn enter(record: Pin<&'a mut NativeOwnerFrame>, owners: &'a T) -> Self {
-        // The guard's borrow prevents moving the record until the native link is removed.
-        let record = record.as_ref().get_ref().storage.get().cast();
-        unsafe { __elephc_eval_owner_frame_enter_v1(record, visit::<T>, (owners as *const T).cast()); }
-        Self { record, _borrow: PhantomData }
-    }
-}
-
-#[cfg(not(test))]
-impl<T: RuntimeOwners> Drop for NativeOwnerFrameGuard<'_, T> {
-    /// Removes the borrowed record before its stack storage or Rust owner can disappear.
-    fn drop(&mut self) { unsafe { __elephc_eval_owner_frame_leave_v1(self.record); } }
-}
-
-/// Borrows the owning pointer field without retaining PHP values or invoking PHP.
-///
-/// # Safety
-/// Data points to the guard's live immobile inventory. The native context and callback
-/// remain pure for this visit, and no pointer-field address survives the collector traversal.
-#[cfg(not(test))]
-unsafe extern "C" fn visit<T: RuntimeOwners>(data: *const c_void, context: *mut c_void) {
-    let owners = unsafe { &*data.cast::<T>() };
-    owners.visit_owned_slots(&mut |slot| unsafe { __elephc_eval_owner_frame_slot_v1(slot, context); });
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ pub mod strcopy;
 pub mod guarded_snapshot;
 pub mod owner_pair;
 pub mod offset_result;
+pub mod offset_write_guard;
 pub mod byte_view;
 
 pub mod concat_window;

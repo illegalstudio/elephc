@@ -712,30 +712,28 @@ pub(super) fn eval_reflection_constants_map(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let names = eval_reflection_constant_names(reflected_name, context, values)?;
-    let mut result = values.assoc_new(names.len())?;
+    let mut result = crate::interpreter::builtins::collection_builder::EvalArrayBuilder::assoc(values, names.len())?;
     for name in names {
-        if !eval_reflection_constant_matches_filter(reflected_name, &name, filter, context, values)?
-        {
-            continue;
-        }
-        // A reflector being built (a silent evaluation) stores null for a value php-src has
-        // not evaluated yet and eval cannot preview; `getConstants()` evaluates it.
-        let value = eval_reflection_constant_value(reflected_name, &name, context, values);
-        let value = if context.deprecations_silenced() {
-            match crate::interpreter::statements::eval_preview_outcome(value, context, values)? {
-                Some(value) => value,
-                None => Some(values.null()?),
+        let value = result.with_values(|values| {
+            if !eval_reflection_constant_matches_filter(reflected_name, &name, filter, context, values)? {
+                return Ok(None);
             }
-        } else {
-            value?
-        };
-        let Some(value) = value else {
-            continue;
-        };
-        let key = values.string(&name)?;
-        result = crate::interpreter::reflection::owned_collections::insert_retained_element(values, result, key, value)?;
+            // A silent reflector preview stores null if this constant cannot be evaluated yet.
+            let value = eval_reflection_constant_value(reflected_name, &name, context, values);
+            if context.deprecations_silenced() {
+                match crate::interpreter::statements::eval_preview_outcome(value, context, values)? {
+                    Some(value) => Ok(value),
+                    None => values.null().map(Some),
+                }
+            } else {
+                value
+            }
+        })?;
+        if let Some(value) = value {
+            result.string(&name, |values| promote_borrowed_result(value, values))?;
+        }
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// What `ReflectionClass::getDefaultProperties()` answers for one reflected class.

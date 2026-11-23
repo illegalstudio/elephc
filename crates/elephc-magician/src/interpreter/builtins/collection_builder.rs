@@ -49,6 +49,11 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         self.values
     }
 
+    /// Calls native operations with the partly constructed array visible to the collector.
+    pub(in crate::interpreter) fn with_values<R>(&mut self, use_values: impl FnOnce(&mut V) -> R) -> R {
+        with_runtime_owners(&self.cell, || use_values(self.values))
+    }
+
     /// Inserts a freshly materialized value under a freshly boxed string key.
     pub(in crate::interpreter) fn string(
         &mut self,
@@ -76,14 +81,41 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         value: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
         key: impl FnOnce(&mut V, RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>,
     ) -> Result<(), EvalStatus> {
+        self.stage_entry(|values, key_owner, value_owner| {
+            let value = value(values)?;
+            value_owner.replace(Some(value));
+            let key = key(values, value)?;
+            key_owner.replace(Some(key));
+            Ok((key, value))
+        })
+    }
+
+    /// Boxes an independent key before evaluating a potentially nested value.
+    pub(in crate::interpreter) fn entry_key_first(
+        &mut self,
+        key: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+        value: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        self.stage_entry(|values, key_owner, value_owner| {
+            let key = key(values)?;
+            key_owner.replace(Some(key));
+            let value = value(values)?;
+            value_owner.replace(Some(value));
+            Ok((key, value))
+        })
+    }
+
+    /// Inserts the acquired entry and retires its operands on every outcome.
+    fn stage_entry(
+        &mut self,
+        acquire: impl FnOnce(&mut V, &RuntimeOwnerSlot, &RuntimeOwnerSlot)
+            -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus>,
+    ) -> Result<(), EvalStatus> {
         let key_owner = RuntimeOwnerSlot::empty();
         let value_owner = RuntimeOwnerSlot::empty();
         with_runtime_owners(&(&self.cell, (&key_owner, &value_owner)), || {
             let inserted = (|| {
-                let value = value(self.values)?;
-                value_owner.replace(Some(value));
-                let key = key(self.values, value)?;
-                key_owner.replace(Some(key));
+                let (key, value) = acquire(self.values, &key_owner, &value_owner)?;
                 let array = self.values.array_set(self.cell.borrowed(), key, value)?;
                 // The setter returns the same receiver lease after any payload relocation.
                 self.cell.update_receiver(array);
