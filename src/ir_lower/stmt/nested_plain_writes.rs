@@ -38,7 +38,8 @@ fn lower_store_selected(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
     let mut sources = Vec::new();
-    let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
+    let target = ctx.with_independent_write_receiver(|ctx|
+        super::nested_write_sources::capture_target(ctx, target, &mut sources));
     let (value, value_owner) = lower_stored_value(ctx, value, span);
     if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
         lower_captured_store(ctx, target, value, span);
@@ -59,12 +60,11 @@ fn lower_captured_store(
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
-    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
-    if ctx.builder.insertion_block_is_terminated() { return; }
-    let parent = resolve_parent_for_write(ctx, parent, span);
-    let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
-    let key = lower_expr(ctx, index);
-    let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
+    let Some((parent, parent_owner)) = lower_independent_parent(ctx, array, span) else { return; };
+    let (key, key_owner) = ctx.with_independent_write_receiver(|ctx| {
+        let key = lower_expr(ctx, index);
+        super::nested_array_writes::root_static_update_receiver(ctx, key, span)
+    });
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
         emit_store(ctx, parent, key, value, index, span);
@@ -89,7 +89,8 @@ fn lower_append_selected(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
     let mut sources = Vec::new();
-    let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
+    let target = ctx.with_independent_write_receiver(|ctx|
+        super::nested_write_sources::capture_target(ctx, target, &mut sources));
     let (value, value_owner) = lower_stored_value(ctx, value, span);
     if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
         lower_captured_append(ctx, target, value, span);
@@ -109,11 +110,7 @@ fn lower_captured_append(
 ) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
-    let parent =
-        super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
-    if ctx.builder.insertion_block_is_terminated() { return; }
-    let parent = resolve_parent_for_write(ctx, parent, span);
-    let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
+    let Some((parent, parent_owner)) = lower_independent_parent(ctx, &target, span) else { return; };
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, None, span, |ctx| {
         emit_append(ctx, parent, value, span);
@@ -121,6 +118,22 @@ fn lower_captured_append(
     emit_append(ctx, parent, value, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
     retire_owner(ctx, parent_owner, span);
+}
+
+/// Fetches and roots the written parent as a value this write owns, or `None` when fetching it throws.
+///
+/// A `??=` write borrows its VALUE operand only. Selecting the parent can call a method
+/// (`offsetGet`, the SimpleXML selector, `__call`), whose argument container and result are fresh
+/// temporaries: classified under the borrowed-operand scope they had no owner.
+fn lower_independent_parent(
+    ctx: &mut LoweringContext<'_, '_>, parent: &Expr, span: Span,
+) -> Option<(LoweredValue, Option<crate::ir::LocalSlotId>)> {
+    ctx.with_independent_write_receiver(|ctx| {
+        let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, parent, span);
+        if ctx.builder.insertion_block_is_terminated() { return None; }
+        let parent = resolve_parent_for_write(ctx, parent, span);
+        Some(super::nested_array_writes::root_static_update_receiver(ctx, parent, span))
+    })
 }
 
 /// Resolves boxed caller-reference markers before conversion or mutation of the selected cell.
