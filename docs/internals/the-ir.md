@@ -1334,8 +1334,13 @@ pieces must stay in agreement:
    the guard is unchanged. Otherwise the table follows the message suffix in
    the immediate and the receiver object becomes the last operand (`static::`
    reads the called-class id instead). Codegen reads it only on the cold path,
-   so the inline tag test costs the same. A callable whose method is resolved
-   from the receiver's static class (#2466) leaves such a method unchecked.
+   so the inline tag test costs the same. A private method is never overridden,
+   except that `static::m()` to a private static method runs the late-bound
+   class's redeclaration (`private_late_static_calls.rs`): the call dispatched
+   among same-signature redeclarations walks them like any `static::` call, and
+   the branch that runs the scope's own method is `Exact`. A callable whose
+   method is resolved from the receiver's static class (#2466) leaves such a
+   method unchecked.
    `new $class($v)` and `new static($v)` dispatch on the class name: when the
    checker records a runtime-typed positional argument (`new $class` records
    every `mixed`/union one, since its constructor is unknown), each class whose

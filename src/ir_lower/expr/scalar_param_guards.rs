@@ -329,9 +329,13 @@ pub(super) fn override_groups(
     let is_static = is_static
         && ctx.classes.get(class).is_none_or(|info| info.static_methods.contains_key(&method_key));
     // A private method is never overridden: a subclass's method of the same name is another
-    // method, and the call runs the one its scope names.
+    // method, and the call runs the one its scope names. `static::m()` to a private static
+    // method is the exception: php-src looks `m` up in the late-bound class, so a subclass's
+    // redeclaration runs and its parameter is the one checked (`private_late_static_calls`).
+    let late_static_lookup =
+        is_static && matches!(ctx.call_guard_dispatch, Some(GuardDispatch::LateStatic { .. }));
     let (declaring, _) = description.rsplit_once("::")?;
-    let private = ctx.classes.get(declaring.trim_start_matches('\\')).is_some_and(|info| {
+    let private = !late_static_lookup && ctx.classes.get(declaring.trim_start_matches('\\')).is_some_and(|info| {
         let visibilities = if is_static { &info.static_method_visibilities } else { &info.method_visibilities };
         visibilities.get(&method_key) == Some(&crate::parser::ast::Visibility::Private)
     });

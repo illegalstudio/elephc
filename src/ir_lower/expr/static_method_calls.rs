@@ -194,14 +194,15 @@ pub(super) fn lower_static_method_call_bound(
         super::scalar_param_guards::method_guard_description(ctx, &callee_description, dispatch_method, names_static_method),
     );
     // `static::` and an object receiver select the method at run time; a named class,
-    // `self::` and `parent::` bind it statically.
+    // `self::` and `parent::` bind it statically, and so does the arm of a private
+    // late-static dispatch that runs the scope's own method.
     let guard_dispatch = match (object_receiver, receiver) {
         (Some(object), _) => super::GuardDispatch::Receiver {
             receiver: object,
             class: callee_description.clone(),
             is_static: names_static_method,
         },
-        (None, StaticReceiver::Static) => super::GuardDispatch::LateStatic {
+        (None, StaticReceiver::Static) if binding != StaticCallBinding::Resolved => super::GuardDispatch::LateStatic {
             class: callee_description.clone(),
             is_static: names_static_method,
         },

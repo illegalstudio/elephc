@@ -2071,6 +2071,57 @@ foreach (["K", "A", "B", "C"] as $class) {
     assert_eq!(out, "K::s(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nK::s(x)\nK::s(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nK::s(x)\nB::s\nB::s\nC::s(): Argument #1 ($c) must be of type string, null given, called in F on line 4\nC::s(x)\n");
 }
 
+/// `static::m()` to a private static method runs the late-bound class's redeclaration
+/// (php-src's static lookup), so the check follows it rather than the scope's private
+/// method: a same-signature redeclaration (dispatched inside one call) names its own class
+/// and reports its parameter line, and with a redeclaration of another type the arm that
+/// runs the scope's own method still checks that method.
+#[test]
+fn test_late_static_call_to_a_private_method_checks_the_redeclaration_it_runs() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $msg, $file, $line) { echo "deprecated: $msg on line $line\n"; return true; });
+class A {
+    private static function m(int $a) { echo "A::m($a)\n"; }
+    static function go(mixed $v) { static::m($v); }
+}
+class B extends A {}
+class C extends A {
+    static function m(
+        int $a
+    ) { echo "C::m($a)\n"; }
+}
+class D extends C {}
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+$n = json_decode("null");
+foreach (["A", "B", "C", "D"] as $class) {
+    t(fn() => $class::go($n));
+    t(fn() => $class::go("x"));
+    t(fn() => $class::go(2.5));
+    t(fn() => $class::go("7"));
+}
+"#,
+    );
+    assert_eq!(out, "A::m(): Argument #1 ($a) must be of type int, null given, called in F on line 5\nA::m(): Argument #1 ($a) must be of type int, string given, called in F on line 5\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 4\nA::m(2)\nA::m(7)\nA::m(): Argument #1 ($a) must be of type int, null given, called in F on line 5\nA::m(): Argument #1 ($a) must be of type int, string given, called in F on line 5\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 4\nA::m(2)\nA::m(7)\nC::m(): Argument #1 ($a) must be of type int, null given, called in F on line 5\nC::m(): Argument #1 ($a) must be of type int, string given, called in F on line 5\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 10\nC::m(2)\nC::m(7)\nC::m(): Argument #1 ($a) must be of type int, null given, called in F on line 5\nC::m(): Argument #1 ($a) must be of type int, string given, called in F on line 5\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 10\nC::m(2)\nC::m(7)\n");
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(int $a) { echo "A::m($a)\n"; }
+    static function go(mixed $v) { static::m($v); }
+}
+class B extends A {}
+class E extends A { static function m(string $e) { echo "E::m($e)\n"; } }
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+$n = json_decode("null");
+foreach (["A", "B", "E"] as $class) {
+    t(fn() => $class::go($n));
+    t(fn() => $class::go("x"));
+}
+"#,
+    );
+    assert_eq!(out, "A::m(): Argument #1 ($a) must be of type int, null given, called in F on line 4\nA::m(): Argument #1 ($a) must be of type int, string given, called in F on line 4\nA::m(): Argument #1 ($a) must be of type int, null given, called in F on line 4\nA::m(): Argument #1 ($a) must be of type int, string given, called in F on line 4\nE::m(): Argument #1 ($e) must be of type string, null given, called in F on line 4\nE::m(x)\n");
+}
+
 /// A call through an interface (inherited through another interface) checks the implementing
 /// method: its class and parameter name in the `TypeError`, a trait method under the using
 /// class, and the `int` precision deprecation on the selected method's parameter line. An
