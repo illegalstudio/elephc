@@ -371,6 +371,33 @@ function observe(int $cp): int {
     }
 }
 
+/// A packed `array<int>` element is a tagged scalar. The tagged-null fallback must be
+/// emitted after the architecture match so every target links the observation kernel.
+#[test]
+fn test_mb_chr_observation_emits_the_tagged_null_fallback_on_all_targets() {
+    let source = r#"<?php
+#[Export]
+function observe(int $index): int {
+    $codepoints = [65];
+    $s = mb_chr($codepoints[$index], "UTF-8");
+    return strlen($s) + ord($s[0]);
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(
+            assembly.contains("mb_chr_observation_tagged_null"),
+            "{target} drops the tagged-null fallback"
+        );
+    }
+}
+
 /// A first-byte observation applies mb_chr's integer argument check before the fast encoder.
 #[test]
 fn test_mb_chr_first_sink_rejects_non_integer_codepoints() {

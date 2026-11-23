@@ -1758,13 +1758,6 @@ fn lower_chr_observation(
 
             ctx.emitter.label(&zero);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            if let Some(tagged_null) = tagged_null {
-        ctx.emitter.label(&tagged_null);
-        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
-        emit_boxed_string_observation(ctx, packed);
-        abi::emit_jump(ctx.emitter, &done);
-    }
-    ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // is the codepoint negative?
@@ -1821,9 +1814,15 @@ fn lower_chr_observation(
 
             ctx.emitter.label(&zero);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            ctx.emitter.label(&done);
         }
     }
+    if let Some(tagged_null) = tagged_null {
+        ctx.emitter.label(&tagged_null);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
+        emit_boxed_string_observation(ctx, packed);
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
 }
