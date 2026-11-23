@@ -1361,6 +1361,11 @@ fn bound_locals_defined(
     let mut locals = Vec::new();
     read_locals(bound, &mut locals);
     locals.into_iter().all(|name| {
+        // A later `unset($name)` or a call that receives it can remove the binding even when
+        // the name starts as a parameter or a main-scope predefined variable.
+        if previous.iter().any(|stmt| stmt_removes_local(stmt, &name)) {
+            return false;
+        }
         if entry_defined.contains(&name)
             || (in_main && matches!(name.as_str(), "argc" | "argv"))
         {
@@ -1374,6 +1379,86 @@ fn bound_locals_defined(
         };
         !previous[index + 1..].iter().any(stmt_has_call)
     })
+}
+
+/// Reports whether a statement can remove a local through `unset()` or a call argument.
+fn stmt_removes_local(stmt: &Stmt, name: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::ExprStmt(expr) => expr_removes_local(expr, name),
+        StmtKind::Global { vars } => vars.iter().any(|var| var == name),
+        StmtKind::For {
+            init,
+            update,
+            body,
+            ..
+        } => {
+            init.as_deref().is_some_and(|stmt| stmt_removes_local(stmt, name))
+                || update
+                    .as_deref()
+                    .is_some_and(|stmt| stmt_removes_local(stmt, name))
+                || body.iter().any(|stmt| stmt_removes_local(stmt, name))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => body.iter().any(|stmt| stmt_removes_local(stmt, name)),
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().any(|stmt| stmt_removes_local(stmt, name))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+        }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            then_body.iter().any(|stmt| stmt_removes_local(stmt, name))
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            try_body.iter().any(|stmt| stmt_removes_local(stmt, name))
+                || catches
+                    .iter()
+                    .any(|catch| catch.body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_removes_local(stmt, name)))
+        }
+        _ => false,
+    }
+}
+
+/// Reports whether a direct call can remove the named local.
+fn expr_removes_local(expr: &Expr, name: &str) -> bool {
+    let ExprKind::FunctionCall { args, .. } = &expr.kind else {
+        return false;
+    };
+    args.iter().any(|arg| matches!(&arg.kind, ExprKind::Variable(local) if local == name))
 }
 
 /// Builds an integer literal expression.
@@ -1527,5 +1612,79 @@ pub(super) fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::Goto(_)
         | StmtKind::GotoLabel(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds `$n + 0` as the loop bound expression.
+    fn bound(name: &str) -> Expr {
+        let span = Span::new(1, 1);
+        binary(
+            Expr::new(ExprKind::Variable(name.to_string()), span),
+            BinOp::Add,
+            int(0, span),
+            span,
+        )
+    }
+
+    /// Builds `unset($name);`.
+    fn unset_stmt(name: &str) -> Stmt {
+        let span = Span::new(1, 1);
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("unset"),
+                    args: vec![Expr::new(ExprKind::Variable(name.to_string()), span)],
+                },
+                span,
+            )),
+            span,
+        )
+    }
+
+    /// A parameter removed by `unset()` cannot seed the hoisted prelude guard.
+    #[test]
+    fn test_bound_locals_defined_rejects_unset_entry_local() {
+        let entry = HashSet::from(["n".to_string()]);
+        assert!(!bound_locals_defined(
+            &bound("n"),
+            &[unset_stmt("n")],
+            &entry,
+            false
+        ));
+        assert!(!bound_locals_defined(
+            &bound("n"),
+            &[unset_stmt("n")],
+            &entry,
+            true
+        ));
+    }
+
+    /// A call that receives the local may remove it by reference.
+    #[test]
+    fn test_bound_locals_defined_rejects_call_argument_local() {
+        let span = Span::new(1, 1);
+        let call = Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("clear"),
+                    args: vec![Expr::new(ExprKind::Variable("n".to_string()), span)],
+                },
+                span,
+            )),
+            span,
+        );
+        let entry = HashSet::from(["n".to_string()]);
+        assert!(!bound_locals_defined(&bound("n"), &[call], &entry, false));
+    }
+
+    /// An untouched parameter still proves the bound read is warning-free.
+    #[test]
+    fn test_bound_locals_defined_accepts_untouched_entry_local() {
+        let entry = HashSet::from(["n".to_string()]);
+        assert!(bound_locals_defined(&bound("n"), &[], &entry, false));
     }
 }
