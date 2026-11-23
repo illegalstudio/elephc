@@ -1014,9 +1014,10 @@ pub(crate) fn paren_is_declaration_parameters<T: SourceToken>(tokens: &[T], open
 /// Returns whether a `$` opens a declaration name slot instead of a variable variable.
 ///
 /// PHP only allows variable variables in expressions: `static $$a;`, `function f($$a)`,
-/// `public $$a;`, `catch (E $$e)` and `use ($$a)` are syntax errors, so their `$` must stay in
-/// the view and let the parser reject it. A parameter DEFAULT (`function f($x = $$a)`) is an
-/// expression again.
+/// `public $$a;`, `final $$a`, `private(set) $$a`, `catch (E $$e)` and `use ($$a)` are syntax
+/// errors, so their `$` must stay in the view and let the parser reject it. A parameter
+/// DEFAULT (`function f($x = $$a)`) is an expression again. `abstract` and `var` stay off this
+/// fast path: PHP reports the modifier itself, not the `$`.
 pub(crate) fn dollar_starts_declaration<T: SourceToken>(
     tokens: &[T],
     index: usize,
@@ -1030,6 +1031,10 @@ pub(crate) fn dollar_starts_declaration<T: SourceToken>(
             || id == tok::T_PROTECTED
             || id == tok::T_PRIVATE
             || id == tok::T_READONLY
+            || id == tok::T_FINAL
+            || id == tok::T_PUBLIC_SET
+            || id == tok::T_PROTECTED_SET
+            || id == tok::T_PRIVATE_SET
     ) {
         return true;
     }
@@ -1091,6 +1096,12 @@ fn declaration_name_predecessor(id: i64) -> bool {
                 || id == tok::T_PRIVATE
                 || id == tok::T_READONLY
                 || id == tok::T_STATIC
+                || id == tok::T_FINAL
+                || id == tok::T_ABSTRACT
+                || id == tok::T_VAR
+                || id == tok::T_PUBLIC_SET
+                || id == tok::T_PROTECTED_SET
+                || id == tok::T_PRIVATE_SET
                 || id == i64::from(b'?')
                 || id == i64::from(b'|')
                 || id == i64::from(b'&')
@@ -1103,39 +1114,85 @@ fn declaration_name_predecessor(id: i64) -> bool {
         )
 }
 
-/// Returns whether a declaration modifier precedes `index` before any statement boundary.
+/// Returns whether a token can appear between a property modifier and its variable.
+fn is_property_type_token(id: i64) -> bool {
+    (is_declaration_type_token(id) && id != tok::T_STATIC)
+        || id == i64::from(b'?')
+        || id == i64::from(b'|')
+        || id == i64::from(b'&')
+        || id == i64::from(b'(')
+        || id == i64::from(b')')
+        || id == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+        || id == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+}
+
+/// Returns whether a token is a property modifier that can introduce `$$name`.
+///
+/// Asymmetric visibility, `final`, `abstract` and `var` are modifiers too. They do not appear
+/// in an expression before `$$name`, so `static::$$a` and `instanceof static ? $$a` stay
+/// expressions.
+fn is_property_modifier(id: i64) -> bool {
+    id == tok::T_PUBLIC
+        || id == tok::T_PROTECTED
+        || id == tok::T_PRIVATE
+        || id == tok::T_STATIC
+        || id == tok::T_READONLY
+        || id == tok::T_FINAL
+        || id == tok::T_ABSTRACT
+        || id == tok::T_VAR
+        || id == tok::T_PUBLIC_SET
+        || id == tok::T_PROTECTED_SET
+        || id == tok::T_PRIVATE_SET
+}
+
+/// Returns whether the token before a property modifier starts a declaration.
+///
+/// `instanceof static` is an expression. `public static`, `{ static` and `#[Attr] public`
+/// are declarations. Another modifier, including `final`, `var` and `private(set)`, also
+/// starts the declaration.
+fn property_declaration_boundary(id: Option<i64>) -> bool {
+    let Some(id) = id else {
+        return true;
+    };
+    id == i64::from(b';')
+        || id == i64::from(b'{')
+        || id == i64::from(b'}')
+        || id == i64::from(b']')
+        || id == tok::T_OPEN_TAG
+        || is_property_modifier(id)
+}
+
+/// Returns whether a declaration modifier precedes `index` across a property type only.
+///
+/// `static::$$a` stops at `::`. A modifier counts only when every token between it and `$`
+/// is a property type and the token before the modifier is a declaration boundary, so
+/// `$o instanceof static ? $$a` stays an expression. `static $$a`, `public static ?int $$a`
+/// and `public private(set) int $$a` still count as declarations.
 pub(crate) fn property_modifier_before<T: SourceToken>(tokens: &[T], index: usize) -> bool {
-    // A declaration name follows a type or modifier token. An operator, literal, variable or
-    // keyword before the `$` proves this is an expression, and rejecting it in O(1) keeps
-    // repeated `$$a` terms from walking the same statement prefix once per variable.
+    // An operator, literal, variable or keyword immediately before the `$` proves this is an
+    // expression. Rejecting it in O(1) keeps repeated `$$a` terms from walking the statement.
     let Some(immediate) = previous_significant_index(tokens, index) else {
         return false;
     };
-    if !declaration_name_predecessor(tokens[immediate].id()) {
+    let immediate_id = tokens[immediate].id();
+    if immediate_id == tok::T_DOUBLE_COLON || !declaration_name_predecessor(immediate_id) {
         return false;
     }
     let mut cursor = index;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
-        match tokens[previous].id() {
-            id if id == tok::T_PUBLIC
-                || id == tok::T_PROTECTED
-                || id == tok::T_PRIVATE
-                || id == tok::T_STATIC
-                || id == tok::T_READONLY =>
-            {
-                return true;
-            }
-            id if id == i64::from(b';')
-                || id == i64::from(b'{')
-                || id == i64::from(b'}')
-                || id == i64::from(b'=')
-                || id == i64::from(b',')
-                || id == i64::from(b'(') =>
-            {
-                return false;
-            }
-            _ => cursor = previous,
+        let id = tokens[previous].id();
+        if id == tok::T_DOUBLE_COLON {
+            return false;
         }
+        if is_property_modifier(id) {
+            let before = previous_significant_index(tokens, previous).map(|index| tokens[index].id());
+            return property_declaration_boundary(before);
+        }
+        if is_property_type_token(id) {
+            cursor = previous;
+            continue;
+        }
+        return false;
     }
     false
 }
