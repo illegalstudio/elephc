@@ -689,7 +689,14 @@ fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
 fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
+        "preg_match"
+            | "preg_match_all"
+            | "preg_replace"
+            | "preg_replace_callback"
+            | "preg_split"
+            | "__elephc_preg_compile"
+            | "__elephc_preg_match_compiled"
+            | "__elephc_preg_free"
     )
 }
 

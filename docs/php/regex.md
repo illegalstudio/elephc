@@ -201,6 +201,10 @@ limit or memory `PREG_INTERNAL_ERROR`, like PHP without JIT. The managed PCRE2
 has no JIT, so `PREG_JIT_STACKLIMIT_ERROR` never occurs. As in
 PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
 callback stays visible to `preg_last_error()` without failing the outer call.
+`preg_grep()` compiles its pattern once and resets the state once per call, not
+before each entry, so an error a `preg_*` call records inside an entry's
+`__toString()` is still reported after the call (and from PHP 8.6 makes it return
+`false`), unless a later entry's nested `preg_*` call succeeds and clears it.
 
 eval() and compiled code share one error state, as PHP has one: an error recorded
 inside eval() is what compiled code's `preg_last_error()` reports next, and the
