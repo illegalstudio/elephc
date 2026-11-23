@@ -23,7 +23,9 @@ use self::projection::{
     is_cast_token, project, project_cast, project_literal, project_qualified_name,
     project_qualified_name_fast, Projected,
 };
-use super::parser_view::{arrow_starts_function_body, is_reference_ampersand};
+use super::parser_view::{
+    arrow_starts_function_body, ellipsis_is_first_class_callable, is_reference_ampersand,
+};
 use super::prechecks::delimiter_pairs;
 use super::prechecks::matching_brace_end;
 use super::reference_scan::{
@@ -88,6 +90,11 @@ pub(super) fn build<T: SourceToken>(
             pending_label = true;
         }
         let id = token.id();
+        // The text view blanks the marker of `name(...)`, so first-class callables keep using
+        // that path instead of exposing parser shapes that only accept a zero-argument call.
+        if id == tok::T_ELLIPSIS && ellipsis_is_first_class_callable(source, tokens, index) {
+            return None;
+        }
         if id == i64::from(b'(') {
             parens.push(index);
         } else if id == i64::from(b')') {

@@ -1178,6 +1178,11 @@ mod tests {
             b"<?php $a[&$b];",
             b"<?php $f = fn() => &$x;",
             b"<?php match(1) { 1 => &$x }",
+            b"<?php strlen(...);",
+            b"<?php C::class(...);",
+            b"<?php C::$method(...);",
+            b"<?php $c::class(...);",
+            b"<?php $object->method(...);",
         ] {
             let tokens = scan_tokens(source);
             assert!(

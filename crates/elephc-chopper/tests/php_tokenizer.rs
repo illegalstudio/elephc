@@ -2909,3 +2909,17 @@ fn tokenizer_reference_write_continuations_are_errors() {
         assert_eq!(error.message, message, "{}", String::from_utf8_lossy(source));
     }
 }
+
+/// Static member first-class callables are valid PHP in both validation views.
+#[test]
+fn tokenizer_static_member_first_class_callables_are_valid() {
+    for source in [
+        b"<?php C::class(...);".as_slice(),
+        b"<?php C::$method(...);",
+        b"<?php C::method(...);",
+        b"<?php $c::class(...);",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+}
