@@ -126,14 +126,21 @@ echo count(past_end(4)), count(off_by_one(1)), count(shrinking(2)), count(reboun
 "#);
     for name in ["past_end", "off_by_one", "shrinking", "rebound_alias", "passed_by_value", "passed_out"] {
         assert!(!function_uses_array_set(&module, name, false), "{name} kept a zero-filling write");
+        // Changed invariant (branch commit 7a0f5064d3): a local later passed to a by-reference
+        // parameter lives in boxed (ref-cell) storage from its first write, so its keyed write is
+        // the runtime's generic offset store, which never zero-fills, instead of a typed
+        // `ArraySet`/`ArrayToHash` promotion at the write.
+        let boxed_from_the_start = name == "passed_out"
+            && function_uses(&module, name, Op::PromoteLocalRefCell);
         assert!(function_uses_array_set(&module, name, true)
             || function_uses(&module, name, Op::ArrayToHash)
-            || function_uses(&module, name, Op::ArraySetMixedKey), "{name} has no sparse-safe write");
+            || function_uses(&module, name, Op::ArraySetMixedKey)
+            || boxed_from_the_start, "{name} has no sparse-safe write");
     }
     // A by-value user parameter receives the `array<mixed>` view, so the local stays promotable;
-    // a by-reference one could mutate it behind the dispatch, so it promotes at the write.
+    // a by-reference one could mutate it behind the dispatch, so its local is boxed at the write.
     assert!(function_uses_array_set(&module, "passed_by_value", true), "passed_by_value lost promotion");
-    assert!(function_uses(&module, "passed_out", Op::ArrayToHash), "passed_out stayed promotable");
+    assert!(function_uses(&module, "passed_out", Op::PromoteLocalRefCell), "passed_out stayed promotable");
 }
 
 /// A widening loop write keeps the runtime writer; an integer scatter keeps typed storage.

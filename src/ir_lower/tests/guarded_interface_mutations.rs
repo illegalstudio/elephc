@@ -129,7 +129,9 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             ("clear_static_holder", Op::LoadStaticProperty),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let unset = function.instructions.iter().find(|inst| inst.op == Op::PropUnset).unwrap();
+            let unset = function.instructions.iter().find(|inst| inst.op == Op::PropUnset)
+                .unwrap_or_else(|| panic!("{target}: {name}: no PropUnset in {:?}",
+                    function.instructions.iter().map(|inst| inst.op).collect::<Vec<_>>()));
             let receiver = function.value(unset.operands[0]).unwrap();
             assert_eq!(receiver.php_type, PhpType::Object("Label".into()), "{target}: {name}");
             let view = function.instructions.iter().find(|inst| inst.result == Some(unset.operands[0])).unwrap();

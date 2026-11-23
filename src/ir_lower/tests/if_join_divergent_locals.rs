@@ -126,9 +126,19 @@ var_dump($pick(1));
         PhpType::Mixed,
         "edge boxing widens the slot to boxed storage"
     );
+    // Changed invariant (the branch widens the slot at its first `null` store, so the join takes
+    // `ScalarDivergenceJoin::Boxed`): no arm needs an explicit `MixedBox` on the merge edge,
+    // because every scalar store into an already-`Mixed` slot is boxed by the store itself. What
+    // must hold is that EVERY store into the slot goes to boxed storage, so the post-merge boxed
+    // read never sees a raw word.
+    let stores = pick.instructions.iter().filter(|inst| {
+        inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).count();
+    assert!(stores >= 3, "the null seed and both arm overwrites store into the slot, got {stores}");
     assert!(
-        pick.instructions.iter().any(|inst| inst.op == Op::MixedBox),
-        "each arm must box its value on the merge edge"
+        pick.instructions.iter().any(|inst| inst.op == Op::MixedBox)
+            || pick.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed,
+        "each arm must reach boxed storage on the merge edge"
     );
     assert_eq!(
         unreleased_int_overwrites(pick, slot),

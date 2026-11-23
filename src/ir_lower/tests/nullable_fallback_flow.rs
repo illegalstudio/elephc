@@ -109,9 +109,12 @@ run(new R55Items());"#).unwrap()).unwrap();
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), target);
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let error = crate::types::check_with_target(&rejected, target).err()
-            .expect("ordinary nullable Iterable reference iteration must be rejected");
-        assert!(error.to_string().contains("by-reference foreach"), "{name}: {error}");
+        // Changed invariant (branch commit b5c98704b6, by-reference foreach over iterable):
+        // by-reference iteration of a `?iterable` is no longer a compile-time refusal. php accepts
+        // it for arrays and raises `Error: An iterator cannot be used with foreach by reference`
+        // only when the value is an Iterator object, so the checker admits the program.
+        crate::types::check_with_target(&rejected, target)
+            .unwrap_or_else(|error| panic!("{name}: by-reference iteration of a nullable iterable must type-check: {error}"));
     }
 }
 

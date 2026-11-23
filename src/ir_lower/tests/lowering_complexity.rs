@@ -74,8 +74,14 @@ fn numeric_fallback_work(source: &str) -> (u64, usize) {
 /// size. Sixteen times the comparisons must build the same number of proofs.
 #[test]
 fn codegen_numeric_fallback_builds_one_proof_per_body() {
-    let (small_queries, small_builds) = numeric_fallback_work(&many_mixed_comparisons(4));
-    let (large_queries, large_builds) = numeric_fallback_work(&many_mixed_comparisons(64));
+    // The compiled exception and runtime prelude bodies every program carries ask a fixed number of
+    // numeric questions of their own (12 of the 16 at four comparisons, since the merge brought
+    // main's richer `ErrorException` / trace prelude). They are the same for every fixture, so
+    // the scaling is measured on what the comparisons add over the empty fixture.
+    let (base_queries, _) = numeric_fallback_work(&many_mixed_comparisons(0));
+    let (small_total, small_builds) = numeric_fallback_work(&many_mixed_comparisons(4));
+    let (large_total, large_builds) = numeric_fallback_work(&many_mixed_comparisons(64));
+    let (small_queries, large_queries) = (small_total - base_queries, large_total - base_queries);
     assert!(small_queries > 0, "the fixture no longer reaches the codegen numeric fallback");
     assert!(large_queries >= small_queries * 8, "{small_queries} vs {large_queries} questions");
     assert_eq!(small_builds, large_builds, "proofs grew with the comparisons: {small_builds} vs {large_builds}");

@@ -74,11 +74,21 @@ echo $one(), $two(), $global(), $object(), $boxed(), $null_scope();
             .any(|instruction| instruction.op == Op::ClosureBind && instruction.operands.len() == 3
                 && matches!(instruction.immediate, Some(Immediate::ClosureBindObjectScope(_)))), "{name}");
         let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+        // Changed invariant (branch commit 7a0f5064d3, `returned_parameter_has_independent_owner`):
+        // a user function that returns its by-value `callable` parameter acquires it, so the call
+        // result is independent and the caller retires the argument descriptor with a plain
+        // `ReleaseLocalSlot` of its rooted lease, not a `ReleaseUnlessAliases` comparison.
         assert!(main.instructions.iter().any(|instruction| {
+            instruction.op == Op::ReleaseLocalSlot
+                && matches!(instruction.immediate, Some(Immediate::LocalSlot(slot))
+                    if main.locals[slot.as_raw() as usize].php_type.codegen_repr()
+                        == crate::types::PhpType::Callable)
+        }), "{name}: rebinding must retire an argument descriptor when the result is independent");
+        assert!(!main.instructions.iter().any(|instruction| {
             instruction.op == Op::ReleaseUnlessAliases
                 && instruction.operands.iter().all(|value|
                     main.value(*value).unwrap().php_type == crate::types::PhpType::Callable)
-        }), "{name}: rebinding must retire an argument descriptor when the result is independent");
+        }), "{name}: an independent callable result needs no alias comparison");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         crate::ir_passes::optimize_module(&mut module);

@@ -41,8 +41,12 @@ echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdCl
             source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
         );
         let constructors: Vec<_> = module.functions.iter().flat_map(|f| &f.instructions).map(|i| i.op).collect();
-        assert_eq!(constructors.iter().filter(|op| **op == Op::CallableValueNew).count(), 2,
-            "{target:?}: positional and named implicit string callables");
+        // Changed invariant (branch callable-argument ABI, commit 7a0f5064d3): a `callable`
+        // parameter receives a boxed value and the callee's shared normalizer resolves a string
+        // spelling (`_eir_callable_argument_normalizer`), so the positional and named `"strlen"`
+        // arguments are no longer built into descriptors by the caller.
+        assert_eq!(constructors.iter().filter(|op| **op == Op::CallableValueNew).count(), 0,
+            "{target:?}: positional and named implicit string callables stay boxed strings");
         assert!(constructors.contains(&Op::FirstClassCallableNew), "{target:?}: actual Closure object");
         for name in ["boolSwitch", "boolLabels", "iterableSwitch", "mixedSwitch"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
