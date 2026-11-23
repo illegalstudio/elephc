@@ -37,10 +37,29 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction(&format!("cbnz x2, {only_start}"));                 // reset: SEEK_SET is required
     ctx.emitter.instruction(&format!("b {allow}"));                             // reset to the start position: allowed
     ctx.emitter.label(&never);
-    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is never seekable", done_label, -1);
+    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is never seekable", done_label, -1, false);
     ctx.emitter.label(&only_start);
-    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is seekable only to start position", done_label, -1);
+    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is seekable only to start position", done_label, -1, false);
     ctx.emitter.label(&allow);
+    // php-src checks the read chain too: the compression decompressors, convert.* and
+    // convert.iconv.* filters are seekable only to the start position.
+    let read_start = ctx.next_label("fseek_read_seek_start");
+    let read_never = ctx.next_label("fseek_read_seek_never");
+    let read_allow = ctx.next_label("fseek_read_seek_allow");
+    abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "x0", &read_allow);
+    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_seek_modes");
+    ctx.emitter.instruction("ldrb w10, [x9, x0]");                              // load this descriptor's read-seek mode
+    ctx.emitter.instruction(&format!("cbz w10, {read_allow}"));                 // no read restriction
+    ctx.emitter.instruction("cmp w10, #2");                                     // never-seekable read filter?
+    ctx.emitter.instruction(&format!("b.eq {read_never}"));
+    ctx.emitter.instruction(&format!("cbnz x1, {read_start}"));                 // start-only: offset 0 is required
+    ctx.emitter.instruction(&format!("cbnz x2, {read_start}"));                 // start-only: SEEK_SET is required
+    ctx.emitter.instruction(&format!("b {read_allow}"));                        // start position: allowed
+    ctx.emitter.label(&read_start);
+    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is seekable only to start position", done_label, -1, true);
+    ctx.emitter.label(&read_never);
+    emit_fseek_seek_warning_arm64(ctx, "fseek()", " is never seekable", done_label, -1, true);
+    ctx.emitter.label(&read_allow);
     // php-src resets the filter state on every allowed seek (zlib.deflate deflateReset,
     // bzip2.compress reinitialization). Only descriptors with a registered write filter
     // carry a label pointer.
@@ -124,10 +143,30 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction(&format!("jnz {only_start}"));                      // reset: non-SEEK_SET fails
     ctx.emitter.instruction(&format!("jmp {allow}"));                           // reset to the start position: allowed
     ctx.emitter.label(&never);
-    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is never seekable", done_label, -1);
+    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is never seekable", done_label, -1, false);
     ctx.emitter.label(&only_start);
-    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is seekable only to start position", done_label, -1);
+    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is seekable only to start position", done_label, -1, false);
     ctx.emitter.label(&allow);
+    let read_start = ctx.next_label("fseek_read_seek_start");
+    let read_never = ctx.next_label("fseek_read_seek_never");
+    let read_allow = ctx.next_label("fseek_read_seek_allow");
+    abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "rdi", &read_allow);
+    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_seek_modes");
+    ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rdi]");                 // load this descriptor's read-seek mode
+    ctx.emitter.instruction(&format!("test r10d, r10d"));                       // no read restriction?
+    ctx.emitter.instruction(&format!("jz {read_allow}"));
+    ctx.emitter.instruction("cmp r10d, 2");                                     // never-seekable read filter?
+    ctx.emitter.instruction(&format!("je {read_never}"));
+    ctx.emitter.instruction(&format!("test rsi, rsi"));                         // start-only: offset 0 is required
+    ctx.emitter.instruction(&format!("jnz {read_start}"));
+    ctx.emitter.instruction(&format!("test rdx, rdx"));                         // start-only: SEEK_SET is required
+    ctx.emitter.instruction(&format!("jnz {read_start}"));
+    ctx.emitter.instruction(&format!("jmp {read_allow}"));                      // start position: allowed
+    ctx.emitter.label(&read_start);
+    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is seekable only to start position", done_label, -1, true);
+    ctx.emitter.label(&read_never);
+    emit_fseek_seek_warning_x86_64(ctx, "fseek()", " is never seekable", done_label, -1, true);
+    ctx.emitter.label(&read_allow);
     let reset_skip = ctx.next_label("fseek_seek_reset_skip");
     let reset_zlib_skip = ctx.next_label("fseek_seek_reset_zlib_skip");
     let reset_bz2_skip = ctx.next_label("fseek_seek_reset_bz2_skip");
@@ -195,7 +234,7 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction("ldrb w10, [x9, x0]");                              // load this descriptor's write-seek mode
     ctx.emitter.instruction("cmp w10, #2");                                     // strict mode?
     ctx.emitter.instruction(&format!("b.ne {allow}"));                          // preserve/reset: rewind to the start is allowed
-    emit_fseek_seek_warning_arm64(ctx, "rewind()", " is never seekable", done_label, 0);
+    emit_fseek_seek_warning_arm64(ctx, "rewind()", " is never seekable", done_label, 0, false);
     ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.emitter.instruction("mov x1, #0");                                      // use offset 0 for rewind
@@ -244,7 +283,7 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rdi]");                 // load this descriptor's write-seek mode
     ctx.emitter.instruction("cmp r10d, 2");                                     // strict mode?
     ctx.emitter.instruction(&format!("jne {allow}"));                           // preserve/reset: rewind to the start is allowed
-    emit_fseek_seek_warning_x86_64(ctx, "rewind()", " is never seekable", done_label, 0);
+    emit_fseek_seek_warning_x86_64(ctx, "rewind()", " is never seekable", done_label, 0, false);
     ctx.emitter.label(&allow);
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("xor esi, esi");                                    // use offset 0 for rewind
@@ -409,13 +448,16 @@ fn emit_fseek_seek_warning_arm64(
     suffix: &str,
     done_label: &str,
     failure: i64,
+    read: bool,
 ) {
     let prefix = format!("{function}: Stream filter ");
     let (fseek_filter, fseek_filter_len) = ctx.data.add_string(prefix.as_bytes());
+    let label_ptrs = if read { "_stream_read_seek_label_ptrs" } else { "_stream_write_seek_label_ptrs" };
+    let label_lens = if read { "_stream_read_seek_label_lens" } else { "_stream_write_seek_label_lens" };
     let (suffix_symbol, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+    abi::emit_symbol_address(ctx.emitter, "x9", label_ptrs);
     ctx.emitter.instruction("ldr x11, [x9, x0, lsl #3]");                       // label pointer for this descriptor
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_lens");
+    abi::emit_symbol_address(ctx.emitter, "x9", label_lens);
     ctx.emitter.instruction("ldr x12, [x9, x0, lsl #3]");                       // label length for this descriptor
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     abi::emit_store_to_sp(ctx.emitter, "x11", 0);
@@ -455,13 +497,16 @@ fn emit_fseek_seek_warning_x86_64(
     suffix: &str,
     done_label: &str,
     failure: i64,
+    read: bool,
 ) {
     let prefix = format!("{function}: Stream filter ");
     let (fseek_filter, fseek_filter_len) = ctx.data.add_string(prefix.as_bytes());
+    let label_ptrs = if read { "_stream_read_seek_label_ptrs" } else { "_stream_write_seek_label_ptrs" };
+    let label_lens = if read { "_stream_read_seek_label_lens" } else { "_stream_write_seek_label_lens" };
     let (suffix_symbol, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+    abi::emit_symbol_address(ctx.emitter, "r9", label_ptrs);
     ctx.emitter.instruction("mov r11, QWORD PTR [r9 + rdi*8]");                  // label pointer for this descriptor
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_lens");
+    abi::emit_symbol_address(ctx.emitter, "r9", label_lens);
     ctx.emitter.instruction("mov r12, QWORD PTR [r9 + rdi*8]");                  // label length for this descriptor
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     abi::emit_store_to_sp(ctx.emitter, "r11", 0);

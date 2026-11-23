@@ -1175,6 +1175,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_stream_write_filters", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
     // PHP 8.6 write_seek_mode state: a per-fd mode (0 preserve, 1 reset, 2 strict) and
     // the php-src filter label the fseek diagnostic names.
+    out.push_str(&comm_directive("_stream_read_seek_modes", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
+    out.push_str(&comm_directive("_stream_read_seek_label_ptrs", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
+    out.push_str(&comm_directive("_stream_read_seek_label_lens", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_stream_write_seek_modes", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
     out.push_str(&comm_directive("_stream_write_seek_label_ptrs", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_stream_write_seek_label_lens", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));

@@ -183,6 +183,15 @@ pub(super) fn finish_builtin_stream_filter_attach(
             stream_filter_seek_label(id),
         );
     }
+    // string.strip_tags / dechunk / convert.* are start-only on the read chain.
+    if stream_filter_read_direction_enabled(ctx, inst)? && matches!(id, 4..=9) {
+        store_stream_filter_read_seek_mode(
+            ctx,
+            abi::int_result_reg(ctx.emitter),
+            1,
+            stream_filter_seek_label(id),
+        );
+    }
     emit_boxed_stream_resource(ctx);
     store_if_result(ctx, inst)
 }
@@ -296,42 +305,75 @@ pub(super) fn emit_rejected_stream_filter(
     store_if_result(ctx, inst)
 }
 
-/// Records a write-direction filter's PHP 8.6 `write_seek_mode` and php-src filter label
-/// for the descriptor in `fd_reg`, so `fseek()` can apply the mode's seekability rule.
-pub(super) fn store_stream_filter_write_seek_mode(
+/// Records a filter direction's seekability mode and php-src filter label for the
+/// descriptor in `fd_reg`, so `fseek()` can apply the mode's rule.
+fn store_stream_filter_seek_mode(
     ctx: &mut FunctionContext<'_>,
     fd_reg: &str,
     mode: i64,
     label: &str,
+    read: bool,
 ) {
     let (label_symbol, label_len) = ctx.data.add_string(label.as_bytes());
     let skip = ctx.next_label("sf_seek_mode_skip");
+    let modes = if read { "_stream_read_seek_modes" } else { "_stream_write_seek_modes" };
+    let ptrs = if read { "_stream_read_seek_label_ptrs" } else { "_stream_write_seek_label_ptrs" };
+    let lens = if read { "_stream_read_seek_label_lens" } else { "_stream_write_seek_label_lens" };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, fd_reg, &skip);
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_modes");
-            ctx.emitter.instruction(&format!("mov w10, #{}", mode));             // materialize the write-seek mode code
+            abi::emit_symbol_address(ctx.emitter, "x9", modes);
+            ctx.emitter.instruction(&format!("mov w10, #{}", mode));             // materialize the seek mode code
             ctx.emitter.instruction(&format!("strb w10, [x9, {}]", fd_reg));    // record the mode for this descriptor
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_ptrs");
+            abi::emit_symbol_address(ctx.emitter, "x9", ptrs);
             abi::emit_symbol_address(ctx.emitter, "x10", &label_symbol);
             ctx.emitter.instruction(&format!("str x10, [x9, {}, lsl #3]", fd_reg)); // record the php-src filter label pointer
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_seek_label_lens");
+            abi::emit_symbol_address(ctx.emitter, "x9", lens);
             abi::emit_load_int_immediate(ctx.emitter, "x10", label_len as i64);
             ctx.emitter.instruction(&format!("str x10, [x9, {}, lsl #3]", fd_reg)); // record the php-src filter label length
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
             abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, fd_reg, &skip);
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_modes");
+            abi::emit_symbol_address(ctx.emitter, "r9", modes);
             ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + {}], {}", fd_reg, mode)); // record the mode for this descriptor
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_ptrs");
+            abi::emit_symbol_address(ctx.emitter, "r9", ptrs);
             abi::emit_symbol_address(ctx.emitter, "r10", &label_symbol);
             ctx.emitter.instruction(&format!("mov QWORD PTR [r9 + {}*8], r10", fd_reg)); // record the php-src filter label pointer
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_seek_label_lens");
+            abi::emit_symbol_address(ctx.emitter, "r9", lens);
             abi::emit_load_int_immediate(ctx.emitter, "r10", label_len as i64);
             ctx.emitter.instruction(&format!("mov QWORD PTR [r9 + {}*8], r10", fd_reg)); // record the php-src filter label length
             ctx.emitter.label(&skip);
         }
+    }
+}
+
+/// Records a write-direction filter's PHP 8.6 `write_seek_mode` and php-src label.
+pub(super) fn store_stream_filter_write_seek_mode(
+    ctx: &mut FunctionContext<'_>, fd_reg: &str, mode: i64, label: &str,
+) {
+    store_stream_filter_seek_mode(ctx, fd_reg, mode, label, false);
+}
+
+/// Records a read-direction filter's fixed seekability (start-only for the compression,
+/// convert and iconv filters) and php-src label.
+pub(super) fn store_stream_filter_read_seek_mode(
+    ctx: &mut FunctionContext<'_>, fd_reg: &str, mode: i64, label: &str,
+) {
+    store_stream_filter_seek_mode(ctx, fd_reg, mode, label, true);
+}
+
+/// Returns whether a statically-known `$mode` enables the read direction.
+pub(super) fn stream_filter_read_direction_enabled(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    if stream_filter_argument_count(inst) < 3 {
+        return Ok(true);
+    }
+    match optional_const_i64_operand(ctx, inst.operands[2])? {
+        Some(mode) => Ok(mode & 1 != 0),
+        None => Ok(false),
     }
 }
 

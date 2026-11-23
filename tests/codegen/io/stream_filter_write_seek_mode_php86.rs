@@ -250,3 +250,61 @@ fclose($g);
     );
     assert_eq!(out, "false|true");
 }
+
+/// Read-side seekability: the decompressors and the convert/iconv read filters are
+/// start-only, matching php-src's `PSFS_SEEKABLE_START` read flag.
+#[test]
+fn test_stream_filter_read_seekability_php86() {
+    let out = run86(
+        r#"<?php
+file_put_contents("x.txt", "hello world");
+$f = fopen("x.txt", "r");
+stream_filter_append($f, "convert.iconv.UTF-8/UTF-16LE");
+fread($f, 4);
+echo @fseek($f, 4, 0), "|";
+echo @fseek($f, 0, 0), "|";
+fclose($f);
+$w = fopen("z.bin", "w");
+stream_filter_append($w, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($w, "hello");
+fclose($w);
+$r = fopen("z.bin", "r");
+stream_filter_append($r, "zlib.inflate", STREAM_FILTER_READ);
+echo @fseek($r, 5, 0), "|";
+echo @fseek($r, 0, 0);
+fclose($r);
+"#,
+    );
+    assert_eq!(out, "-1|0|-1|0");
+}
+
+/// The start-only read rejection names the filter's php-src label.
+#[test]
+fn test_stream_filter_read_seekability_warnings_php86() {
+    let out = run86(
+        r#"<?php
+set_error_handler(static function (int $severity, string $message): bool {
+    echo $message, "\n";
+    return true;
+});
+file_put_contents("x.txt", "hello world");
+$f = fopen("x.txt", "r");
+stream_filter_append($f, "convert.iconv.UTF-8/UTF-16LE");
+fseek($f, 4, 0);
+fclose($f);
+$w = fopen("z.bin", "w");
+stream_filter_append($w, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($w, "hello");
+fclose($w);
+$r = fopen("z.bin", "r");
+stream_filter_append($r, "zlib.inflate", STREAM_FILTER_READ);
+fseek($r, 5, 0);
+fclose($r);
+restore_error_handler();
+"#,
+    );
+    assert_eq!(
+        out,
+        "fseek(): Stream filter convert.iconv.* is seekable only to start position\nfseek(): Stream filter zlib.inflate is seekable only to start position\n"
+    );
+}

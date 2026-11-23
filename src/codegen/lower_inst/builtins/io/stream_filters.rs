@@ -300,7 +300,25 @@ pub(super) fn lower_zlib_inflate_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     emit_zlib_inflate_attach_in_place(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+        }
+    }
+    store_stream_filter_read_seek_mode(ctx, abi::int_result_reg(ctx.emitter), 1, "zlib.inflate");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8),
+        Arch::X86_64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 
@@ -404,7 +422,25 @@ pub(super) fn lower_bzip2_decompress_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     emit_bzip2_decompress_attach_in_place(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+        }
+    }
+    store_stream_filter_read_seek_mode(ctx, abi::int_result_reg(ctx.emitter), 1, "bzip2.decompress");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8),
+        Arch::X86_64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 
@@ -569,6 +605,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
             ctx.emitter.instruction("cmp x9, #2");                              // test for STREAM_FILTER_WRITE-only mode
             ctx.emitter.instruction(&format!("b.eq {}", write_label));          // install the streaming write transcoder
+            store_stream_filter_read_seek_mode(ctx, abi::int_result_reg(ctx.emitter), 1, "convert.iconv.*");
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("b {}", after_label));             // skip the write-filter attach path
             ctx.emitter.label(&write_label);
@@ -583,6 +620,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp r9, 2");                               // test for STREAM_FILTER_WRITE-only mode
             ctx.emitter.instruction(&format!("je {}", write_label));            // install the streaming write transcoder
+            store_stream_filter_read_seek_mode(ctx, abi::int_result_reg(ctx.emitter), 1, "convert.iconv.*");
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("jmp {}", after_label));           // skip the write-filter attach path
             ctx.emitter.label(&write_label);
