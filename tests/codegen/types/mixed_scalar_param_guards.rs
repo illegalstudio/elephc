@@ -1792,3 +1792,34 @@ echo $n, "\n";
     assert_eq!(output.stdout, "k 3,4,zzz 8\nt 3\nk 3,4,zzz 8\nt 3\nk 3,4,zzz 8\nt 3\n306\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A leading omitted by-reference parameter whose default can throw (`int &$a = 1 % 0`) is
+/// filled before the supplied named arguments are checked, as PHP does: `f(b: box(null))` throws
+/// `DivisionByZeroError`, not the `TypeError` for `$b`. A by-reference default parked that way
+/// (`array &$a = [PHP_INT_SIZE]`) is still released when a later check refuses or the callee
+/// throws, and an accepted call binds it by reference (`--heap-debug` leak summary clean).
+#[test]
+fn test_named_leading_throwing_by_reference_default_runs_before_the_checks() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function f(int &$a = 1 % 0, string $b = 'x') { echo "f body\n"; }
+function g(array &$a = [PHP_INT_SIZE], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; echo "g ", implode(",", $a), "\n"; }
+function t(array &$a = [PHP_INT_SIZE, 1], string $b = 'x', int $d = PHP_INT_SIZE) { $a[] = $b; throw new Exception("t " . count($a)); }
+function k(array &$a = [], string $b = 'x', int $d = 1 % 0) { echo "k body\n"; }
+for ($i = 0; $i < 3; $i++) {
+    try { f(b: box(null)); } catch (Throwable $e) { show($e); }
+    try { g(b: box(null)); } catch (Throwable $e) { show($e); }
+    g(b: box(str_repeat("z", 3)));
+    try { t(b: box("ok")); } catch (Throwable $e) { show($e); }
+    try { k(b: box(null)); } catch (Throwable $e) { show($e); }
+}
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    let round = "DivisionByZeroError: Modulo by zero\nTypeError: g(): Argument #2 ($b) must be of type string, null given\ng 8,zzz\nException: t 3\nTypeError: k(): Argument #2 ($b) must be of type string, null given\n";
+    assert_eq!(output.stdout, format!("{round}{round}{round}next\n"));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

@@ -137,7 +137,16 @@ pub(super) fn lower_named_args_with_signature_options(
                 operands.push(source_values[*source_index]);
             }
             crate::types::call_args::PlannedRegularArg::Default(_) if leading_defaults[param_index].is_some() => {
-                operands.push(leading_defaults[param_index].expect("leading default lowered"));
+                operands.push(match leading_defaults[param_index].take().expect("leading default lowered") {
+                    LeadingDefault::Rooted(value) => value,
+                    // The checks are done: retire the pin without releasing, and pass the
+                    // default as the ordinary pass would have, owned by the call as before.
+                    LeadingDefault::Pinned(value, pins) => {
+                        let span = ctx.call_site_span.unwrap_or_else(Span::dummy);
+                        super::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
+                        value
+                    }
+                });
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
                 operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
@@ -170,6 +179,16 @@ pub(super) fn lower_named_args_with_signature_options(
     operands
 }
 
+/// An omitted parameter's default lowered ahead of the supplied arguments' checks.
+#[derive(Clone)]
+enum LeadingDefault {
+    /// A by-value default, rooted across the checks and passed as is.
+    Rooted(crate::ir::ValueId),
+    /// A by-reference default that can throw, kept as the call's operand and pinned (without a
+    /// retain) in the unwind chain while the checks run.
+    Pinned(crate::ir::ValueId, Vec<super::call_operand_owners::PinnedInFlightOwner>),
+}
+
 /// Runs the runtime scalar-parameter checks of the supplied named arguments before an omitted
 /// trailing default that can throw is evaluated.
 ///
@@ -186,7 +205,7 @@ fn check_supplied_scalar_params_before_defaults(
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
     source_values: &mut [crate::ir::ValueId],
-    leading_defaults: &mut [Option<crate::ir::ValueId>],
+    leading_defaults: &mut [Option<LeadingDefault>],
 ) {
     use super::scalar_param_guards::GuardSource;
     let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
@@ -215,17 +234,27 @@ fn check_supplied_scalar_params_before_defaults(
     let last_supplied = supplied.last().map_or(0, |(param_index, _)| *param_index);
     for (param_index, arg) in plan.regular_args.iter().enumerate().take(last_supplied) {
         let crate::types::call_args::PlannedRegularArg::Default(default) = arg else { continue };
-        // A by-reference parameter's default stays in the ordinary operand pass: an owned
-        // default bound by reference has no root that survives into the call, so lowering it
-        // here leaked it when a check refused or the callee threw. Its evaluation order is only
-        // observable for a default that can throw, which a by-reference parameter rarely has.
         if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+            // A by-reference parameter's default that cannot throw stays in the ordinary
+            // operand pass: its evaluation order is unobservable. One that can throw
+            // (`int &$a = 1 % 0`) runs now, as PHP fills it before any check. It stays the
+            // call's own operand and is only pinned over the checks, so a refusal releases it
+            // and the call then binds and releases it as before. Rooting it in a temporary
+            // instead made the call bind that temporary, whose root did not survive into the
+            // call (a throwing callee leaked it).
+            if super::call_arg_coercion::default_is_inert(default) {
+                continue;
+            }
+            let value = lower_arg_with_signature(ctx, sig, param_index, default);
+            let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[value], Span::dummy());
+            leading_defaults[param_index] = Some(LeadingDefault::Pinned(value, pins));
             continue;
         }
         let value = lower_arg_with_signature(ctx, sig, param_index, default);
         let lowered = lowered_value_from_id(ctx, value);
-        leading_defaults[param_index] =
-            Some(super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value);
+        leading_defaults[param_index] = Some(LeadingDefault::Rooted(
+            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value,
+        ));
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     for (param_index, source_index) in supplied {
