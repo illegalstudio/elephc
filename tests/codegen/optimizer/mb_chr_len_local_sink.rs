@@ -370,3 +370,72 @@ function observe(int $cp): int {
         }
     }
 }
+
+/// A first-byte observation applies mb_chr's integer argument check before the fast encoder.
+#[test]
+fn test_mb_chr_first_sink_rejects_non_integer_codepoints() {
+    let source = r#"<?php
+$cp = $argc > 0 ? "65junk" : 0;
+try {
+    $s = mb_chr($cp, "UTF-8");
+    echo ord($s[0]), "\n";
+} catch (TypeError $e) {
+    echo "TypeError\n";
+}
+"#;
+    assert_eq!(compile_and_run(source), "TypeError\n");
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_first"), "{main}");
+}
+
+/// A packed observation applies the same integer argument check.
+#[test]
+fn test_mb_chr_packed_sink_rejects_non_integer_codepoints() {
+    let source = r#"<?php
+$cp = $argc > 0 ? "65junk" : 0;
+try {
+    $s = mb_chr($cp, "UTF-8");
+    echo strlen($s), ":", ord($s[0]), "\n";
+} catch (TypeError $e) {
+    echo "TypeError\n";
+}
+"#;
+    assert_eq!(compile_and_run(source), "TypeError\n");
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_packed"), "{main}");
+}
+
+/// A missing array key reaches the first-byte observation as a tagged null and keeps the
+/// bridge's deprecation while still returning the NUL byte.
+#[test]
+fn test_mb_chr_first_sink_keeps_tagged_null_deprecation() {
+    let source = r#"<?php
+$values = [];
+$cp = $values[0];
+$s = mb_chr($cp, "UTF-8");
+echo ord($s[0]), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0\n");
+    assert!(out.stderr.contains("Deprecated: mb_chr()"), "{}", out.stderr);
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_first"), "{main}");
+}
+
+/// The packed observation keeps the same tagged-null deprecation and reports the NUL length.
+#[test]
+fn test_mb_chr_packed_sink_keeps_tagged_null_deprecation() {
+    let source = r#"<?php
+$values = [];
+$cp = $values[0];
+$s = mb_chr($cp, "UTF-8");
+echo strlen($s), ":", ord($s[0]), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:0\n");
+    assert!(out.stderr.contains("Deprecated: mb_chr()"), "{}", out.stderr);
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_packed"), "{main}");
+}
