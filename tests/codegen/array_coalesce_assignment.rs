@@ -5,6 +5,7 @@
 //! - `tests/codegen/mod.rs` through the codegen integration suite.
 
 use crate::support::*;
+use crate::support::compile_and_run_with_heap_debug;
 
 /// Array defaults established with `??=` survive a parent constructor call and
 /// assignment into a declared typed property.
@@ -167,4 +168,38 @@ fn test_internal_helper_calls_do_not_select_magic_call_classes() {
     };
     let (one, many) = (asm_len(1), asm_len(12));
     assert!(many < one + one / 4, "erased() grows with __call classes: {one} -> {many} bytes");
+}
+
+/// `$this->prop[$k] ?? $d` over a declared string or array property reads the typed value (or the
+/// default while the property is still uninitialized) without boxing leaks, in a loop, under
+/// `--heap-debug`. Expected output verified against php 8.5 (`php -n`).
+#[test]
+fn test_coalesce_over_declared_string_and_array_properties_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class OffsetCoalesceHolder {
+    public string $bytes;
+    public array $items;
+    public array $rows = [];
+    public function __construct(?string $bytes, ?array $items) {
+        if ($bytes !== null) { $this->bytes = $bytes; }
+        if ($items !== null) { $this->items = $items; }
+        $this->rows = ['a' => [1, 2], 'b' => []];
+    }
+    public function char(int $i): string { return $this->bytes[$i] ?? '-'; }
+    public function item(string $k): string { return $this->items[$k] ?? 'none'; }
+    public function row(string $k): int { return $this->rows[$k][1] ?? -1; }
+}
+$set = new OffsetCoalesceHolder('xyz', ['k' => 'v']);
+$unset = new OffsetCoalesceHolder(null, null);
+$out = '';
+for ($round = 0; $round < 50; $round++) {
+    $out = $set->char(1) . $set->char(9) . $set->item('k') . $set->item('z')
+        . $unset->char(0) . $unset->item('k') . $set->row('a') . $set->row('b') . $set->row('c');
+}
+echo $out, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "y-vnone-none2-1-1\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "expected clean heap, got: {}", out.stderr);
 }
