@@ -626,6 +626,18 @@ pub(super) fn emit_callable_descriptor_invoke_as(
         let slot = ctx.ref_cell_owner_slot(&alias).expect("published selection cell");
         unregister_owned_call_operand(ctx, slot, alias_span);
         ctx.release_ref_cell_owner(&alias, Some(alias_span));
+        // The alias local itself still names the cell that was just retired, and its runtime
+        // state word still says "reference-bound". Left like that, the next execution of this
+        // call site (a loop body) releases and stores through the stale cell instead of
+        // re-promoting a fresh one: free-list corruption with an object element, a leaked cell
+        // with a scalar one. `unset_local` resets the state word (as `unset($x)` does) and the
+        // zero clears the abandoned pointer, the same detach `unset` of a reference performs.
+        if let Some(alias_slot) = ctx.local_slots.get(&alias).copied() {
+            for op in [Op::UnsetLocal, Op::ZeroLocalSlot] {
+                ctx.emit_void(op, Vec::new(), Some(Immediate::LocalSlot(alias_slot)),
+                    op.default_effects(), Some(alias_span));
+            }
+        }
     }
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);

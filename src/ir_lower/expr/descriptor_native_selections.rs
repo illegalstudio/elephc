@@ -53,6 +53,14 @@ pub(super) fn prepare(
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, span); }
     modes.into_iter().zip(args).map(|(mode, arg)| mode.map(|by_reference| {
         let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        // Start every execution of this site from a pristine alias. A previous execution (a loop
+        // body) may have left it reference-bound to a cell that a throwing callee's unwind
+        // already retired, and the store below would then go through that stale cell.
+        let alias_slot = ctx.local_slots[&alias];
+        for op in [Op::UnsetLocal, Op::ZeroLocalSlot] {
+            ctx.emit_void(op, Vec::new(), Some(Immediate::LocalSlot(alias_slot)),
+                op.default_effects(), Some(arg.span));
+        }
         let null = ctx.builder.emit_const_null();
         let null = LoweredValue { value: null, ir_type: IrType::I64 };
         store_value_into_temp(ctx, &alias, PhpType::Mixed, null, arg.span);
