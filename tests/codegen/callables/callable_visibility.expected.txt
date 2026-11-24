@@ -53,7 +53,3 @@ viaUsort 7: TypeError: usort(): Argument #2 ($callback) must be a valid callback
 viaUsort 8: TypeError: usort(): Argument #2 ($callback) must be a valid callback, class "NoClass" not found
 viaUsort 9: TypeError: usort(): Argument #2 ($callback) must be a valid callback, function "nofunction" not found or invalid function name
 viaUsort 10: TypeError: usort(): Argument #2 ($callback) must be a valid callback, no array or string given
-scope 3: Error: Call to private method H::spriv() from scope Other
-scope 4: Error: Call to protected method H::sprot() from scope Other
-scope 5: Error: Call to private method H::spriv() from scope Other
-scope 6: Error: Call to protected method H::sprot() from scope Other
