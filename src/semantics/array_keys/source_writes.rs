@@ -939,7 +939,7 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             return;
         };
         let mut locals = self.locals.clone();
-        apply_expression_facts(
+        let evaluated_target = evaluate_expression_facts(
             target,
             &mut locals,
             self.properties,
@@ -956,6 +956,7 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         self.error = validate_array_access_chain(
             self.profile,
             target,
+            &evaluated_target,
             &locals,
             self.properties,
             self.current_class,
@@ -1171,6 +1172,17 @@ fn apply_expression_facts(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> ValueFact {
+    evaluate_expression_facts(expr, locals, properties, profile, current_class).result
+}
+
+/// Applies expression writes and retains each subexpression's value at its evaluation point.
+fn evaluate_expression_facts(
+    expr: &Expr,
+    locals: &mut LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> EvaluatedExpressionFacts {
     let mut visitor = ExpressionFactUpdater {
         locals,
         properties,
@@ -1179,10 +1191,31 @@ fn apply_expression_facts(
         expression_values: HashMap::new(),
     };
     ast_visit::walk_expression(expr, &mut visitor);
-    visitor
+    let result = visitor
         .expression_values
-        .remove(&expression_id(expr))
-        .unwrap_or(ValueFact::Unknown)
+        .get(&expression_id(expr))
+        .cloned()
+        .unwrap_or(ValueFact::Unknown);
+    EvaluatedExpressionFacts {
+        result,
+        snapshots: visitor.expression_values,
+    }
+}
+
+/// Captured values from one expression walk, keyed by source-expression identity.
+struct EvaluatedExpressionFacts {
+    result: ValueFact,
+    snapshots: HashMap<usize, ValueFact>,
+}
+
+impl EvaluatedExpressionFacts {
+    /// Returns the fact recorded when one evaluated subexpression completed.
+    fn snapshot(&self, expr: &Expr) -> ValueFact {
+        self.snapshots
+            .get(&expression_id(expr))
+            .cloned()
+            .unwrap_or(ValueFact::Unknown)
+    }
 }
 
 /// Records expression results after their operands have produced their side effects.
@@ -1890,13 +1923,14 @@ fn validate_stmt(
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
-            // PHP re-reads a plain local index after the RHS, while every computed index is
-            // stabilized when its own evaluation finishes.
-            let index = if matches!(&index.kind, ExprKind::Variable(_)) {
-                infer_expr(index, locals, properties, profile, current_class)
-            } else {
-                evaluated_index
-            };
+            let index = assignment_index_fact(
+                index,
+                evaluated_index,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
             validate_index_fact(profile, &receiver, &index, index_span)?;
             locals.assign(array, array_write_fact(receiver, index, value));
         }
@@ -1907,25 +1941,24 @@ fn validate_stmt(
             locals.assign(array, array_push_fact(receiver, value));
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            apply_expression_facts(target, locals, properties, profile, current_class);
+            let evaluated_target =
+                evaluate_expression_facts(target, locals, properties, profile, current_class);
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
-            validate_array_access_chain(
+            let evaluated_indices = validate_array_access_chain(
                 profile,
                 target,
+                &evaluated_target,
                 locals,
                 properties,
                 current_class,
             )?;
             let mut indices = Vec::new();
             if let Some(array) = local_array_target(target, &mut indices) {
-                let indices: Vec<_> = indices
-                    .into_iter()
-                    .map(|index| infer_expr(index, locals, properties, profile, current_class))
-                    .collect();
+                debug_assert_eq!(indices.len(), evaluated_indices.len());
                 locals.assign(
                     array,
-                    nested_array_write_fact(locals.get(array), &indices, value),
+                    nested_array_write_fact(locals.get(array), &evaluated_indices, value),
                 );
             }
         }
@@ -1936,21 +1969,24 @@ fn validate_stmt(
             value,
         } => {
             apply_expression_facts(object, locals, properties, profile, current_class);
-            apply_expression_facts(index, locals, properties, profile, current_class);
+            let index_span = index.span;
+            let evaluated_index =
+                apply_expression_facts(index, locals, properties, profile, current_class);
             apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = property_fact(
                 infer_expr(object, locals, properties, profile, current_class),
                 property,
                 properties,
             );
-            validate_index(
-                profile,
-                &receiver,
+            let index = assignment_index_fact(
                 index,
+                evaluated_index,
                 locals,
                 properties,
+                profile,
                 current_class,
-            )?;
+            );
+            validate_index_fact(profile, &receiver, &index, index_span)?;
         }
         StmtKind::StaticPropertyArrayAssign {
             receiver,
@@ -1958,17 +1994,20 @@ fn validate_stmt(
             index,
             value,
         } => {
-            apply_expression_facts(index, locals, properties, profile, current_class);
+            let index_span = index.span;
+            let evaluated_index =
+                apply_expression_facts(index, locals, properties, profile, current_class);
             apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = static_property_fact(receiver, property, properties, current_class);
-            validate_index(
-                profile,
-                &receiver,
+            let index = assignment_index_fact(
                 index,
+                evaluated_index,
                 locals,
                 properties,
+                profile,
                 current_class,
-            )?;
+            );
+            validate_index_fact(profile, &receiver, &index, index_span)?;
         }
         StmtKind::If {
             condition,
@@ -4169,20 +4208,6 @@ fn validate_closure_value(
     validate_block(body, &mut locals, properties, profile, current_class)
 }
 
-/// Validates a proven write receiver while leaving dynamic and object dimensions to the checker.
-fn validate_index(
-    profile: SemanticProfile,
-    receiver: &ValueFact,
-    index: &Expr,
-    locals: &LocalFacts,
-    properties: &PropertyFacts,
-    current_class: Option<&str>,
-) -> Result<(), CompileError> {
-    let index_span = index.span;
-    let index = infer_expr(index, locals, properties, profile, current_class);
-    validate_index_fact(profile, receiver, &index, index_span)
-}
-
 /// Validates one index fact captured at its PHP-observable evaluation point.
 fn validate_index_fact(
     profile: SemanticProfile,
@@ -4196,28 +4221,49 @@ fn validate_index_fact(
     super::validate_write_receiver(profile, &receiver, &key, span)
 }
 
+/// Selects the assignment key PHP reads after the RHS or captured before it.
+fn assignment_index_fact(
+    index: &Expr,
+    evaluated: ValueFact,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
+    if matches!(&index.kind, ExprKind::Variable(_)) {
+        infer_expr(index, locals, properties, profile, current_class)
+    } else {
+        evaluated
+    }
+}
+
 /// Validates every key whose immediate receiver can be proven while walking to the root.
 fn validate_array_access_chain(
     profile: SemanticProfile,
     target: &Expr,
+    evaluated: &EvaluatedExpressionFacts,
     locals: &LocalFacts,
     properties: &PropertyFacts,
     current_class: Option<&str>,
-) -> Result<(), CompileError> {
-    let mut current = target;
-    while let ExprKind::ArrayAccess { array, index } = &current.kind {
-        let receiver = infer_write_receiver(array, locals, properties, profile, current_class);
-        validate_index(
-            profile,
-            &receiver,
+) -> Result<Vec<ValueFact>, CompileError> {
+    let mut indices = Vec::new();
+    let root = array_access_root(target, &mut indices);
+    let mut receiver = infer_expr(root, locals, properties, profile, current_class);
+    let mut facts = Vec::with_capacity(indices.len());
+    for index in indices {
+        let fact = assignment_index_fact(
             index,
+            evaluated.snapshot(index),
             locals,
             properties,
+            profile,
             current_class,
-        )?;
-        current = array;
+        );
+        validate_index_fact(profile, &receiver, &fact, index.span)?;
+        receiver = array_element_fact(receiver, fact.clone(), true);
+        facts.push(fact);
     }
-    Ok(())
+    Ok(facts)
 }
 
 /// Infers only receiver categories that are stable without full name or call resolution.
@@ -4320,24 +4366,6 @@ fn infer_expr(
     }
 }
 
-/// Infers a receiver that is itself an intermediate parent of a nested write.
-fn infer_write_receiver(
-    expr: &Expr,
-    locals: &LocalFacts,
-    properties: &PropertyFacts,
-    profile: SemanticProfile,
-    current_class: Option<&str>,
-) -> ValueFact {
-    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
-        return infer_expr(expr, locals, properties, profile, current_class);
-    };
-    array_element_fact(
-        infer_write_receiver(array, locals, properties, profile, current_class),
-        infer_expr(index, locals, properties, profile, current_class),
-        true,
-    )
-}
-
 /// Projects an element category while distinguishing reads from autovivifying write parents.
 fn array_element_fact(receiver: ValueFact, index: ValueFact, write_parent: bool) -> ValueFact {
     match (receiver, index) {
@@ -4423,6 +4451,18 @@ fn local_array_target<'a>(target: &'a Expr, indices: &mut Vec<&'a Expr>) -> Opti
             Some(root)
         }
         _ => None,
+    }
+}
+
+/// Returns an indexed write's root and collects its dimensions in source order.
+fn array_access_root<'a>(target: &'a Expr, indices: &mut Vec<&'a Expr>) -> &'a Expr {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            let root = array_access_root(array, indices);
+            indices.push(index);
+            root
+        }
+        _ => target,
     }
 }
 

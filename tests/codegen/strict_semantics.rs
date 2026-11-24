@@ -110,11 +110,15 @@ $key = 0;
 $plain = [[], []];
 $plain[$key] = ($key = 1) ? 'ab' : 'cd';
 $plain[1][false] = 'y';
-echo $computed[0], ':', $plain[1];
+$keys = [0];
+$nested = [[[], []]];
+$nested[0][$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd';
+echo $computed[0], ':', $plain[1], ':',
+    (int) is_string($nested[0][0]), (int) is_array($nested[0][1]);
 "#;
     assert_eq!(
         StrictFixture::new(source).run(&["--strict-array-keys"]),
-        "xb:yb"
+        "xb:yb:11"
     );
 }
 

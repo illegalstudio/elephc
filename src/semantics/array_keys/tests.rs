@@ -211,6 +211,9 @@ fn strict_array_key_source_validation_keeps_assignment_index_capture_order() {
     let accepted = [
         "<?php $keys = [0]; $values = [[], []]; $values[$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[0][false] = 'x';",
         "<?php $key = 0; $values = [[], []]; $values[$key] = ($key = 1) ? 'ab' : 'cd'; $values[1][false] = 'x';",
+        "<?php $keys = [0]; $values = [[[], []]]; $values[0][$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[0][0][false] = 'x';",
+        "<?php class CapturedPropertyKey { public array $items = [[], []]; } $keys = [0]; $box = new CapturedPropertyKey(); $box->items[$keys[0]] = ($keys[0] = false);",
+        "<?php class CapturedStaticKey { public static array $items = [[], []]; } $keys = [0]; CapturedStaticKey::$items[$keys[0]] = ($keys[0] = false);",
     ];
     for source in accepted {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
@@ -220,6 +223,9 @@ fn strict_array_key_source_validation_keeps_assignment_index_capture_order() {
     let rejected = [
         "<?php $keys = [0]; $values = [[], []]; $values[$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[1][false] = 'x';",
         "<?php $key = 0; $values = [[], []]; $values[$key] = ($key = 1) ? 'ab' : 'cd'; $values[0][false] = 'x';",
+        "<?php $keys = [0]; $values = [[[], []]]; $values[0][$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[0][1][false] = 'x';",
+        "<?php class RejectedPropertyKey { public array $items = [[], []]; } $keys = [false]; $box = new RejectedPropertyKey(); $box->items[$keys[0]] = ($keys[0] = 0);",
+        "<?php class RejectedStaticKey { public static array $items = [[], []]; } $keys = [false]; RejectedStaticKey::$items[$keys[0]] = ($keys[0] = 0);",
     ];
     for source in rejected {
         let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
