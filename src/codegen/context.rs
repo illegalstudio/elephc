@@ -13,6 +13,7 @@
 //!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
 //!   id — not the fragment — is what keeps two similarly named functions from colliding.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -77,7 +78,7 @@ pub(crate) struct FunctionContext<'a> {
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
-    callable_reachability: CallableReachabilityAnalysis,
+    callable_reachability: OnceCell<CallableReachabilityAnalysis>,
     /// Runtime names a declared-`callable` conversion may resolve when provenance is open
     /// (see `lower_elephc_normalize_callable`); `None` outside such a conversion.
     pub(super) declared_callable_candidates: Option<Vec<String>>,
@@ -198,7 +199,6 @@ impl<'a> FunctionContext<'a> {
         heap_debug: bool,
         epilogue_label: Option<String>,
     ) -> Self {
-        let callable_reachability = CallableReachabilityAnalysis::new(module, function);
         let pcntl_async_signals = module_uses_pcntl_async_signals(module);
         let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
         let function_fragment = label_fragment(&function.name);
@@ -240,7 +240,7 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             binding_state_offsets: layout.binding_state_offsets,
             local_analysis: layout.local_analysis,
-            callable_reachability,
+            callable_reachability: OnceCell::new(),
             declared_callable_candidates: None,
             shared_selector_candidates: None,
             inline_callable_selectors: false,
@@ -440,7 +440,11 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
         self.shared_selector_candidates
             .clone()
-            .or_else(|| self.callable_reachability.candidates(value))
+            .or_else(|| {
+                self.callable_reachability
+                    .get_or_init(|| CallableReachabilityAnalysis::new(self.module, self.function))
+                    .candidates(value)
+            })
             .or_else(|| self.declared_callable_candidates.clone())
     }
 
