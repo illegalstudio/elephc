@@ -1019,9 +1019,18 @@ fn check_ref_assign_variable(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let source_ty = env.get(source).cloned().ok_or_else(|| {
-        CompileError::new(span, &format!("Undefined variable: ${}", source))
-    })?;
+    // `$b = &$z` on a name nothing assigned yet creates `$z` holding null, as php does.
+    let source_ty = match env.get(source).cloned() {
+        Some(ty) => ty,
+        None if !checker.strict_locals => {
+            env.insert(source.to_string(), PhpType::Mixed);
+            checker.definitely_bound_locals.insert(source.to_string());
+            PhpType::Mixed
+        }
+        None => {
+            return Err(CompileError::new(span, &format!("Undefined variable: ${}", source)));
+        }
+    };
     if target == source {
         return Ok(());
     }

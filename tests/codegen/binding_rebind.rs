@@ -111,3 +111,15 @@ echo t1(true), t16(true), t27(true), "\n";"####;
     assert_eq!(out.stdout, "5\n1\n-1\n111\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `$b = &$z` on a name nothing assigned yet creates `$z` holding null, as php does.
+#[test]
+fn test_reference_to_an_unassigned_name_creates_it() {
+    let source = r####"<?php
+function t31() { $b = &$z; $z = 2; return [$b, $z]; }
+function t32() { $b = &$z; return $b; }
+echo json_encode(t31()), json_encode(t32()), "\n";"####;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[2,2]null\n");
+}
