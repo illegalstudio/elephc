@@ -82,11 +82,22 @@ pub fn emit_gc_frame_children(e: &mut Emitter) {
     op(e, "cmp x9, x0", "cmp r10, rax", "compact transferred-owner guards remain valid without expanding native records");
     op(e, "b.eq __rt_gc_frames_guard", "je __rt_gc_frames_guard", "select the compact guard adapter before reading extended frame metadata");
     op(e, "ldr x9, [x0, #8]", "mov r10, QWORD PTR [rax + 8]", "a call-operand record keeps its visitor where a PHP activation keeps its caller file");
-    for symbol in ["__rt_cleanup_call_operand_owner", "__rt_cleanup_call_operand_descriptor"] {
+    for symbol in [
+        "__rt_cleanup_call_operand_owner",
+        "__rt_cleanup_call_operand_descriptor",
+        "__rt_cleanup_call_reference_argument",
+    ] {
         abi::emit_symbol_address(e, if e.target.arch == Arch::AArch64 { "x10" } else { "r11" }, symbol);
-        op(e, "cmp x9, x10", "cmp r10, r11", "only the cleanup callback tells the two extended records apart");
+        op(e, "cmp x9, x10", "cmp r10, r11", "the standard cleanup callbacks mark the shorter call-operand layout");
         op(e, "b.eq __rt_gc_frames_operand_record", "je __rt_gc_frames_operand_record", "select the shorter call-operand layout");
     }
+    // Bridges, the owned-argument boundary and the invokers publish a cleanup callback of their
+    // own in the same shorter layout, which they tag in the word an activation keeps its caller
+    // line in.
+    op(e, "ldr x9, [x0, #32]", "mov r10, QWORD PTR [rax + 32]", "read the record tag, or the caller line of a PHP activation");
+    abi::emit_load_int_immediate(e, if e.target.arch == Arch::AArch64 { "x10" } else { "r11" }, abi::CALL_OPERAND_RECORD_TAG);
+    op(e, "cmp x9, x10", "cmp r10, r11", "a tagged record is a call-operand record whatever its cleanup callback");
+    op(e, "b.eq __rt_gc_frames_operand_record", "je __rt_gc_frames_operand_record", "select the shorter call-operand layout");
     emit_load_extended_visitor(e, ACTIVATION_OWNER_VISITOR_OFFSET);
     abi::emit_jump(e, "__rt_gc_frames_have_visitor");
     e.label("__rt_gc_frames_operand_record");

@@ -40,7 +40,7 @@ pub use calls::{
 };
 pub(crate) use call_operand_scope::{
     emit_unlink_call_operand_owner_at_address,
-    CALL_OPERAND_OWNER_RECORD_BYTES,
+    CALL_OPERAND_OWNER_RECORD_BYTES, CALL_OPERAND_RECORD_TAG,
     emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
     emit_link_call_operand_custom_cleanup_at_stack,
     emit_push_call_operand_owner, emit_push_call_reference_argument_owner, emit_unlink_call_operand_owner_at_stack,

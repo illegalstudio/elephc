@@ -15,6 +15,14 @@ use crate::codegen_support::emit::Emitter;
 
 pub(crate) const CALL_OPERAND_OWNER_RECORD_BYTES: usize = 48;
 
+/// Word 4 of every record published through the shared owner layout.
+///
+/// A saved-frame walker has to tell a call-operand record (visitor at word 5) from a PHP activation
+/// (caller file at word 5, visitor at word 6). The cleanup callback cannot say so: bridges, the
+/// owned-argument boundary and the invokers publish their own. Word 4 is the caller line of an
+/// activation, a small integer, so this constant cannot be mistaken for one.
+pub(crate) const CALL_OPERAND_RECORD_TAG: i64 = 0x4f50_5245_4331;
+
 /// Publishes a value in a preallocated owned-value guard before later code can throw.
 pub(crate) fn emit_guard_owned_at_stack(
     emitter: &mut Emitter,
@@ -122,6 +130,7 @@ fn emit_link_owner_with_cleanup(
     emit_store_to_sp(emitter, scratch, record_offset + 8);
     emit_load_int_immediate(emitter, scratch, 0);
     emit_store_to_sp(emitter, scratch, record_offset + 24);
+    emit_load_int_immediate(emitter, scratch, CALL_OPERAND_RECORD_TAG);
     emit_store_to_sp(emitter, scratch, record_offset + 32);
     emit_symbol_address(emitter, scratch, visitor);
     emit_store_to_sp(emitter, scratch, record_offset + 40);
@@ -163,7 +172,8 @@ pub(crate) fn emit_link_call_operand_owner_in_frame(
     emit_symbol_address(emitter, scratch, "__rt_cleanup_call_operand_owner");
     emit_store_to_address(emitter, scratch, record, 8);
     emit_store_zero_to_address(emitter, record, 24);
-    emit_store_zero_to_address(emitter, record, 32);
+    emit_load_int_immediate(emitter, scratch, CALL_OPERAND_RECORD_TAG);
+    emit_store_to_address(emitter, scratch, record, 32);
     emit_symbol_address(emitter, scratch, "__rt_gc_operand_frame_owners");
     emit_store_to_address(emitter, scratch, record, 40);
     emit_store_reg_to_symbol(emitter, record, "_exc_call_frame_top", 0);

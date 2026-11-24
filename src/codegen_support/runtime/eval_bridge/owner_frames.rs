@@ -23,7 +23,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, data, record, 16);
     abi::emit_store_to_address(emitter, visitor, record, 40);
     abi::emit_store_zero_to_address(emitter, record, 24);
-    abi::emit_store_zero_to_address(emitter, record, 32);
+    // The tag lets the saved-frame walker read the visitor at word 5 of this shorter record.
+    abi::emit_load_int_immediate(emitter, scratch, abi::CALL_OPERAND_RECORD_TAG);
+    abi::emit_store_to_address(emitter, scratch, record, 32);
     abi::emit_symbol_address(emitter, scratch, "__rt_eval_owner_frame_noop");
     abi::emit_store_to_address(emitter, scratch, record, 8);
     abi::emit_store_reg_to_symbol(emitter, record, "_exc_call_frame_top", 0);
