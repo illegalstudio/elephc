@@ -266,9 +266,26 @@ echo $runner->run(1);
 "#;
     let (one_asm, _runtime_asm, _libraries) =
         compile_source_to_asm_with_options(one, &dir, 8_388_608, false, false);
+    // A program that calls an unseen callable also compiles the CLI's session surface, whose
+    // save-handler adapter holds open Mixed callback sites of its own: the dispatcher exists
+    // anyway, and the lone user site calls it instead of carrying a second inline ladder.
+    assert_eq!(
+        one_asm.matches("_eir_shared_mixed_callable_invoke:").count(),
+        1,
+        "the dispatcher the session adapter already needs must be emitted once"
+    );
+    let run_body = one_asm
+        .split_once("@fn name=OneRunner::run symbol=")
+        .and_then(|(_, rest)| rest.split_once("@endfn name=OneRunner::run"))
+        .expect("OneRunner::run body")
+        .0;
     assert!(
-        !one_asm.contains("_eir_shared_mixed_callable_invoke"),
-        "one reachable open Mixed callback site must stay inline"
+        run_body.contains("_eir_shared_mixed_callable_invoke"),
+        "the lone open Mixed callback site must reuse the existing dispatcher"
+    );
+    assert!(
+        !run_body.contains("runtime_descriptor_release_done"),
+        "the lone site must not carry an inline resolver of its own"
     );
     assert!(
         one_asm

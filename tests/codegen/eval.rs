@@ -240,11 +240,26 @@ eval($code);
                 (line.starts_with("bl ") || line.starts_with("call ")) && line.contains(prefix)
             })
             .count();
+        // The bridge sites reach the lookups through the module's one context-bearing resolver
+        // (`__elephc_eval_resolve_callable_arg`), so the lookup is called from that resolver
+        // alone; the sites that share it are counted below.
         assert!(
-            calls >= 2,
-            "multiple callable sites should reuse {prefix}; observed {calls} calls"
+            calls >= 1,
+            "the shared resolver should call {prefix}; observed {calls} calls"
         );
     }
+    let resolver_calls = user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.contains("__elephc_eval_resolve_callable_arg")
+        })
+        .count();
+    assert!(
+        resolver_calls >= 2,
+        "multiple callable sites should reuse the shared resolver; observed {resolver_calls} calls"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

@@ -1517,7 +1517,7 @@ echo call_user_func_array(make_callback(), $args);
 #[test]
 fn test_call_user_func_array_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
     let dir = make_cli_test_dir("elephc_cufa_unknown_stacked_capture_descriptor_invoker");
-    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 $base = 10;
 $callbacks = [
@@ -1550,7 +1550,7 @@ echo call_user_func_array($cb, $args);
     );
     let out = assemble_and_run(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &dir,
         &required_libraries,
         &default_link_paths(),

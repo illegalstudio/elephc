@@ -3236,6 +3236,40 @@ echo $n;
 }
 
 
+/// Returns the text of the invoker body a closure's descriptor reaches.
+///
+/// The descriptor's invoker word names either the body (`_eir_cbody_*`) or a shared entry that
+/// branches to it (`_eir_shared_callable_invoker_*`, one per distinct descriptor context); the
+/// body is then the text from its `runtime callable invoker` marker to the next one.
+fn closure_invoker_body(asm: &str, closure_symbol: &str) -> String {
+    let entry = format!("    .quad {closure_symbol}\n");
+    let descriptor = asm.split_once(&entry).expect("the closure's descriptor entry word").1;
+    // Descriptor words after the entry: name, name length, signature, environment, invocation,
+    // invoker.
+    let invoker = descriptor
+        .lines()
+        .nth(5)
+        .and_then(|line| line.trim().strip_prefix(".quad "))
+        .expect("the closure descriptor's invoker word")
+        .to_string();
+    let body = if invoker.starts_with("_eir_cbody_") {
+        invoker
+    } else {
+        let shared = asm
+            .split_once(&format!("{invoker}:\n"))
+            .unwrap_or_else(|| panic!("the shared invoker entry {invoker}"))
+            .1;
+        shared
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("b ").filter(|label| label.starts_with("_eir_cbody_")))
+            .expect("the shared invoker entry branches to its body")
+            .to_string()
+    };
+    let marker = format!("runtime callable invoker {body}\n");
+    let text = asm.split_once(&marker).unwrap_or_else(|| panic!("the invoker body {body}")).1;
+    text.split("runtime callable invoker").next().unwrap_or("").to_string()
+}
+
 /// The invoker's post-call argument releases must not run while the result is still a REGISTER PAIR.
 ///
 /// Every release is a call, and a call preserves nothing. Only a counted pointer fits in the
@@ -3267,11 +3301,10 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
     let dir = make_cli_test_dir("elephc_invoker_string_result_release");
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let invoker = user_asm
-        .split("runtime callable invoker")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    // The program compiles with the CLI's world (the session surface among it), so the first
+    // invoker emitted is no longer this closure's: follow the closure's own descriptor to the
+    // invoker body it reaches (descriptor -> shared entry -> `_eir_cbody_*`).
+    let invoker = closure_invoker_body(&user_asm, "_fn__u__u_eir_u_closure_u_main_u_0");
     let boxing = invoker
         .find("__rt_heap_alloc")
         .unwrap_or_else(|| panic!("the invoker must box its result:\n{}", invoker));
