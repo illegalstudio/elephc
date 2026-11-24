@@ -272,6 +272,15 @@ abstract class C { use A, B, S; }
         assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
         assert!(!message.contains("Cannot override final method"), "{message}");
     }
+    // Concrete methods of both kinds still meet a final parent method first.
+    for source in [
+        "<?php\nclass P { final public function foo() {} }\ntrait S { public static function foo() { return 1; } }\nclass C extends P { use S; public function foo() {} }\n",
+        "<?php\nclass P { final public static function foo() {} }\ntrait S { public function foo() { return 1; } }\nclass C extends P { use S; public static function foo() { return 2; } }\n",
+    ] {
+        let message = check_source(source).expect_err("final parent override should fail");
+        assert!(message.contains("Cannot override final method P::foo"), "{message}");
+        assert!(!message.contains("Cannot change method kind"), "{message}");
+    }
 }
 
 /// A trait that uses one trait requiring a method and another implementing it has a concrete

@@ -439,14 +439,18 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
     )
 }
 
-/// Returns whether `class` itself holds another method named like `method` of the other kind
-/// (static or instance). Only two trait requirements can do that, and PHP reports their kind
-/// conflict before a final one (`use A, B { A::foo as final; }` with a static `B::foo`), while a
-/// child of a final parent method is still reported as a final override first.
+/// Returns whether `method` is abstract and `class` itself holds another abstract method of
+/// that name of the other kind (static or instance). Two trait requirements can do that, and PHP
+/// reports their kind conflict before a final one (`use A, B { A::foo as final; }` with a static
+/// `B::foo`). A concrete method beside one of the other kind still meets a final parent method
+/// first, as in PHP.
 fn has_same_class_kind_conflict(class: &FlattenedClass, method: &ClassMethod) -> bool {
-    class.methods.iter().any(|other| {
-        other.is_static != method.is_static && other.name.eq_ignore_ascii_case(&method.name)
-    })
+    method.is_abstract
+        && class.methods.iter().any(|other| {
+            other.is_abstract
+                && other.is_static != method.is_static
+                && other.name.eq_ignore_ascii_case(&method.name)
+        })
 }
 
 /// Constructs a `CompileError` for attempting to change a static method to
