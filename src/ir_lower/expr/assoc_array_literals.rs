@@ -482,11 +482,19 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         // must match that result rather than stamp a raw object payload over the cell.
         return Some(PhpType::Mixed);
     }
-    class_info
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
+    if let Some((_, ty)) = class_info.properties.iter().find(|(name, _)| name == property) {
+        return Some(normalize_value_php_type(ty.codegen_repr()));
+    }
+    // A magic getter's result is whatever `__get()` returns. Without this fallback a property
+    // read inside a literal fell back to the syntactic `int` stamp, which cast a CData/object
+    // payload to int and truncated it (the `FFI` context's dynamic globals hit this through
+    // magic `__call` argument arrays). Restrict the fallback to the FFI surface: other magic
+    // classes (notably a SimpleXMLElement subclass) must keep their native-dimension result
+    // typing, or a `settype()` on one of their properties takes the generic object conversion.
+    if normalized.eq_ignore_ascii_case("FFI") || normalized.eq_ignore_ascii_case("FFI\\CData") {
+        return magic_get_result_type(ctx, normalized).map(normalize_value_php_type);
+    }
+    None
 }
 
 /// Returns the declared property result type plus `null` when a nullsafe receiver may be null.

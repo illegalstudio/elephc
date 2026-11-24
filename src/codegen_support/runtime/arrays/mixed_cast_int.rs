@@ -54,6 +54,8 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_int_from_array");                 // hashes cast to their current element count
     emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
     emitter.instruction("b.eq __rt_mixed_cast_int_from_resource");              // resources cast to their display id
+    emitter.instruction("cmp x0, #6");                                          // does the mixed payload hold an object?
+    emitter.instruction("b.eq __rt_mixed_cast_int_from_object");                // objects warn and cast to 1 like PHP
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads cast to zero for now
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the normalized integer result
 
@@ -82,6 +84,23 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_int_zero");
     emitter.instruction("mov x0, #0");                                          // null containers cast to zero
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the null-container cast result
+
+    emitter.label("__rt_mixed_cast_int_from_object");
+    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    abi::emit_symbol_address(emitter, "x10", "_ffi_cdata_class_id");            // resolve the FFI CData class id symbol
+    emitter.instruction("ldr x10, [x10]");                                      // load the CData class id (-1 without FFI)
+    emitter.instruction("cmp x9, x10");                                         // is this an FFI CData object?
+    emitter.instruction("b.ne __rt_mixed_cast_int_object_non_cdata");           // other objects keep the previous zero result
+    emitter.instruction("mov x0, x1");                                          // pass the object payload to the warning helper
+    emitter.instruction("mov x1, #0");                                          // select the integer warning wording
+    emitter.instruction("mov x2, #0");                                          // no eval context is available from this cast helper
+    emitter.instruction("mov x3, #0");                                          // native object, not a callable descriptor
+    emitter.instruction("bl __rt_sprintf_warn_object_numeric");                 // emit PHP's object-to-int warning
+    emitter.instruction("mov x0, #1");                                          // PHP casts a CData object to 1
+    emitter.instruction("b __rt_mixed_cast_int_done");                          // return the normalized integer result
+    emitter.label("__rt_mixed_cast_int_object_non_cdata");
+    emitter.instruction("mov x0, #0");                                          // non-CData objects preserve the previous zero result
+    emitter.instruction("b __rt_mixed_cast_int_done");                          // return the normalized integer result
 
     emitter.label("__rt_mixed_cast_int_from_resource");
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
@@ -126,6 +145,8 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_int_from_array_linux_x86_64");      // hashes cast to their current element count
     emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
     emitter.instruction("je __rt_mixed_cast_int_from_resource_linux_x86_64");   // resources cast to their display id
+    emitter.instruction("cmp rax, 6");                                          // does the mixed payload hold an object?
+    emitter.instruction("je __rt_mixed_cast_int_from_object_linux_x86_64");     // objects warn and cast to 1 like PHP
     emitter.instruction("mov rax, 0");                                          // null and unsupported payloads cast to zero for now
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the normalized integer result
 
@@ -156,6 +177,21 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_int_zero_linux_x86_64");
     emitter.instruction("mov rax, 0");                                          // null containers cast to zero
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the null-container cast result
+
+    emitter.label("__rt_mixed_cast_int_from_object_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the object's runtime class id
+    abi::emit_symbol_address(emitter, "r10", "_ffi_cdata_class_id");            // resolve the FFI CData class id symbol
+    emitter.instruction("cmp rax, QWORD PTR [r10]");                            // is this an FFI CData object?
+    emitter.instruction("jne __rt_mixed_cast_int_object_non_cdata_linux_x86_64"); // other objects keep the previous zero result
+    emitter.instruction("xor esi, esi");                                        // select the integer warning wording
+    emitter.instruction("xor edx, edx");                                        // no eval context is available from this cast helper
+    emitter.instruction("xor ecx, ecx");                                        // native object, not a callable descriptor
+    abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric_x64");      // emit PHP's object-to-int warning
+    emitter.instruction("mov rax, 1");                                          // PHP casts a CData object to 1
+    emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the normalized integer result
+    emitter.label("__rt_mixed_cast_int_object_non_cdata_linux_x86_64");
+    emitter.instruction("xor eax, eax");                                        // non-CData objects preserve the previous zero result
+    emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the normalized integer result
 
     emitter.label("__rt_mixed_cast_int_from_resource_linux_x86_64");
     emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the registry argument

@@ -64,6 +64,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("weak_reference", crate::core_prelude::program_uses_weak_reference),
     ("pcre", crate::pcre_prelude::program_uses_surface),
     ("uri", crate::uri_prelude::program_uses_uri),
+    ("ffi", crate::ffi_prelude::detect::program_uses_ffi),
 ];
 
 /// Every prelude function decided per name (the OPcache/INI and version preludes' own lists).

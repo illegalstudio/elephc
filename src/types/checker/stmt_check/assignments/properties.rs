@@ -1028,7 +1028,9 @@ fn resolve_object_array_property(
         }
     }
     if class_info.visible_property(property).is_none() {
-        if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes) {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes)
+            || class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+        {
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok((sig.return_type.clone(), true));
             }

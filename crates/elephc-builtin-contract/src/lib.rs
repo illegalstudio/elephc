@@ -62,7 +62,7 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
-pub use class_spec::{ClassContract, ClassKind, ClassRoute};
+pub use class_spec::{interface_is_php_visible, ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use constant_deprecation::{
     class_constant_deprecation, global_constant_deprecation, is_deprecated_class_constant_name,
@@ -79,7 +79,8 @@ pub use module::PhpModule;
 pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
     ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
-    ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS, TIDY_CASTS, TIDY_OPERATORS,
+    ObjectShift, BCMATH_NUMBER_OPERATORS, FFI_CDATA_OPERATORS, GMP_CASTS, GMP_OPERATORS, TIDY_CASTS,
+    TIDY_OPERATORS,
 };
 pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
 pub use php_version::PhpVersion;

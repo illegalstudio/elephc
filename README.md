@@ -502,6 +502,7 @@ cargo run -- build hello.php
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
 | [FFI memory](examples/ffi-memory/) | Raw C memory patterns with `malloc`, `free`, `memcpy` via FFI |
+| [FFI callbacks](examples/ffi-callbacks/) | PHP closures called from C through libffi-backed function pointers (`qsort`) |
 
 ## FFI
 
@@ -526,6 +527,9 @@ raise(15);
 
 Notes:
 
+- The compiler's `extern` surface is separate from PHP's runtime `ext/ffi`
+  surface (`FFI::cdef`, `FFI::load`, `FFI\CData`, callbacks), documented in
+  [docs/php/ffi.md](docs/php/ffi.md).
 - `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
 - `string` arguments are copied to temporary null-terminated C strings for the duration of the native call.
 - `string` return values are copied back into owned elephc strings.

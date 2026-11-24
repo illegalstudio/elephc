@@ -367,6 +367,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
         (with_crates.contains("uri"), "uri"),
+        (with_crates.contains("ffi"), "ffi"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -706,6 +707,33 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let locale_used = crate::locale_prelude::program_uses_locale(&ast);
     let ast = crate::locale_prelude::inject_if_used(ast, locale_used, target.platform);
     timings.record_since("locale-prelude", phase_started);
+    // Inject PHP's `ext/ffi` surface (FFI, FFI\CData, FFI\CType and the exception
+    // classes) only when the program references it. Declaring the prelude's
+    // `extern "elephc_ffi"` block is what links the bridge, so FFI-free binaries
+    // never carry the C parser or libffi.
+    // ext/ffi's bridge reaches libffi through the platform dynamic loader and is not part of
+    // the iOS bridge set. Fail with an explicit diagnostic instead of an unresolved symbol at
+    // final link (the AGENTS target policy requires a diagnostic for an unsupported target).
+    // Use the same detection result as injection: source-only FFI must be rejected too.
+    let ffi_used = with_crates.contains("ffi")
+        || autoloaded("ffi")
+        || crate::ffi_prelude::detect::program_uses_ffi(&ast);
+    if target.is_ios() && ffi_used {
+        crate::progress::clear();
+        errors::report(&errors::CompileError::new(
+            Span::new(0, 0),
+            "PHP FFI is not supported on iOS targets",
+        ));
+        process::exit(1);
+    }
+    crate::progress::phase("ffi-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::ffi_prelude::inject_if_used(ast, ffi_used, &mut prelude_inventory);
+    // Introspection-driven injection (eval, get_declared_classes) also needs the bridge even
+    // when the surface is only reachable through an eval fragment and the extern declarations
+    // never reach the main checker's required-library set.
+    let ffi_prelude_injected = prelude_inventory.groups.contains_key("ffi");
+    timings.record_since("ffi-prelude", phase_started);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an
     // interim prelude (choice B vs draft PR #654's native libxml stack).
@@ -1021,6 +1049,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
+    if ffi_prelude_injected
+        && !check_result.required_libraries.iter().any(|library| library == "elephc_ffi")
+    {
+        check_result.required_libraries.push("elephc_ffi".to_string());
+    }
     timings.record_since("typecheck", phase_started);
     if emit == Emit::Phpext && hosted_php_ext.is_some() {
         crate::progress::clear();

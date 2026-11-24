@@ -557,8 +557,15 @@ fn emit_stateful_extern_callback_trampoline(
 
 /// Returns the C-visible extern callback parameter types used before PHP boxing.
 fn extern_callback_visible_arg_types(callback_sig: &FunctionSig) -> Vec<PhpType> {
-    callback_sig
-        .params
+    let visible = if callback_sig.variadic.as_deref()
+        == Some(crate::func_args::HIDDEN_ARGS_PARAM)
+    {
+        let end = callback_sig.params.len().saturating_sub(1);
+        &callback_sig.params[..end]
+    } else {
+        &callback_sig.params[..]
+    };
+    visible
         .iter()
         .map(|(_, ty)| match ty.codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) => PhpType::Int,

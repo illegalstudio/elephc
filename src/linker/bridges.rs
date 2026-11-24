@@ -426,6 +426,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_ffi",
+        env_var: "ELEPHC_FFI_LIB_DIR",
+        crate_name: "elephc-ffi",
+        flag_name: "ffi",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge implements PHP's ext/ffi declaration parser, CData/CType model,
+        // and dynamic C calls; the libffi sources are compiled into the archive.
+        php_extensions: &["ffi"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
 ];
 
 /// Locates (auto-building in a source checkout) the archive of the bridge
@@ -844,6 +858,23 @@ impl BridgeStaticlib {
             return self.validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
         }
         if let Some(archive) = self.find_archive() {
+            // `cargo test` builds the FFI archive with the `php-src-fixtures` feature, and Cargo
+            // writes both feature profiles to the same filename. A later ordinary compile in
+            // this checkout would otherwise link the test-only `zend_test` shims into a user
+            // binary. Rebuild without the feature unless this process is a test/CI run that
+            // deliberately wants them.
+            if self.lib_name == "elephc_ffi"
+                && std::env::var_os("ELEPHC_TEST_PREBUILT_BRIDGES").is_none()
+                && std::env::var_os("ELEPHC_FFI_FIXTURES").is_none()
+                && ffi_archive_has_fixture_symbol(&archive)
+            {
+                if let Some(workspace) = self.find_workspace() {
+                    self.build_staticlib(&workspace);
+                    if let Some(rebuilt) = self.find_archive() {
+                        return self.validate_archive(rebuilt);
+                    }
+                }
+            }
             if self.lib_name == "elephc_pdo"
                 && super::pdo::profile_selected()
                 && self.claim_rebuild_attempt()
@@ -1486,6 +1517,14 @@ fn rebuild_replaces(archive: &Path, output_dir: &Path) -> bool {
     }
 }
 
+/// Returns whether an FFI archive carries the test-only `php-src-fixtures` symbols.
+fn ffi_archive_has_fixture_symbol(path: &Path) -> bool {
+    const MARKER: &[u8] = b"elephc_ffi_bug79096";
+    std::fs::read(path)
+        .map(|bytes| bytes.windows(MARKER.len()).any(|window| window == MARKER))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1514,6 +1553,19 @@ mod tests {
                 bridge.lib_name
             );
         }
+    }
+
+    /// The stale FFI archive guard recognizes the test-only fixture symbol in an archive.
+    #[test]
+    fn ffi_archive_fixture_marker_is_detected() {
+        let dir = scratch("ffi_fixture_marker");
+        let with = dir.join("with.a");
+        let without = dir.join("without.a");
+        std::fs::write(&with, b"prefix elephc_ffi_bug79096 suffix").expect("write marker archive");
+        std::fs::write(&without, b"ordinary archive").expect("write clean archive");
+        assert!(ffi_archive_has_fixture_symbol(&with));
+        assert!(!ffi_archive_has_fixture_symbol(&without));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Creates an empty directory unique across parallel test threads.

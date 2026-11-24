@@ -106,7 +106,7 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let ty = ctx.value_php_type(value)?;
     let result = match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
-        PhpType::Object(name) => object_type_implements_iterable(ctx, &name),
+        PhpType::Object(name) => object_type_is_php_iterable(ctx, &name),
         PhpType::Int
         | PhpType::Float
         | PhpType::Str
@@ -128,6 +128,12 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
     };
     emit_static_bool(ctx, result);
     store_if_result(ctx, inst)
+}
+
+/// Returns whether a statically known class satisfies PHP's `is_iterable()` surface.
+fn object_type_is_php_iterable(ctx: &FunctionContext<'_>, type_name: &str) -> bool {
+    object_type_implements_iterable(ctx, type_name)
+        && elephc_builtin_contract::interface_is_php_visible(type_name, "Traversable")
 }
 
 /// Emits runtime `is_iterable()` checks for a boxed Mixed or Union value.
@@ -345,8 +351,17 @@ fn emit_object_countable_check(ctx: &mut FunctionContext<'_>) {
         abi::int_arg_reg_name(target, 1),
         countable_id as i64,
     );
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), 1);
-    abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // test the object's runtime interface list for Countable
+    // Use the compiler-internal interface table: FFI\CData hides Countable from PHP-visible
+    // `class_implements()` while count() and is_countable() still use its internal handler.
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [x0]");                            // load the object's runtime class id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");                // load the object's runtime class id
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");  // test the internal interface table for Countable
 }
 
 /// Emits runtime `is_countable()` for a boxed Mixed or Union value.

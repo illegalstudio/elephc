@@ -38,7 +38,7 @@ pub(crate) const ABSENT_MESSAGE_SYMBOL: &str = "_exc_absent_metadata_msg";
 /// For class catches: walks the parent-id chain from the thrown object's class up to the root,
 /// checking each ancestor against the catch class_id. Sentinel `-1` marks root classes.
 ///
-/// For interface catches: indexes into the per-class interface metadata table (`_class_interface_ptrs`)
+/// For interface catches: indexes into the PHP-visible per-class interface metadata table
 /// and scans the `[interface_id, impl_ptr]` pairs until a match or end-of-list.
 /// The caller is responsible for pre-allocating the required stack frame and saving callee-saved registers
 /// according to the target ABI before calling this helper.
@@ -82,7 +82,7 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // x10 = total number of emitted classes
     emitter.instruction("cmp x9, x10");                                         // is the thrown object's class_id within the emitted class table?
     emitter.instruction("b.hs __rt_exception_matches_no");                      // out-of-range class ids cannot satisfy an interface catch safely
-    abi::emit_symbol_address(emitter, "x11", "_class_interface_ptrs");          // load page of the class-to-interface metadata table
+    abi::emit_symbol_address(emitter, "x11", "_class_php_interface_ptrs");      // load page of the PHP-visible class-to-interface table
     emitter.instruction("lsl x12, x9, #3");                                     // scale class_id by 8 bytes per metadata pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // x11 = pointer to this class's interface metadata block
     emitter.instruction("ldr x12, [x11]");                                      // x12 = number of emitted interfaces for this class
@@ -147,7 +147,7 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_class_gc_desc_count", 0);     // r9 = total number of emitted class metadata slots
     emitter.instruction("cmp r8, r9");                                          // is the thrown object's class_id within the emitted class table?
     emitter.instruction("jae __rt_exception_matches_no");                       // out-of-range class ids cannot satisfy an interface catch safely
-    abi::emit_symbol_address(emitter, "r10", "_class_interface_ptrs");          // materialize the class-to-interface metadata table base pointer
+    abi::emit_symbol_address(emitter, "r10", "_class_php_interface_ptrs");      // materialize the PHP-visible class-to-interface table base
     emitter.instruction("mov r10, QWORD PTR [r10 + r8 * 8]");                   // r10 = pointer to this class's interface metadata block
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = number of emitted interfaces for this class
     emitter.instruction("add r10, 8");                                          // advance to the first [interface_id, impl_ptr] pair

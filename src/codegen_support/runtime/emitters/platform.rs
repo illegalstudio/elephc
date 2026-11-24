@@ -18,7 +18,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     // I/O runtime functions
     // The terminal-stdout indirection every echo/print travels through. Always
     // emitted (every program can echo); its body differs for `--web` builds.
-    io::emit_stdout_write(emitter, features.web, mbstring);
+    io::emit_stdout_write(emitter, features.web, mbstring, features.ffi);
     // Backs file_get_contents('php://input'); reads the request body under --web,
     // returns false (null) otherwise. Always emitted so the EIR call resolves.
     io::emit_php_input(emitter, features.web);

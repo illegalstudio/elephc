@@ -43,9 +43,20 @@ pub(crate) fn check_iterator_source(
 fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+        // FFI objects are checked at runtime: php-src raises its TypeError for these sources
+        // instead of failing the AOT build on a statically non-Traversable class.
+        PhpType::Object(name) if is_ffi_iterator_source(name) => true,
         PhpType::Object(name) => traversable_object_supported(checker, name),
         _ => false,
     }
+}
+
+/// Returns whether an FFI class gets php-src's runtime `iterator_to_array()` TypeError.
+fn is_ffi_iterator_source(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("FFI")
+        || name.eq_ignore_ascii_case("FFI\\CData")
+        || name.eq_ignore_ascii_case("FFI\\CType")
 }
 
 /// Checks iterator apply source and reports a compile error when it is invalid.

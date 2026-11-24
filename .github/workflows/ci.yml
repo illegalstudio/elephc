@@ -58,7 +58,9 @@ env:
     -p elephc-instr
     -p elephc-probe
     -p elephc-curl
+    -p elephc-ffi
     -p elephc-zend
+    --features elephc-ffi/php-src-fixtures
 
 jobs:
   cancel-rebuilt-queue-runs:

@@ -927,3 +927,24 @@ var_dump($child->{$name});
     );
     assert_eq!(out, "string(4) \"text\"\nint(42)\nstring(8) \"declared\"\n");
 }
+
+/// A runtime property name still stores into a declared public slot before `__set` runs.
+#[test]
+fn test_dynamic_property_name_prefers_declared_public_slot_over_magic_set() {
+    let out = compile_and_run(
+        r#"<?php
+class MagicPublicSlot {
+    public $x = 1;
+    public $log = [];
+    public function __set($name, $value) {
+        $this->log[] = $name;
+    }
+}
+$object = new MagicPublicSlot();
+$name = 'x';
+$object->$name = 42;
+var_dump($object->x, $object->log);
+"#,
+    );
+    assert_eq!(out, "int(42)\narray(0) {\n}\n");
+}

@@ -1253,21 +1253,28 @@ fn merge_local_assignment_type(
                 }
             }
             if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
-                let message = format!(
-                    "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
-                    name, existing, ty
-                );
-                // Filed against the DECISION's key, not pushed straight into `warnings`, so a
-                // later walk that re-decides this site and drops the retype drops the warning
-                // too. A span that names no node files no decision either, so its warning has
-                // nothing that could retract it and goes out directly, as before.
-                if span.identifies_a_node() {
-                    checker.binding_decision_warnings.insert(
-                        (span, name.to_string()),
-                        CompileWarning::new(span, &message),
+                // Parser-generated incdec captures are internal places, not user locals. A
+                // native XML property read captures the proxy object while the operator's
+                // numeric region pre-types the temporary, so reporting the storage widening
+                // would warn about a compiler temporary on valid `$xml->node++` code. The
+                // retype below still runs; only the user-visible diagnostic is withheld.
+                if !name.contains("__elephc_element_incdec_") {
+                    let message = format!(
+                        "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
+                        name, existing, ty
                     );
-                } else {
-                    checker.warnings.push(CompileWarning::new(span, &message));
+                    // Filed against the DECISION's key, not pushed straight into `warnings`, so a
+                    // later walk that re-decides this site and drops the retype drops the warning
+                    // too. A span that names no node files no decision either, so its warning has
+                    // nothing that could retract it and goes out directly, as before.
+                    if span.identifies_a_node() {
+                        checker.binding_decision_warnings.insert(
+                            (span, name.to_string()),
+                            CompileWarning::new(span, &message),
+                        );
+                    } else {
+                        checker.warnings.push(CompileWarning::new(span, &message));
+                    }
                 }
                 // The span EIR lowering consults to abandon the old frame slot instead of
                 // storing the new value through it.

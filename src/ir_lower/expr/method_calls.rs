@@ -36,6 +36,35 @@ pub(super) fn recorded_method_access_message(
     })
 }
 
+/// Maps `$ffi->new()`, `$ffi->type()`, and `$ffi->cast()` to their context-aware helpers.
+///
+/// The static `FFI::*` signatures cannot see the receiver's cdef context. Ordinary and
+/// nullsafe calls share this mapping so `$ffi?->new()` resolves in the same context.
+pub(super) fn ffi_instance_method_name<'a>(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: crate::ir::ValueId,
+    method: &'a str,
+) -> &'a str {
+    let receiver_ty = ctx.builder.value_php_type(receiver).codegen_repr();
+    let ffi_receiver = match &receiver_ty {
+        PhpType::Object(name) => name.trim_start_matches('\\').eq_ignore_ascii_case("FFI"),
+        PhpType::Union(members) => members.iter().any(|member| {
+            matches!(member, PhpType::Object(name)
+                if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI"))
+        }),
+        _ => false,
+    };
+    if !ffi_receiver {
+        return method;
+    }
+    match php_symbol_key(method).as_str() {
+        "new" => "__elephc_instance_new",
+        "type" => "__elephc_instance_type",
+        "cast" => "__elephc_instance_cast",
+        _ => method,
+    }
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -44,6 +73,7 @@ pub(super) fn lower_method_call(
     args: &[Expr],
     op: Op,
     expr: &Expr,
+    allow_cdata_invoke: bool,
 ) -> LoweredValue {
     // A statically-decided private/protected method access from an inaccessible
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
@@ -57,6 +87,29 @@ pub(super) fn lower_method_call(
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    }
+    if !allow_cdata_invoke {
+        let guard = super::nullable_method_calls::reject_ffi_cdata_method_call(ctx, object, op, expr);
+        if let Some(value) = guard {
+            return value;
+        }
+    }
+    // `$ffi->new(...)` selects the type in the receiver's own cdef context, which the
+    // static `FFI::new` signature cannot express; the prelude exposes that form as an
+    // instance helper with the same signature.
+    let method = ffi_instance_method_name(ctx, object.value, method);
+
+    // A `mixed`/union receiver may hold CData at runtime; php-src raises its method-call
+    // Error before arguments run, while an ordinary object keeps the normal dispatch. The
+    // runtime class check runs on the already evaluated receiver.
+    if !allow_cdata_invoke
+        && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+        && super::callable_probes::may_hold_ffi_cdata(ctx, object_expr)
+        && ctx.classes.contains_key("FFI\\CData")
+    {
+        return super::nullable_method_calls::lower_guarded_cdata_method_call(
+            ctx, object, method, args, op, expr,
+        );
     }
     // PHP permits `$object->staticMethod()` and resolves the static method from the
     // object's class. The checker accepts that shape alongside the instance table; here

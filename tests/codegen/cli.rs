@@ -1192,6 +1192,34 @@ fn test_with_pdo_keeps_unreferenced_pdo_function() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--with-ffi` roots the injected FFI prelude without source-level FFI use.
+#[test]
+fn test_with_ffi_keeps_unreferenced_ffi_surface() {
+    let dir = make_cli_test_dir("elephc_cli_with_ffi_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-ffi")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced FFI assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-ffi --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read FFI assembly");
+    assert!(
+        asm.contains("FFI::__elephc_wrap"),
+        "--with-ffi must keep unreferenced FFI declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--with-crypto` force-links the bridge without force-injecting the hash prelude.
 #[test]
 fn test_with_crypto_does_not_force_hash_prelude() {
@@ -2665,4 +2693,29 @@ fn test_cli_capture_slots_are_published_before_the_probe_starts() {
     assert_eq!(slots.len(), 4, "the four capture slots are stored:\n{asm}");
     assert!(slots.iter().all(|slot| *slot < init), "every slot is stored before the probe starts");
     let _ = fs::remove_dir_all(&dir);
+}
+/// iOS is a supported compile target but the FFI bridge's dynamic loader is not part of the
+/// iOS artifact set: the compiler must fail with an explicit diagnostic instead of an
+/// unresolved `elephc_ffi_*` symbol at link time.
+#[test]
+fn test_cli_rejects_ffi_on_ios_targets() {
+    let dir = make_cli_test_dir("elephc_cli_ffi_ios");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php $ffi = FFI::new(\"int\");").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("ios-arm64")
+        .arg("--emit")
+        .arg("staticlib")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run the iOS FFI CLI probe");
+
+    assert!(!output.status.success(), "iOS FFI must be rejected");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("PHP FFI is not supported on iOS targets"),
+        "missing the iOS FFI diagnostic: {stderr}"
+    );
 }

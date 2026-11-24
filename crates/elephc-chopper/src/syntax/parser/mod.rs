@@ -49,6 +49,15 @@ pub fn name_part_from_token(token: &Token, metadata: &crate::syntax::lexer::Toke
     stmt::name_part_from_token(token, metadata)
 }
 
+/// Returns a process-unique id for parser-generated incdec capture locals.
+pub(crate) fn next_generated_incdec_id() -> u64 {
+    GENERATED_INCDEC_ID.with(|id| {
+        let next = id.get().wrapping_add(1);
+        id.set(next);
+        next
+    })
+}
+
 /// Caps syntactic delimiter nesting before recursive expression parsing can
 /// consume the compiler process stack.
 const MAX_COMPILER_NESTING: usize = 1024;
@@ -67,6 +76,11 @@ thread_local! {
     static VALIDATION_ONLY: Cell<bool> = const { Cell::new(false) };
     /// Whether the input is a tagless fragment for the runtime interpreter.
     static RUNTIME_FRAGMENT: Cell<bool> = const { Cell::new(false) };
+    /// Monotonic id for parser-generated incdec capture locals.
+    ///
+    /// Two statements in different included files can share a span line/column, so a
+    /// span-derived name is not unique across the merged program.
+    static GENERATED_INCDEC_ID: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Restores the enclosing parser's fragment mode, including on unwind.
