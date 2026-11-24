@@ -851,3 +851,46 @@ E[2] Undefined array key "exceptions" @8
 NULL["1xy",2,"viaarg"]{"a":1,"0":9}
 "####, "{}", out.stderr);
 }
+
+/// A closure bound to a class writing array elements of a readonly property, of a slot a reference aliases, and of a property whose object its own body releases mid-write; a 3000-element loop of appends. php -n output.
+#[test]
+fn test_bound_closure_writes_respect_readonly_references_and_rebinding() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+set_error_handler(function($n,$s,$f,$l){ echo "E[$n] $s @$l\n"; return true; });
+class Holder {
+    private readonly array $ro;
+    private array $plain = [];
+    private array $ref = ['r' => 0];
+    private array $big = [];
+    public function __construct() { $this->ro = ['a' => 1]; }
+    public function &refSlot() { return $this->ref; }
+    public function dump() { return json_encode([$this->ro, $this->ref, count($this->big), count($this->plain)]); }
+}
+class Rebinder { private array $items = []; public static $log = []; public function __destruct() { echo "destruct\n"; } public function dump() { return json_encode($this->items); } }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+$h = new Holder;
+t(function() use ($h) { \Closure::bind(function () { $this->ro['b'] = 2; }, $h, $h)(); });
+t(function() use ($h) { \Closure::bind(function () { $this->ro[] = 2; }, $h, $h)(); });
+t(function() use ($h) { \Closure::bind(function () { $this->ro['a'] .= 'x'; }, $h, $h)(); });
+$alias = &$h->refSlot();
+t(function() use ($h) { \Closure::bind(function () { $this->ref['r'] = 5; $this->ref[] = 6; }, $h, $h)(); });
+echo json_encode($alias), "\n";
+$r = new Rebinder;
+$g = \Closure::bind(function () use (&$r) { $this->items['a'] = 1; $r = null; $this->items['b'] = 2; }, $r, $r);
+$g();
+echo "after\n";
+$n = 3000;
+$h2 = new Holder;
+\Closure::bind(function () use ($n) { for ($i = 0; $i < $n; $i++) { $this->big[] = $i; $this->plain['k' . ($i & 255)] = $i; } }, $h2, $h2)();
+echo $h2->dump(), "\n";
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot indirectly modify readonly property Holder::$ro
+{"r":5,"0":6}
+after
+[{"a":1},{"r":0},3000,256]
+destruct
+"####, "{}", out.stderr);
+}
