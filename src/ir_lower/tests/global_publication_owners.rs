@@ -69,25 +69,52 @@ fn main_binding_origins_declare_the_global_scope_on_every_target() {
     }
 }
 
-/// Real opaque eval retires every replacement/source lease through the native value ABI.
+/// Checks opaque eval's native value ABI with one local and optimizer profile.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+fn assert_opaque_global_publication_owners(locals: bool, optimize: bool) {
+    let fragment = SOURCE.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $fragment=$argc>0?'{fragment}':'';eval($fragment);");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
+    let module = super::semantic_sources::lower_capturing_arguments(&source,
+        Target::detect_host(), profile, optimize, SourceMode::Php);
+    assert!(module.required_runtime_features.eval_bridge);
+    let output = super::native_module::run(&module);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "locals={locals} opt={optimize}: {stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), EXPECTED, "locals={locals} opt={optimize}: {stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    assert!(!stderr.contains("Warning:"), "{stderr}");
+}
+
+/// Leaves both strict locals and EIR optimization off.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
-fn global_publication_sources_opaque_values_and_owners() {
-    let fragment = SOURCE.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
-    let source = format!("<?php $fragment=$argc>0?'{fragment}':'';eval($fragment);");
-    for locals in [false, true] {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals);
-        for optimize in [false, true] {
-            let module = super::semantic_sources::lower_capturing_arguments(&source,
-                Target::detect_host(), profile, optimize, SourceMode::Php);
-            assert!(module.required_runtime_features.eval_bridge);
-            let output = super::native_module::run(&module);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "locals={locals} opt={optimize}: {stderr}");
-            assert_eq!(String::from_utf8_lossy(&output.stdout), EXPECTED, "locals={locals} opt={optimize}: {stderr}");
-            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
-            assert!(!stderr.contains("Warning:"), "{stderr}");
-        }
-    }
+fn global_publication_sources_opaque_owners_permissive_unoptimized() {
+    assert_opaque_global_publication_owners(false, false);
+}
+
+/// Retains permissive local bindings with EIR optimization.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn global_publication_sources_opaque_owners_permissive_optimized() {
+    assert_opaque_global_publication_owners(false, true);
+}
+
+/// Checks strict local bindings with EIR optimization off.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn global_publication_sources_opaque_owners_strict_unoptimized() {
+    assert_opaque_global_publication_owners(true, false);
+}
+
+/// Checks strict local bindings with EIR optimization.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn global_publication_sources_opaque_owners_strict_optimized() {
+    assert_opaque_global_publication_owners(true, true);
 }
