@@ -160,6 +160,11 @@ pub struct Module {
     pub global_constants: HashMap<String, (ExprKind, PhpType)>,
     /// User-declared global constant names, separated from the seeded builtin inventory.
     pub user_defined_constants: Vec<String>,
+    /// Canonical source file of each user-declared global constant, keyed by constant name.
+    ///
+    /// `ReflectionConstant::getFileName()` answers its stored filename for user constants and
+    /// `false` for internal ones; the builtin inventory has no entry here.
+    pub user_constant_files: HashMap<String, String>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -262,6 +267,7 @@ impl Module {
             declared_trait_final_constants: HashMap::new(),
             global_constants: HashMap::new(),
             user_defined_constants: Vec::new(),
+            user_constant_files: HashMap::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),

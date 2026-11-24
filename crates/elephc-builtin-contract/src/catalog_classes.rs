@@ -260,6 +260,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("ReflectionAttribute", "reflectionattribute", Class, Reflection, CheckerInjected),
     class!("ReflectionClass", "reflectionclass", Class, Reflection, CheckerInjected),
     class!("ReflectionClassConstant", "reflectionclassconstant", Class, Reflection, CheckerInjected),
+    class!("ReflectionConstant", "reflectionconstant", Class, Reflection, CheckerInjected, since: Php84),
     class!("ReflectionEnum", "reflectionenum", Class, Reflection, CheckerInjected, since: Php81),
     class!("ReflectionEnumBackedCase", "reflectionenumbackedcase", Class, Reflection, CheckerInjected, since: Php81),
     class!("ReflectionEnumUnitCase", "reflectionenumunitcase", Class, Reflection, CheckerInjected, since: Php81),

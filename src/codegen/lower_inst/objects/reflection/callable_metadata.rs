@@ -189,6 +189,8 @@ pub(super) fn reflection_method_owner_metadata(
 ) -> ReflectionOwnerMetadata {
     let rendered_to_string = reflection_listed_method_to_string(ctx, &member);
     ReflectionOwnerMetadata {
+        file_name: None,
+        extension_name: None,
         rendered_to_string: Some(rendered_to_string),
         reflected_name: Some(member.name.clone()),
         attr_names: member.attr_names,

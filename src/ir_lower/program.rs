@@ -122,6 +122,7 @@ fn lower_on_compiler_stack(
         .cloned()
         .collect();
     module.user_defined_constants.sort();
+    module.user_constant_files = crate::codegen_support::collect_constant_source_files(program);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);

@@ -156,6 +156,10 @@ struct ReflectionOwnerMetadata {
     /// emits its own declaring function, which does not terminate. The dump is a string, so it
     /// does not recurse: it is rendered from the real member and carried across (#1080).
     rendered_to_string: Option<String>,
+    /// Source file of a user-defined global constant; `None` answers PHP `false`.
+    file_name: Option<String>,
+    /// Extension name of an internal global constant; `None` answers PHP `false`.
+    extension_name: Option<String>,
 }
 
 /// Compile-time metadata for one class/interface/trait/enum constant reflector.

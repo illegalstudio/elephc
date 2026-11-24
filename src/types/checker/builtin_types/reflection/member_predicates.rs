@@ -116,6 +116,57 @@ pub(super) fn builtin_reflection_constant_false_union_method(method_name: &str) 
     }
 }
 
+/// Returns a public Reflection method that reads one private string slot and answers PHP
+/// `false` when that slot is empty (`ReflectionConstant::getFileName()` /
+/// `getExtensionName()`).
+pub(super) fn builtin_reflection_constant_optional_string_method(
+    method_name: &str,
+    property: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let property_value = || reflection_this_property(property, dummy_span);
+    ClassMethod {
+        type_params: Vec::new(),
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(string_or_bool_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(property_value()),
+                            op: BinOp::StrictEq,
+                            right: Box::new(Expr::new(
+                                ExprKind::StringLiteral(String::new()),
+                                dummy_span,
+                            )),
+                        },
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(property_value())), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public Reflection predicate that always reports PHP `false`.
 pub(super) fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

@@ -175,6 +175,49 @@ fn collect_constant_decls(
     }
 }
 
+/// Collects the canonical source file of every user-declared global constant.
+///
+/// Mirrors [`collect_constant_decls`]' statement walk: a `const` declaration or a literal-name
+/// `define()` call records the file of the statement that declares it. Builtin constants have
+/// no entry, which is what makes `ReflectionConstant::getFileName()` answer `false` for them.
+pub(crate) fn collect_constant_source_files(program: &Program) -> HashMap<String, String> {
+    let mut files = HashMap::new();
+    collect_constant_file_decls(program, &mut files);
+    files
+}
+
+/// Recursively records the declaring source file of user constants.
+fn collect_constant_file_decls(stmts: &[Stmt], files: &mut HashMap<String, String>) {
+    for stmt in stmts {
+        let source_file = stmt
+            .span
+            .source_path()
+            .map(|path| crate::source::canonical_source_path(std::path::Path::new(&path)));
+        match &stmt.kind {
+            StmtKind::ConstDecl { name, .. } => {
+                if let Some(path) = &source_file {
+                    files.entry(name.clone()).or_insert_with(|| path.clone());
+                }
+            }
+            StmtKind::ExprStmt(expr) => {
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    if name.as_str() == "define" && args.len() == 2 {
+                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                            if let Some(path) = &source_file {
+                                files.entry(const_name.clone()).or_insert_with(|| path.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+                collect_constant_file_decls(body, files);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.
 ///
 /// Returns `PhpType::Int` as a fallback for unsupported expression kinds.

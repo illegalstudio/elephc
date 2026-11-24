@@ -24,7 +24,7 @@ use crate::types::checker::Checker;
 use crate::types::FunctionSig;
 
 /// The synthesized Reflection classes that carry a `getAttributes()` method over `__attrs`.
-const REFLECTION_ATTRIBUTE_OWNERS: [&str; 10] = [
+const REFLECTION_ATTRIBUTE_OWNERS: [&str; 11] = [
     "ReflectionClass",
     "ReflectionObject",
     "ReflectionEnum",
@@ -33,6 +33,7 @@ const REFLECTION_ATTRIBUTE_OWNERS: [&str; 10] = [
     "ReflectionProperty",
     "ReflectionParameter",
     "ReflectionClassConstant",
+    "ReflectionConstant",
     "ReflectionEnumUnitCase",
     "ReflectionEnumBackedCase",
 ];

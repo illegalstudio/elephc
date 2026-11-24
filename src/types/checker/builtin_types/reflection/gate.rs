@@ -28,6 +28,7 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionUnionType",
     "ReflectionIntersectionType",
     "ReflectionClassConstant",
+    "ReflectionConstant",
     "ReflectionEnumUnitCase",
     "ReflectionEnumBackedCase",
 ];

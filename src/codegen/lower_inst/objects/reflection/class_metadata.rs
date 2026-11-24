@@ -23,6 +23,7 @@ pub(super) fn reflection_owner_metadata(
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
         "ReflectionParameter" => reflection_parameter_metadata(ctx, inst),
         "ReflectionClassConstant" => reflection_class_constant_metadata(ctx, inst),
+        "ReflectionConstant" => reflection_constant_metadata(ctx, inst),
         "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
             reflection_enum_case_metadata(ctx, class_name, inst)
         }
@@ -112,6 +113,8 @@ pub(super) fn reflection_class_metadata_for_name(
             .iter()
             .any(|name| class_name.trim_start_matches('\\').eq_ignore_ascii_case(name));
         return Ok(ReflectionOwnerMetadata {
+            file_name: None,
+            extension_name: None,
             rendered_to_string: None,
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
@@ -181,6 +184,8 @@ pub(super) fn reflection_class_metadata_for_name(
         let property_members = default_property_members(&property_names, true, interface_name);
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
+            file_name: None,
+            extension_name: None,
             rendered_to_string: None,
             reflected_name: Some(interface_name.to_string()),
             attr_names: Vec::new(),
@@ -256,6 +261,8 @@ pub(super) fn reflection_class_metadata_for_name(
         let property_members = default_property_members(&property_names, false, trait_name);
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
+            file_name: None,
+            extension_name: None,
             rendered_to_string: None,
             reflected_name: Some(trait_name.to_string()),
             attr_names: Vec::new(),

@@ -543,6 +543,12 @@ and enums, plus `ReflectionMethod`, exposes the original source file and
 declaration line when EIR source metadata is available. AOT `getEndLine()`
 currently reports the declaration line because the bridge keeps declaration
 spans, not full body spans.
+
+PHP 8.4's `ReflectionConstant` is AOT-only for now. `class_exists('ReflectionConstant')`
+is true because the shared class catalog declares it, but constructing one inside `eval()`
+does not resolve eval-defined globals yet: the object reports empty metadata instead of the
+constant's name and value. Use compiled code for global-constant reflection until the eval
+constructor is wired.
 `ReflectionClass` construction accepts class-name strings and object arguments;
 object arguments reflect the runtime class of eval-created or generated/AOT
 objects. `ReflectionObject` construction accepts object arguments and exposes the

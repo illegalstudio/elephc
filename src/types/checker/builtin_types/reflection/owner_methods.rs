@@ -399,7 +399,7 @@ pub(super) fn add_reflection_member_flag_methods(
             "__is_readonly",
         ));
     }
-    if class_name == "ReflectionClassConstant" {
+    if matches!(class_name, "ReflectionClassConstant" | "ReflectionConstant") {
         properties.push(builtin_property(
             "__value",
             Visibility::Private,

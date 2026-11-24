@@ -40,6 +40,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionUnionType",
         "ReflectionIntersectionType",
         "ReflectionClassConstant",
+        "ReflectionConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
     ] {
@@ -210,6 +211,14 @@ pub(crate) fn inject_builtin_reflection(
             ),
         );
     }
+    class_map.insert(
+        "ReflectionConstant".to_string(),
+        builtin_reflection_owner_class(
+            "ReflectionConstant",
+            true,
+            vec![("name", Some(TypeExpr::Str), None, false)],
+        ),
+    );
 
     Ok(())
 }

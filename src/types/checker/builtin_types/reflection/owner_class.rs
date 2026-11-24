@@ -140,6 +140,82 @@ pub(super) fn builtin_reflection_owner_class(
             methods.push(builtin_reflection_constant_null_mixed_method("getType"));
         }
     }
+    if name == "ReflectionConstant" {
+        properties.push(builtin_reflection_lazy_property());
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__short_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__namespace_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__in_namespace",
+            Visibility::Private,
+            Some(TypeExpr::Bool),
+            bool_lit(false),
+        ));
+        properties.push(builtin_property(
+            "__is_deprecated",
+            Visibility::Private,
+            Some(TypeExpr::Bool),
+            bool_lit(false),
+        ));
+        properties.push(builtin_property(
+            "__file_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__extension_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "getShortName",
+            "__short_name",
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "getNamespaceName",
+            "__namespace_name",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "inNamespace",
+            "__in_namespace",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isDeprecated",
+            "__is_deprecated",
+        ));
+        methods.push(builtin_reflection_constant_optional_string_method(
+            "getFileName",
+            "__file_name",
+        ));
+        methods.push(builtin_reflection_constant_optional_string_method(
+            "getExtensionName",
+            "__extension_name",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getExtension",
+        ));
+    }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
             "__string",

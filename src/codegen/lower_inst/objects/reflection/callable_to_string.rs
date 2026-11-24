@@ -416,7 +416,7 @@ fn reflection_constant_type_to_string(metadata: &ReflectionParameterTypeMetadata
 }
 
 /// Renders one constant value in php-src's `_class_const_string` form.
-fn reflection_constant_value_text(value: &ReflectionConstantValue) -> String {
+pub(super) fn reflection_constant_value_text(value: &ReflectionConstantValue) -> String {
     match value {
         ReflectionConstantValue::Int(number) => number.to_string(),
         ReflectionConstantValue::Bool(true) => "true".to_string(),
@@ -433,7 +433,7 @@ fn reflection_constant_value_text(value: &ReflectionConstantValue) -> String {
 }
 
 /// Returns php-src's type name for an untyped constant value.
-fn reflection_constant_value_type_name(value: &ReflectionConstantValue) -> &'static str {
+pub(super) fn reflection_constant_value_type_name(value: &ReflectionConstantValue) -> &'static str {
     match value {
         ReflectionConstantValue::Int(_) => "int",
         ReflectionConstantValue::Bool(_) => "bool",
@@ -460,4 +460,17 @@ fn test_reflection_dump_internal_deprecated_headers() {
     assert!(method.starts_with("Method [ <internal, deprecated:date, prototype DateTimeInterface>"));
     assert_eq!(reflection_origin_label(false, true, None), "user, deprecated");
     assert_eq!(reflection_origin_label(true, true, None), "internal, deprecated");
+}
+
+/// Renders php-src's `_const_string` dump for a global constant.
+pub(super) fn reflection_global_constant_to_string(
+    name: &str,
+    value: &ReflectionConstantValue,
+) -> String {
+    format!(
+        "Constant [ {} {} ] {{ {} }}\n",
+        reflection_constant_value_type_name(value),
+        name,
+        reflection_constant_value_text(value),
+    )
 }

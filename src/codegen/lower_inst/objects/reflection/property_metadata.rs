@@ -36,6 +36,8 @@ pub(super) fn reflection_property_metadata(
                 type_metadata.as_ref(),
             );
             Some(ReflectionOwnerMetadata {
+                file_name: None,
+                extension_name: None,
                 rendered_to_string: None,
                 reflected_name: Some(property_name.clone()),
                 attr_names: info

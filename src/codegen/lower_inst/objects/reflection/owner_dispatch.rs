@@ -20,6 +20,7 @@ pub(in crate::codegen::lower_inst::objects) fn is_reflection_owner_class(class_n
             | "ReflectionProperty"
             | "ReflectionParameter"
             | "ReflectionClassConstant"
+            | "ReflectionConstant"
             | "ReflectionEnum"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
@@ -54,6 +55,26 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
             class_name
         ))
     })?;
+    if owner_class_name == "ReflectionConstant" {
+        if let Some(name_operand) = inst.operands.first().copied() {
+            let name = const_required_string_operand(ctx, name_operand, "ReflectionConstant")?;
+            let canonical = super::constant_metadata::reflection_constant_canonical_name(
+                ctx,
+                name.trim_start_matches('\\'),
+            );
+            let known = ctx.module.global_constants.contains_key(canonical)
+                || elephc_builtin_contract::lookup_constant(canonical).is_some();
+            if !known {
+                let message = format!("Constant \"{}\" does not exist", name);
+                crate::codegen::lower_inst::exceptions::emit_reflection_exception_at(
+                    ctx,
+                    &message,
+                    ctx.current_source_location(),
+                );
+                return Ok(());
+            }
+        }
+    }
     if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {

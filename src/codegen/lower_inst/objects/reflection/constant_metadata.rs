@@ -28,6 +28,8 @@ pub(super) fn reflection_class_constant_metadata(
         resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
+            file_name: None,
+            extension_name: None,
             rendered_to_string: None,
             reflected_name: Some(constant_name.clone()),
             attr_names: case.attribute_names.clone(),
@@ -107,6 +109,8 @@ pub(super) fn reflection_enum_case_metadata(
     Ok(
         resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
+                file_name: None,
+                extension_name: None,
                 rendered_to_string: None,
                 reflected_name: Some(case_name.clone()),
                 attr_names: case.attribute_names.clone(),
@@ -175,6 +179,8 @@ pub(super) fn reflection_class_constant_owner_metadata(
     let member_flags =
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
     ReflectionOwnerMetadata {
+        file_name: None,
+        extension_name: None,
         rendered_to_string: None,
         reflected_name: Some(reflected_name),
         attr_names: metadata.attr_names,
@@ -416,3 +422,66 @@ pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> 
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
 }
 
+/// Returns the registered global-constant name for a `ReflectionConstant` constructor argument.
+///
+/// PHP lowercases a constant's namespace but keeps its short name exact, so
+/// `new ReflectionConstant('app\\BAR')` resolves a registered `App\\BAR`.
+pub(super) fn reflection_constant_canonical_name<'a>(
+    ctx: &'a FunctionContext<'_>,
+    name: &'a str,
+) -> &'a str {
+    ctx.module
+        .global_constants
+        .keys()
+        .find(|candidate| {
+            reflection_constant_lookup_key(candidate) == reflection_constant_lookup_key(name)
+        })
+        .map(String::as_str)
+        .unwrap_or(name)
+}
+
+/// Normalizes a constant name for lookup: namespace lowercased, short name exact.
+fn reflection_constant_lookup_key(name: &str) -> String {
+    match name.rfind('\\') {
+        Some(index) => format!("{}\\{}", name[..index].to_ascii_lowercase(), &name[index + 1..]),
+        None => name.to_string(),
+    }
+}
+
+/// Resolves `ReflectionConstant(name)` metadata from the module's global constants.
+///
+/// The constructor argument must be a compile-time string: the global constant table is
+/// built while lowering, so a runtime name has no value to reflect.
+pub(super) fn reflection_constant_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(name_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let name = const_required_string_operand(ctx, name_operand, "ReflectionConstant")?;
+    let canonical = reflection_constant_canonical_name(ctx, name.trim_start_matches('\\'));
+    let is_user_defined = ctx
+        .module
+        .user_defined_constants
+        .iter()
+        .any(|name| name == canonical);
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(canonical.to_string());
+    metadata.file_name = if is_user_defined {
+        ctx.module.user_constant_files.get(canonical).cloned()
+    } else {
+        None
+    };
+    metadata.extension_name = if is_user_defined {
+        None
+    } else {
+        elephc_builtin_contract::lookup_constant(canonical)
+            .map(|constant| constant.module.registered_name().to_string())
+    };
+    if let Some((kind, _)) = ctx.module.global_constants.get(canonical) {
+        let expr = crate::parser::ast::Expr::new(kind.clone(), crate::span::Span::dummy());
+        metadata.constant_value = reflection_constant_value(ctx, "", None, &expr, 0).ok();
+    }
+    Ok(metadata)
+}

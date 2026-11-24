@@ -110,7 +110,10 @@ pub(super) fn emit_reflection_owner_metadata(
                 emit_reflection_literal_string_property(ctx, reflected_name, offset, offset + 8);
             }
         }
-        if is_reflection_class_owner || owner_class_name == "ReflectionEnum" {
+        if is_reflection_class_owner
+            || owner_class_name == "ReflectionEnum"
+            || owner_class_name == "ReflectionConstant"
+        {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
         if is_reflection_class_owner {
@@ -393,7 +396,10 @@ pub(super) fn emit_reflection_owner_metadata(
     }
     if matches!(
         owner_class_name.as_str(),
-        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+        "ReflectionClassConstant"
+            | "ReflectionConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
     ) {
         if let Some(value) = &metadata.constant_value {
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -409,6 +415,27 @@ pub(super) fn emit_reflection_owner_metadata(
             metadata.type_metadata.is_some(),
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+    }
+    if owner_class_name == "ReflectionConstant" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__file_name",
+            metadata.file_name.as_deref().unwrap_or(""),
+        )?;
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__extension_name",
+            metadata.extension_name.as_deref().unwrap_or(""),
+        )?;
+        if let Some(value) = &metadata.constant_value {
+            let rendered = reflection_global_constant_to_string(
+                metadata.reflected_name.as_deref().unwrap_or(""),
+                value,
+            );
+            emit_reflection_owner_string_property_by_name(ctx, class_name, "__string", &rendered)?;
+        }
     }
     if owner_class_name == "ReflectionClassConstant" {
         if let Some(value) = &metadata.constant_value {
