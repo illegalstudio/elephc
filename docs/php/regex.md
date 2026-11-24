@@ -94,7 +94,7 @@ for a complete project.
 | `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0, $offset = 0): int\|false` | PHP returns the match count, or `false` for an invalid pattern or the removed `/e` modifier. elephc's type checker currently types the result as `mixed`. Optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string\|array\|null` | PHP returns the replaced value, or `null` on failure. elephc's type checker currently types the result as `mixed`. `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
-| `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
+| `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and limits. As in PHP, only returned pieces count toward `$limit`, `-1` and `0` mean no limit, and any other limit below 2 returns the subject as one piece |
 | `preg_grep()` | `preg_grep($pattern, $array, $flags = 0): array\|false` | Return the entries whose string value matches, keeping their keys; `PREG_GREP_INVERT` keeps the others. An invalid pattern returns `false` |
 | `preg_last_error()` | `preg_last_error(): int` | The `PREG_*_ERROR` code of the last `preg_*` call |
 | `preg_last_error_msg()` | `preg_last_error_msg(): string` | PHP's message for that code |
@@ -105,9 +105,14 @@ Capture output supports ordinary locals and native references whose payload is a
 ## Pattern syntax
 
 PCRE syntax is passed to PCRE2, so lookahead, lookbehind, lazy quantifiers,
-shorthand classes, and Unicode property escapes are available. PHP-style
-slash-delimited patterns are supported, and elephc maps these trailing modifiers
-to PCRE2 wrapper flags:
+shorthand classes, and Unicode property escapes are available. Delimiters follow
+PHP: leading whitespace is skipped, the delimiter is any byte other than a
+letter, a digit, a backslash or NUL, `(`, `[`, `{` and `<` close with their
+bracket pair (nested pairs are counted), and the first closing delimiter no
+backslash escapes ends the pattern. An empty pattern, an invalid or missing
+delimiter, and an unknown modifier make the call fail like PHP (`false`, or
+`null` for the replace functions) without a warning. elephc maps these trailing
+modifiers to PCRE2 compile options:
 
 | Modifier | Meaning |
 |---|---|
@@ -117,8 +122,19 @@ to PCRE2 wrapper flags:
 | `u` | UTF-8 and Unicode-property matching |
 | `U` | Ungreedy matching |
 | `x` | Extended mode: unescaped whitespace and `#` comments in the pattern are ignored; whitespace inside a character class still matches |
+| `A` | Anchored: a match must start at the search offset |
+| `D` | Dollar end-only: `$` does not match before a final newline |
+| `n` | No auto-capture: plain `(...)` groups do not capture |
+| `J` | Duplicate subpattern names are allowed |
+| `r` | Caseless restrict: under `i`, ASCII and non-ASCII letters do not match each other |
 
-Space, newline, and carriage return in the modifier suffix are ignored. Other trailing modifiers are currently not mapped to PCRE2 flags. Every `preg_*` function rejects the removed `/e` modifier before compilation.
+`S` and `X` are accepted with no effect, as in PHP 8. Space, newline, and carriage return in the modifier suffix are ignored. Every `preg_*` function rejects the removed `/e` modifier before compilation.
+
+The global functions (`preg_match_all()`, `preg_replace()`,
+`preg_replace_callback()`, `preg_split()`) step through the subject like PHP:
+after an empty match the next search starts at the same offset but may not
+match empty there, an empty match at the end of the subject is found, and `^`,
+`\b` and lookbehind always see the whole subject.
 
 ## Captures and replacements
 
@@ -236,7 +252,8 @@ managed PCRE2 package (10.47), not the PHP build's library.
 - Regex runtime detection is conservative around dynamic `instanceof`: programs
   that can dynamically reference emitted SPL regex classes may link PCRE2 even
   when they do not call `preg_*` directly.
-- Only the pattern modifiers listed above are mapped to PCRE2 flags today.
+- A malformed pattern or an unknown modifier fails silently: PHP's warnings
+  ("Unknown modifier", "No ending delimiter", ...) are not emitted.
 - PCRE2's own default match limit (10,000,000) applies instead of PHP's
   `pcre.backtrack_limit` (1,000,000).
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
