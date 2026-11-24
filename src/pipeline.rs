@@ -2043,6 +2043,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         !deferred_class_files.contains(&crate::source::canonical(&path).unwrap_or_else(|_| path.clone()))
     });
     timings.record_since("typecheck", phase_started);
+    crate::mem_stats::report_ast("after typecheck", &ast);
+    crate::mem_stats::report_check("after typecheck", &check_result);
     decl_trace("after typecheck", &ast);
     if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
         let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
@@ -2657,6 +2659,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     }
     timings.record_since("ir-lower", phase_started);
+    crate::mem_stats::report_ast("after ir-lower", &ast);
+    crate::mem_stats::report_check("after ir-lower", &check_result);
+    crate::mem_stats::report_module("after ir-lower", &ir_module);
     if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
         let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
         let in_module: Vec<&str> = ir_module
@@ -2676,6 +2681,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let required_libraries = std::mem::take(&mut check_result.required_libraries);
     drop(ast);
     drop(check_result);
+    crate::mem_stats::mark("ast + check_result dropped");
 
     if emit_ir {
         eir_output::emit(ir_module, emit, filename, ir_opt, &exported_functions, &mut timings);
@@ -2704,6 +2710,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
+    crate::mem_stats::report_module("after ir-opt", &ir_module);
     // The shape merge has now folded everything the EIR comparison could prove identical, so what
     // remains is the measured case for widening it: candidates whose lowered bodies agree.
     if report_generics {

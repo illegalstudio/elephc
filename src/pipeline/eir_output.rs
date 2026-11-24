@@ -41,6 +41,12 @@ pub(super) fn emit(
         ir_passes::optimize_module(&mut module);
     }
     timings.record_since("ir-opt", phase_started);
+    crate::mem_stats::report_module("after ir-opt", &module);
+    if crate::mem_stats::stop_before_print() {
+        crate::progress::clear();
+        timings.report();
+        return;
+    }
 
     crate::progress::phase("ir-print");
     let phase_started = Instant::now();

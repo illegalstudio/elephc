@@ -157,6 +157,9 @@ rustls-pemfile = "2"
 regex = "1"
 
 [features]
+# Counting global allocator for `ELEPHC_MEM_STATS=1`: exact live-heap figures and clone-measured
+# structure sizes (`crate::mem_stats`). Off by default: the stock build pays nothing.
+mem-stats = []
 # Keeps the codegen test package and its PDO dev-dependency on the same libpq
 # backend profile. Without this relay, a later `cargo test` can rebuild and
 # replace the feature-built staticlib with the pure-Rust default archive.

@@ -32,6 +32,7 @@ pub mod session_prelude;
 mod source_map;
 mod test_command;
 mod timings;
+pub mod mem_stats;
 
 /// Runs command-line dispatch with compiler-owned stack management.
 pub use cli_entry::run as run_cli;

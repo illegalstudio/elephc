@@ -98,6 +98,7 @@ impl CompileTimings {
     pub(crate) fn record_since(&mut self, phase: &'static str, started_at: Instant) {
         let elapsed = started_at.elapsed();
         crate::progress::finish_phase(phase, elapsed);
+        crate::mem_stats::mark(phase);
         if self.enabled {
             let cpu_now = process_cpu_time();
             let cpu = match (cpu_now, self.cpu_at_last_record) {
