@@ -29,20 +29,57 @@ pub struct Context<'a> {
 pub fn publish_stack<E: AssemblyEmitter + TargetAbi>(
     emitter: &mut E, owner_address: &str, record_offset: usize, context: Context<'_>,
 ) {
-    let scratch = emitter.secondary_scratch_reg();
     emitter.comment("publish temporary call operand owner");
-    emitter.emit_store_to_sp(owner_address, record_offset + DATA);
-    emitter.emit_load_symbol_to_reg(scratch, context.head, 0);
-    emitter.emit_store_to_sp(scratch, record_offset);
-    emitter.emit_symbol_address(scratch, context.cleanup);
-    emitter.emit_store_to_sp(scratch, record_offset + CLEANUP);
-    emitter.emit_load_int_immediate(scratch, 0);
-    emitter.emit_store_to_sp(scratch, record_offset + PREFIX_BYTES);
+    write_stack_prefix(emitter, owner_address, record_offset, context.head, context.cleanup);
+    let scratch = emitter.secondary_scratch_reg();
     emitter.emit_store_to_sp(scratch, record_offset + OPERAND_STACK_BASE);
     emitter.emit_symbol_address(scratch, context.visitor);
     emitter.emit_store_to_sp(scratch, record_offset + OWNER_VISITOR);
+    publish_stack_head(emitter, record_offset, context.head);
+}
+
+/// Publishes a compact native frame whose collector dispatch uses its cleanup entry.
+pub fn publish_compact_stack(
+    emitter: &mut impl TargetAbi,
+    owner_address: &str,
+    record_offset: usize,
+    head: &str,
+    cleanup: &str,
+) {
+    write_stack_prefix(emitter, owner_address, record_offset, head, cleanup);
+    publish_stack_head(emitter, record_offset, head);
+}
+
+/// Initializes the shared fields before any walker can see the record.
+fn write_stack_prefix(
+    emitter: &mut impl TargetAbi,
+    owner_address: &str,
+    record_offset: usize,
+    head: &str,
+    cleanup: &str,
+) {
+    let scratch = emitter.secondary_scratch_reg();
+    emitter.emit_store_to_sp(owner_address, record_offset + DATA);
+    emitter.emit_load_symbol_to_reg(scratch, head, 0);
+    emitter.emit_store_to_sp(scratch, record_offset + PREVIOUS);
+    emitter.emit_symbol_address(scratch, cleanup);
+    emitter.emit_store_to_sp(scratch, record_offset + CLEANUP);
+    emitter.emit_load_int_immediate(scratch, 0);
+    emitter.emit_store_to_sp(scratch, record_offset + PREFIX_BYTES);
+}
+
+/// Stores the initialized stack record address as the activation chain head.
+fn publish_stack_head(emitter: &mut impl TargetAbi, record_offset: usize, head: &str) {
+    let scratch = emitter.secondary_scratch_reg();
     emitter.emit_temporary_stack_address(scratch, record_offset);
-    emitter.emit_store_reg_to_symbol(scratch, context.head, 0);
+    emitter.emit_store_reg_to_symbol(scratch, head, 0);
+}
+
+/// Pops a stack activation whose caller guarantees it is still the newest record.
+pub fn pop_stack(emitter: &mut impl TargetAbi, record_offset: usize, head: &str) {
+    let scratch = emitter.secondary_scratch_reg();
+    emitter.emit_load_temporary_stack_slot(scratch, record_offset + PREVIOUS);
+    emitter.emit_store_reg_to_symbol(scratch, head, 0);
 }
 
 /// Publishes a pending return lease without moving the temporary-stack base.

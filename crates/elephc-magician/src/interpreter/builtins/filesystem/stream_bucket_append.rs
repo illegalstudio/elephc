@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::{with_collection_cells, with_collection_result};
 use super::super::super::*;
 
 /// Evaluates `stream_bucket_append($brigade, $bucket)`.
@@ -49,11 +50,13 @@ pub(in crate::interpreter) fn eval_stream_bucket_append_result(
     bucket: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let buckets = eval_brigade_buckets(brigade, values)?;
-    let len = values.array_len(buckets)?;
-    let index = values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let buckets = values.array_set(buckets, index, bucket)?;
-    values.property_set(brigade, "_buckets", buckets)?;
+    with_collection_cells(values, |values, owners| {
+        let buckets = owners.stage(eval_brigade_buckets(brigade, values)?);
+        let len = values.array_len(buckets)?;
+        let index = owners.stage(values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)?);
+        let buckets = values.array_set(buckets, index, bucket)?;
+        values.property_set(brigade, "_buckets", buckets)
+    })?;
     values.null()
 }
 
@@ -62,10 +65,12 @@ pub(in crate::interpreter) fn eval_brigade_buckets(
     brigade: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let buckets = values.property_get(brigade, "_buckets")?;
-    if values.is_array_like(buckets)? {
-        Ok(buckets)
-    } else {
-        values.array_new(0)
-    }
+    with_collection_result(values, |values, result| {
+        result.replace(Some(values.property_get(brigade, "_buckets")?));
+        if !values.is_array_like(result.borrowed())? {
+            values.release(result.take())?;
+            result.replace(Some(values.array_new(0)?));
+        }
+        Ok(())
+    })
 }

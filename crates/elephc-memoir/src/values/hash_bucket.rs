@@ -156,3 +156,59 @@ pub fn emit_detach_reference_owner(emitter: &mut impl Emitter) {
         }
     }
 }
+
+/// Recognizes a persistent wrapper after the boxed invoker-marker probe has declined it.
+pub fn emit_probe_persistent_wrapper(emitter: &mut impl Emitter, ordinary: &str, persistent: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x15, #7");                                 // persistent references use a nested Mixed box
+            emitter.instruction(&format!("b.ne {ordinary}"));                   // ordinary boxes keep the existing replacement path
+            emitter.instruction("ldr x15, [x14, #16]");                         // inspect the persistent-reference marker
+            emitter.instruction("cmp x15, #1");                                 // only marker one carries PHP reference identity
+            emitter.instruction(&format!("b.eq {persistent}"));                 // preserve the wrapper and update its child
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [r14], 7");                      // persistent references use a nested Mixed box
+            emitter.instruction(&format!("jne {ordinary}"));                    // ordinary boxes keep the existing replacement path
+            emitter.instruction("cmp QWORD PTR [r14 + 16], 1");                 // only marker one carries PHP reference identity
+            emitter.instruction(&format!("je {persistent}"));                   // preserve the wrapper and update its child
+        }
+    }
+}
+
+/// Selects reference entries that a bucket-replacing array builder must detach first.
+pub fn emit_value_detach_probe(emitter: &mut impl Emitter, detach: &str, forward: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x9, #11");                                 // raw managed reference entries also detach
+            emitter.instruction(&format!("b.eq {detach}"));                     // clear the bucket before releasing its cell owner
+            emitter.instruction("cmp x9, #7");                                  // boxed references carry the ordinary Mixed entry tag
+            emitter.instruction(&format!("b.ne {forward}"));                    // ordinary entries need no detachment
+            emitter.instruction("ldr x10, [x4, #24]");                          // inspect the existing box without changing ownership
+            emitter.instruction(&format!("cbz x10, {forward}"));                // a null Mixed handle is an ordinary value
+            emitter.instruction("ldr x11, [x10]");                              // distinguish invoker markers and persistent wrappers
+            emitter.instruction("cmp x11, #11");                                // boxed invoker references also detach for array builders
+            emitter.instruction(&format!("b.eq {detach}"));                     // preserve their caller's original storage
+            emitter.instruction("cmp x11, #7");                                 // only a nested Mixed box can be a persistent reference
+            emitter.instruction(&format!("b.ne {forward}"));                    // ordinary boxed values keep their existing replacement path
+            emitter.instruction("ldr x11, [x10, #16]");                         // inspect the persistent-reference marker
+            emitter.instruction("cmp x11, #1");                                 // marker one identifies writable PHP reference identity
+            emitter.instruction(&format!("b.ne {forward}"));                    // ordinary nested values need no detachment
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // raw managed reference entries also detach
+            emitter.instruction(&format!("je {detach}"));                       // clear the bucket before releasing its cell owner
+            emitter.instruction("cmp QWORD PTR [r8 + 40], 7");                  // boxed references carry the ordinary Mixed entry tag
+            emitter.instruction(&format!("jne {forward}"));                     // ordinary entries need no detachment
+            emitter.instruction("mov r10, QWORD PTR [r8 + 24]");                // inspect the existing box without changing ownership
+            emitter.instruction("test r10, r10");                               // a null Mixed handle is an ordinary value
+            emitter.instruction(&format!("jz {forward}"));                      // skip absent boxed storage
+            emitter.instruction("cmp QWORD PTR [r10], 11");                     // boxed invoker references also detach for array builders
+            emitter.instruction(&format!("je {detach}"));                       // preserve their caller's original storage
+            emitter.instruction("cmp QWORD PTR [r10], 7");                      // only a nested Mixed box can be a persistent reference
+            emitter.instruction(&format!("jne {forward}"));                     // ordinary boxed values keep their existing replacement path
+            emitter.instruction("cmp QWORD PTR [r10 + 16], 1");                 // marker one identifies writable PHP reference identity
+            emitter.instruction(&format!("jne {forward}"));                     // ordinary nested values need no detachment
+        }
+    }
+}

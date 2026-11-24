@@ -8,7 +8,7 @@
 //! - The caller supplies the class and message, and publishes the completed payload.
 //! - Recycled allocations require explicit initialization of each populated slot.
 
-use crate::{abi, Arch, Emitter, TargetAbi};
+use crate::{abi, Arch, Emitter, FrameOffset, TargetAbi};
 
 /// Native storage size for a complete compact Throwable payload.
 const PAYLOAD_BYTES: i64 = 56;
@@ -89,6 +89,22 @@ pub fn emit_static_message(emitter: &mut impl Emitter, symbol: &str, length: i64
 /// Initializes the exception code of a fresh compact error to zero.
 pub fn emit_default_code(emitter: &mut impl TargetAbi, payload: &str) {
     emitter.emit_store_zero_to_address(payload, CODE);
+}
+
+/// Detaches the default message and previous owners before constructor initialization.
+pub fn emit_release_constructor_defaults(emitter: &mut impl Emitter, object_frame_offset: FrameOffset) {
+    let object = emitter.symbol_scratch_reg();
+    let value = emitter.int_result_reg();
+    for (offset, release) in [(MESSAGE_POINTER, "__rt_heap_free_safe"), (PREVIOUS, "__rt_decref_any")] {
+        emitter.load_at_offset(object, object_frame_offset.bytes());
+        emitter.emit_load_from_address(value, object, offset);
+        // Detach before release, since a previous exception may run a user destructor.
+        emitter.emit_store_zero_to_address(object, offset);
+        if offset == MESSAGE_POINTER {
+            emitter.emit_store_zero_to_address(object, MESSAGE_LENGTH);
+        }
+        emitter.emit_call_label(release);
+    }
 }
 
 /// Writes the marker used when a Throwable has no recorded creation line.

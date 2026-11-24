@@ -16,6 +16,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::{EvalArrayBuilder, with_collection_cells};
 use super::super::super::*;
 use super::*;
 
@@ -82,8 +83,14 @@ pub(in crate::interpreter) fn eval_file_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     if let Some(result) = eval_user_wrapper_file_get_contents_result(&path, context, values)? {
-        if values.type_tag(result)? == EVAL_TAG_STRING {
-            let bytes = values.string_bytes(result)?;
+        let bytes = with_collection_cells(values, |values, owners| {
+            let result = owners.stage(result);
+            if values.type_tag(result)? == EVAL_TAG_STRING {
+                return values.string_bytes(result).map(Some);
+            }
+            Ok(None)
+        })?;
+        if let Some(bytes) = bytes {
             return eval_file_lines_array(&bytes, flags, values);
         }
         values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
@@ -111,36 +118,19 @@ fn eval_file_lines_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let ignore_new_lines = flags & EVAL_FILE_IGNORE_NEW_LINES != 0;
     let skip_empty_lines = flags & EVAL_FILE_SKIP_EMPTY_LINES != 0;
-    let mut result = values.array_new(0)?;
-    let mut line_start = 0;
+    let mut result = EvalArrayBuilder::indexed(values, 0)?;
     let mut line_index = 0;
-    let push = |line: &[u8],
-                    result: RuntimeCellHandle,
-                    line_index: &mut usize,
-                    values: &mut _|
-     -> Result<RuntimeCellHandle, EvalStatus> {
-        let mut line = line;
-        if ignore_new_lines {
-            if let Some(trimmed) = line.strip_suffix(b"\n") {
-                line = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
-            }
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let line = if ignore_new_lines {
+            line.strip_suffix(b"\n")
+                .map_or(line, |line| line.strip_suffix(b"\r").unwrap_or(line))
+        } else {
+            line
+        };
+        if !skip_empty_lines || !line.is_empty() {
+            result.index(line_index, |values| values.string_bytes_value(line))?;
+            line_index += 1;
         }
-        if skip_empty_lines && line.is_empty() {
-            return Ok(result);
-        }
-        let result = super::scandir::eval_array_set_indexed_bytes(result, *line_index, line, values)?;
-        *line_index += 1;
-        Ok(result)
-    };
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte != b'\n' {
-            continue;
-        }
-        result = push(&bytes[line_start..=index], result, &mut line_index, values)?;
-        line_start = index + 1;
     }
-    if line_start < bytes.len() {
-        result = push(&bytes[line_start..], result, &mut line_index, values)?;
-    }
-    Ok(result)
+    Ok(result.finish())
 }

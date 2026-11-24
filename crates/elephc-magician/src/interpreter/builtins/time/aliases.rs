@@ -13,6 +13,7 @@
 //!   procedural date/time aliases; splitting by alias would obscure the shared
 //!   fallback and timezone-table rules.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
 
 #[path = "../../../../../../src/list_id_prelude/table.rs"]
@@ -315,13 +316,11 @@ fn eval_timezone_identifiers_filtered_alias(
         return eval_timezone_identifiers_country_error(context, values);
     }
     let rows = eval_timezone_identifier_rows(group, &country);
-    let mut result = values.array_new(rows.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, rows.len())?;
     for (index, name) in rows.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns the requested DateTimeZone group mask, defaulting to `DateTimeZone::ALL`.

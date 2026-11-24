@@ -8,6 +8,7 @@
 //! - `vsprintf()` owns array-to-argument expansion for printf-family vector
 //!   calls. `vprintf()` reuses that expansion from this file.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_call};
 use super::super::super::*;
 
 eval_builtin! {
@@ -41,24 +42,31 @@ pub(in crate::interpreter) fn eval_vsprintf_result(
         return Err(EvalStatus::RuntimeFatal);
     };
     let format = values.string_bytes(*format)?;
-    let format_args = eval_sprintf_argument_array_values(*array, values)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, context, values)?;
-    values.string_bytes_value(&output)
+    with_sprintf_array_args(*array, context, values, |args, context, values| {
+        let output = super::sprintf::eval_sprintf_bytes(&format, args, context, values)?;
+        values.string_bytes_value(&output)
+    })
 }
 
-/// Reads `vsprintf()` values in PHP array iteration order while ignoring keys.
-pub(in crate::interpreter) fn eval_sprintf_argument_array_values(
+/// Lends the array's values in iteration order and retires them after formatting.
+pub(in crate::interpreter) fn with_sprintf_array_args<V: RuntimeValueOps>(
     array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if !values.is_array_like(array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
     let len = values.array_len(array)?;
-    let mut args = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        args.push(values.array_get(array, key)?);
-    }
-    Ok(args)
+    with_collection_call(context, values, |context, values, owners, result| {
+        let mut args = Vec::with_capacity(len);
+        for position in 0..len {
+            let (_, value) = stage_collection_entry(array, position, values, owners)?;
+            args.push(value);
+        }
+        result.replace(Some(consume(&args, context, values)?));
+        Ok(())
+    })
 }

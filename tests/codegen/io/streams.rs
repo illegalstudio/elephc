@@ -9004,3 +9004,32 @@ echo file_get_contents("fgccontent://x"), "|";
     );
     assert_eq!(out, "wrapper-content|");
 }
+
+/// A synchronous stream-notification exception must retire the native argument array.
+#[test]
+fn test_stream_notification_callback_unwind_releases_arguments() {
+    let source = r#"<?php
+$ctx = stream_context_create([], ['notification' => function($code, $sev, $msg, $mc, $bt, $bm) {
+    throw new Exception("notification");
+}]);
+for ($i = 0; $i < (int)$argv[1]; $i++) {
+    try {
+        @fopen('http://127.0.0.1:1/', 'r');
+    } catch (Exception $error) {
+        echo $error->getMessage(), "|";
+        unset($error);
+    }
+}
+unset($ctx, $i);
+stream_context_create([], ['other' => 1]);
+echo "done";
+"#;
+    let counts = ["0", "1", "6"];
+    let outputs = compile_and_run_with_heap_debug_per_argv(source, &[&["0"], &["1"], &["6"]]);
+    let summaries: Vec<_> = outputs.iter().zip(counts).map(|(result, calls)| {
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(result.stdout, format!("{}done", "notification|".repeat(calls.parse().unwrap())));
+        result.stderr.lines().find(|line| line.starts_with("HEAP DEBUG: leak summary:")).unwrap()
+    }).collect();
+    assert!(summaries.iter().all(|summary| *summary == summaries[0]), "{summaries:?}");
+}

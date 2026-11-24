@@ -222,6 +222,12 @@ impl GeneratorOwner {
         emitter.emit_load_from_address(destination, generator, self.offset());
     }
 
+    /// Lends the caller an independent reference to a boxed Generator slot.
+    pub fn emit_retain(self, emitter: &mut impl crate::Emitter, generator: &str) {
+        self.emit_borrow(emitter, generator, emitter.int_result_reg());
+        emitter.emit_call_label("__rt_incref");
+    }
+
     /// Publishes an owner into a fresh Generator slot.
     pub fn emit_publish(self, emitter: &mut impl crate::Emitter, generator: &str, value: &str) {
         emitter.emit_store_to_address(value, generator, self.offset());

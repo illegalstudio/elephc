@@ -807,25 +807,14 @@ pub(super) fn eval_reflection_default_properties(
         }
         if member.default_value.is_some() { defaults.push((name, member)); }
     }
-    let mut result = values.assoc_new(defaults.len())?;
-    let outcome = (|| {
-        for (name, member) in defaults {
-            let default = member.default_value.as_ref().ok_or(EvalStatus::RuntimeFatal)?;
-            let value = eval_reflection_member_default_value(&member, default, context, values)?;
-            let key = match values.string(&name) {
-                Ok(key) => key,
-                Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
-            };
-            let stored = values.array_set(result, key, value);
-            let released_value = eval_release_value(context, values, value);
-            let released_key = values.release(key);
-            result = stored?;
-            released_value.and(released_key)?;
-        }
-        Ok(result)
-    })();
-    if outcome.is_err() { let _ = eval_release_value(context, values, result); }
-    outcome.map(EvalReflectionDefaultProperties::Values)
+    let mut result = EvalArrayBuilder::assoc(values, defaults.len())?;
+    for (name, member) in defaults {
+        let default = member.default_value.as_ref().ok_or(EvalStatus::RuntimeFatal)?;
+        result.string(&name, |values| {
+            eval_reflection_member_default_value(&member, default, context, values)
+        })?;
+    }
+    Ok(EvalReflectionDefaultProperties::Values(result.finish()))
 }
 
 /// Handles eval-backed `ReflectionClass::getStaticProperties()` calls.
@@ -851,17 +840,20 @@ pub(in crate::interpreter) fn eval_reflection_class_get_static_properties_result
     // Reading the static properties initializes the class, as in php-src.
     eval_raise_class_initialization_deprecations(&reflected_name, context, values)?;
     let property_names = eval_reflection_static_property_names(&reflected_name, context, values)?;
-    let mut result = values.assoc_new(property_names.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, property_names.len())?;
     for name in property_names {
-        let Some(value) =
-            eval_reflection_static_property_value(&reflected_name, &name, context, values)?
-        else {
-            continue;
-        };
-        let key = values.string(&name)?;
-        result = values.array_set(result, key, value)?;
+        result.update(|values, owners, _| {
+            let Some(value) =
+                eval_reflection_static_property_value(&reflected_name, &name, context, values)?
+            else {
+                return Ok(None);
+            };
+            let value = owners.stage(value);
+            let key = owners.stage(values.string(&name)?);
+            Ok(Some((key, value)))
+        })?;
     }
-    Ok(Some(result))
+    Ok(Some(result.finish()))
 }
 
 /// Handles eval-backed `ReflectionClass::getStaticPropertyValue()` calls.

@@ -75,15 +75,3 @@ pub(in crate::interpreter) fn eval_scandir_result(
     }
     Ok(result.finish())
 }
-
-/// Writes one byte-string value into an indexed runtime array at a zero-based position.
-pub(in crate::interpreter) fn eval_array_set_indexed_bytes(
-    array: RuntimeCellHandle,
-    index: usize,
-    value: &[u8],
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let value = values.string_bytes_value(value)?;
-    values.array_set(array, key, value)
-}

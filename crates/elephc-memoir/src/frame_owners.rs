@@ -62,6 +62,25 @@ pub fn emit_take_stack(emitter: &mut impl Emitter, offset: RecordOffset) {
     }
 }
 
+/// Retires typed owner slots from a borrowed record passed as the first native argument.
+pub fn emit_addressed_cleanup(
+    emitter: &mut impl Emitter,
+    label: &str,
+    owners: &[(usize, &str)],
+) {
+    emitter.label_global(label);
+    abi::emit_frame_prologue(emitter, 32);
+    emitter.emit_store_to_sp(emitter.int_arg_reg_name(0), 0);
+    let record = emitter.secondary_scratch_reg();
+    for &(offset, entry) in owners {
+        emitter.emit_load_temporary_stack_slot(record, 0);
+        emit_take_addressed(emitter, record, RecordOffset::new(offset));
+        emitter.emit_call_label(entry);
+    }
+    abi::emit_frame_restore(emitter, 32);
+    emitter.instruction("ret");                                                 // return after retiring each detached owner
+}
+
 /// Preserves the caller's real stack while selecting a borrowed PHP frame for ordinary slot helpers.
 pub fn enter_borrowed_frame(emitter: &mut impl Emitter) {
     if emitter.arch() == Arch::AArch64 {

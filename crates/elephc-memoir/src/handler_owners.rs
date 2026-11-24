@@ -31,6 +31,34 @@ pub const EXCEPTION_FIELDS: [&str; 5] = [
 /// Frame offset of the pending exception owner shared with the host completion routine.
 pub const PENDING: usize = 8;
 
+/// Transfers active registration fields to an addressed suspension record.
+pub fn emit_suspend(
+    emitter: &mut impl Emitter,
+    record: &str,
+    scratch: &str,
+    fields: &[(usize, &str)],
+) {
+    for &(offset, symbol) in fields {
+        emitter.emit_load_symbol_to_reg(scratch, symbol, 0);
+        emitter.emit_store_to_address(scratch, record, offset);
+        emitter.emit_store_zero_to_symbol(symbol, 0);
+    }
+}
+
+/// Moves saved registration fields back into active storage, retiring the frame's ownership.
+pub fn emit_resume(
+    emitter: &mut impl Emitter,
+    record: &str,
+    scratch: &str,
+    fields: &[(usize, &str)],
+) {
+    for &(offset, symbol) in fields {
+        emitter.emit_load_from_address(scratch, record, offset);
+        emitter.emit_store_zero_to_address(record, offset);
+        emitter.emit_store_reg_to_symbol(scratch, symbol, 0);
+    }
+}
+
 /// Allocates a record for the previous handler state, leaving the pointer in the result register.
 pub fn emit_allocate_node(emitter: &mut impl Emitter, fields: &[&str]) {
     emitter.emit_load_int_immediate(emitter.int_result_reg(), (fields.len() * 8) as i64);

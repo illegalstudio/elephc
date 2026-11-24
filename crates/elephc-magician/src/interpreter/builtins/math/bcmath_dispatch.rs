@@ -9,6 +9,7 @@
 //! - Magician calls the standalone C ABI so AOT and eval share one process scale.
 //! - ABI errors become catchable `ValueError` or `DivisionByZeroError` objects.
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use std::ptr;
 
@@ -575,13 +576,10 @@ fn materialize_result(
         BcmathResult::Int(value) => values.int(i64::from(value)),
         BcmathResult::String(value) => values.string(&value),
         BcmathResult::StringPair((quotient, remainder)) => {
-            let mut result = values.array_new(2)?;
-            let zero = values.int(0)?;
-            let quotient = values.string(&quotient)?;
-            result = values.array_set(result, zero, quotient)?;
-            let one = values.int(1)?;
-            let remainder = values.string(&remainder)?;
-            values.array_set(result, one, remainder)
+            let mut result = EvalArrayBuilder::indexed(values, 2)?;
+            result.index(0, |values| values.string(&quotient))?;
+            result.index(1, |values| values.string(&remainder))?;
+            Ok(result.finish())
         }
     }
 }

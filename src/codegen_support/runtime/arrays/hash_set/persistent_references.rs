@@ -11,23 +11,13 @@
 
 use super::{hash_layout, Arch, Emitter};
 
-/// Recognizes a persistent wrapper after the boxed invoker-marker probe has declined it.
+/// Routes a persistent wrapper to write-through while ordinary values keep the existing path.
 pub(super) fn emit_probe(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("cmp x15, #7");                                 // persistent references use a nested Mixed box
-            emitter.instruction("b.ne __rt_hash_set_check_reference");          // ordinary boxes keep the existing replacement path
-            emitter.instruction("ldr x15, [x14, #16]");                         // inspect the persistent-reference marker
-            emitter.instruction("cmp x15, #1");                                 // only marker one carries PHP reference identity
-            emitter.instruction("b.eq __rt_hash_set_persistent_write");         // preserve the wrapper and update its child
-        }
-        Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r14], 7");                      // persistent references use a nested Mixed box
-            emitter.instruction("jne __rt_hash_set_check_reference_x");         // ordinary boxes keep the existing replacement path
-            emitter.instruction("cmp QWORD PTR [r14 + 16], 1");                 // only marker one carries PHP reference identity
-            emitter.instruction("je __rt_hash_set_persistent_write_x");         // preserve the wrapper and update its child
-        }
-    }
+    let (ordinary, persistent) = match emitter.target.arch {
+        Arch::AArch64 => ("__rt_hash_set_check_reference", "__rt_hash_set_persistent_write"),
+        Arch::X86_64 => ("__rt_hash_set_check_reference_x", "__rt_hash_set_persistent_write_x"),
+    };
+    elephc_memoir::values::hash_bucket::emit_probe_persistent_wrapper(emitter, ordinary, persistent);
 }
 
 /// Publishes a detached incoming value through the existing persistent wrapper.
@@ -72,41 +62,12 @@ pub(super) fn emit_write(emitter: &mut Emitter) {
     }
 }
 
-/// Selects reference entries that a bucket-replacing array builder must detach first.
+/// Routes occupied buckets through the extractor before an independent-value replacement.
 pub(super) fn emit_value_detach_probe(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("cmp x9, #11");                                 // raw managed reference entries also detach
-            emitter.instruction("b.eq __rt_hash_set_value_detach");             // clear the bucket before releasing its cell owner
-            emitter.instruction("cmp x9, #7");                                  // boxed references carry the ordinary Mixed entry tag
-            emitter.instruction("b.ne __rt_hash_set_value_forward");            // ordinary entries need no detachment
-            emitter.instruction("ldr x10, [x4, #24]");                          // inspect the existing box without changing ownership
-            emitter.instruction("cbz x10, __rt_hash_set_value_forward");        // a null Mixed handle is an ordinary value
-            emitter.instruction("ldr x11, [x10]");                              // distinguish invoker markers and persistent wrappers
-            emitter.instruction("cmp x11, #11");                                // boxed invoker references also detach for array builders
-            emitter.instruction("b.eq __rt_hash_set_value_detach");             // preserve their caller's original storage
-            emitter.instruction("cmp x11, #7");                                 // only a nested Mixed box can be a persistent reference
-            emitter.instruction("b.ne __rt_hash_set_value_forward");            // ordinary boxed values keep their existing replacement path
-            emitter.instruction("ldr x11, [x10, #16]");                         // inspect the persistent-reference marker
-            emitter.instruction("cmp x11, #1");                                 // marker one identifies writable PHP reference identity
-            emitter.instruction("b.ne __rt_hash_set_value_forward");            // ordinary nested values need no detachment
-            emitter.label("__rt_hash_set_value_detach");
-        }
-        Arch::X86_64 => {
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // raw managed reference entries also detach
-            emitter.instruction("je __rt_hash_set_value_detach_x");             // clear the bucket before releasing its cell owner
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 7");                  // boxed references carry the ordinary Mixed entry tag
-            emitter.instruction("jne __rt_hash_set_value_forward_x");           // ordinary entries need no detachment
-            emitter.instruction("mov r10, QWORD PTR [r8 + 24]");                // inspect the existing box without changing ownership
-            emitter.instruction("test r10, r10");                               // a null Mixed handle is an ordinary value
-            emitter.instruction("jz __rt_hash_set_value_forward_x");            // skip absent boxed storage
-            emitter.instruction("cmp QWORD PTR [r10], 11");                     // boxed invoker references also detach for array builders
-            emitter.instruction("je __rt_hash_set_value_detach_x");             // preserve their caller's original storage
-            emitter.instruction("cmp QWORD PTR [r10], 7");                      // only a nested Mixed box can be a persistent reference
-            emitter.instruction("jne __rt_hash_set_value_forward_x");           // ordinary boxed values keep their existing replacement path
-            emitter.instruction("cmp QWORD PTR [r10 + 16], 1");                 // marker one identifies writable PHP reference identity
-            emitter.instruction("jne __rt_hash_set_value_forward_x");           // ordinary nested values need no detachment
-            emitter.label("__rt_hash_set_value_detach_x");
-        }
-    }
+    let (detach, forward) = match emitter.target.arch {
+        Arch::AArch64 => ("__rt_hash_set_value_detach", "__rt_hash_set_value_forward"),
+        Arch::X86_64 => ("__rt_hash_set_value_detach_x", "__rt_hash_set_value_forward_x"),
+    };
+    elephc_memoir::values::hash_bucket::emit_value_detach_probe(emitter, detach, forward);
+    emitter.label(detach);
 }

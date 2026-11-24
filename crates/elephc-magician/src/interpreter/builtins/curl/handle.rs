@@ -9,6 +9,7 @@
 //! Key details:
 //! - Option dispatch validates PHP value shapes before forwarding to the shared bridge.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use crate::curl_ffi as ffi;
 
 use super::*;
@@ -407,26 +408,28 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         let mut blob = Vec::new();
         let len = values.array_len(value)?;
         for position in 0..len {
-            let key = values.array_iter_key(value, position)?;
-            let item = values.array_get(value, key)?;
-            // AOT throws a catchable `\TypeError` for an array/object/null item instead
-            // of silently casting it (`crate::curl_prelude::curl_setopt`'s own `is_array
-            // ($item) || is_object($item) || is_null($item)` guard) — an eval-side
-            // `(string)` cast of an array is a warning plus `"Array"`, not the same
-            // failure, so this checks the item's tag before ever reaching `cast_string`.
-            let item_tag = values.type_tag(item)?;
-            if matches!(
-                item_tag,
-                EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_NULL
-            ) {
-                return eval_throw_type_error(
-                    "curl_setopt(): Argument #3 ($value) must be an array of strings for this option",
-                    context,
-                    values,
-                );
-            }
-            let item = values.cast_string(item)?;
-            blob.extend_from_slice(&values.string_bytes(item)?);
+            let bytes = with_collection_cells(values, |values, owners| {
+                let (_, item) = stage_collection_entry(value, position, values, owners)?;
+                // AOT throws a catchable `\TypeError` for an array/object/null item instead
+                // of silently casting it (`crate::curl_prelude::curl_setopt`'s own `is_array
+                // ($item) || is_object($item) || is_null($item)` guard) — an eval-side
+                // `(string)` cast of an array is a warning plus `"Array"`, not the same
+                // failure, so this checks the item's tag before ever reaching `cast_string`.
+                let item_tag = values.type_tag(item)?;
+                if matches!(
+                    item_tag,
+                    EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_NULL
+                ) {
+                    return eval_throw_type_error(
+                        "curl_setopt(): Argument #3 ($value) must be an array of strings for this option",
+                        context,
+                        values,
+                    );
+                }
+                let item = owners.stage(values.cast_string(item)?);
+                values.string_bytes(item)
+            })?;
+            blob.extend_from_slice(&bytes);
             blob.push(0);
         }
         return values.bool_value(ffi::easy_setopt_slist(raw, opt, &blob));

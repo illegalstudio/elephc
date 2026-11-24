@@ -580,3 +580,34 @@ pub fn emit_publish_appended_owner(emitter: &mut impl Emitter, array_slot: usize
     emitter.emit_call_label("__rt_incref");
     emitter.emit_pop_reg(result);
 }
+
+/// Replaces the selected packed box and adds a caller owner for the detached value.
+pub fn emit_clone_owned_packed_element_aarch64(emitter: &mut impl Emitter) {
+    emitter.instruction("str x0, [sp, #48]");                                   // preserve the old cell whose array-owner reference will be replaced
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
+    emitter.instruction("str x0, [sp, #56]");                                   // preserve the replacement across old-cell cleanup
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the unique indexed-array pointer
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the selected integer index
+    emitter.instruction("add x9, x9, #24");                                     // address the boxed Mixed payload base
+    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // publish the detached zval in the unique outer array
+    emitter.instruction("ldr x0, [sp, #48]");                                   // drop the replaced array-owner reference to the shared cell
+    emitter.instruction("bl __rt_decref_mixed");                                // release the old cell without affecting aliases that still own it
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the detached cell now owned by the array
+    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference consumed after the nested write
+}
+
+/// Replaces the selected packed box and adds a caller owner for the detached value.
+pub fn emit_clone_owned_packed_element_x86_64(emitter: &mut impl Emitter) {
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the old cell whose array-owner reference will be replaced
+    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replacement across old-cell cleanup
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the unique indexed-array pointer
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the selected integer index
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], rax");              // publish the detached zval in the unique outer array
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // drop the replaced array-owner reference to the shared cell
+    emitter.instruction("call __rt_decref_mixed");                              // release the old cell without affecting aliases that still own it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the detached cell now owned by the array
+    emitter.emit_push_reg("rax");
+    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference consumed after the nested write
+    emitter.emit_pop_reg("rax");
+}

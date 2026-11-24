@@ -13,6 +13,7 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::types::PhpType;
+use elephc_memoir::{owner_records, values::packed_slots};
 use elephc_memoir::buffers::diagnostic_buffer::{self, FragmentFrame};
 
 const FRAME: usize = 1024;
@@ -20,6 +21,12 @@ const BUFFER: usize = 704;
 const LENGTH: usize = 712;
 const LEVEL: usize = 720;
 const PREFIX: usize = 728;
+const WARNING_OWNERS: owner_records::Context<'static> = owner_records::Context {
+    head: "_exc_call_frame_top",
+    cleanup: "__rt_warning_cleanup",
+    visitor: "__rt_gc_warning_frame_owners",
+};
+
 const ARRAY: usize = 736;
 const ARGS: usize = 744;
 const RESULT: usize = 752;
@@ -229,8 +236,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
     abi::emit_store_zero_to_symbol(e, "_rt_diag_warning_message_len", 0);
-    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
+    owner_records::pop_stack(e, ACTIVATION, WARNING_OWNERS.head);
     abi::emit_temporary_stack_address(e, a0, 0);
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");
@@ -324,31 +330,19 @@ fn emit_arguments(e: &mut Emitter) {
             }
         }
         abi::emit_load_temporary_stack_slot(e, scratch, ARRAY);
-        abi::emit_store_to_address(e, result, scratch, 24 + index * 8);
+        let length = if arm { "x11" } else { "r11" };
+        packed_slots::emit_publish_word_at(e, scratch, result, length, index);
     }
     abi::emit_load_temporary_stack_slot(e, result, ARRAY);
-    abi::emit_load_int_immediate(e, scratch, 4);
-    abi::emit_store_to_address(e, scratch, result, 0);
     emit_box_current_owned_value_as_mixed(e, &PhpType::Array(Box::new(PhpType::Mixed)));
     save(e, ARGS);
 }
 
 /// Publishes an owning cleanup activation before entering arbitrary user code.
 fn emit_activation(e: &mut Emitter) {
-    let scratch = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
-    abi::emit_load_symbol_to_reg(e, scratch, "_exc_call_frame_top", 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION);
-    abi::emit_symbol_address(e, scratch, "__rt_warning_cleanup");
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 8);
-    abi::emit_temporary_stack_address(e, scratch, 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 16);
-    abi::emit_load_int_immediate(e, scratch, 0);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
-    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
-    abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
-    abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
+    let data = abi::int_result_reg(e);
+    abi::emit_temporary_stack_address(e, data, 0);
+    owner_records::publish_stack(e, data, ACTIVATION, WARNING_OWNERS);
 }
 
 #[cfg(test)]

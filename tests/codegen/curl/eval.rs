@@ -1860,3 +1860,35 @@ echo "DONE\n";
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     }
 }
+
+/// cURL option traversal and result builders retire temporary PHP cells while keeping handles live.
+#[test]
+fn eval_curl_residual_option_and_result_owners() {
+    if skip_without_curl_native("eval_curl_residual_option_and_result_owners") {
+        return;
+    }
+    let cases = [
+        ("option array", "if (!curl_setopt_array($h,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>1])) { echo 'failed'; }"),
+        ("header list", "if (!curl_setopt($h,CURLOPT_HTTPHEADER,['Accept: application/json','Accept-Language: en'])) { echo 'failed'; }"),
+        ("multipart", "if (!curl_setopt($h,CURLOPT_POSTFIELDS,['x'=>['a','b'],'y'=>'z'])) { echo 'failed'; }"),
+        ("handle list", "$r=curl_multi_get_handles($m); if (count($r) !== 1) { echo 'failed'; } unset($r);"),
+    ];
+    let sources: Vec<_> = cases.iter().flat_map(|(_, call)| {
+        [0, 1, 6].map(|calls| format!(
+            "$h=curl_init(); $m=curl_multi_init(); curl_multi_add_handle($m,$h); \
+             for ($i=0; $i<{calls}; $i++) {{ {call} }} \
+             unset($i); curl_multi_remove_handle($m,$h); unset($m,$h); echo 'done';"
+        ))
+    }).collect();
+    let args: Vec<_> = sources.iter().map(|source| [source.as_str()]).collect();
+    let argvs: Vec<_> = args.iter().map(|args| args.as_slice()).collect();
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        "<?php if ($argc < 0) { curl_version(); } eval($argv[1]);",
+        &argvs,
+    );
+    for ((case, calls), result) in cases.iter().flat_map(|(name, _)| [0, 1, 6].map(|calls| (name, calls))).zip(outputs) {
+        assert!(result.success, "{case} ({calls} calls): {}", result.stderr);
+        assert_eq!(result.stdout, "done", "{case} ({calls} calls)");
+        assert!(result.stderr.contains("HEAP DEBUG: leak summary: clean"), "{case} ({calls} calls): {}", result.stderr);
+    }
+}

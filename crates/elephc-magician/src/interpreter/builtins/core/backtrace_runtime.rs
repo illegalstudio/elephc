@@ -10,7 +10,7 @@
 
 use super::super::super::*;
 use super::func_args::eval_current_function_arg;
-use super::super::collection_builder::EvalArrayBuilder;
+use super::super::collection_builder::{with_collection_cells, with_collection_result, EvalArrayBuilder};
 use crate::context::{EvalBacktraceFrame, EvalFunctionArgsFrame};
 
 const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
@@ -57,18 +57,22 @@ pub(super) fn eval_debug_print_backtrace(
     let frame_limit = backtrace_frame_limit(limit, frames.len());
     for (index, frame) in frames.into_iter().take(frame_limit).enumerate() {
         let rendered = render_backtrace_frame(index, &frame, options, context, values)?;
-        let rendered = values.string(&rendered)?;
-        values.echo(rendered)?;
-        values.release(rendered)?;
+        with_collection_cells(values, |values, owners| {
+            let rendered = owners.stage(values.string(&rendered)?);
+            values.echo(rendered)
+        })?;
     }
     let mut native_index = 0;
     while limit >= 0 && (limit == 0 || frame_limit + native_index < limit as usize) {
         let Some(frame) = values.runtime_backtrace_entry(native_index, options)? else { break };
-        let rendered = render_native_frame(frame_limit + native_index, frame, options, context, values)?;
-        values.release(frame)?;
-        let rendered = values.string(&rendered)?;
-        values.echo(rendered)?;
-        values.release(rendered)?;
+        let rendered = with_collection_cells(values, |values, owners| {
+            let frame = owners.stage(frame);
+            render_native_frame(frame_limit + native_index, frame, options, context, values)
+        })?;
+        with_collection_cells(values, |values, owners| {
+            let rendered = owners.stage(values.string(&rendered)?);
+            values.echo(rendered)
+        })?;
         native_index += 1;
     }
     values.null()
@@ -83,26 +87,30 @@ fn render_native_frame(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let file = native_frame_text(frame, "file", values)?;
-    let line = native_frame_field(frame, "line", values)?;
-    let line_number = eval_int_value(line, values)?;
-    values.release(line)?;
+    let line_number = with_collection_cells(values, |values, owners| {
+        let line = owners.stage(native_frame_field(frame, "line", values)?);
+        eval_int_value(line, values)
+    })?;
     let function = native_frame_text(frame, "function", values)?;
     let class = native_frame_text(frame, "class", values)?;
     let call_type = native_frame_text(frame, "type", values)?;
     let mut rendered = format!("#{index} {file}({line_number}): {class}{call_type}{function}(");
     if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 {
-        let args = native_frame_field(frame, "args", values)?;
-        if !values.is_null(args)? {
-            for position in 0..values.array_len(args)? {
-                if position > 0 { rendered.push_str(", "); }
-                let key = values.int(position as i64)?;
-                let value = values.array_get(args, key)?;
-                values.release(key)?;
-                rendered.push_str(&render_backtrace_argument(value, context, values)?);
-                values.release(value)?;
+        with_collection_cells(values, |values, owners| {
+            let args = owners.stage(native_frame_field(frame, "args", values)?);
+            if !values.is_null(args)? {
+                for position in 0..values.array_len(args)? {
+                    if position > 0 { rendered.push_str(", "); }
+                    let arg = with_collection_cells(values, |values, owners| {
+                        let key = owners.stage(values.int(position as i64)?);
+                        let value = owners.stage(values.array_get(args, key)?);
+                        render_backtrace_argument(value, context, values)
+                    })?;
+                    rendered.push_str(&arg);
+                }
             }
-        }
-        values.release(args)?;
+            Ok(())
+        })?;
     }
     rendered.push_str(")\n");
     Ok(rendered)
@@ -110,23 +118,27 @@ fn render_native_frame(
 
 /// Returns an owned optional native frame field without emitting a missing-key warning.
 fn native_frame_field(frame: RuntimeCellHandle, name: &str, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(name)?;
-    let exists = values.array_key_exists(key, frame)?;
-    let present = values.truthy(exists)?;
-    values.release(exists)?;
-    let value = if present { values.array_get(frame, key)? } else { values.null()? };
-    values.release(key)?;
-    Ok(value)
+    with_collection_result(values, |values, result| {
+        with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.string(name)?);
+            let exists = owners.stage(values.array_key_exists(key, frame)?);
+            let value = if values.truthy(exists)? { values.array_get(frame, key)? } else { values.null()? };
+            result.replace(Some(value));
+            Ok(())
+        })
+    })
 }
 
 /// Copies an optional native string field, treating absent class/type markers as empty.
 fn native_frame_text(frame: RuntimeCellHandle, name: &str, values: &mut impl RuntimeValueOps) -> Result<String, EvalStatus> {
-    let value = native_frame_field(frame, name, values)?;
-    let text = if values.is_null(value)? { String::new() } else {
-        String::from_utf8_lossy(&values.string_bytes(value)?).into_owned()
-    };
-    values.release(value)?;
-    Ok(text)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(native_frame_field(frame, name, values)?);
+        if values.is_null(value)? {
+            Ok(String::new())
+        } else {
+            Ok(String::from_utf8_lossy(&values.string_bytes(value)?).into_owned())
+        }
+    })
 }
 
 /// Applies PHP's limit convention where zero is unlimited and a negative value selects no frames.

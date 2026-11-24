@@ -40,6 +40,7 @@
 //!   dies partway never leaves the half-built structure dangling and never disturbs whatever
 //!   mime is already ATTACHED from an earlier successful call on the same handle.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use crate::curl_ffi as ffi;
 
 use super::*;
@@ -64,44 +65,49 @@ pub(in crate::interpreter) fn eval_curl_build_multipart(
     if !ffi::mime_new(raw) {
         return values.bool_value(false);
     }
+    let built = eval_curl_multipart_fields(raw, fields, context, values);
+    if matches!(built, Ok(true)) {
+        return values.bool_value(ffi::mime_post(raw));
+    }
+    ffi::mime_abort(raw);
+    built.and_then(|_| values.bool_value(false))
+}
+
+/// Visits every top-level field while its temporary PHP cells stay rooted.
+fn eval_curl_multipart_fields(
+    raw: i64,
+    fields: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     let len = values.array_len(fields)?;
     for position in 0..len {
-        let key = values.array_iter_key(fields, position)?;
-        let value = values.array_get(fields, key)?;
-        let name = values.cast_string(key)?;
-        let name = values.string_bytes(name)?;
-        if eval_curl_is_php_array(value, values)? {
-            if !eval_curl_multipart_nested(raw, &name, value, context, values)? {
-                return values.bool_value(false);
+        let accepted = with_collection_cells(values, |values, owners| {
+            let (key, value) = stage_collection_entry(fields, position, values, owners)?;
+            let name = owners.stage(values.cast_string(key)?);
+            let name = values.string_bytes(name)?;
+            if eval_curl_is_php_array(value, values)? {
+                return eval_curl_multipart_nested(raw, &name, value, context, values);
             }
-            continue;
-        }
-        if !ffi::mime_add_part(raw) {
-            ffi::mime_abort(raw);
-            return values.bool_value(false);
-        }
-        if !ffi::mime_part_field(raw, ffi::MIME_FIELD_NAME, &name) {
-            ffi::mime_abort(raw);
-            return values.bool_value(false);
-        }
-        if values.type_tag(value)? == EVAL_TAG_OBJECT {
-            if !eval_curl_multipart_object_part(raw, value, context, values)? {
-                return values.bool_value(false);
+            if !ffi::mime_add_part(raw) || !ffi::mime_part_field(raw, ffi::MIME_FIELD_NAME, &name) {
+                return Ok(false);
             }
-            continue;
-        }
-        let scalar = values.cast_string(value)?;
-        let scalar = values.string_bytes(scalar)?;
-        if !ffi::mime_part_field(raw, ffi::MIME_FIELD_DATA, &scalar) {
-            ffi::mime_abort(raw);
-            return values.bool_value(false);
+            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+                return eval_curl_multipart_object_part(raw, value, context, values);
+            }
+            let scalar = owners.stage(values.cast_string(value)?);
+            let scalar = values.string_bytes(scalar)?;
+            Ok(ffi::mime_part_field(raw, ffi::MIME_FIELD_DATA, &scalar))
+        })?;
+        if !accepted {
+            return Ok(false);
         }
     }
-    values.bool_value(ffi::mime_post(raw))
+    Ok(true)
 }
 
 /// Emits one part per element of a nested array value, all sharing the outer key as their
-/// field name. Returns `false` when the walk failed (already aborted).
+/// field name. Returns `false` when the caller must abort the build.
 fn eval_curl_multipart_nested(
     raw: i64,
     name: &[u8],
@@ -111,33 +117,34 @@ fn eval_curl_multipart_nested(
 ) -> Result<bool, EvalStatus> {
     let len = values.array_len(value)?;
     for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let inner = values.array_get(value, key)?;
-        // DIVERGENCE FROM PHP, the AOT walker's own: going one level deeper stops php-src's
-        // recursion and raises its ordinary `Warning: Array to string conversion`, posting
-        // the literal string `"Array"`. Reproducing that warn-and-mangle shape was judged
-        // not worth the complexity; an inner element that is itself an array or object gets
-        // a clear, loud `\TypeError` instead of a silently mangled request.
-        if eval_curl_is_php_array(inner, values)? || values.type_tag(inner)? == EVAL_TAG_OBJECT {
-            ffi::mime_abort(raw);
-            let _: RuntimeCellHandle = eval_throw_type_error(
-                "curl_setopt(): CURLOPT_POSTFIELDS nested array value must contain only scalars",
-                context,
-                values,
-            )?;
-        }
-        if !ffi::mime_add_part(raw) {
-            ffi::mime_abort(raw);
-            return Ok(false);
-        }
-        if !ffi::mime_part_field(raw, ffi::MIME_FIELD_NAME, name) {
-            ffi::mime_abort(raw);
-            return Ok(false);
-        }
-        let inner = values.cast_string(inner)?;
-        let inner = values.string_bytes(inner)?;
-        if !ffi::mime_part_field(raw, ffi::MIME_FIELD_DATA, &inner) {
-            ffi::mime_abort(raw);
+        let accepted = with_collection_cells(values, |values, owners| {
+            let (_, inner) = stage_collection_entry(value, position, values, owners)?;
+            // DIVERGENCE FROM PHP, the AOT walker's own: going one level deeper stops php-src's
+            // recursion and raises its ordinary `Warning: Array to string conversion`, posting
+            // the literal string `"Array"`. Reproducing that warn-and-mangle shape was judged
+            // not worth the complexity; an inner element that is itself an array or object gets
+            // a clear, loud `\TypeError` instead of a silently mangled request.
+            if eval_curl_is_php_array(inner, values)? || values.type_tag(inner)? == EVAL_TAG_OBJECT {
+                let _: RuntimeCellHandle = eval_throw_type_error(
+                    "curl_setopt(): CURLOPT_POSTFIELDS nested array value must contain only scalars",
+                    context,
+                    values,
+                )?;
+            }
+            if !ffi::mime_add_part(raw) {
+                return Ok(false);
+            }
+            if !ffi::mime_part_field(raw, ffi::MIME_FIELD_NAME, name) {
+                return Ok(false);
+            }
+            let inner = owners.stage(values.cast_string(inner)?);
+            let inner = values.string_bytes(inner)?;
+            if !ffi::mime_part_field(raw, ffi::MIME_FIELD_DATA, &inner) {
+                return Ok(false);
+            }
+            Ok(true)
+        })?;
+        if !accepted {
             return Ok(false);
         }
     }
@@ -155,17 +162,14 @@ fn eval_curl_multipart_object_part(
     if values.object_is_a(value, CURL_STRING_FILE_CLASS, false)? {
         let data = eval_curl_multipart_property(value, "data", values)?;
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_DATA, &data) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         let postname = eval_curl_multipart_property(value, "postname", values)?;
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_FILENAME, &postname) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         let mime = eval_curl_multipart_property(value, "mime", values)?;
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_TYPE, &mime) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         return Ok(true);
@@ -173,7 +177,6 @@ fn eval_curl_multipart_object_part(
     if values.object_is_a(value, CURL_FILE_CLASS, false)? {
         let path = eval_curl_multipart_property(value, "name", values)?;
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_FILEDATA, &path) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         // ALWAYS SET, NEVER SKIPPED — see this module's header: skipping it is not "no
@@ -185,19 +188,16 @@ fn eval_curl_multipart_object_part(
             &mime
         };
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_TYPE, mime) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         // NO `basename()` HERE — the full path is the measured, correct fallback.
         let postname = eval_curl_multipart_property(value, "postname", values)?;
         let filename: &[u8] = if postname.is_empty() { &path } else { &postname };
         if !ffi::mime_part_field(raw, ffi::MIME_FIELD_FILENAME, filename) {
-            ffi::mime_abort(raw);
             return Ok(false);
         }
         return Ok(true);
     }
-    ffi::mime_abort(raw);
     let class_name = eval_curl_given_type_name(value, context, values)?;
     let _: RuntimeCellHandle = eval_throw_type_error(
         &format!(
@@ -219,7 +219,9 @@ fn eval_curl_multipart_property(
     property: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
-    let value = values.property_get(object, property)?;
-    let value = values.cast_string(value)?;
-    values.string_bytes(value)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(values.property_get(object, property)?);
+        let value = owners.stage(values.cast_string(value)?);
+        values.string_bytes(value)
+    })
 }

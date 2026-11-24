@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use super::*;
 
@@ -60,11 +61,11 @@ pub(in crate::interpreter) fn eval_glob_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let pattern = eval_path_string(pattern, values)?;
     let matches = eval_glob_matches(&pattern);
-    let mut result = values.array_new(matches.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, matches.len())?;
     for (index, path) in matches.iter().enumerate() {
-        result = super::scandir::eval_array_set_indexed_bytes(result, index, path.as_bytes(), values)?;
+        result.index(index, |values| values.string_bytes_value(path.as_bytes()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Collects sorted matches for one local glob pattern.

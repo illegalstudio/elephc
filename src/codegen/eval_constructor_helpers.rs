@@ -765,42 +765,20 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
 
 /// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
-    emit_release_builtin_throwable_defaults(emitter);
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
-    emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
-    emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
-    emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
-    emitter.instruction("str xzr, [x9, #40]");                                  // default the previous Throwable pointer to null
+    use elephc_memoir::values::throwable_storage;
+    let offset = elephc_memoir::FrameOffset::new(32);
+    throwable_storage::emit_release_constructor_defaults(emitter, offset);
+    abi::load_at_offset(emitter, "x9", offset.bytes());
+    throwable_storage::emit_default_code(emitter, "x9");
 }
 
 /// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
-    emit_release_builtin_throwable_defaults(emitter);
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
-    emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
-    emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
-    emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
-    emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
-}
-
-/// Releases the default owners installed by by-name allocation before compact Throwable setup.
-fn emit_release_builtin_throwable_defaults(emitter: &mut Emitter) {
-    let object_frame_offset = match emitter.target.arch {
-        Arch::AArch64 => 32,
-        Arch::X86_64 => 24,
-    };
-    let object = abi::symbol_scratch_reg(emitter);
-    let value = abi::int_result_reg(emitter);
-    for (offset, release) in [(8, "__rt_heap_free_safe"), (40, "__rt_decref_any")] {
-        abi::load_at_offset(emitter, object, object_frame_offset);
-        abi::emit_load_from_address(emitter, value, object, offset);
-        // Detach before release, since a previous exception may run a user destructor.
-        abi::emit_store_zero_to_address(emitter, object, offset);
-        if offset == 8 {
-            abi::emit_store_zero_to_address(emitter, object, 16);
-        }
-        abi::emit_call_label(emitter, release);
-    }
+    use elephc_memoir::values::throwable_storage;
+    let offset = elephc_memoir::FrameOffset::new(24);
+    throwable_storage::emit_release_constructor_defaults(emitter, offset);
+    abi::load_at_offset(emitter, "r11", offset.bytes());
+    throwable_storage::emit_default_code(emitter, "r11");
 }
 
 /// Emits ARM64 class-id dispatch for supported constructor bodies.

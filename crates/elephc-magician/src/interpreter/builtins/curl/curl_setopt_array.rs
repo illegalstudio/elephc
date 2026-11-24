@@ -14,6 +14,7 @@ eval_builtin! {
     values: Curl,
 }
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use super::*;
 
 /// Evaluates `curl_setopt_array($handle, $options)` over eval expressions.
@@ -65,11 +66,13 @@ fn eval_curl_setopt_array_result(
     }
     let len = values.array_len(options)?;
     for position in 0..len {
-        let key = values.array_iter_key(options, position)?;
-        let value = values.array_get(options, key)?;
-        let option = eval_int_value(key, values)?;
-        let applied = eval_curl_setopt_apply(raw, table_id, option, value, context, values)?;
-        if !values.truthy(applied)? {
+        let applied = with_collection_cells(values, |values, owners| {
+            let (key, value) = stage_collection_entry(options, position, values, owners)?;
+            let option = eval_int_value(key, values)?;
+            let applied = owners.stage(eval_curl_setopt_apply(raw, table_id, option, value, context, values)?);
+            values.truthy(applied)
+        })?;
+        if !applied {
             return values.bool_value(false);
         }
     }

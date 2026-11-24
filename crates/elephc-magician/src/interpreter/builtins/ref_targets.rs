@@ -20,6 +20,9 @@ pub(in crate::interpreter) fn eval_write_direct_ref_target(
     values: &mut impl RuntimeValueOps,
     variable_ownership: Option<ScopeCellOwnership>,
 ) -> Result<(), EvalStatus> {
+    if variable_ownership == Some(ScopeCellOwnership::Owned) {
+        return write_back_owned_ref_target(target, value, context, values);
+    }
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
             let Some(scope) = (unsafe { scope.as_mut() }) else {

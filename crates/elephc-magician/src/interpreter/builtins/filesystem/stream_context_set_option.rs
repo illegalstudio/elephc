@@ -15,6 +15,8 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::with_collection_call;
+use elephc_memoir::runtime_owners::StagedRuntimeOwners;
 use super::super::super::*;
 
 /// Evaluates `stream_context_set_option($context, ...)`.
@@ -104,18 +106,21 @@ pub(in crate::interpreter) fn eval_stream_context_set_option_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_context_resource_id(stream_context, values)?;
-    let wrapper = values.cast_string(wrapper)?;
-    let option = values.cast_string(option)?;
-    let options = match context.stream_resources().stream_context_options(id) {
-        Some(options) => options,
-        None => values.assoc_new(1)?,
-    };
-    let wrapper_options = eval_stream_context_wrapper_options(options, wrapper, values)?;
-    let wrapper_options = values.array_set(wrapper_options, option, value)?;
-    let options = values.array_set(options, wrapper, wrapper_options)?;
-    let options = super::stream_context_create::eval_stream_context_options_arg(Some(options), values)?;
-    let stored = eval_replace_stream_context_options(id, options, context, values)?;
-    values.bool_value(stored)
+    with_collection_call(context, values, |context, values, owners, result| {
+        let wrapper = owners.stage(values.cast_string(wrapper)?);
+        let option = owners.stage(values.cast_string(option)?);
+        let options = match context.stream_resources().stream_context_options(id) {
+            Some(options) => owners.stage(values.retain(options)?),
+            None => owners.stage(values.assoc_new(1)?),
+        };
+        let wrapper_options = eval_stream_context_wrapper_options(options, wrapper, values, owners)?;
+        let wrapper_options = values.array_set(wrapper_options, option, value)?;
+        let options = values.array_set(options, wrapper, wrapper_options)?;
+        let options = values.retain(options.borrowed())?;
+        let stored = eval_replace_stream_context_options(id, Some(options), context, values)?;
+        result.replace(Some(values.bool_value(stored)?));
+        Ok(())
+    })
 }
 
 /// Publishes an independently owned option cell before releasing the detached predecessor.
@@ -151,13 +156,14 @@ fn eval_stream_context_wrapper_options(
     options: RuntimeCellHandle,
     wrapper: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let exists = values.array_key_exists(wrapper, options)?;
+    let exists = owners.stage(values.array_key_exists(wrapper, options)?);
     if values.truthy(exists)? {
-        let wrapper_options = values.array_get(options, wrapper)?;
+        let wrapper_options = owners.stage(values.array_get(options, wrapper)?);
         if values.is_array_like(wrapper_options)? {
             return Ok(wrapper_options);
         }
     }
-    values.assoc_new(1)
+    Ok(owners.stage(values.assoc_new(1)?))
 }

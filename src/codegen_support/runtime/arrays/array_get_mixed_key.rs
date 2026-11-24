@@ -110,17 +110,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_get_mixed_key_clone_done");               // share the helper epilogue with ref-cell cloning
 
     emitter.label("__rt_array_get_mixed_key_detach_indexed");
-    emitter.instruction("str x0, [sp, #48]");                                   // preserve the old cell whose array-owner reference will be replaced
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
-    emitter.instruction("str x0, [sp, #56]");                                   // preserve the replacement across old-cell cleanup
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the unique indexed-array pointer
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the selected integer index
-    emitter.instruction("add x9, x9, #24");                                     // address the boxed Mixed payload base
-    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // publish the detached zval in the unique outer array
-    emitter.instruction("ldr x0, [sp, #48]");                                   // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release the old cell without affecting aliases that still own it
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the detached cell now owned by the array
-    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference consumed after the nested write
+    packed_slots::emit_clone_owned_packed_element_aarch64(emitter);
     emitter.instruction("b __rt_array_get_mixed_key_clone_done");               // return through the shared epilogue
 
     emitter.label("__rt_array_get_mixed_key_clone_ref_cell");
@@ -329,18 +319,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_get_mixed_key_clone_done");             // share the helper epilogue with ref-cell cloning
 
     emitter.label("__rt_array_get_mixed_key_detach_indexed");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the old cell whose array-owner reference will be replaced
-    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replacement across old-cell cleanup
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the unique indexed-array pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the selected integer index
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], rax");              // publish the detached zval in the unique outer array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("call __rt_decref_mixed");                              // release the old cell without affecting aliases that still own it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the detached cell now owned by the array
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference consumed after the nested write
-    abi::emit_pop_reg(emitter, "rax");
+    packed_slots::emit_clone_owned_packed_element_x86_64(emitter);
     emitter.instruction("jmp __rt_array_get_mixed_key_clone_done");             // return through the shared epilogue
 
     emitter.label("__rt_array_get_mixed_key_clone_ref_cell");

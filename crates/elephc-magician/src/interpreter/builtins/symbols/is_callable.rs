@@ -15,6 +15,7 @@ eval_builtin! {
     values: Symbols,
 }
 
+use crate::interpreter::builtins::collection_builder::with_collection_cells;
 use super::super::super::*;
 
 /// Evaluates direct `is_callable(...)` calls inside an eval fragment.
@@ -225,22 +226,24 @@ fn eval_callable_array_display_name(
     if values.array_len(value)? != 2 {
         return Ok(None);
     }
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(value, zero)?;
-    let method = values.array_get(value, one)?;
-    if values.type_tag(method)? != EVAL_TAG_STRING {
-        return Ok(None);
-    }
-    let method =
-        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let receiver_name = match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => eval_callable_object_class_name(receiver, context, values)?,
-        EVAL_TAG_STRING => String::from_utf8(values.string_bytes(receiver)?)
-            .map_err(|_| EvalStatus::RuntimeFatal)?,
-        _ => return Ok(None),
-    };
-    Ok(Some(format!("{receiver_name}::{method}")))
+    with_collection_cells(values, |values, owners| {
+        let zero = owners.stage(values.int(0)?);
+        let one = owners.stage(values.int(1)?);
+        let receiver = owners.stage(values.array_get(value, zero)?);
+        let method = owners.stage(values.array_get(value, one)?);
+        if values.type_tag(method)? != EVAL_TAG_STRING {
+            return Ok(None);
+        }
+        let method =
+            String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let receiver_name = match values.type_tag(receiver)? {
+            EVAL_TAG_OBJECT => eval_callable_object_class_name(receiver, context, values)?,
+            EVAL_TAG_STRING => String::from_utf8(values.string_bytes(receiver)?)
+                .map_err(|_| EvalStatus::RuntimeFatal)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(format!("{receiver_name}::{method}")))
+    })
 }
 
 /// Returns the PHP-visible class name used when formatting callable object probes.

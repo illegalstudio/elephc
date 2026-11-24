@@ -14,6 +14,7 @@ eval_builtin! {
     values: Filesystem,
 }
 
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::super::super::*;
 use super::*;
 
@@ -134,9 +135,9 @@ fn eval_csv_fields_array(
     fields: &[Vec<u8>],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(fields.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, fields.len())?;
     for (index, field) in fields.iter().enumerate() {
-        result = super::scandir::eval_array_set_indexed_bytes(result, index, field, values)?;
+        result.index(index, |values| values.string_bytes_value(field))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

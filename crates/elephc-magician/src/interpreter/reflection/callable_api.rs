@@ -7,6 +7,7 @@
 //! Key details:
 //! - Invocation, metadata predicates, prototypes, and PHP string forms share one target lookup.
 
+use crate::interpreter::builtins::collection_builder::{stage_collection_entry, with_collection_cells};
 use super::*;
 
 /// Handles eval-backed `ReflectionMethod::invoke()` and `invokeArgs()` calls.
@@ -406,8 +407,10 @@ pub(super) fn eval_reflection_no_arg_string_method(
     method: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let value = values.method_call(object, method, Vec::new())?;
-    eval_reflection_string_arg(value, values)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(values.method_call(object, method, Vec::new())?);
+        eval_reflection_string_arg(value, values)
+    })
 }
 
 /// Calls one no-arg Reflection method and returns its bool result.
@@ -416,11 +419,13 @@ pub(super) fn eval_reflection_no_arg_bool_method(
     method: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let value = values.method_call(object, method, Vec::new())?;
-    if values.type_tag(value)? != EVAL_TAG_BOOL {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    values.truthy(value)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(values.method_call(object, method, Vec::new())?);
+        if values.type_tag(value)? != EVAL_TAG_BOOL {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        values.truthy(value)
+    })
 }
 
 /// Calls one no-arg Reflection method and returns its int result.
@@ -429,8 +434,10 @@ pub(super) fn eval_reflection_no_arg_int_method(
     method: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    let value = values.method_call(object, method, Vec::new())?;
-    eval_int_value(value, values)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(values.method_call(object, method, Vec::new())?);
+        eval_int_value(value, values)
+    })
 }
 
 /// Formats one eval-visible ReflectionType object if the value is a retained type object.
@@ -478,13 +485,18 @@ pub(super) fn eval_reflection_composite_type_to_string(
     separator: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let types = values.method_call(object, "getTypes", Vec::new())?;
-    let mut names = Vec::new();
-    for position in 0..values.array_len(types)? {
-        let key = values.array_iter_key(types, position)?;
-        let member = values.array_get(types, key)?;
-        names.push(eval_reflection_type_method_string(member, "getName", values)?);
-    }
+    let mut names = with_collection_cells(values, |values, owners| {
+        let types = owners.stage(values.method_call(object, "getTypes", Vec::new())?);
+        let mut names = Vec::new();
+        for position in 0..values.array_len(types)? {
+            let name = with_collection_cells(values, |values, owners| {
+                let (_, member) = stage_collection_entry(types, position, values, owners)?;
+                eval_reflection_type_method_string(member, "getName", values)
+            })?;
+            names.push(name);
+        }
+        Ok(names)
+    })?;
     if separator == "|" && eval_reflection_type_method_bool(object, "allowsNull", values)? {
         names.push(String::from("null"));
     }
@@ -497,9 +509,11 @@ pub(super) fn eval_reflection_type_method_string(
     method: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let value = values.method_call(object, method, Vec::new())?;
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    with_collection_cells(values, |values, owners| {
+        let value = owners.stage(values.method_call(object, method, Vec::new())?);
+        let bytes = values.string_bytes(value)?;
+        String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    })
 }
 
 /// Calls one no-arg ReflectionType method and returns its bool result.
@@ -508,11 +522,7 @@ pub(super) fn eval_reflection_type_method_bool(
     method: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let value = values.method_call(object, method, Vec::new())?;
-    if values.type_tag(value)? != EVAL_TAG_BOOL {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    values.truthy(value)
+    eval_reflection_no_arg_bool_method(object, method, values)
 }
 
 /// Maps a legacy ReflectionParameter predicate method to its target named type.

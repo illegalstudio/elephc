@@ -195,6 +195,18 @@ pub(in crate::interpreter) fn with_collection_cells<V: RuntimeValueOps, R>(
     })
 }
 
+/// Acquires an iterator key and its element, registering each before the next runtime call.
+pub(in crate::interpreter) fn stage_collection_entry(
+    array: RuntimeCellHandle,
+    position: usize,
+    values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let key = owners.stage(values.array_iter_key(array, position)?);
+    let value = owners.stage(values.array_get(array, key.borrowed())?);
+    Ok((key.borrowed(), value.borrowed()))
+}
+
 /// Builds or updates a result while keeping it visible through each step's cleanup.
 pub(in crate::interpreter) fn with_collection_result<V: RuntimeValueOps>(
     values: &mut V,

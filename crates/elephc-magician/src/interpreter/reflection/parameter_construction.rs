@@ -7,6 +7,7 @@
 //! Key details:
 //! - Function and method targets accept PHP-compatible name or position selectors.
 
+use crate::interpreter::builtins::collection_builder::with_collection_cells;
 use super::*;
 
 /// Builds an eval-backed `ReflectionParameter` object for a function or method parameter.
@@ -71,16 +72,7 @@ pub(super) fn eval_reflection_method_parameter_constructor_error(
     if values.array_len(target)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(target, zero)?;
-    let method = values.array_get(target, one)?;
-    let method_name = eval_reflection_string_arg(method, values)?;
-    let class_name = match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
-        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
+    let (class_name, method_name) = eval_reflection_method_target_names(target, context, values)?;
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
@@ -200,16 +192,7 @@ pub(super) fn eval_reflection_method_parameter_metadata(
     if values.array_len(target)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(target, zero)?;
-    let method = values.array_get(target, one)?;
-    let method_name = eval_reflection_string_arg(method, values)?;
-    let class_name = match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
-        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
+    let (class_name, method_name) = eval_reflection_method_target_names(target, context, values)?;
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
@@ -277,4 +260,26 @@ pub(super) fn eval_reflection_parameter_for_selector(
         }
         EvalReflectionParameterSelector::Position(_) => None,
     }
+}
+
+
+/// Reads a ReflectionParameter callable's receiver and method names from owned cells.
+fn eval_reflection_method_target_names(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, String), EvalStatus> {
+    with_collection_cells(values, |values, owners| {
+        let zero = owners.stage(values.int(0)?);
+        let one = owners.stage(values.int(1)?);
+        let receiver = owners.stage(values.array_get(target, zero)?);
+        let method = owners.stage(values.array_get(target, one)?);
+        let method_name = eval_reflection_string_arg(method, values)?;
+        let class_name = match values.type_tag(receiver)? {
+            EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
+            EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        Ok((class_name, method_name))
+    })
 }

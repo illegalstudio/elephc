@@ -89,3 +89,47 @@ fn test_eval_collection_owners_retire_after_repeated_calls() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Repeated eval collection and reflection calls retire their intermediate cells.
+#[test]
+fn test_eval_residual_collection_owners_retire_after_repeated_calls() {
+    let class = "class MemoirResidualSubject { public static $s='s'; public function foo(int|string $v) {} }";
+    let memory = "$f=fopen('php://memory','w+');";
+    let close = "fclose($f); unset($f);";
+    let cases = [
+        ("iterator keys", "", "$r=iterator_to_array(['x'=>1,'y'=>2],true);", ""),
+        ("iterator values", "", "$r=iterator_to_array(['x'=>1,'y'=>2],false);", ""),
+        ("strtr", "", "$r=strtr('abz',['a'=>'X','b'=>'Y']);", ""),
+        ("vsprintf", "", "$r=vsprintf('%s:%d',['x',1]);", ""),
+        ("vprintf", "", "ob_start(); $r=vprintf('%s:%d',['x',1]); ob_end_clean();", ""),
+        ("vfprintf", memory, "$r=vfprintf($f,'%s:%d',['x',1]);", close),
+        ("fputcsv", memory, "$r=fputcsv($f,['x','y']);", close),
+        ("fgetcsv", "$f=fopen('php://memory','w+'); fwrite($f,\"x,y\\n\");", "rewind($f); $r=fgetcsv($f);", close),
+        ("metadata", memory, "$r=stream_get_meta_data($f);", close),
+        ("stream_select", memory, "$read=[$f]; $write=[]; $except=[]; $r=stream_select($read,$write,$except,0); unset($read,$write,$except);", close),
+        ("stream context", "", "$c=stream_context_create(); $r=stream_context_set_option($c,'http','timeout',1); unset($c);", ""),
+        ("file", "", "$r=file('data://text/plain,x%0Ay%0A');", ""),
+        ("glob", "file_put_contents('memoir-audit.txt','x');", "$r=glob('memoir-*.txt');", "unlink('memoir-audit.txt');"),
+        ("iconv get", "", "$r=iconv_get_encoding('all');", ""),
+        ("iconv headers", "", "$r=iconv_mime_decode_headers(\"X-Word: one\\r\\nX-Word: two\\r\\n\\r\\n\");", ""),
+        ("openssl", "", "$r=openssl_get_cipher_methods();", ""),
+        ("callable name", "", "$r=is_callable(['MemoirResidualSubject','foo'],true,$name); unset($name);", ""),
+        ("reflection statics", class, "$ref=new ReflectionClass('MemoirResidualSubject'); $r=$ref->getStaticProperties(); unset($ref);", ""),
+        ("reflection types", class, "$m=new ReflectionMethod('MemoirResidualSubject','foo'); $parts=$m->getParameters(); $p=$parts[0]; $t=$p->getType(); $r=(string)$t; unset($t,$p,$parts,$m);", ""),
+    ];
+    let sources: Vec<_> = cases.iter().flat_map(|(_, setup, call, cleanup)| {
+        [0, 1, 6].map(|calls| {
+            format!("{setup} for ($i=0; $i<{calls}; $i++) {{ {call} unset($r); }} unset($i); {cleanup} echo 'done';")
+        })
+    }).collect();
+    let args: Vec<_> = sources.iter().map(|source| [source.as_str()]).collect();
+    let variants: Vec<_> = args.iter().map(|args| args.as_slice()).collect();
+    let results = compile_and_run_with_heap_debug_per_argv("<?php eval($argv[1]);", &variants);
+    let mut failures = Vec::new();
+    for ((case, calls), result) in cases.iter().flat_map(|(name, ..)| [0, 1, 6].map(|calls| (name, calls))).zip(results) {
+        if !result.success || result.stdout != "done" || !result.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("{case} ({calls} calls): stdout={:?}, stderr={}", result.stdout, result.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

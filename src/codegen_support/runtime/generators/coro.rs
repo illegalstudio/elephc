@@ -328,8 +328,7 @@ fn emit_gen_current_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_current");
     arm64_acc_prologue1(emitter);
     arm64_ensure_started(emitter, "current");
-    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "x19");
     arm64_acc_epilogue1(emitter);
 }
 
@@ -341,8 +340,7 @@ fn emit_gen_key_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_key");
     arm64_acc_prologue1(emitter);
     arm64_ensure_started(emitter, "key");
-    GeneratorOwner::Key.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    GeneratorOwner::Key.emit_retain(emitter, "x19");
     arm64_acc_epilogue1(emitter);
 }
 
@@ -409,8 +407,7 @@ fn emit_gen_send_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the resume
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // did the generator finish?
     emitter.instruction("b.eq __rt_gen_send_null");                             // finished generators yield no further value
-    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "x19");
     emitter.instruction("b __rt_gen_send_done");                                // skip the null fallback
     emitter.label("__rt_gen_send_null");
     emitter.instruction("mov x0, #0");                                          // send() returns null when the generator is finished
@@ -444,8 +441,7 @@ fn emit_gen_throw_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the injected exception was handled
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // did the generator finish after catching?
     emitter.instruction("b.eq __rt_gen_throw_null");                            // a generator that caught and finished yields nothing more
-    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "x19");
     emitter.instruction("b __rt_gen_throw_done");                               // skip the null fallback
     emitter.label("__rt_gen_throw_null");
     emitter.instruction("mov x0, #0");                                          // throw() returns null when the generator is finished
@@ -532,8 +528,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_current");
     x86_acc_prologue1(emitter);
     x86_ensure_started(emitter, "current");
-    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "r12");
     x86_acc_epilogue1(emitter);
 
     // key
@@ -542,8 +537,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_key");
     x86_acc_prologue1(emitter);
     x86_ensure_started(emitter, "key");
-    GeneratorOwner::Key.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    GeneratorOwner::Key.emit_retain(emitter, "r12");
     x86_acc_epilogue1(emitter);
 
     // valid
@@ -602,8 +596,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the resume
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // did the generator finish?
     emitter.instruction("je __rt_gen_send_null");                               // finished generators yield no further value
-    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "r12");
     emitter.instruction("jmp __rt_gen_send_done");                              // skip the null fallback
     emitter.label("__rt_gen_send_null");
     emitter.instruction("xor eax, eax");                                        // send() returns null when the generator is finished
@@ -632,8 +625,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the injected exception was handled
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // did the generator finish after catching?
     emitter.instruction("je __rt_gen_throw_null");                              // a generator that caught and finished yields nothing more
-    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    GeneratorOwner::Value.emit_retain(emitter, "r12");
     emitter.instruction("jmp __rt_gen_throw_done");                             // skip the null fallback
     emitter.label("__rt_gen_throw_null");
     emitter.instruction("xor eax, eax");                                        // throw() returns null when the generator is finished
@@ -689,11 +681,9 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // has the inner generator finished?
     emitter.instruction("b.eq __rt_gen_delegate_done");                         // stop delegating once the inner generator is exhausted
     // -- yield the inner key/value out through the outer suspend boundary --
-    GeneratorOwner::Key.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // own a key reference for the outer suspend (it consumes one)
+    GeneratorOwner::Key.emit_retain(emitter, "x19");
     emitter.instruction("mov x20, x0");                                         // stash the owned key while boxing the value
-    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // own a value reference for the outer suspend (it consumes one)
+    GeneratorOwner::Value.emit_retain(emitter, "x19");
     emitter.instruction("mov x1, x0");                                          // value -> suspend argument 1
     emitter.instruction("mov x0, x20");                                         // key -> suspend argument 0
     emitter.instruction("bl __rt_gen_suspend_delegated");                       // suspend the outer generator; delegated keys never renumber
@@ -713,8 +703,7 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gen_delegate_loop");                            // re-check the inner state and finish delegating
 
     emitter.label("__rt_gen_delegate_done");
-    GeneratorOwner::Return.emit_borrow(emitter, "x19", "x0");
-    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference to the delegated return value
+    GeneratorOwner::Return.emit_retain(emitter, "x19");
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved x19/x20
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
@@ -744,11 +733,9 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = inner generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // has the inner generator finished?
     emitter.instruction("je __rt_gen_delegate_done");                           // stop delegating once the inner generator is exhausted
-    GeneratorOwner::Key.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // own a key reference for the outer suspend
+    GeneratorOwner::Key.emit_retain(emitter, "r12");
     emitter.instruction("mov r13, rax");                                        // stash the owned key while fetching the value
-    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // own a value reference for the outer suspend
+    GeneratorOwner::Value.emit_retain(emitter, "r12");
     emitter.instruction("mov rsi, rax");                                        // value -> suspend argument 1
     emitter.instruction("mov rdi, r13");                                        // key -> suspend argument 0
     emitter.instruction("call __rt_gen_suspend_delegated");                     // suspend the outer generator; delegated keys never renumber
@@ -767,8 +754,7 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gen_delegate_loop");                          // re-check the inner state and finish delegating
 
     emitter.label("__rt_gen_delegate_done");
-    GeneratorOwner::Return.emit_borrow(emitter, "r12", "rax");
-    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference to the delegated return value
+    GeneratorOwner::Return.emit_retain(emitter, "r12");
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
