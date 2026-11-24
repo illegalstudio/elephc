@@ -1734,8 +1734,6 @@ fn emit_aarch64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_method_args(
                 module,
@@ -1783,7 +1781,6 @@ fn emit_aarch64_method_bodies(
         );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1791,7 +1788,6 @@ fn emit_aarch64_method_bodies(
         emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 48, fail_label);
@@ -1813,8 +1809,6 @@ fn emit_x86_64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_method_args(
                 module,
@@ -1858,7 +1852,6 @@ fn emit_x86_64_method_bodies(
         );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1866,7 +1859,6 @@ fn emit_x86_64_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -1888,8 +1880,6 @@ fn emit_aarch64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_static_method_args(
                 module,
@@ -1928,7 +1918,6 @@ fn emit_aarch64_static_method_bodies(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1939,7 +1928,6 @@ fn emit_aarch64_static_method_bodies(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 64, fail_label);
@@ -1961,8 +1949,6 @@ fn emit_x86_64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_static_method_args(
                 module,
@@ -1998,7 +1984,6 @@ fn emit_x86_64_static_method_bodies(
         );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -2006,7 +1991,6 @@ fn emit_x86_64_static_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
-        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -2112,7 +2096,6 @@ fn emit_aarch64_prepare_method_args(
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     // The body reserved one zeroed owner slot per by-value callable below the ref cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -2133,12 +2116,6 @@ fn emit_aarch64_prepare_method_args(
                     module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2169,7 +2146,6 @@ fn emit_aarch64_prepare_static_method_args(
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     // The body reserved one zeroed owner slot per by-value callable below the ref cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -2189,12 +2165,6 @@ fn emit_aarch64_prepare_static_method_args(
                     module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2225,7 +2195,6 @@ fn emit_x86_64_prepare_method_args(
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     // The body reserved one zeroed owner slot per by-value callable below the ref cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -2247,12 +2216,6 @@ fn emit_x86_64_prepare_method_args(
                     X86_64_METHOD_CONTEXT_FRAME_OFFSET,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2283,7 +2246,6 @@ fn emit_x86_64_prepare_static_method_args(
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     // The body reserved one zeroed owner slot per by-value callable below the ref cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -2304,12 +2266,6 @@ fn emit_x86_64_prepare_static_method_args(
                     X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);

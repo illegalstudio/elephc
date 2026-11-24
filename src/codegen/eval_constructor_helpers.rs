@@ -1034,8 +1034,6 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail", body_label);
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_aarch64_prepare_constructor_args(
             module,
@@ -1068,7 +1066,6 @@ fn emit_aarch64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
-    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", success_label));                       // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1076,7 +1073,6 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
-    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", fail_label));                          // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_aarch64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -1104,8 +1100,6 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail_x", body_label);
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
-    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_x86_64_prepare_constructor_args(
             module,
@@ -1138,7 +1132,6 @@ fn emit_x86_64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
-    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1146,7 +1139,6 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
-    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", fail_label));                        // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_x86_64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -1283,7 +1275,6 @@ fn emit_aarch64_prepare_constructor_args(
         callable_support,
     );
     // The body reserved one zeroed owner slot per by-value callable below these cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first constructor argument
@@ -1335,12 +1326,6 @@ fn emit_aarch64_prepare_constructor_args(
                     ConstructorArgOwner::Borrowed,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1369,7 +1354,6 @@ fn emit_x86_64_prepare_constructor_args(
         callable_support,
     );
     // The body reserved one zeroed owner slot per by-value callable below these cells.
-    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first constructor argument
@@ -1422,12 +1406,6 @@ fn emit_x86_64_prepare_constructor_args(
                     ConstructorArgOwner::Borrowed,
                 );
             }
-            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
-                emitter,
-                &callable_owners,
-                index,
-                ref_slots.len() * 32 + arg_temp_bytes,
-            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
