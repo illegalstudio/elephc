@@ -785,8 +785,15 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`php_sapi_name()`](./builtins/misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
+| [`posix_errno()`](./builtins/misc/posix_errno.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_get_last_error()`](./builtins/misc/posix_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_geteuid()`](./builtins/misc/posix_geteuid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_getpgrp()`](./builtins/misc/posix_getpgrp.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_isatty()`](./builtins/misc/posix_isatty.md) | `(mixed $file_descriptor): bool` | `bool` | ✓ | ✓ |
+| [`posix_kill()`](./builtins/misc/posix_kill.md) | `(int $process_id, int $signal): bool` | `bool` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_strerror()`](./builtins/misc/posix_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./builtins/misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./builtins/misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
