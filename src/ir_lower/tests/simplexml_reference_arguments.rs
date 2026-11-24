@@ -114,6 +114,13 @@ fn verify_closed_world_demo_shapes_request_no_interpreter(target: &str) {
         assert!(!function.locals.iter().any(|local| matches!(local.kind, crate::ir::LocalKind::EvalContext)),
             "{target}: {} must declare no eval context in a closed world", function.name);
     }
+    // A statically array receiver (`array $subject`, `$choices[$index]`) is never a SimpleXML
+    // view, so those callers carry no passing-mode query at all.
+    for function in module.functions.iter().filter(|function| ["through", "grouped"].contains(&function.name.as_str())) {
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::RuntimeCall
+            && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CallableParameterIsByRef))),
+            "{target}: {} needs no passing-mode query for an array receiver", function.name);
+    }
     assert!(!module.required_runtime_features.eval_bridge, "{target}: no interpreter requested");
 }
 

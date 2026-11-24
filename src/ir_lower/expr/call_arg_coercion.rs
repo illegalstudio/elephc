@@ -163,9 +163,26 @@ pub(super) fn may_be_native_selection_reference_argument(ctx: &LoweringContext<'
     if !ctx.classes.contains_key("SimpleXMLElement") { return false; }
     let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else { return false; };
     let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, receiver);
+    // A receiver that is statically a PHP array (a bare `array` parameter included) is never a
+    // SimpleXML view: its elements are plain values, so no passing-mode query is needed.
+    if type_is_statically_array(&ty) { return false; }
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || singular_object_class(&ty).is_some_and(|(class, _)| class.is_empty() || ctx.interfaces.contains_key(class))
         || may_be_native_selection_reference_argument(ctx, receiver)
+}
+
+/// Whether `ty` can only hold PHP arrays (list or hash), allowing absent values.
+///
+/// A bare `array` declaration reaches lowering as a union of the two array storages, which the
+/// erased-receiver test would otherwise mistake for a possible SimpleXML family.
+fn type_is_statically_array(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => members.iter().any(type_is_statically_array)
+            && members.iter().all(|member| matches!(member, PhpType::Void | PhpType::Never)
+                || type_is_statically_array(member)),
+        _ => false,
+    }
 }
 
 /// Moves the selected view into a scoped reference cell so no old-value lease spans the call.

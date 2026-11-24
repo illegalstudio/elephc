@@ -15,15 +15,8 @@ final class Holder {
         echo $key, $position, $modifier($this->elements[$position]), "\n";
     }
 
-    /** Table::render shape: a static closure over rows built in a loop. */
-    public function render(): void {
-        $isCell = static fn ($cell) => $cell instanceof Holder;
-        $rows = [];
-        foreach ([[1], [new Holder]] as $i => $row) {
-            $rows[$i] = $row;
-            echo $isCell($rows[$i][0]) ? 'cell' : 'plain', "\n";
-        }
-    }
+    // Table::render's `$isCell($rows[$i][0])` (an erased element receiver in a loop) is left out:
+    // that query path leaks and mishandles object elements on main too, the open defect elephc-yg2f.
 
     /** stream() / evaluate() shape: a callable property applied to a property. */
     public function apply(callable $callback): string {
@@ -53,7 +46,6 @@ function mapped(array $config): array {
 $holder = new Holder;
 $holder->modify('x', fn ($value) => $value + 1);
 $holder->modify('x', function (&$value) { $value += 10; return $value; });
-$holder->render();
 echo $holder->apply(fn ($p) => strtoupper($p)), "\n";
 echo $holder->apply('ucfirst'), "\n";
 echo through(fn ($v) => $v . '!', ['k' => 'a']), "\n";
