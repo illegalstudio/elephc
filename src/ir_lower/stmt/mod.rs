@@ -114,7 +114,7 @@ use static_property_helpers::*;
 pub(crate) use control_exit::{
     lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
     lower_throw_access_exception,
-    lower_throw_access_error_message,
+    lower_throw_access_error_message, throw_lowered_exception,
 };
 pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel

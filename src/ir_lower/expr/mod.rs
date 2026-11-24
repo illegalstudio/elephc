@@ -267,8 +267,10 @@ pub(crate) use call_operand_owners::{
 };
 pub(crate) use property_access::singular_object_class;
 pub(crate) use enum_argument_guards::{
-    guard_declared_callable_return, guard_declared_callable_variadic_entry,
-    guard_reference_parameter_entry, reference_parameter_needs_entry_guard,
+    guard_declared_callable_return, guard_declared_callable_value,
+    guard_declared_callable_variadic_entry,
+    guard_reference_argument_value, guard_reference_parameter_entry,
+    reference_parameter_needs_entry_guard,
 };
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;

@@ -2015,3 +2015,41 @@ withHost "%78n--a-.com" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
 "#
     );
 }
+
+/// Verifies a `mixed` value reaches URI class parameters (positional and named) and a nullable
+/// URI class return through PHP's run-time class check, with PHP's `TypeError` for the wrong
+/// URI class, null, or a string.
+#[test]
+fn test_uri_classes_at_mixed_class_typed_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+use Uri\Rfc3986\Uri;
+use Uri\WhatWg\Url;
+function take(?Uri $u): string { return $u?->toString() ?? "null"; }
+function takeUrl(Url $u): string { return $u->toAsciiString(); }
+function pick(array $a, int $i): ?Uri { return $a[$i] ?? null; }
+function getMixed(mixed $v): mixed { return $v; }
+$vals = [new Uri("https://example.com/a"), Url::parse("https://example.com/"), null, "x"];
+foreach ([0, 1, 2, 3] as $i) {
+    try { echo take(getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { echo takeUrl(u: getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { $r = pick($vals, $i); echo $r?->toString() ?? "null", "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com/a\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, Uri\\Rfc3986\\Uri given\n\
+         https://example.com/a\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url given\n\
+         https://example.com/\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url returned\n\
+         null\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, null given\n\
+         null\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, string given\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, string given\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, string returned\n"
+    );
+}
