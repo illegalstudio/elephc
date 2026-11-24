@@ -317,13 +317,16 @@ pub(super) fn scalar_binding_guard_effect() -> Effect {
 
 /// The binding effect of calling `callable` with arguments: the runtime callable invoker
 /// checks a value bound to a declared scalar parameter (see [`scalar_binding_guard_effect`]).
-/// Only a value whose type is known at run time is checked, so a call whose arguments are all
-/// scalar literals binds without the check.
+/// A scalar literal is no exception: a callable selected at run time receives it boxed, so
+/// `$f(1.5)` for `fn(int $n)` raises the precision deprecation (whose handler can write
+/// globals or throw), and under `strict_types=1` `$f(1)` for `fn(string $s)` throws.
+///
+/// A variable that holds a tracked callable alias already carries its targets' binding effect
+/// (`aliases::callable_alias_from_expr`); an untracked one binds conservatively.
 pub(super) fn callable_value_binding_effect(callable: &Expr, args: &[Expr]) -> Effect {
-    let runtime_typed = args.iter().any(|arg| !matches!(arg.kind,
-        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)));
-    if runtime_typed && calls::callback_binding_may_throw(callable) {
+    let tracked_alias = matches!(callable.kind, ExprKind::Variable(_))
+        && aliases::callable_alias_from_expr(callable).is_some();
+    if !args.is_empty() && !tracked_alias && calls::callback_binding_may_throw(callable) {
         scalar_binding_guard_effect()
     } else {
         Effect::PURE

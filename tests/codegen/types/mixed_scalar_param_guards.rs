@@ -1366,6 +1366,31 @@ function handler(int $no, string $msg): bool { global $x; $x = 2; return true; }
     assert_eq!(out, "map 2\nmap-named 2\nfilter 2\nusort 2\ncuf 2\ncufa 2\nreduce 2\nvar 2\nclosure 2\n");
 }
 
+/// A scalar literal passed to a callable selected at run time is bound through the callable
+/// invoker's checks: `1.5` bound to `int` raises the precision deprecation, so the handler's
+/// global write is seen after the call and its exception reaches the `catch` around it.
+#[test]
+fn test_callable_value_literal_argument_runs_the_binding_handler() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 0;
+set_error_handler(function (int $no, string $msg): bool { global $x; $x = 5; echo "handler: $msg\n"; return true; });
+$k = count($argv);
+$f = $k > 1 ? fn(int $n) => 0 : fn(int $m) => 1;
+$x = 1;
+$r = $f(1.5);
+echo $x, " ", $r, "\n";
+function relay(int $flag): int {
+    $f = $flag > 1 ? fn(int $n) => 0 : fn(int $m) => 1;
+    try { return $f(2.5); } catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; return -1; }
+}
+set_error_handler(function (int $no, string $msg): bool { throw new ErrorException($msg); });
+echo relay($k), "\n";
+"#,
+    );
+    assert_eq!(out, "handler: Implicit conversion from float 1.5 to int loses precision\n5 1\ncaught: Implicit conversion from float 2.5 to int loses precision\n-1\n");
+}
+
 /// A call through a callable value the compiler resolves statically (`$f = 'ts'; $f($v)`, a
 /// `'K::sm'` string) binds through the direct-call path, but the checker records no argument
 /// site for it, so its scalar checks were skipped: `null` reached `string` as `""` and a lossy

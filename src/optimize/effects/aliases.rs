@@ -16,10 +16,19 @@ use super::calls::{callable_target_call_effect, closure_alias_effect, merge_call
 /// Handles first-class callables, closures, ternary/null-coalesce/match-based callable expressions,
 /// and variable lookups against the active callable alias map. Returns `None` for expressions
 /// that cannot produce a callable value.
+///
+/// A callable's effect includes its binding effect: a call through the alias binds its
+/// arguments through the callable invoker's scalar checks, literals included (see
+/// [`super::callable_value_binding_effect`]).
 pub(super) fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
+    let with_binding = |effect: Effect| if super::calls::callback_binding_may_throw(expr) {
+        effect.combine(super::scalar_binding_guard_effect())
+    } else {
+        effect
+    };
     match &expr.kind {
-        ExprKind::FirstClassCallable(target) => Some(callable_target_call_effect(target)),
-        ExprKind::Closure { .. } => closure_alias_effect(expr),
+        ExprKind::FirstClassCallable(target) => Some(with_binding(callable_target_call_effect(target))),
+        ExprKind::Closure { .. } => closure_alias_effect(expr).map(with_binding),
         ExprKind::Ternary {
             then_expr,
             else_expr,
