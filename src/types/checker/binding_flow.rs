@@ -122,6 +122,21 @@ impl Checker {
         }
     }
 
+    /// For a bare read `$v` of a local that may be unbound whose type carries only the `null` the
+    /// missing binding added, returns the type of the binding itself.
+    ///
+    /// A store into fixed storage (a reference alias, a `static`, a by-reference capture) cannot
+    /// widen that storage, and the `null` is not a value the program stores: it is the warning
+    /// path of a read. Such a store is checked against the binding's own type.
+    pub(crate) fn unwidened_binding_copy(&self, value: &Expr, read: &PhpType) -> Option<PhpType> {
+        let ExprKind::Variable(name) = &value.kind else { return None; };
+        if self.definitely_bound_locals.contains(name) || !Self::union_contains_void(read) {
+            return None;
+        }
+        let stripped = self.strip_void_from_union(read);
+        stripped.is_plain_binding_storage().then_some(stripped)
+    }
+
     /// Hands a plain store the binding a missing-binding view widened: the store replaces the
     /// value, so it is merged against the type the binding held, not against the read view's
     /// extra `null` (which made `$p = $a->cp(); return ...;` beside a later `$p = $a->ep();` keep

@@ -80,3 +80,34 @@ for ($i = 0; $i < 8; $i += 7) {
     assert_eq!(out.stdout, "NULL\nint(1)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A copy of a possibly unbound local into storage that cannot widen (a reference alias, a `static`, the profiler listener's `$usageIndexReference = $usageIndexValue` in a `finally`) is accepted: the `null` the missing binding adds to the read is the warning path of the read, not a type the storage must hold (symfony's `ProfilerListener::onKernelResponse`).
+#[test]
+fn test_a_copy_of_a_maybe_unbound_local_into_fixed_storage_compiles() {
+    let source = r####"<?php
+class S { private int $u = 5; public function &getUsageIndex(): int { return $this->u; } public function get(): int { return $this->u; } }
+function f(?S $session, bool $c) {
+    if ($session instanceof S) {
+        $v = $r = &$session->getUsageIndex();
+        $r = PHP_INT_MIN;
+    }
+    try {
+        if ($c) { return 1; }
+    } finally {
+        if ($session instanceof S) {
+            $r = $v;
+        }
+    }
+    return $session ? $session->get() : -1;
+}
+function t1(bool $c) { $r = 0; $q = &$r; if ($c) { $v = 1; } $q = $v; return $r; }
+function t16(bool $c) { if ($c) { $v = 1; } static $k = 0; $k = $v; return $k; }
+function t27(bool $c) { static $k = 0; $r = &$k; if ($c) { $v = 1; } $r = $v; return $k; }
+$s = new S;
+echo f($s, false), "\n", f($s, true), "\n", f(null, false), "\n";
+echo t1(true), t16(true), t27(true), "\n";"####;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5\n1\n-1\n111\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

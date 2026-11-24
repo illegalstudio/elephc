@@ -359,7 +359,23 @@ fn check_assign_value_type(
     {
         checker.invalidate_local_flow_narrowing(name, env);
     }
-    let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
+    let binding_before = env.get(name).cloned();
+    let mut merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
+    if merged.is_err() {
+        // `$r = $v` with `$v` possibly unbound reads `null` on the warning path only: storage that
+        // cannot widen (a reference alias, a static) takes the binding's own type instead.
+        if let Some(own) = checker.unwidened_binding_copy(value, &ty) {
+            match binding_before {
+                Some(before) => { env.insert(name.to_string(), before); }
+                None => { env.remove(name); }
+            }
+            let retried = merge_local_assignment_type(checker, name, &own, value, span, env, stmt_form);
+            if retried.is_ok() {
+                ty = own;
+                merged = retried;
+            }
+        }
+    }
     if merged.is_ok() {
         // A completed non-null store ends the missing-binding alternative. Keep the physical
         // contract while retracting the null that an earlier conditional binding added.
