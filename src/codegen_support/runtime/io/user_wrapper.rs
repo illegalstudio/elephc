@@ -81,7 +81,9 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("orr x9, x9, x11");                                     // compare the complete descriptor rather than a reusable slot
     emitter.instruction("mov x0, x9");                                          // resolve the descriptor's stable PHP resource identity
     abi::emit_call_label(emitter, "__rt_resource_id_of");
+    emitter.instruction("str xzr, [sp, #8]");                                   // default: no pending XML read failure
     abi::emit_load_symbol_to_reg(emitter, "x11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("cbz x11, __rt_uwfclose_policy_ready");                 // no pending XML failure: keep the close callback
     emitter.instruction("cmp x0, x11");                                         // does this incarnation own the pending XML read failure?
     emitter.instruction("cset x11, eq");                                        // remember the policy before guard publication
     emitter.instruction("str x11, [sp, #8]");                                   // preserve this stream's close policy across the guard
@@ -139,7 +141,10 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r9, 0x40000000");                                   // reconstruct the complete synthetic descriptor
     emitter.instruction("mov rax, r9");                                         // resolve the descriptor's stable PHP resource identity
     abi::emit_call_label(emitter, "__rt_resource_id_of");
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // default: no pending XML read failure
     abi::emit_load_symbol_to_reg(emitter, "r11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("test r11, r11");                                       // is any XML read failure pending?
+    emitter.instruction("jz __rt_uwfclose_policy_ready_x86");                   // none: keep the close callback
     emitter.instruction("cmp rax, r11");                                        // match only the resource incarnation whose XML read failed
     emitter.instruction("sete cl");                                             // materialize this stream's close policy
     emitter.instruction("movzx ecx, cl");                                       // clear the remaining policy bits
