@@ -90,7 +90,7 @@ impl Checker {
                 };
                 let ty = self.promotable_array_value_view(name, expr.span, ty);
                 self.record_local_value_read(name, expr.span, &ty, env);
-                self.note_possibly_missing_read(name, expr.span);
+                self.note_possibly_missing_read(name, expr.span, env);
                 Ok(ty)
         }
             ExprKind::ArrayReference(inner) => {

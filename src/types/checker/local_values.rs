@@ -30,8 +30,13 @@ impl Checker {
     /// missing, so EIR lowering can give the name its definedness flag before the first lowering
     /// of the body instead of discovering the need by lowering the body twice. Only a hint: a
     /// name the checker does not file is still found, and replayed, by lowering itself.
-    pub(crate) fn note_possibly_missing_read(&mut self, name: &str, span: Span) {
+    ///
+    /// Only a name the environment already holds is filed: a name it lacks is either read before
+    /// any store (lowering finds that one itself) or read by an inference probe that walks one
+    /// expression without its body's bindings, which says nothing about the body's flow.
+    pub(crate) fn note_possibly_missing_read(&mut self, name: &str, span: Span, env: &TypeEnv) {
         if !span.identifies_a_node()
+            || !env.contains_key(name)
             || self.loop_stmt_depth != 0
             || self.definitely_bound_locals.contains(name)
             || name.starts_with('\u{1}')

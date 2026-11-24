@@ -273,8 +273,10 @@ pub(crate) fn begin_body(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
             // binding on some path gets its flag now. Left to the first lowering to discover,
             // each such body was lowered twice. A hint only, as a name it misses is still
             // discovered and replayed.
+            let use_hint = std::env::var_os("ELEPHC_NO_DEFINEDNESS_HINT").is_none();
             let mut hinted: Vec<&String> = read.iter().filter(|name| {
-                !params.contains(*name)
+                use_hint
+                    && !params.contains(*name)
                     && ctx.local_value_read_types.contains_key(
                         &crate::types::checker::possibly_missing_read_key(&ctx.loop_storage_scope, name),
                     )
@@ -284,6 +286,9 @@ pub(crate) fn begin_body(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
             for name in hinted {
                 ctx.definedness.tracked.insert(name.clone());
                 stats::hinted();
+                if std::env::var("ELEPHC_DEFINEDNESS_STATS").is_ok_and(|v| v == "names") {
+                    eprintln!("[definedness-hint] {} ${}", ctx.loop_storage_scope, name);
+                }
             }
         }
     }
