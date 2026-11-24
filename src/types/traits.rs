@@ -94,13 +94,15 @@ struct ImportedMethod {
 /// Class-like declarations with traits are processed in program order; each declaration's trait
 /// uses are resolved recursively, then merged with the declaration's own members.
 /// Circular trait composition and duplicate declarations are reported as errors.
-/// Returns `(flattened_classes, flattened_enums, errors)`.
+/// Returns `(flattened_classes, flattened_enums, errors, final_abstract_imports)`; the last are
+/// checked by `final_abstract_import_overrides` once builtin classes are registered too.
 pub fn flatten_classes(
     program: &Program,
 ) -> (
     Vec<FlattenedClass>,
     HashMap<String, FlattenedClass>,
     Vec<CompileError>,
+    Vec<FinalAbstractImport>,
 ) {
     let mut trait_map = HashMap::new();
     let mut trait_keys = HashSet::new();
@@ -381,14 +383,14 @@ pub fn flatten_classes(
         }
     }
 
-    errors.extend(final_abstract_parent_overrides(&final_abstract_imports, &mut flattened));
-    (flattened, flattened_enums, errors)
+    (flattened, flattened_enums, errors, final_abstract_imports)
 }
 
-/// An abstract trait method made `as final` on a class, recorded while flattening the class.
-/// `local` marks one the class body replaces, with `span` at that method; otherwise it is kept
-/// on the class and `span` is the class declaration.
-struct FinalAbstractImport {
+/// An abstract trait method made `as final` on a class, recorded while flattening the class and
+/// checked against the class's ancestors by `final_abstract_import_overrides`. `local` marks one
+/// the class body replaces, with `span` at that method; otherwise it is kept on the class and
+/// `span` is the class declaration.
+pub struct FinalAbstractImport {
     class: String,
     method: String,
     source_trait: String,
@@ -396,31 +398,44 @@ struct FinalAbstractImport {
     local: bool,
 }
 
-/// Reports the abstract `as final` imports that another method overrides, once every class is
-/// flattened. Zend binds a class's traits after its parent's methods, so an import the class
-/// keeps is overridden by any ancestor method of that name, private or static included. One the
-/// class body replaces is overridden by that body, unless the nearest ancestor declaring the
-/// name has it final and not private: that final method is reported first, by the class schema.
-/// Both report `Cannot override final method A::foo()` with the importing trait, and drop every
-/// method of the name from the class, so the schema reports nothing more about it.
-fn final_abstract_parent_overrides(
+/// The class-body methods that replace an abstract `as final` import while overriding a non
+/// private ancestor method, by lowercase class and method name, with the importing trait and
+/// the import's method name. The class schema reports `Cannot override final method T::foo()`
+/// for one only after its ordinary override checks pass, as PHP checks the parent first.
+pub(crate) type FinalAbstractBodyOverrides = HashMap<(String, String), (String, String)>;
+
+/// Reports the abstract `as final` imports that another method overrides, once every class,
+/// builtin ones included, is in `classes`. Zend binds a class's traits after its parent's
+/// methods, so an import the class keeps is overridden by any ancestor method of that name,
+/// private or static included: `Cannot override final method A::foo()`, after which every method
+/// of the name is dropped so the schema reports nothing more about it. A class-body method that
+/// replaces the import is reported the same way when no ancestor, or only a private one,
+/// declares the name. Over a non-private ancestor method it is checked as an override of that
+/// method first, so it is returned in the body-override map for the class schema, and the other
+/// methods of the name are dropped.
+pub(crate) fn final_abstract_import_overrides(
     imports: &[FinalAbstractImport],
-    flattened: &mut [FlattenedClass],
-) -> Vec<CompileError> {
-    let classes: HashMap<String, &FlattenedClass> = flattened
-        .iter()
+    classes: &mut HashMap<String, FlattenedClass>,
+) -> (Vec<CompileError>, FinalAbstractBodyOverrides) {
+    let by_key: HashMap<String, &FlattenedClass> = classes
+        .values()
         .map(|class| (php_symbol_key(&class.name), class))
         .collect();
     let mut errors = Vec::new();
-    let mut overridden = Vec::new();
+    let mut body_overrides = FinalAbstractBodyOverrides::new();
+    // Class name, method name, and the span of a class-body method that stays.
+    let mut dropped: Vec<(&FinalAbstractImport, Option<Span>)> = Vec::new();
     for import in imports {
-        let ancestor = nearest_ancestor_method(&classes, &import.class, &import.method);
-        let reported = match (import.local, ancestor) {
-            (true, Some(method)) => !(method.is_final && method.visibility != Visibility::Private),
-            (true, None) => true,
-            (false, ancestor) => ancestor.is_some(),
-        };
-        if reported {
+        let ancestor = nearest_ancestor_method(&by_key, &import.class, &import.method);
+        let visible_ancestor =
+            ancestor.is_some_and(|method| method.visibility != Visibility::Private);
+        if import.local && visible_ancestor {
+            body_overrides.insert(
+                (php_symbol_key(&import.class), php_symbol_key(&import.method)),
+                (import.source_trait.clone(), import.method.clone()),
+            );
+            dropped.push((import, Some(import.span)));
+        } else if import.local || ancestor.is_some() {
             errors.push(CompileError::new(
                 import.span,
                 &format!(
@@ -428,17 +443,20 @@ fn final_abstract_parent_overrides(
                     import.source_trait, import.method
                 ),
             ));
-            overridden.push(import);
+            dropped.push((import, None));
         }
     }
-    for import in overridden {
-        if let Some(class) = flattened.iter_mut().find(|class| class.name == import.class) {
-            class
-                .methods
-                .retain(|method| !method.name.eq_ignore_ascii_case(&import.method));
+    for (import, kept) in dropped {
+        if let Some(class) = classes
+            .values_mut()
+            .find(|class| class.name.eq_ignore_ascii_case(&import.class))
+        {
+            class.methods.retain(|method| {
+                !method.name.eq_ignore_ascii_case(&import.method) || Some(method.span) == kept
+            });
         }
     }
-    errors
+    (errors, body_overrides)
 }
 
 /// Returns the method named `method` of the nearest flattened ancestor of `class` that declares

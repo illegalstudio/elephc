@@ -303,6 +303,9 @@ pub(crate) struct Checker {
     /// Abstract methods each trait-using class owes to its traits, by class name
     /// ([`schema::collect_trait_method_requirements`]).
     pub trait_method_requirements: HashMap<String, schema::TraitMethodRequirements>,
+    /// Class-body methods that replace an abstract `as final` trait import while overriding a
+    /// visible ancestor method ([`crate::types::traits::final_abstract_import_overrides`]).
+    pub final_abstract_body_overrides: crate::types::traits::FinalAbstractBodyOverrides,
     /// Own property order and trait-collision defaults of classes that use traits.
     pub trait_property_origins: schema::TraitPropertyOrigins,
     /// Name of the class currently being type-checked (used for `$this` resolution).

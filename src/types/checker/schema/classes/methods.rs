@@ -183,6 +183,7 @@ fn apply_static_method(
             ),
         ));
     }
+    reject_final_abstract_body_override(checker, class, method)?;
     state.static_sigs.insert(method_key.clone(), sig);
     if let Some(return_type) = method
         .return_type
@@ -349,6 +350,7 @@ fn apply_instance_method(
             ),
         ));
     }
+    reject_final_abstract_body_override(checker, class, method)?;
     state.method_sigs.insert(method_key.clone(), sig);
     if let Some(return_type) = method
         .return_type
@@ -437,6 +439,24 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
             declaring_class, method.name
         ),
     )
+}
+
+/// Reports a class-body method that replaces an abstract `as final` trait import, once it has
+/// passed the checks against the ancestor method it overrides: PHP checks that override first,
+/// then the import (`Cannot override final method A::foo()`).
+fn reject_final_abstract_body_override(
+    checker: &Checker,
+    class: &FlattenedClass,
+    method: &ClassMethod,
+) -> Result<(), CompileError> {
+    let key = (php_symbol_key(&class.name), php_symbol_key(&method.name));
+    match checker.final_abstract_body_overrides.get(&key) {
+        Some((source_trait, name)) => Err(CompileError::new(
+            method.span,
+            &format!("Cannot override final method {}::{}", source_trait, name),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Returns whether `method` is abstract and `class` itself holds another abstract method of

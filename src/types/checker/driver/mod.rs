@@ -14,7 +14,10 @@ use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
-use crate::types::{traits::flatten_classes, TypeEnv};
+use crate::types::{
+    traits::{final_abstract_import_overrides, flatten_classes},
+    TypeEnv,
+};
 
 use super::builtin_class_gate::{
     program_may_reference_fiber, program_may_reference_generator, program_may_reference_user_filter,
@@ -111,7 +114,8 @@ pub(super) fn check_types_impl(
     constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
-    let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
+    let (mut flattened_classes, mut flattened_enums, flatten_errors, final_abstract_imports) =
+        flatten_classes(program);
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
@@ -293,6 +297,11 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    // Abstract `as final` trait imports meet their ancestors once builtin parents are known too.
+    let (override_errors, body_overrides) =
+        final_abstract_import_overrides(&final_abstract_imports, &mut class_map);
+    errors.extend(override_errors);
+    checker.final_abstract_body_overrides = body_overrides;
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();

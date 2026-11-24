@@ -1771,6 +1771,64 @@ fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
     }
 }
 
+/// Builtin ancestors count like user ones for an abstract `as final` import: a kept import is
+/// overridden by `Exception::getMessage`, and a class body replacing it meets the final builtin
+/// method first. A class body that overrides a visible, non-final ancestor illegally reports
+/// that override (kind, visibility, abstract, signature) before the import, and the other
+/// methods of the name add nothing (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_override_precedence() {
+    let single_error = |source: &str| -> String {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        messages.into_iter().next().unwrap()
+    };
+    for (source, message) in [
+        (
+            "trait A { abstract public function getMessage(); }\nclass C extends Exception { use A { getMessage as final; } }",
+            "Cannot override final method A::getMessage",
+        ),
+        (
+            "trait A { abstract public function getPrevious(): ?Throwable; }\nabstract class C extends TypeError { use A { getPrevious as final; } }",
+            "Cannot override final method A::getPrevious",
+        ),
+        (
+            "trait A { abstract public function getMessage(); }\nclass C extends Exception { use A { getMessage as final; } public function getMessage() { return 'x'; } }",
+            "Cannot override final method Exception::getMessage",
+        ),
+        (
+            "class P { public static function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo() {} }",
+            "Cannot change method kind",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } protected function foo() {} }",
+            "Cannot reduce visibility",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } abstract public function foo(); }",
+            "Cannot make concrete method abstract",
+        ),
+        (
+            "class P { final public function foo() {} }\ntrait A { abstract public function foo(); }\ntrait B { abstract public static function foo(); }\nabstract class C extends P { use A, B { A::foo as final; } abstract public function foo(); }",
+            "Cannot override final method P::foo",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo() {} }",
+            "Cannot override final method A::foo",
+        ),
+    ] {
+        let reported = single_error(source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    let reported = single_error(
+        "class P { public function foo(): int { return 1; } }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo(): string { return 'x'; } }",
+    );
+    assert!(!reported.contains("Cannot override final method"), "{reported}");
+}
+
 /// The same abstract trait method reached through two traits is one method, final only when its
 /// first copy is; `insteadof` keeps an abstract `as final` import as a requirement; two
 /// concrete methods collide before any final requirement is compared; `foo as final foo` makes
