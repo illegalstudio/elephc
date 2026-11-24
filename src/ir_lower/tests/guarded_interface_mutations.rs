@@ -150,13 +150,21 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             ("write_static_dynamic", Op::DynamicPropSet),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            // The merged backend writes through the shared erased-write helper
+            // A runtime-name write stays the instruction at the site, on the boxed `Root` view.
+            if let Some(write) = function.instructions.iter().find(|inst| inst.op == op) {
+                let receiver = function.value(write.operands[0]).unwrap();
+                assert_eq!(receiver.php_type, PhpType::Mixed, "{target}: {name}");
+                let boxed = function.instructions.iter()
+                    .find(|inst| inst.result == Some(write.operands[0])).unwrap();
+                assert_eq!(boxed.op, Op::MixedBox, "{target}: {name}: delayed runtime view");
+                assert_eq!(function.value(boxed.operands[0]).unwrap().php_type, PhpType::Object("Root".into()));
+                continue;
+            }
+            // A named write goes through the shared erased-write helper
             // (`__eir_erased_write@<form>...@<property>`): the site boxes the `Root` view and calls
             // the helper with it as the first operand, and the helper's body holds the one write
-            // instruction on a `Mixed` receiver parameter. The site must not write the property
-            // itself, which would be a receiver retyped to `Label`.
-            assert!(function.instructions.iter().all(|inst| inst.op != op),
-                "{target}: {name}: the site must not write through a retyped receiver");
+            // instruction on a `Mixed` receiver parameter. The site writes no property itself,
+            // which would be a receiver retyped to `Label`.
             let call = function.instructions.iter().find(|inst| super::is_erased_write_call(&module, inst))
                 .unwrap_or_else(|| panic!("{target}: {name}: no erased-write helper call"));
             let mut receiver_value = call.operands[0];
@@ -174,8 +182,11 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             };
             let helper = module.functions.iter().find(|candidate| candidate.name == helper_name).unwrap();
             assert_eq!(helper.params[0].php_type, PhpType::Mixed, "{target}: {name}: helper receiver parameter");
-            let write = helper.instructions.iter().find(|inst| inst.op == op)
-                .unwrap_or_else(|| panic!("{target}: {name}: {helper_name} holds no {op:?}"));
+            // The helper writes through the runtime-name ladder (`dynamic_prop_set v0 "value" v1`, on its
+            // boxed receiver parameter) whichever form the site spelled, behind a null check that
+            // throws php's Error: measured in the helper's EIR.
+            let write = helper.instructions.iter().find(|inst| inst.op == Op::DynamicPropSet)
+                .unwrap_or_else(|| panic!("{target}: {name}: {helper_name} holds no DynamicPropSet"));
             assert_eq!(helper.value(write.operands[0]).unwrap().php_type, PhpType::Mixed,
                 "{target}: {name}: the helper writes through the Mixed receiver view");
         }

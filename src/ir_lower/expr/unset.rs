@@ -1015,7 +1015,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
     member: &Expr,
 ) -> bool {
     if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
-    if checked_unset_receiver_class(ctx, object, member).is_none()
+    if unset_receiver_class_is_unknown(ctx, object, member)
         && unset_receiver_resolves_at_runtime(ctx, object)
     {
         return true;
@@ -1031,12 +1031,32 @@ pub(super) fn unset_property_access_has_direct_lowering(
     ) || unset_property_receiver_is_gradual(ctx, object, property, member)
 }
 
+/// Whether the checked class of an `unset()` receiver names no class with a slot layout: nothing
+/// was proved, or the proof is an interface (a property declared `Root` whose `instanceof` guard
+/// was invalidated by a rewrite), which has no declared slot to clear.
+fn unset_receiver_class_is_unknown(ctx: &LoweringContext<'_, '_>, object: &Expr, member: &Expr) -> bool {
+    match checked_unset_receiver_class(ctx, object, member) {
+        None => true,
+        Some((class, _)) => {
+            let class = class.trim_start_matches('\\');
+            ctx.interfaces.contains_key(class) && !ctx.classes.contains_key(class)
+        }
+    }
+}
+
 /// Whether the receiver of an `unset()` whose class is not statically known is resolved on its
 /// runtime class: a boxed value, a union, or an object typed only by an INTERFACE (a property
 /// declared `Root`, rewritten between its `instanceof` guard and the unset, so the guard no longer
 /// names a class). php removes the slot of whatever class the object really has.
 fn unset_receiver_resolves_at_runtime(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
-    match unset_operand_type(ctx, object).codegen_repr() {
+    let ty = match &object.kind {
+        ExprKind::PropertyAccess { object: inner, property } => {
+            property_access_expr_type_for_ir(ctx, inner, property)
+                .unwrap_or_else(|| unset_operand_type(ctx, object))
+        }
+        _ => unset_operand_type(ctx, object),
+    };
+    match ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => true,
         PhpType::Object(class) => ctx.interfaces.contains_key(class.trim_start_matches('\\')),
         _ => false,
@@ -1075,7 +1095,7 @@ pub(super) fn lower_unset_property_access(
     }
     // An eval barrier can widen a named receiver to Mixed. The runtime-name ladder
     // still resolves its physical slot and access rights on the current object.
-    if checked_unset_receiver_class(ctx, object, expr).is_none()
+    if unset_receiver_class_is_unknown(ctx, object, expr)
         && unset_receiver_resolves_at_runtime(ctx, object)
     {
         let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
@@ -1184,6 +1204,14 @@ pub(super) fn lower_unset_dynamic_property_access(
     expr: &Expr,
 ) {
     let object = lower_member_receiver(ctx, object, expr);
+    // An object typed only by an interface has no class for the backend to read slots from: box it
+    // so the runtime-name ladder dispatches on the class the value really has.
+    let object = match ctx.builder.value_php_type(object.value) {
+        PhpType::Object(class) if ctx.interfaces.contains_key(class.trim_start_matches('\\')) => {
+            coerce_value_for_temp(ctx, object, &PhpType::Mixed, expr.span)
+        }
+        _ => object,
+    };
     let property = lower_expr(ctx, property);
     let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
         ctx, property, expr.span,
