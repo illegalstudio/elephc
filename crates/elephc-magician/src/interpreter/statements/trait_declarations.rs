@@ -600,14 +600,16 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             continue;
         }
         if !trait_method_names.insert(key.clone()) {
-            // A plain abstract redeclaration after an abstract `as final` import keeps the final
-            // one, as in PHP; any other second method of the name is a collision or override.
+            // A compatible plain abstract redeclaration after an abstract `as final` import keeps
+            // the final one, as in PHP; any other second method of the name is a collision, an
+            // override, a kind change or an incompatible declaration.
             let keeps_final_requirement = method.is_abstract()
                 && !method.is_final()
                 && methods.iter().any(|stored| {
                     stored.name().eq_ignore_ascii_case(&key)
                         && stored.is_abstract()
                         && stored.is_final()
+                        && same_abstract_signature(stored, &method)
                 });
             if keeps_final_requirement {
                 continue;
@@ -689,6 +691,26 @@ pub(super) fn append_eval_trait_method_aliases(
         methods.push(alias_method);
     }
     Ok(())
+}
+
+/// Returns whether two abstract trait methods declare one signature: the same kind (static or
+/// instance), parameter types, by-reference and variadic flags, optionality, and return type.
+fn same_abstract_signature(left: &EvalClassMethod, right: &EvalClassMethod) -> bool {
+    let optional = |method: &EvalClassMethod| {
+        method
+            .parameter_defaults()
+            .iter()
+            .map(Option::is_some)
+            .collect::<Vec<_>>()
+    };
+    left.is_static() == right.is_static()
+        && left.params().len() == right.params().len()
+        && left.parameter_types() == right.parameter_types()
+        && left.parameter_is_by_ref() == right.parameter_is_by_ref()
+        && left.parameter_is_variadic() == right.parameter_is_variadic()
+        && optional(left) == optional(right)
+        && left.return_type() == right.return_type()
+        && left.returns_by_ref() == right.returns_by_ref()
 }
 
 /// Rejects a receiver method that replaces `imported`, an adapted trait method, when the import

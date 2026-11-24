@@ -262,6 +262,16 @@ abstract class C { use A, B, S; }
     .expect_err("static/instance conflict should fail");
     assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
     assert!(!message.contains("Cannot override final method"), "{message}");
+    // Two abstract requirements of different kinds conflict on kind before an earlier
+    // `as final` one counts as overridden, in either order of kinds.
+    for (first, second) in [("", "static "), ("static ", "")] {
+        let message = check_source(&format!(
+            "<?php\ntrait A {{ abstract public {first}function foo(); }}\ntrait B {{ abstract public {second}function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; }} }}\n"
+        ))
+        .expect_err("static/instance conflict should fail");
+        assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
+        assert!(!message.contains("Cannot override final method"), "{message}");
+    }
 }
 
 /// A trait that uses one trait requiring a method and another implementing it has a concrete

@@ -521,8 +521,8 @@ class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
 /// abstract class, while a body on the importing class, enum or trait (static or not), a concrete
 /// method of another used trait (also one `insteadof` keeps), a parent method (even a private
 /// eval or AOT one) or a subclass overrides the final method and fails, as in PHP 8.3+, and
-/// `foo as final foo` makes the method itself final, and a later plain abstract copy keeps the
-/// final requirement (#2352).
+/// `foo as final foo` makes the method itself final, and a later compatible plain abstract
+/// method keeps the final requirement while an incompatible or other-kind one fails (#2352).
 #[test]
 fn execute_program_applies_eval_trait_final_adaptation_to_abstract_methods() {
     let accepted = parse_fragment(
@@ -608,6 +608,16 @@ abstract class EvalAdaptFinalAbstractFirstTBox {
 }
 class EvalAdaptFinalAbstractFirstTChild extends EvalAdaptFinalAbstractFirstTBox {
     public function foo() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractNarrow { abstract public function foo(); }
+trait EvalAdaptFinalAbstractWide { abstract public function foo(int $x); }
+abstract class EvalAdaptFinalAbstractIncompatible {
+    use EvalAdaptFinalAbstractNarrow, EvalAdaptFinalAbstractWide { EvalAdaptFinalAbstractNarrow::foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractInstance { abstract public function foo(); }
+trait EvalAdaptFinalAbstractStatic { abstract public static function foo(); }
+abstract class EvalAdaptFinalAbstractKindPair {
+    use EvalAdaptFinalAbstractInstance, EvalAdaptFinalAbstractStatic { EvalAdaptFinalAbstractInstance::foo as final; }
 }"#,
         br#"trait EvalAdaptFinalAbstractAotT { abstract public function hidden(); }
 abstract class EvalAdaptFinalAbstractAotBox extends KnownClass {

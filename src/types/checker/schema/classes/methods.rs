@@ -115,6 +115,9 @@ fn apply_static_method(
         // Box the generic object boundary so native Closure descriptors keep their runtime tag.
         sig.params[0].1 = crate::types::PhpType::Mixed;
     }
+    if has_same_class_kind_conflict(class, method) {
+        return Err(method_kind_error(class, method));
+    }
     if state.final_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -262,6 +265,9 @@ fn apply_instance_method(
         && method.params.first().is_some_and(|(_, ty, _, _)| ty.is_none())
     {
         if let Some((_, ty)) = sig.params.first_mut() { *ty = crate::types::PhpType::Mixed; }
+    }
+    if has_same_class_kind_conflict(class, method) {
+        return Err(method_kind_error(class, method));
     }
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
@@ -431,6 +437,16 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
             declaring_class, method.name
         ),
     )
+}
+
+/// Returns whether `class` itself holds another method named like `method` of the other kind
+/// (static or instance). Only two trait requirements can do that, and PHP reports their kind
+/// conflict before a final one (`use A, B { A::foo as final; }` with a static `B::foo`), while a
+/// child of a final parent method is still reported as a final override first.
+fn has_same_class_kind_conflict(class: &FlattenedClass, method: &ClassMethod) -> bool {
+    class.methods.iter().any(|other| {
+        other.is_static != method.is_static && other.name.eq_ignore_ascii_case(&method.name)
+    })
 }
 
 /// Constructs a `CompileError` for attempting to change a static method to
