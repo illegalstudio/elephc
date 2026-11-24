@@ -16,6 +16,12 @@ use crate::fast_hash::FastMap as HashMap;
 use crate::ir_lower::context::{IfArmExit, ReflectionBindings, StaticCallableBinding};
 use crate::types::TypeEnv;
 
+#[cfg(test)]
+thread_local! {
+    /// Names `join_arm_types` examined, for the lowering complexity test.
+    pub(crate) static JOIN_NAMES_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 mod runtime_choice;
 pub(super) use runtime_choice::lower_runtime_choice;
 
@@ -530,8 +536,13 @@ fn finish_type_join(
         .last()
         .map(|arm| arm.types.clone())
         .unwrap_or_else(|| ctx.local_types_snapshot());
+    // Nothing to convert on the edges when no name joined: the per-arm type restore only fed the
+    // conversions, and the merge resumes from `saved_types` below.
+    let edges_convert = !joined.is_empty() || !edge_boxed.is_empty();
     for arm in &arms {
-        ctx.restore_local_types(arm.types.clone());
+        if edges_convert {
+            ctx.restore_local_types(arm.types.clone());
+        }
         let conversions = arm_conversions(arm, &joined);
         let mixed_conversions = arm_mixed_conversions(arm, &edge_boxed);
         ctx.builder.position_at_end(arm.tail);
@@ -637,8 +648,23 @@ fn join_arm_types(
     let Some(first) = arms.first() else {
         return (TypeEnv::default(), HashSet::default());
     };
-    let mut names = first.types.keys().cloned().collect::<Vec<_>>();
+    // A name every arm types identically joins to nothing (equal types have equal storage
+    // representations and no pointer join), so only the names some arm changed are examined and
+    // sorted. Sorting and cloning every local of the body at every `if` made the lowering of a
+    // long container factory quadratic in its locals.
+    let mut names = first
+        .types
+        .iter()
+        .filter(|(name, first_type)| {
+            arms[1..]
+                .iter()
+                .any(|arm| arm.types.get(name.as_str()) != Some(*first_type))
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
     names.sort();
+    #[cfg(test)]
+    JOIN_NAMES_EXAMINED.with(|count| count.set(count.get() + names.len()));
 
     let mut joined = TypeEnv::default();
     let mut edge_boxed = HashSet::default();

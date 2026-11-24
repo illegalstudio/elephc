@@ -1500,6 +1500,39 @@ echo (new E())->make()->getContent(), $m->getCharset();
     }
 }
 
+/// One function with `locals` locals assigned up front and `branches` independent `if` statements
+/// that each change one of them.
+fn many_locals_many_branches(locals: usize, branches: usize) -> String {
+    let mut body = String::new();
+    for index in 0..locals {
+        body.push_str(&format!("    $v{index} = $n + {index};\n"));
+    }
+    for index in 0..branches {
+        body.push_str(&format!("    if ($n > {index}) {{ $v{} = \"s\"; }}\n", index % locals));
+    }
+    body.push_str("    return $v0;\n");
+    format!("<?php\nfunction f(int $n) {{\n{body}}}\necho f($argc), \"\\n\";\n")
+}
+
+/// Names `if` merges examined while lowering `source`.
+fn join_names_examined(source: &str) -> usize {
+    crate::ir_lower::stmt::conditionals::JOIN_NAMES_EXAMINED.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::ir_lower::stmt::conditionals::JOIN_NAMES_EXAMINED.with(|count| count.get())
+}
+
+/// An `if` merge joined the type of every local of the body, sorting and cloning all of them
+/// whether or not the arms differed: the cost of a merge grew with the body's locals, so a long
+/// container factory was quadratic. Only the names an arm changed are examined now: with the locals
+/// quadrupled, the examined names stay proportional to the branches.
+#[test]
+fn if_merges_examine_only_the_names_their_arms_changed() {
+    let few = join_names_examined(&many_locals_many_branches(40, 40));
+    let many = join_names_examined(&many_locals_many_branches(160, 40));
+    assert!(few > 0, "the fixture no longer reaches an if merge");
+    assert!(many <= few * 2, "merges examined {few} names with 40 locals and {many} with 160");
+}
+
 /// `count` classes with public defaults and one `get_class_vars($name)` of a computed name, which
 /// lowers a case-insensitive name ladder with one rung per class.
 fn many_class_vars_rungs(count: usize) -> String {

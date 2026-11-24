@@ -280,12 +280,17 @@ pub(super) fn lower_logical_binary(
 /// `foreach ($v as …)` that follows was lowered as an iteration of that class
 /// (`Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract`).
 pub(super) fn join_short_circuit_operand_types(ctx: &mut LoweringContext<'_, '_>, saved_types: TypeEnv) {
-    let operand_types = ctx.local_types_snapshot();
-    ctx.restore_local_types(saved_types.clone());
-    for (name, operand_ty) in operand_types {
-        if saved_types.get(&name) == Some(&operand_ty) {
-            continue;
-        }
+    // Only the names the operand changed are collected: cloning the whole environment of a body
+    // with thousands of locals for every `&&` / `||` made a long container factory quadratic.
+    let mut changed: Vec<String> = ctx
+        .local_types
+        .iter()
+        .filter(|(name, operand_ty)| saved_types.get(name.as_str()) != Some(*operand_ty))
+        .map(|(name, _)| name.clone())
+        .collect();
+    changed.sort();
+    ctx.restore_local_types(saved_types);
+    for name in changed {
         let Some(slot) = ctx.local_slots.get(&name).copied() else {
             continue;
         };
