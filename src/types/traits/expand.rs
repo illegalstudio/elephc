@@ -353,15 +353,18 @@ fn select_methods(
         let imports = candidates.remove(&method_name).unwrap_or_default();
         let (requirements, remaining): (Vec<ImportedMethod>, Vec<ImportedMethod>) = imports
             .into_iter()
-            // An abstract method made `as final` stays a requirement after `insteadof`, so the
-            // method kept in its place overrides it, as in PHP.
+            // An abstract method made `as final`, here or inside the used trait, stays a
+            // requirement after `insteadof`, so the method kept in its place overrides it.
             .filter(|candidate| {
                 !suppressed
                     .get(&method_name)
                     .is_some_and(|set| set.contains(&candidate.source_trait))
                     || (candidate.decl.is_abstract
-                        && final_overrides
-                            .contains(&(candidate.source_trait.clone(), method_name.clone())))
+                        && (candidate.decl.is_final
+                            || final_overrides.contains(&(
+                                candidate.source_trait.clone(),
+                                method_name.clone(),
+                            ))))
             })
             .map(|mut candidate| {
                 // Zend applies `as <visibility>` to the trait's copy before it compares two
@@ -428,14 +431,21 @@ fn unsatisfied_requirements(
     for requirement in requirements {
         // A requirement made `as final` is overridden by any concrete candidate, of either kind,
         // and overrides any other requirement bound before it (`check_final_abstract_imports`).
-        // A later copy of the same trait method is that method again, and is dropped.
-        let earlier_other = kept.iter().any(|earlier| {
-            !is_same_trait_method(
+        // A later copy of a trait method already kept is that method again: only a concrete
+        // method of its kind overrides it, and one of the other kind is left to the class schema's
+        // static/instance check, as in PHP.
+        let is_copy = |earlier: &ImportedMethod| {
+            is_same_trait_method(
                 (&earlier.origin, &earlier.decl),
                 (&requirement.origin, &requirement.decl),
             )
-        });
-        if requirement.decl.is_final && (!concrete.is_empty() || earlier_other) {
+        };
+        let overridden = if kept.iter().any(is_copy) {
+            concrete.iter().any(|other| other.decl.is_static == requirement.decl.is_static)
+        } else {
+            !concrete.is_empty() || !kept.is_empty()
+        };
+        if requirement.decl.is_final && overridden {
             return Err(final_abstract_import_override(
                 span,
                 &requirement.source_trait,

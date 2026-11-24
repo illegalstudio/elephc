@@ -599,7 +599,19 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             reject_override_of_final_abstract_import(&method)?;
             continue;
         }
-        if !trait_method_names.insert(key) {
+        if !trait_method_names.insert(key.clone()) {
+            // A plain abstract redeclaration after an abstract `as final` import keeps the final
+            // one, as in PHP; any other second method of the name is a collision or override.
+            let keeps_final_requirement = method.is_abstract()
+                && !method.is_final()
+                && methods.iter().any(|stored| {
+                    stored.name().eq_ignore_ascii_case(&key)
+                        && stored.is_abstract()
+                        && stored.is_final()
+                });
+            if keeps_final_requirement {
+                continue;
+            }
             return Err(EvalStatus::RuntimeFatal);
         }
         methods.push(method);

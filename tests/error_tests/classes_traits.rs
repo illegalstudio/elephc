@@ -228,7 +228,8 @@ class C { use A; use B; }
 }
 
 /// A concrete trait method satisfies another trait's abstract one only when both are static or
-/// both are instance methods, in one `use A, B` as in separate `use` statements.
+/// both are instance methods, in one `use A, B` as in separate `use` statements, also when the
+/// abstract method is a later `as final` copy.
 #[test]
 fn test_error_trait_requirement_static_kind_mismatch() {
     expect_error(
@@ -247,6 +248,20 @@ final class C { use A, B; }
 "#,
         "Cannot change method kind when overriding C::foo",
     );
+    // A later `as final` copy of a kept trait method is not overridden by a method of the
+    // other kind: PHP reports the static/instance conflict (#2352).
+    let message = check_source(
+        r#"<?php
+trait T { abstract public function foo(); }
+trait A { use T; }
+trait B { use T { foo as final; } }
+trait S { public static function foo() { return 1; } }
+abstract class C { use A, B, S; }
+"#,
+    )
+    .expect_err("static/instance conflict should fail");
+    assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
+    assert!(!message.contains("Cannot override final method"), "{message}");
 }
 
 /// A trait that uses one trait requiring a method and another implementing it has a concrete
@@ -1686,7 +1701,8 @@ fn test_error_trait_alias_as_final_abstract_method_binding_order() {
 /// The same abstract trait method reached through two traits is one method, final only when its
 /// first copy is; `insteadof` keeps an abstract `as final` import as a requirement; two
 /// concrete methods collide before any final requirement is compared; `foo as final foo` makes
-/// the method itself final; and a parent override is reported once (#2352).
+/// the method itself final; and a parent override is reported once (#2352). An `as final`
+/// made inside the used trait survives `insteadof` the same way.
 #[test]
 fn test_error_trait_alias_as_final_abstract_method_edge_cases() {
     let t = "trait T { abstract public function foo(); }\n";
@@ -1727,6 +1743,19 @@ fn test_error_trait_alias_as_final_abstract_method_edge_cases() {
     expect_error(
         &format!(
             "<?php\n{t}abstract class C {{ use T {{ foo as final foo; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let inner_final = "trait T { abstract public function foo(); }\ntrait A { use T { foo as final; } }\n";
+    expect_error(
+        &format!(
+            "<?php\n{inner_final}trait B {{ public function foo() {{ return 1; }} }}\nclass C {{ use A, B {{ B::foo insteadof A; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{inner_final}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ B::foo insteadof A; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
         ),
         "Cannot override final method C::foo",
     );

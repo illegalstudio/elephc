@@ -521,7 +521,8 @@ class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
 /// abstract class, while a body on the importing class, enum or trait (static or not), a concrete
 /// method of another used trait (also one `insteadof` keeps), a parent method (even a private
 /// eval or AOT one) or a subclass overrides the final method and fails, as in PHP 8.3+, and
-/// `foo as final foo` makes the method itself final (#2352).
+/// `foo as final foo` makes the method itself final, and a later plain abstract copy keeps the
+/// final requirement (#2352).
 #[test]
 fn execute_program_applies_eval_trait_final_adaptation_to_abstract_methods() {
     let accepted = parse_fragment(
@@ -542,6 +543,23 @@ return "ok";"#,
     let mut values = FakeOps::default();
     let result = execute_program(&accepted, &mut scope, &mut values).expect("execute eval ir");
     assert_eq!(values.get(result), FakeValue::String("ok".to_string()));
+
+    let kept_final = parse_fragment(
+        br#"trait EvalAdaptFinalAbstractFirst { abstract public function foo(); }
+trait EvalAdaptFinalAbstractSecond { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractFirstBox {
+    use EvalAdaptFinalAbstractFirst, EvalAdaptFinalAbstractSecond {
+        EvalAdaptFinalAbstractFirst::foo as final;
+        EvalAdaptFinalAbstractSecond::foo insteadof EvalAdaptFinalAbstractFirst;
+    }
+}
+return "kept";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&kept_final, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::String("kept".to_string()));
 
     for source in [
         br#"trait EvalAdaptFinalAbstractSub { abstract public function foo(); }
@@ -579,6 +597,17 @@ class EvalAdaptFinalAbstractReqBox {
 class EvalAdaptFinalAbstractParent { private function foo() { return 1; } }
 abstract class EvalAdaptFinalAbstractParentBox extends EvalAdaptFinalAbstractParent {
     use EvalAdaptFinalAbstractParentT { foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractFirstT { abstract public function foo(); }
+trait EvalAdaptFinalAbstractSecondT { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractFirstTBox {
+    use EvalAdaptFinalAbstractFirstT, EvalAdaptFinalAbstractSecondT {
+        EvalAdaptFinalAbstractFirstT::foo as final;
+        EvalAdaptFinalAbstractSecondT::foo insteadof EvalAdaptFinalAbstractFirstT;
+    }
+}
+class EvalAdaptFinalAbstractFirstTChild extends EvalAdaptFinalAbstractFirstTBox {
+    public function foo() { return 1; }
 }"#,
         br#"trait EvalAdaptFinalAbstractAotT { abstract public function hidden(); }
 abstract class EvalAdaptFinalAbstractAotBox extends KnownClass {
