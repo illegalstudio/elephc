@@ -142,6 +142,13 @@ fn build_loaded_class_info(
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
+    // PHP binds abstract trait methods after the parent inheritance checked above, and before
+    // interfaces (`final_abstract_import_overrides`).
+    if let Some((span, message)) =
+        checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name))
+    {
+        return Err(CompileError::new(*span, message));
+    }
     interfaces::validate_interface_contracts(
         &mut state,
         &class,

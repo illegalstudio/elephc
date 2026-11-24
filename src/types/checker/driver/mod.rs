@@ -298,10 +298,8 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     // Abstract `as final` trait imports meet their ancestors once builtin parents are known too.
-    let (override_errors, body_overrides) =
+    checker.final_abstract_binding_failures =
         final_abstract_import_overrides(&final_abstract_imports, &mut class_map);
-    errors.extend(override_errors);
-    checker.final_abstract_body_overrides = body_overrides;
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();

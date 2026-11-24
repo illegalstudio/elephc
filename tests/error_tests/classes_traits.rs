@@ -1776,7 +1776,7 @@ fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
 /// name the earliest final import in `use` order is reported, with only the imports the first
 /// one that a later final import overrides; a concrete import or class body is checked as an
 /// override of a visible ancestor first, also before a plain abstract import of the other kind
-/// fails (#2352).
+/// fails, and every binding failure waits for the class's other inheritance checks (#2352).
 #[test]
 fn test_error_trait_alias_as_final_abstract_method_binding_model() {
     let ab = "trait A { abstract public function foo(); }\ntrait B { abstract public function foo(); }\n";
@@ -1818,6 +1818,17 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function foo() {{ return 1; }} }}"), "Cannot reduce visibility"),
         (format!("{kinds}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot make concrete method abstract"),
         (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} }}"), "Cannot change method kind when overriding C::foo"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    // The binding failure waits for the whole parent inheritance of the class: other methods
+    // and final constants first, then the first failure in trait binding order.
+    for (source, message) in [
+        (format!("{a}class P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A {{ foo as final; }} public function foo() {{}} protected function bar() {{}} }}"), "Cannot reduce visibility when overriding method: C::bar"),
+        (format!("{kinds}class P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function bar() {{}} }}"), "Cannot reduce visibility when overriding method: C::bar"),
+        (format!("{a}trait B {{ abstract public function bar(); }}\nclass P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ A::foo as final; B::bar as final; }} public function bar() {{}} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{kinds}class P {{ public function foo() {{}} final public const X = 1; }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} public const X = 2; }}"), "final constant"),
     ] {
         let reported = single_error(&source);
         assert!(reported.contains(message), "{source}: {reported}");
