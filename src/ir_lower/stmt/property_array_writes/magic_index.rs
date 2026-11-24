@@ -40,9 +40,12 @@ pub(super) fn lower(
         let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
         root_property_write_value(ctx, boxed, span, &mut roots)
     } else { object };
+    // A program that loads no code at run time tests class ids and builds the class name only in
+    // the tails that print it; the others keep it for the whole write.
+    let by_id = !ctx.program_loads_code_at_run_time();
     let name = ctx.declare_owned_hidden_temp(PhpType::Str);
     let name_slot = ctx.local_slots[&name];
-    crate::ir_lower::expr::register_owned_call_operand(ctx, name_slot, span);
+    if !by_id { crate::ir_lower::expr::register_owned_call_operand(ctx, name_slot, span); }
     let select = ctx.builder.create_named_block("property.index.runtime_class", vec![]);
     let regular = ctx.builder.create_named_block("property.index.regular", vec![]);
     let done = ctx.builder.create_named_block("property.index.merge", vec![]);
@@ -56,12 +59,13 @@ pub(super) fn lower(
     // A program that loads no code at run time knows every class, so a class is its id: one load and
     // a compare per class, where `get_class()` builds a string that every arm then compares. The
     // name is only needed by the overloaded tail's notice, which asks for it there.
-    let by_id = !ctx.program_loads_code_at_run_time();
+    let mut unboxed_object = None;
     let class_id = if by_id {
-        let generic = PhpType::Object(String::new());
+        let generic = generic_object();
         let unboxed = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, generic.clone(),
             Op::mixed_unbox_effects(&generic), Some(span));
         ctx.builder.set_value_ownership(unboxed.value, Ownership::Borrowed);
+        unboxed_object = Some(unboxed);
         Some(ctx.emit_value(Op::ObjectClassId, vec![unboxed.value], None, PhpType::Int,
             Op::ObjectClassId.default_effects(), Some(span)))
     } else {
@@ -74,14 +78,21 @@ pub(super) fn lower(
     };
     let mut merged = None;
     // The overloaded and inaccessible reads address the object only through the runtime property
-    // dispatcher, so every class of one of those kinds shares one tail; only the class-name test
-    // (and the class name in the notice, taken from the selected name) is its own.
-    let mut tails: [Option<BlockId>; 2] = [None, None];
+    // dispatcher, so every class of one of those kinds shares one tail; only the class test (and
+    // the class name in the notice, taken from the selected name) is its own. A class whose dynamic
+    // property hash is written has an arm of its own (the hash sits at an offset of its layout and
+    // the creation diagnostic names it) that fetches the hash cell and hands it to ONE shared
+    // mutation.
+    let mut tails: [Option<BlockId>; FLAVORS] = [None; FLAVORS];
     // With class ids the members of a shared tail are tested together, after the classes with an arm
     // of their own: a run of consecutive ids is two comparisons.
-    let mut members: [Vec<i64>; 2] = [Vec::new(), Vec::new()];
+    let mut members: [Vec<i64>; FLAVORS] = Default::default();
+    // The slot the fetched hash cell is parked in, the block that mutates it, and the initialized
+    // slots once it is parked.
+    let mut hash_cell: Option<(String, crate::ir::LocalSlotId, BlockId)> = None;
+    let mut hash_cell_state = None;
     for (class, kind) in classes {
-        let flavor = match kind { Kind::Magic { hash: false } => Some(0), Kind::Inaccessible => Some(1), _ => None };
+        let flavor = flavor_of(kind);
         if let (Some(flavor), true) = (flavor, class_id.is_some()) {
             tails[flavor].get_or_insert_with(|| ctx.builder.create_named_block("property.index.shared", vec![]));
             members[flavor].push(ctx.classes.get(class.trim_start_matches('\\')).map_or(0, |info| info.class_id) as i64);
@@ -117,12 +128,44 @@ pub(super) fn lower(
             ctx.restore_initialized_slots(before);
             continue;
         }
+        // The arm of a class whose dynamic property hash is written.
         let concrete = PhpType::Object(class.clone());
-        let receiver = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, concrete.clone(),
-            Op::mixed_unbox_effects(&concrete), Some(span));
+        let receiver = match unboxed_object {
+            Some(unboxed) => ctx.emit_value(Op::Borrow, vec![unboxed.value], None, concrete,
+                Op::Borrow.default_effects(), Some(span)),
+            None => ctx.emit_value(Op::MixedUnbox, vec![object.value], None, concrete.clone(),
+                Op::mixed_unbox_effects(&concrete), Some(span)),
+        };
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
-        write(ctx, object, receiver, &class, property, kind, index, value, compound, span, diagnosed);
-        merge(ctx, done, &mut merged);
+        let (cell, cell_slot, mutation) = match &hash_cell {
+            Some((cell, slot, mutation)) => (cell.clone(), *slot, *mutation),
+            None => {
+                let cell = ctx.declare_hidden_temp(PhpType::Mixed);
+                let slot = ctx.local_slots[&cell];
+                let mutation = ctx.builder.create_named_block("property.index.hash_mutation", vec![]);
+                hash_cell = Some((cell.clone(), slot, mutation));
+                (cell, slot, mutation)
+            }
+        };
+        let property_name = string(ctx, property, span);
+        if matches!(kind, Kind::Magic { hash: true }) {
+            // An entry that is not stored yet is read through the getter, like any overloaded name.
+            let present = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, property_name.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashContains)), PhpType::Bool,
+                effects_lookup::runtime_effects(), Some(span));
+            let stored = ctx.builder.create_named_block("property.index.dynamic", vec![]);
+            let getter = tails[FLAVOR_MAGIC].get_or_insert_with(||
+                ctx.builder.create_named_block("property.index.shared", vec![]));
+            ctx.builder.terminate(Terminator::CondBr { cond: present.value,
+                then_target: stored, then_args: vec![], else_target: *getter, else_args: vec![] });
+            ctx.builder.position_at_end(stored);
+        }
+        let array = ctx.emit_owned_value(Op::RuntimeCall, vec![receiver.value, property_name.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
+            effects_lookup::runtime_effects(), Some(span));
+        park_hash_cell(ctx, &cell, cell_slot, array, span);
+        hash_cell_state.get_or_insert_with(|| ctx.initialized_slots_snapshot());
+        ctx.builder.terminate(Terminator::Br { target: mutation, args: vec![] });
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
     }
@@ -166,25 +209,30 @@ pub(super) fn lower(
         let Some(tail) = tail else { continue };
         ctx.builder.position_at_end(tail);
         ctx.restore_initialized_slots(before_tails.clone());
-        if by_id && flavor == 0 {
+        // The notice of an overloaded read names the class, which the selected arm no longer knows.
+        let needs_name = flavor == FLAVOR_MAGIC;
+        if by_id && needs_name {
+            crate::ir_lower::expr::register_owned_call_operand(ctx, name_slot, span);
             let target = crate::ir::RuntimeFnId::GetClass;
             let class_name = ctx.emit_value(Op::RuntimeCall, vec![object.value],
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))), PhpType::Str,
                 target.effects(), Some(span));
             crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class_name, span);
         }
-        let notice = if flavor == 0 {
-            let current = ctx.load_local(&name, Some(span));
-            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
-            let prefix = string(ctx, "Notice: Indirect modification of overloaded property ", span);
-            let head = ctx.emit_value(Op::StrConcat, vec![prefix.value, current.value], None, PhpType::Str,
-                Op::StrConcat.default_effects(), Some(span));
-            let suffix = string(ctx, &format!("::${property} has no effect\n"), span);
-            Some(ctx.emit_value(Op::StrConcat, vec![head.value, suffix.value], None, PhpType::Str,
-                Op::StrConcat.default_effects(), Some(span)))
-        } else { None };
+        let notice = needs_name.then(|| overloaded_notice(ctx, &name, property, span));
         let name_value = string(ctx, property, span);
-        fetched(ctx, object, name_value, notice, flavor == 0, index, value, compound, span, diagnosed);
+        fetched(ctx, object, name_value, notice, needs_name, index, value, compound, span, diagnosed);
+        if by_id && needs_name { crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span); }
+        merge(ctx, done, &mut merged);
+    }
+    if let (Some((cell, slot, mutation)), Some(state)) = (&hash_cell, hash_cell_state) {
+        // The one mutation of every fetched dynamic property hash cell.
+        ctx.builder.position_at_end(*mutation);
+        ctx.restore_initialized_slots(state);
+        let array = ctx.load_local(cell, Some(span));
+        ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
+        mutate(ctx, array, index, value, compound, span, diagnosed);
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, *slot, span);
         merge(ctx, done, &mut merged);
     }
     ctx.builder.position_at_end(regular);
@@ -193,9 +241,42 @@ pub(super) fn lower(
     merge(ctx, done, &mut merged);
     ctx.builder.position_at_end(done);
     if let Some(merged) = merged { ctx.restore_initialized_slots(merged); }
-    crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span);
+    if !by_id { crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span); }
     retire_property_write_roots(ctx, roots, span);
     true
+}
+
+/// Number of shared tails: one per kind of receiver read through the runtime property dispatcher.
+const FLAVORS: usize = 2;
+/// Overloaded class without a property hash: the getter is read, with the indirect-modification notice.
+const FLAVOR_MAGIC: usize = 0;
+/// Declared slot the scope cannot access.
+const FLAVOR_INACCESSIBLE: usize = 1;
+
+/// The shared tail a kind of receiver belongs to, `None` for the kinds that write a dynamic hash.
+fn flavor_of(kind: Kind) -> Option<usize> {
+    match kind {
+        Kind::Magic { hash: false } => Some(FLAVOR_MAGIC),
+        Kind::Inaccessible => Some(FLAVOR_INACCESSIBLE),
+        Kind::Dynamic | Kind::Magic { hash: true } => None,
+    }
+}
+
+/// The class-less object type a shared tail unboxes its receiver to.
+fn generic_object() -> PhpType {
+    PhpType::Object(String::new())
+}
+
+/// The notice of an overloaded read that exposes a value, naming the class held in local `name`.
+fn overloaded_notice(ctx: &mut LoweringContext<'_, '_>, name: &str, property: &str, span: Span) -> LoweredValue {
+    let current = ctx.load_local(name, Some(span));
+    ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+    let prefix = string(ctx, "Notice: Indirect modification of overloaded property ", span);
+    let head = ctx.emit_value(Op::StrConcat, vec![prefix.value, current.value], None, PhpType::Str,
+        Op::StrConcat.default_effects(), Some(span));
+    let suffix = string(ctx, &format!("::${property} has no effect\n"), span);
+    ctx.emit_value(Op::StrConcat, vec![head.value, suffix.value], None, PhpType::Str,
+        Op::StrConcat.default_effects(), Some(span))
 }
 
 /// Keeps hook-backed and native XML fields on their dedicated paths.
@@ -224,57 +305,16 @@ fn kind(ctx: &LoweringContext<'_, '_>, class: &str, info: &crate::types::ClassIn
         .then_some(Kind::Inaccessible)
 }
 
-/// Uses attached entries first, otherwise performs one visibility-aware property read.
-fn write(
-    ctx: &mut LoweringContext<'_, '_>, boxed: LoweredValue, object: LoweredValue,
-    class: &str, property: &str, kind: Kind, index: LoweredValue, value: LoweredValue,
-    compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+/// Parks a fetched dynamic property hash cell in the slot `cell` shared by every arm, as
+/// `root_owned_call_operand` parks one in a slot of its own, and publishes its owner record.
+fn park_hash_cell(
+    ctx: &mut LoweringContext<'_, '_>, cell: &str, slot: crate::ir::LocalSlotId, array: LoweredValue, span: Span,
 ) {
-    let name = string(ctx, property, span);
-    if matches!(kind, Kind::Dynamic) {
-        attached(ctx, object, name, index, value, compound, span, diagnosed);
-        return;
-    }
-    if matches!(kind, Kind::Magic { hash: true }) {
-        let present = ctx.emit_value(Op::RuntimeCall, vec![object.value, name.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashContains)), PhpType::Bool,
-            effects_lookup::runtime_effects(), Some(span));
-        let stored = ctx.builder.create_named_block("property.index.dynamic", vec![]);
-        let getter = ctx.builder.create_named_block("property.index.getter", vec![]);
-        let done = ctx.builder.create_named_block("property.index.fetched", vec![]);
-        let initial = ctx.initialized_slots_snapshot();
-        let mut merged = None;
-        ctx.builder.terminate(Terminator::CondBr { cond: present.value,
-            then_target: stored, then_args: vec![], else_target: getter, else_args: vec![] });
-        ctx.builder.position_at_end(stored);
-        attached(ctx, object, name, index, value, compound, span, diagnosed);
-        merge(ctx, done, &mut merged);
-        ctx.builder.position_at_end(getter);
-        ctx.restore_initialized_slots(initial);
-        let notice = string(ctx, &format!("Notice: Indirect modification of overloaded property {class}::${property} has no effect\n"), span);
-        fetched(ctx, boxed, name, Some(notice), true, index, value, compound, span, diagnosed);
-        merge(ctx, done, &mut merged);
-        ctx.builder.position_at_end(done);
-        if let Some(merged) = merged { ctx.restore_initialized_slots(merged); }
-    } else {
-        let notice = matches!(kind, Kind::Magic { .. }).then(|| string(ctx, &format!(
-            "Notice: Indirect modification of overloaded property {class}::${property} has no effect\n"), span));
-        fetched(ctx, boxed, name, notice, matches!(kind, Kind::Magic { .. }),
-            index, value, compound, span, diagnosed);
-    }
-}
-
-/// Fetches an independently guarded attached hash cell before changing its array payload.
-fn attached(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
-    index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
-) {
-    let array = ctx.emit_owned_value(Op::RuntimeCall, vec![object.value, name.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
-        effects_lookup::runtime_effects(), Some(span));
-    let (array, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
-    mutate(ctx, array, index, value, compound, span, diagnosed);
-    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+    let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, array, Some(span));
+    ctx.store_local(cell, rooted, PhpType::Mixed, Some(span));
+    crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span);
+    ctx.unguard_call_argument(array.value, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, array, Some(span));
 }
 
 /// Reads inaccessible and magic names through the complete runtime class dispatcher.

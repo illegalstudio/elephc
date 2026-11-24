@@ -213,7 +213,11 @@ fn dispatch(
         let info = &ctx.classes[&class];
         let key = if include_dynamic && (dynamic_slot(info, &class, property)
             || magic_append::is_candidate(ctx, &class, info, property)) {
-            None
+            // Dynamic storage and overloaded names are written by name through the runtime, never
+            // through a layout: one arm per behaviour serves every class that has it.
+            let hashed = info.dynamic_property_hash_is_name_addressable()
+                || crate::types::checker::builtin_stdclass::is_stdclass(&class);
+            Some(if dynamic_slot(info, &class, property) { "dynamic" } else if hashed { "magic-hash" } else { "magic-bare" }.to_string())
         } else {
             let declaring = info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class.clone());
             let shape = object_type_property_type(ctx, &PhpType::Object(class.clone()), property);
@@ -232,7 +236,12 @@ fn dispatch(
                 (_, Some(offset)) => format!("@{offset}"),
                 _ => declaring,
             };
-            Some(format!("{slot}|{shape:?}|{guard}|{writable}"))
+            // A slot that holds a reference cell is written through it: the arm is its own.
+            let by_reference = info.reference_properties.contains(property)
+                || info.visible_property(property).is_some_and(|(index, _)|
+                    info.owned_reference_property_slots.contains(&index)
+                        || info.property_slot_is_reference(index, property));
+            Some(format!("{slot}|{shape:?}|{guard}|{writable}|{by_reference}"))
         };
         match key.as_ref().and_then(|key| by_key.get(key)).copied() {
             Some(at) => groups[at].3.push(class),
@@ -265,6 +274,7 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
         then_target: ordinary, then_args: vec![], else_target: missing, else_args: vec![] });
     ctx.builder.position_at_end(ordinary);
+    let mut unboxed_object = None;
     let class_id = if by_id {
         let generic = PhpType::Object(String::new());
         let unboxed = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
@@ -275,6 +285,7 @@ fn dispatch(
                 Op::Borrow.default_effects(), Some(span))
         };
         ctx.builder.set_value_ownership(unboxed.value, Ownership::Borrowed);
+        unboxed_object = Some(unboxed);
         Some(ctx.emit_value(Op::ObjectClassId, vec![unboxed.value], None, PhpType::Int,
             Op::ObjectClassId.default_effects(), Some(span)))
     } else {
@@ -348,7 +359,11 @@ fn dispatch(
         }
         ctx.builder.position_at_end(matched);
         let concrete = PhpType::Object(class);
-        let receiver = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        // The object was unboxed once to read its class id; an arm views that same object as its class.
+        let receiver = if let Some(unboxed) = unboxed_object {
+            ctx.emit_value(Op::Borrow, vec![unboxed.value], None, concrete,
+                Op::Borrow.default_effects(), Some(span))
+        } else if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_value(Op::MixedUnbox, vec![object.value], None, concrete.clone(),
                 Op::mixed_unbox_effects(&concrete), Some(span))
         } else {

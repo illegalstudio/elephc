@@ -79,3 +79,34 @@ fn write_helpers_share_the_overloaded_tail_and_the_arms_of_unrelated_declarers()
     assert!(per_class <= 12, "{per_class} instructions per added class ({small} -> {large})");
     assert!(large < 6_000, "the helper is {large} instructions");
 }
+
+/// A framework-shaped program: `declarers` unrelated classes that declare `privates` (each with a
+/// subclass), `magic` overloaded classes, SimpleXML and eval, and one erased write of every form
+/// on a name the classes declare (`privates`) and on names no class declares (`info`, `options`).
+fn framework(declarers: usize, magic: usize) -> String {
+    let mut source = crowd(declarers, magic);
+    for index in 0..declarers {
+        source.push_str(&format!("class Sub{index} extends Decl{index} {{ function f() {{ return 1; }} }}\n"));
+    }
+    source.push_str("$x = new SimpleXMLElement('<r/>'); echo $x->getName();\neval($argc > 5 ? 'echo 1;' : '');\n");
+    source.push_str("function w1(mixed $c) { $c->privates[] = 1; }\nfunction w2(mixed $c) { $c->privates['k'] .= 'a'; }\n");
+    source.push_str("function w3(mixed $c) { $c->info['a'] = 1; }\nfunction w4(mixed $c) { $c->options['b'] = 2; }\n");
+    source.push_str("function w5(mixed $c) { $c->privates = []; }\nw1(new Decl0); w2(new Decl0); w3(new Decl0); w4(new Decl0); w5(new Decl0);\n");
+    source
+}
+
+/// Every helper of a program shaped like a framework (hundreds of overloaded and declaring classes,
+/// SimpleXML, eval) stays far below the 180 000-261 000 instructions the Symfony Demo's were: a few
+/// instructions per class, whatever the form and whether the name is declared or dynamic.
+#[test]
+fn write_helpers_of_a_framework_shaped_program_stay_small() {
+    let module = super::lower_source(&framework(60, 220));
+    let sizes: Vec<_> = module.functions.iter()
+        .filter(|function| function.name.starts_with(crate::names::ERASED_WRITE_HELPER_PREFIX)
+            && (function.name.ends_with("@privates") || function.name.ends_with("@info") || function.name.ends_with("@options")))
+        .map(|function| (function.name.clone(), function.instructions.len())).collect();
+    assert!(sizes.len() >= 5, "the helpers of the program: {sizes:?}");
+    for (name, size) in sizes {
+        assert!(size < 10_000, "{name} is {size} instructions");
+    }
+}
