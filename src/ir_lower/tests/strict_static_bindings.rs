@@ -30,6 +30,13 @@ fn lower_statics(target: Target, strict: bool) -> Module {
         function static_array_owner(): void {
             $seed=[1];static $value=$seed;unset($seed);
         }
+        function static_fresh_array_owner(): void {
+            static $value=[1];
+        }
+        function static_callable_owner(): void {
+            $seed=static function(): int { return 7; };
+            static $value=$seed;unset($seed);
+        }
         $parameter="local";static_parameter_choice($parameter,false);
         late_static();late_static();
         echo conditional_static(false),":",conditional_static(true),"|";late_throw();
@@ -78,6 +85,38 @@ fn strict_native_static_bindings_keep_storage_separate_on_every_target() {
                 array_owner.instruction(inst).expect("initializer owner instruction").op,
                 Op::Acquire,
                 "{name}: publishing a local array as static storage needs an independent owner",
+            );
+            let fresh_array_owner = module.functions.iter()
+                .find(|function| function.name == "static_fresh_array_owner")
+                .expect("fresh array static owner fixture");
+            let initializer = fresh_array_owner.instructions.iter()
+                .find(|instruction| instruction.op == Op::InitStaticLocal)
+                .expect("fresh array static initializer");
+            let source = fresh_array_owner.value(initializer.operands[0])
+                .expect("fresh initializer source");
+            let crate::ir::ValueDef::Instruction { inst, .. } = source.def else {
+                panic!("{name}: fresh array initializer must be an instruction result");
+            };
+            assert_eq!(
+                fresh_array_owner.instruction(inst).expect("fresh initializer instruction").op,
+                Op::ArrayNew,
+                "{name}: a fresh static initializer must transfer its existing owner",
+            );
+            let callable_owner = module.functions.iter()
+                .find(|function| function.name == "static_callable_owner")
+                .expect("callable static owner fixture");
+            let initializer = callable_owner.instructions.iter()
+                .find(|instruction| instruction.op == Op::InitStaticLocal)
+                .expect("callable static initializer");
+            let source = callable_owner.value(initializer.operands[0])
+                .expect("callable initializer source");
+            let crate::ir::ValueDef::Instruction { inst, .. } = source.def else {
+                panic!("{name}: callable initializer owner must be an instruction result");
+            };
+            assert_eq!(
+                callable_owner.instruction(inst).expect("callable initializer instruction").op,
+                Op::Acquire,
+                "{name}: publishing a local callable as static storage needs an independent owner",
             );
             crate::ir::validate_module(&module).unwrap();
             let mut invalid = module.clone();
