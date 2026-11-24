@@ -331,16 +331,8 @@ fn validate_final_constant_constraints(
     parent_info: Option<&ClassInfo>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    // A private final constant is reported before any class is built (checker driver).
     for constant in &class.constants {
-        if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
-            return Err(CompileError::new(
-                constant.span,
-                &format!(
-                    "Private constant {}::{} cannot be final",
-                    class.name, constant.name
-                ),
-            ));
-        }
         if parent_info.is_some_and(|parent| parent.final_constants.contains(&constant.name)) {
             return Err(CompileError::new(
                 constant.span,

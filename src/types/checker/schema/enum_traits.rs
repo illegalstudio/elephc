@@ -108,18 +108,7 @@ pub(crate) fn validate_class_trait_requirements(
         // so its error takes the place of the class's binding failure.
         let binding_failure =
             checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name));
-        // A class whose parent failed to build reports that parent's error, as PHP does before
-        // it compiles the class; its used traits add nothing.
-        if binding_failure.is_some()
-            && class
-                .extends
-                .as_deref()
-                .is_some_and(|parent| {
-                    !checker.classes.keys().any(|built| built.eq_ignore_ascii_case(parent))
-                })
-        {
-            continue;
-        }
+
         // The error the class schema reported for a class with a binding failure: the failure
         // itself, or an inheritance error PHP reports before it, either one after the used
         // traits are compiled.
@@ -131,6 +120,12 @@ pub(crate) fn validate_class_trait_requirements(
                 })
                 .or_else(|| class_build_errors.get(&php_symbol_key(&class.name)).copied())
         });
+        // A class whose build error is its parent's (`class_build_errors` has no entry) reports
+        // that parent's error, as PHP does before it compiles the class; its used traits add
+        // nothing.
+        if binding_failure.is_some() && class_error.is_none() {
+            continue;
+        }
         let mut pairs: Vec<(&ClassMethod, &ClassMethod, Option<RequirementPairKey>)> = Vec::new();
         for (required, actual) in &contract.satisfied {
             let key = (required.identity(), actual.identity());

@@ -15,7 +15,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
-    traits::{final_abstract_import_overrides, flatten_classes},
+    traits::{final_abstract_import_overrides, flatten_classes, FlattenedClass},
     TypeEnv,
 };
 
@@ -370,6 +370,21 @@ pub(super) fn check_types_impl(
             checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
         }
     }
+    // PHP rejects a private final constant while compiling the class, before it links any
+    // class, so the error precedes every inheritance and trait diagnostic.
+    for class in &flattened_classes {
+        for constant in &class.constants {
+            if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
+                errors.push(CompileError::new(
+                    constant.span,
+                    &format!(
+                        "Private constant {}::{} cannot be final",
+                        class.name, constant.name
+                    ),
+                ));
+            }
+        }
+    }
     // Where each class's build error starts in `errors`, so a used trait's own requirement
     // incompatibility can take its place (`validate_class_trait_requirements`).
     let mut class_build_errors: HashMap<String, usize> = HashMap::new();
@@ -382,13 +397,7 @@ pub(super) fn check_types_impl(
             &mut building,
         ) {
             // A class whose parent failed returns the parent's error, which stays the parent's.
-            let parent_built = class_map
-                .get(&class_name)
-                .and_then(|class| class.extends.as_deref())
-                .is_none_or(|parent| {
-                    checker.classes.keys().any(|built| built.eq_ignore_ascii_case(parent))
-                });
-            if parent_built {
+            if !parent_build_failed(&class_name, &class_map, &checker) {
                 class_build_errors.insert(php_symbol_key(&class_name), errors.len());
             }
             errors.extend(error.flatten());
@@ -790,5 +799,42 @@ var_dump((new Mw())->check(new Req()));
             vec!["Alpha", "Bravo", "Charlie", "Delta", "Echo_", "Foxtrot", "Golf", "Hotel"],
             "class ids should follow sorted names, not hash or declaration order"
         );
+    }
+}
+
+/// Whether `class_name` failed to build because its parent, a declared class, failed to build
+/// first: its error is then the parent's. An unknown parent, an interface or trait named as a
+/// parent, and an inheritance cycle through the class are the class's own errors.
+fn parent_build_failed(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    let find = |name: &str| {
+        class_map
+            .values()
+            .find(|class| class.name.eq_ignore_ascii_case(name.trim_start_matches('\\')))
+    };
+    let Some(parent) = find(class_name).and_then(|class| class.extends.as_deref()) else {
+        return false;
+    };
+    let Some(mut ancestor) = find(parent) else {
+        return false;
+    };
+    if checker.classes.keys().any(|built| built.eq_ignore_ascii_case(&ancestor.name)) {
+        return false;
+    }
+    let mut visited = HashSet::new();
+    loop {
+        if ancestor.name.eq_ignore_ascii_case(class_name) {
+            return false;
+        }
+        if !visited.insert(php_symbol_key(&ancestor.name)) {
+            return true;
+        }
+        match ancestor.extends.as_deref().and_then(find) {
+            Some(next) => ancestor = next,
+            None => return true,
+        }
     }
 }

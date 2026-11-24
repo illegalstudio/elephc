@@ -1858,6 +1858,31 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
     let messages: Vec<String> = parent_failed.flatten().into_iter().map(|error| error.message).collect();
     assert!(messages[0].contains("cannot extend final class"), "{messages:?}");
     assert!(messages.iter().all(|message| !message.contains("bar")), "{messages:?}");
+    // A parent that is unknown, not a class, or part of a cycle through the class is the class's
+    // own error, which the used trait's incompatibility still replaces.
+    let trait_pair = "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\n";
+    for parent in [
+        "",
+        "interface Missing {}\n",
+        "trait Missing {}\n",
+        "class Missing extends C {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Missing {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+    }
+    // A private final constant is a compile error of the class, before any trait is linked.
+    let error = check_source_full(&format!(
+        "<?php\n{trait_pair}class C {{ private final const X = 1; use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+    ))
+    .err()
+    .expect("program should fail");
+    let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+    assert!(messages[0].contains("Private constant C::X cannot be final"), "{messages:?}");
     for source in [
         // Abstract imports bound before the failure are checked first, against the parent or
         // the method that satisfies them.
