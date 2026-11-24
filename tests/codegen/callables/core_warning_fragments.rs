@@ -53,9 +53,10 @@ echo 'done';
 "#);
     assert!(output.success);
     assert_eq!(output.stdout, "done");
-    // php names the raise site after the quoted key: `... "missing1\n" in <file> on line 4`.
+    // php names the raise site after the quoted key: `... "missing1\n" in <file> on line 4`, and
+    // its default diagnostic begins with a newline (`php -n` prints `\nWarning: ...`).
     assert!(
-        output.stderr.starts_with("Warning: Undefined array key \"missing1\n\" in ")
+        output.stderr.starts_with("\nWarning: Undefined array key \"missing1\n\" in ")
             && output.stderr.ends_with(" on line 4\n"),
         "stderr: {:?}",
         output.stderr
