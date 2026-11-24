@@ -179,7 +179,7 @@ pub(super) fn emit_instance_target_table_lookup(
     selected_label: &str,
     miss_label: &str,
 ) -> Result<()> {
-    emit_instance_target_table_scan(ctx, targets, selector, selected_label, miss_label, true)
+    emit_instance_target_table_scan(ctx, targets, selector, selected_label, miss_label, true, closure)
 }
 
 /// Reports whether a row of `targets` matches the saved selector block, without binding it.
@@ -193,10 +193,11 @@ pub(super) fn emit_instance_target_table_match(
     matched_label: &str,
     miss_label: &str,
 ) -> Result<()> {
-    emit_instance_target_table_scan(ctx, targets, selector, matched_label, miss_label, false)
+    emit_instance_target_table_scan(ctx, targets, selector, matched_label, miss_label, false, false)
 }
 
-/// Scans the receiver rows; a match binds the row's template only when `bind` is set.
+/// Scans the receiver rows; a match binds the row's template only when `bind` is set, into a
+/// Closure object with its own handle when `closure` is also set.
 fn emit_instance_target_table_scan(
     ctx: &mut FunctionContext<'_>,
     targets: &[RuntimeArrayInstanceMethodTarget],
@@ -204,6 +205,7 @@ fn emit_instance_target_table_scan(
     selected_label: &str,
     miss_label: &str,
     bind: bool,
+    closure: bool,
 ) -> Result<()> {
     if targets.is_empty() {
         abi::emit_jump(ctx.emitter, miss_label);
