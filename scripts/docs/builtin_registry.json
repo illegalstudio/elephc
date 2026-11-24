@@ -65893,7 +65893,7 @@
       "return_type": "object",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "gmp_powm_sec",
     "sub_area": "Math"
   },
@@ -66056,7 +66056,7 @@
       "return_type": "object",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "gmp_prevprime",
     "sub_area": "Math"
   },
@@ -118996,10 +118996,10 @@
         },
         {
           "by_ref": false,
-          "default": true,
+          "default": null,
           "name": "restart_syscalls",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         }
       ],
       "required_param_count": 2,
@@ -119037,10 +119037,10 @@
         },
         {
           "by_ref": false,
-          "default": "true",
+          "default": "null",
           "name": "restart_syscalls",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         }
       ],
       "required_param_count": 2,
@@ -119135,10 +119135,10 @@
         },
         {
           "by_ref": false,
-          "default": "true",
+          "default": "null",
           "name": "restart_syscalls",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         }
       ],
       "return_type": "bool",

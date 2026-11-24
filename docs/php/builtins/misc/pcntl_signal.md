@@ -6,7 +6,7 @@ description: "Installs a callable, default, or ignored disposition for one signa
 ## pcntl_signal()
 
 ```php
-function pcntl_signal(int $signal, mixed $handler, bool $restart_syscalls = true): bool
+function pcntl_signal(int $signal, mixed $handler, ?bool $restart_syscalls = null): bool
 ```
 
 Installs a callable, default, or ignored disposition for one signal.
@@ -14,7 +14,7 @@ Installs a callable, default, or ignored disposition for one signal.
 **Parameters**:
 - `$signal` (`int`)
 - `$handler` (`mixed`)
-- `$restart_syscalls` (`bool`), default `true`, optional
+- `$restart_syscalls` (`?bool`), default `null`, optional
 
 **Returns**: `bool`
 

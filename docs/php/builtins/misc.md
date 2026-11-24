@@ -71,7 +71,7 @@ sidebar:
 | [`pcntl_setns()`](./misc/pcntl_setns.md) | `(int $process_id = null, int $nstype = 1073741824): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_setpriority()`](./misc/pcntl_setpriority.md) | `(int $priority, int $process_id = null, int $mode = 0): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_setqos_class()`](./misc/pcntl_setqos_class.md) | `(mixed $qos_class): void` | `void` | ✓ | ✓ |
-| [`pcntl_signal()`](./misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_signal()`](./misc/pcntl_signal.md) | `(int $signal, mixed $handler, ?bool $restart_syscalls = null): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_sigprocmask()`](./misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |

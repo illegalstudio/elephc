@@ -3617,6 +3617,24 @@
       "internal": false,
       "kind": "class",
       "module": "reflection",
+      "name": "ReflectionConstant",
+      "php_manual": null,
+      "since": "8.4"
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "reflection",
       "name": "ReflectionEnum",
       "php_manual": null,
       "since": "8.1"
@@ -8696,6 +8714,24 @@
       "extension": false,
       "internal": false,
       "module": "curl",
+      "name": "CURLINFO_SIZE_DELIVERED",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 6291527
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
       "name": "CURLINFO_SIZE_DOWNLOAD",
       "route": "predefined",
       "since": null,
@@ -12926,6 +12962,24 @@
       "extension": false,
       "internal": false,
       "module": "curl",
+      "name": "CURLOPT_SEEKFUNCTION",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 20167
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
       "name": "CURLOPT_SERVER_RESPONSE_TIMEOUT",
       "route": "predefined",
       "since": "8.4",
@@ -16670,6 +16724,24 @@
       "extension": false,
       "internal": false,
       "module": "curl",
+      "name": "CURL_READFUNC_ABORT",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 268435456
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
       "name": "CURL_READFUNC_PAUSE",
       "route": "predefined",
       "since": null,
@@ -16944,6 +17016,60 @@
       "route": "predefined",
       "since": null,
       "value": 7
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
+      "name": "CURL_SEEKFUNC_CANTSEEK",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
+      "name": "CURL_SEEKFUNC_FAIL",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "curl",
+      "name": "CURL_SEEKFUNC_OK",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 0
     },
     {
       "aot": {

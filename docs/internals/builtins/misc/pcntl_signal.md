@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_signal(): lowering path, type checks,
 ## Signature summary
 
 ```php
-function pcntl_signal(int $signal, mixed $handler, bool $restart_syscalls = true): bool
+function pcntl_signal(int $signal, mixed $handler, ?bool $restart_syscalls = null): bool
 ```
 
 ## What the type checker enforces

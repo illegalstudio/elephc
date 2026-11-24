@@ -43,10 +43,6 @@
         "name": "buffer_ptr"
       },
       {
-        "area": "Math",
-        "name": "clamp"
-      },
-      {
         "area": "Class",
         "name": "class_attribute_args"
       },
@@ -57,10 +53,6 @@
       {
         "area": "Class",
         "name": "class_get_attributes"
-      },
-      {
-        "area": "String",
-        "name": "grapheme_strrev"
       },
       {
         "area": "Type",
@@ -187,7 +179,7 @@
   ],
   "coverage": {
     "classes": {
-      "have": 193,
+      "have": 203,
       "total": 329
     },
     "constants": {
@@ -195,7 +187,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1114,
+      "have": 1118,
       "total": 2169
     }
   },
@@ -1312,8 +1304,8 @@
     },
     {
       "classes": {
-        "eval": 16,
-        "have": 16,
+        "eval": 17,
+        "have": 17,
         "total": 26
       },
       "constants": null,
@@ -1510,8 +1502,8 @@
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 353,
-        "have": 392,
+        "eval": 355,
+        "have": 396,
         "total": 545
       },
       "name": "standard",
@@ -1616,8 +1608,8 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 9,
+        "have": 9,
         "total": 9
       },
       "constants": null,
@@ -1752,17 +1744,109 @@
       {
         "name": "SortDirection",
         "since": "8.6"
+      },
+      {
+        "name": "Time\\Duration",
+        "since": "8.6"
+      },
+      {
+        "name": "Time\\TimeException",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlPercentEncodingMode",
+        "since": "8.6"
       }
     ],
     "constants": [
       {
+        "name": "CURLINFO_SIZE_DELIVERED",
+        "since": "8.6"
+      },
+      {
+        "name": "CURLOPT_SEEKFUNCTION",
+        "since": "8.6"
+      },
+      {
+        "name": "CURL_READFUNC_ABORT",
+        "since": "8.6"
+      },
+      {
+        "name": "CURL_SEEKFUNC_CANTSEEK",
+        "since": "8.6"
+      },
+      {
+        "name": "CURL_SEEKFUNC_FAIL",
+        "since": "8.6"
+      },
+      {
+        "name": "CURL_SEEKFUNC_OK",
+        "since": "8.6"
+      },
+      {
         "name": "MYSQLI_OPT_COMPRESS",
+        "since": "8.6"
+      },
+      {
+        "name": "STREAM_CRYPTO_STATUS_NONE",
+        "since": "8.6"
+      },
+      {
+        "name": "STREAM_CRYPTO_STATUS_WANT_READ",
+        "since": "8.6"
+      },
+      {
+        "name": "STREAM_CRYPTO_STATUS_WANT_WRITE",
         "since": "8.6"
       }
     ],
     "functions": [
       {
+        "name": "clamp",
+        "since": "8.6"
+      },
+      {
+        "name": "gmp_powm_sec",
+        "since": "8.6"
+      },
+      {
+        "name": "gmp_prevprime",
+        "since": "8.6"
+      },
+      {
+        "name": "grapheme_strrev",
+        "since": "8.6"
+      },
+      {
         "name": "mysqli_quote_string",
+        "since": "8.6"
+      },
+      {
+        "name": "stream_socket_get_crypto_status",
+        "since": "8.6"
+      },
+      {
+        "name": "url_percent_encode",
         "since": "8.6"
       }
     ]

@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1114 / 2169** (51%), classes **193 / 329** (59%), constants **1614 / 3181** (51%).
+Overall coverage: functions **1118 / 2169** (52%), classes **203 / 329** (62%), constants **1614 / 3181** (51%).
 
 ## Coverage by PHP module
 
@@ -60,7 +60,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | - | 0 / 43 · 0% |
 | `random` | 9 / 9 · 100% | 11 / 11 · 100% | 2 / 2 · 100% |
 | `readline` | 1 / 13 · 8% | - | 0 / 1 · 0% |
-| `reflection` | - | 16 / 26 · 62% | - |
+| `reflection` | - | 17 / 26 · 65% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
 | `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | - |
 | [`simplexml`](./xml.md#functions) | 3 / 3 · 100% | 2 / 2 · 100% | - |
@@ -70,13 +70,13 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 392 / 545 · 72% | 3 / 6 · 50% | 171 / 400 · 43% |
+| `standard` | 396 / 545 · 73% | 3 / 6 · 50% | 171 / 400 · 43% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
 | [`tidy`](./tidy.md#functions) | 24 / 24 · 100% | 2 / 2 · 100% | 161 / 161 · 100% |
 | [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
-| `uri` | - | 0 / 9 · 0% | - |
+| `uri` | - | 9 / 9 · 100% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | - | 0 / 1 · 0% | - |
 | [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |
@@ -98,7 +98,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 392 / 353
+- `standard` functions: 396 / 355
 - `standard` constants: 171 / 150
 
 Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
@@ -109,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 3 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `MYSQLI_OPT_COMPRESS` (PHP 8.6), `SortDirection` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6).
+elephc also implements 26 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `CURLINFO_SIZE_DELIVERED` (PHP 8.6), `CURLOPT_SEEKFUNCTION` (PHP 8.6), `CURL_READFUNC_ABORT` (PHP 8.6), `CURL_SEEKFUNC_CANTSEEK` (PHP 8.6), `CURL_SEEKFUNC_FAIL` (PHP 8.6), `CURL_SEEKFUNC_OK` (PHP 8.6), `MYSQLI_OPT_COMPRESS` (PHP 8.6), `STREAM_CRYPTO_STATUS_NONE` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_READ` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_WRITE` (PHP 8.6), `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `Uri\Rfc3986\UriBuilder` (PHP 8.6), `Uri\Rfc3986\UriHostType` (PHP 8.6), `Uri\Rfc3986\UriType` (PHP 8.6), `Uri\WhatWg\UrlBuilder` (PHP 8.6), `Uri\WhatWg\UrlHostType` (PHP 8.6), `Uri\WhatWg\UrlPercentEncodingMode` (PHP 8.6), `clamp()` (PHP 8.6), `gmp_powm_sec()` (PHP 8.6), `gmp_prevprime()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6), `stream_socket_get_crypto_status()` (PHP 8.6), `url_percent_encode()` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
@@ -177,7 +177,6 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `read_exif_data()` | Image | Alias of exif_read_data(). |
-| `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
 | `memory_get_allocations()` | Misc | Returns the cumulative number of successful native heap allocations, including reused blocks. Direct native reads do not allocate; eval boxes the sampled count. |
 | `memory_get_frees()` | Misc | Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count. |
@@ -206,7 +205,6 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `zval_pack()` | Pointer | Packs an elephc runtime value into a heap-allocated PHP zval pointer. |
 | `zval_type()` | Pointer | Returns the PHP zval type byte for a zval pointer. |
 | `zval_unpack()` | Pointer | Unpacks a PHP zval pointer into an owned elephc Mixed value. |
-| `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
 Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `Elephc\Web\Request`, `Elephc\Web\Worker`, `Elephc\Web\WorkerApplication`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.

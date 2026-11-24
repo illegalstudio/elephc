@@ -768,7 +768,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_setns()`](./builtins/misc/pcntl_setns.md) | `(int $process_id = null, int $nstype = 1073741824): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_setpriority()`](./builtins/misc/pcntl_setpriority.md) | `(int $priority, int $process_id = null, int $mode = 0): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_setqos_class()`](./builtins/misc/pcntl_setqos_class.md) | `(mixed $qos_class): void` | `void` | ✓ | ✓ |
-| [`pcntl_signal()`](./builtins/misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_signal()`](./builtins/misc/pcntl_signal.md) | `(int $signal, mixed $handler, ?bool $restart_syscalls = null): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./builtins/misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./builtins/misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
