@@ -28,6 +28,7 @@ pub(crate) use defaults::normalize_signature_default_receivers;
 pub(crate) use defaults::normalize_lexical_callable_default;
 pub(crate) use property_default_selectors::collect_globals as collect_global_constants;
 pub(crate) use classes::validate_trait_property_defaults;
+pub(crate) use classes::{final_internal_class, parent_kind_error};
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;

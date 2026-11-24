@@ -1903,6 +1903,44 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         assert!(messages[0].contains(message), "{parent}: {messages:?}");
         assert_eq!(messages.len(), 2, "{parent}: {messages:?}");
     }
+    // A failing parent that sorts before the child keeps one copy of its error, which the
+    // child's used trait incompatibility replaces.
+    for parent in [
+        "interface I { public function foo(); }\nclass Base implements I {}\n",
+        "class Base extends Unknown {}\n",
+        "class Ba extends Bb {}\nclass Bb extends Ba {}\nclass Base extends Ba {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+        // An unknown grandparent stays unknown when a second class reaches it.
+        assert!(messages.iter().all(|message| !message.contains("involving class Unknown")), "{parent}: {messages:?}");
+    }
+    // PHP compiles a class body before it early-binds the parent, binds only a parent declared
+    // earlier, and rejects an earlier trait or an internal final class as a parent while
+    // compiling.
+    for (source, message) in [
+        ("final class GP {}\nclass X extends GP { private final const Y = 1; private final const Z = 1; }", "Private constant X::Y cannot be final"),
+        ("readonly class GP {}\nclass X extends GP { private final const Y = 1; }", "Private constant X::Y cannot be final"),
+        ("interface GP {}\nclass X extends GP { private final const Y = 1; }", "Private constant X::Y cannot be final"),
+        ("class X extends GP {}\nfinal class GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends GP {}\ninterface GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends GP {}\nreadonly class GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends Q {}\ntrait Q {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("trait Q {}\nclass X extends Q {}\nclass B { private final const Y = 1; }", "Class X cannot extend trait Q"),
+        ("class X extends Closure {}\nclass B { private final const Y = 1; }", "Class X cannot extend final class Closure"),
+        ("class X extends WeakMap {}", "Class X cannot extend final class WeakMap"),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
     // A class that implements an interface or uses a trait is not early-bound: its parent is
     // rejected while linking, after every class declaration has been compiled.
     for child in ["interface I {}\nclass A extends GP implements I {}", "trait Q {}\nclass A extends GP { use Q; }"] {

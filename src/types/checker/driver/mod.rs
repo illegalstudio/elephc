@@ -374,7 +374,7 @@ pub(super) fn check_types_impl(
     // compiling one it rejects its early-bound parent (a final class, an interface, a readonly
     // mismatch) and its private final constants. Those errors precede every later inheritance
     // and trait diagnostic, and the class builds below do not report them again.
-    let compile_errors = class_compile_errors(&flattened_classes, &class_map, &checker);
+    let compile_errors = class_compile_errors(program, &flattened_classes, &class_map, &checker);
     errors.extend(compile_errors.iter().cloned());
     // Where each class's own build error starts in `errors`, so a used trait's own requirement
     // incompatibility can take its place (`validate_class_trait_requirements`). A class whose
@@ -397,9 +397,23 @@ pub(super) fn check_types_impl(
                     })
                 })
                 .collect();
-            if !fresh.is_empty() {
-                class_build_errors.insert(php_symbol_key(&class_name), errors.len());
-                errors.extend(fresh);
+            // A parent's error repeated by the child keeps one copy, which is also where the
+            // child's own build error starts, so a used trait's incompatibility replaces it.
+            let mut first = None;
+            for error in fresh {
+                let index = match errors.iter().position(|reported| {
+                    reported.span == error.span && reported.message == error.message
+                }) {
+                    Some(index) => index,
+                    None => {
+                        errors.push(error);
+                        errors.len() - 1
+                    }
+                };
+                first.get_or_insert(index);
+            }
+            if let Some(index) = first {
+                class_build_errors.insert(php_symbol_key(&class_name), index);
             }
         }
     }
@@ -803,51 +817,21 @@ var_dump((new Mw())->check(new Req()));
 }
 
 /// The errors PHP raises while compiling the class declarations, in source order: for each
-/// class PHP early-binds (see [`is_compile_bound`]), a parent that is an interface or a final
-/// class or differs in `readonly`, then its private final constants. The messages and spans are
-/// those of the class schema build (`validate_parent_constraints`, `resolve_parent_info`), which
-/// reports them again. A class that uses traits or implements interfaces is linked later, after
-/// its traits are bound, so its parent errors stay with the class schema build.
+/// class, its private final constants (PHP compiles the class body first), then, when PHP
+/// early-binds the class (see [`is_compile_bound`]), a parent that is a trait, an interface or a
+/// final class, or that differs in `readonly`. The messages are those of the class schema build
+/// (`validate_parent_constraints`, `resolve_parent_info`), which reports them again at the class
+/// span. A class that uses traits or implements interfaces, or whose parent is declared later,
+/// is linked later, so its parent errors stay with the class schema build.
 fn class_compile_errors(
+    program: &Program,
     classes: &[FlattenedClass],
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Vec<CompileError> {
+    let order = declaration_order(program);
     let mut errors = Vec::new();
     for class in classes {
-        let early_bound = class.used_traits.is_empty() && class.implements.is_empty();
-        if let Some(parent_name) = class
-            .extends
-            .as_deref()
-            .filter(|parent| early_bound && is_compile_bound(parent, class_map, checker, 0))
-        {
-            if checker.interfaces.contains_key(parent_name) {
-                errors.push(CompileError::new(
-                    class.span,
-                    &format!(
-                        "Class {} cannot extend interface {}; use implements instead",
-                        class.name, parent_name
-                    ),
-                ));
-            } else if let Some(parent) = class_map.get(parent_name) {
-                if parent.is_final {
-                    errors.push(CompileError::new(
-                        class.span,
-                        &format!("Class {} cannot extend final class {}", class.name, parent_name),
-                    ));
-                } else if class.is_readonly_class != parent.is_readonly_class {
-                    let relation = if class.is_readonly_class {
-                        "readonly class cannot extend non-readonly parent"
-                    } else {
-                        "non-readonly class cannot extend readonly parent"
-                    };
-                    errors.push(CompileError::new(
-                        class.span,
-                        &format!("{}: {} extends {}", relation, class.name, parent_name),
-                    ));
-                }
-            }
-        }
         for constant in &class.constants {
             if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
                 errors.push(CompileError::new(
@@ -859,35 +843,95 @@ fn class_compile_errors(
                 ));
             }
         }
+        let Some(position) = order.get(&php_symbol_key(&class.name)).copied() else {
+            continue;
+        };
+        let early_bound = class.used_traits.is_empty() && class.implements.is_empty();
+        let Some(parent_name) = class.extends.as_deref().filter(|parent| {
+            early_bound && is_compile_bound(parent, position, &order, class_map, checker, 0)
+        }) else {
+            continue;
+        };
+        if let Some(message) = super::schema::parent_kind_error(&class.name, parent_name, class_map, checker) {
+            errors.push(CompileError::new(class.span, &message));
+        } else if let Some(parent) = class_map.get(parent_name) {
+            if parent.is_final {
+                errors.push(CompileError::new(
+                    class.span,
+                    &format!("Class {} cannot extend final class {}", class.name, parent_name),
+                ));
+            } else if class.is_readonly_class != parent.is_readonly_class {
+                let relation = if class.is_readonly_class {
+                    "readonly class cannot extend non-readonly parent"
+                } else {
+                    "non-readonly class cannot extend readonly parent"
+                };
+                errors.push(CompileError::new(
+                    class.span,
+                    &format!("{}: {} extends {}", relation, class.name, parent_name),
+                ));
+            }
+        }
     }
     errors
 }
 
-/// Whether PHP binds the class-like `name` while compiling the file, so a child can early-bind
-/// to it: an interface without parent interfaces, or a class that uses no traits, implements no
-/// interface, and has either no parent or a parent bound the same way (`zend_compile_class_decl`
-/// only early-binds classes without interfaces and traits). Built-in class-likes (dummy span)
-/// are always bound. `depth` stops parent cycles.
+/// The source position of each top-level class, interface, trait and enum declaration of
+/// `program`, keyed by `php_symbol_key`.
+fn declaration_order(program: &Program) -> HashMap<String, usize> {
+    let mut order = HashMap::new();
+    for (position, stmt) in program.iter().enumerate() {
+        if let StmtKind::ClassDecl { name, .. }
+        | StmtKind::InterfaceDecl { name, .. }
+        | StmtKind::TraitDecl { name, .. }
+        | StmtKind::EnumDecl { name, .. } = &stmt.kind
+        {
+            order.entry(php_symbol_key(name)).or_insert(position);
+        }
+    }
+    order
+}
+
+/// Whether PHP has bound the class-like `name` when it compiles the declaration at `before`, so
+/// a child there can early-bind to it. A built-in is always bound. A source declaration must
+/// come earlier, and is bound when it is a trait, an interface without parent interfaces, or a
+/// class that uses no traits, implements no interface, and has either no parent or a parent
+/// bound the same way (`zend_compile_class_decl` only early-binds classes without interfaces
+/// and traits). `depth` stops parent cycles.
 fn is_compile_bound(
     name: &str,
+    before: usize,
+    order: &HashMap<String, usize>,
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     depth: usize,
 ) -> bool {
-    if let Some(interface) = checker.interfaces.get(name) {
-        return interface.parents.is_empty() || interface.declaration_span == crate::span::Span::dummy();
-    }
-    let Some(class) = class_map.get(name) else {
-        return false;
-    };
-    if class.span == crate::span::Span::dummy() {
+    let dummy = crate::span::Span::dummy();
+    let interface = checker.interfaces.get(name);
+    let class = class_map.get(name);
+    if interface.is_some_and(|interface| interface.declaration_span == dummy)
+        || class.is_some_and(|class| class.span == dummy || checker.internal_class_decls.contains(&class.name))
+        || (class.is_none() && super::schema::final_internal_class(name).is_some())
+    {
         return true;
     }
-    if depth > class_map.len() || !class.used_traits.is_empty() || !class.implements.is_empty() {
+    let Some(position) = order.get(&php_symbol_key(name)).copied() else {
+        return false;
+    };
+    if position >= before || depth > order.len() {
+        return false;
+    }
+    if let Some(interface) = interface {
+        return interface.parents.is_empty();
+    }
+    let Some(class) = class else {
+        return checker.declared_traits.iter().any(|declared| php_symbol_key(declared) == php_symbol_key(name));
+    };
+    if !class.used_traits.is_empty() || !class.implements.is_empty() {
         return false;
     }
     match class.extends.as_deref() {
         None => true,
-        Some(parent) => is_compile_bound(parent, class_map, checker, depth + 1),
+        Some(parent) => is_compile_bound(parent, position, order, class_map, checker, depth + 1),
     }
 }

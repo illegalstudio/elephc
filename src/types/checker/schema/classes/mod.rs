@@ -72,7 +72,11 @@ pub(crate) fn build_class_info_recursive(
         ));
     }
 
-    let class = load_class(class_name, class_map)?;
+    // An unknown class leaves `building` as it found it, so a later build that reaches it
+    // reports it unknown again rather than circular.
+    let class = load_class(class_name, class_map).inspect_err(|_| {
+        building.remove(class_name);
+    })?;
     let result = build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
         .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)));
     // A failed build must not poison later sibling builds with a stale "circular inheritance"
@@ -247,6 +251,46 @@ fn validate_class_modifiers(class: &FlattenedClass) -> Result<(), CompileError> 
     Ok(())
 }
 
+/// PHP's internal final classes the checker does not always declare: a class extending one is
+/// rejected as extending a final class, not reported as an unknown parent.
+const FINAL_INTERNAL_CLASSES: [&str; 5] = ["Closure", "Fiber", "Generator", "WeakMap", "WeakReference"];
+
+/// The canonical name of `name` when it is one of [`FINAL_INTERNAL_CLASSES`].
+pub(crate) fn final_internal_class(name: &str) -> Option<&'static str> {
+    FINAL_INTERNAL_CLASSES
+        .into_iter()
+        .find(|internal| internal.eq_ignore_ascii_case(name.trim_start_matches('\\')))
+}
+
+/// The error for a class `class_name` whose parent `parent_name` is not a class it can extend:
+/// an interface, a declared trait, or an internal final class the program does not declare.
+pub(crate) fn parent_kind_error(
+    class_name: &str,
+    parent_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> Option<String> {
+    if checker.interfaces.contains_key(parent_name) {
+        return Some(format!(
+            "Class {} cannot extend interface {}; use implements instead",
+            class_name, parent_name
+        ));
+    }
+    if class_map.contains_key(parent_name) {
+        return None;
+    }
+    let parent_key = crate::names::php_symbol_key(parent_name);
+    if let Some(declared) = checker
+        .declared_traits
+        .iter()
+        .find(|declared| crate::names::php_symbol_key(declared) == parent_key)
+    {
+        return Some(format!("Class {} cannot extend trait {}", class_name, declared));
+    }
+    final_internal_class(parent_name)
+        .map(|internal| format!("Class {} cannot extend final class {}", class_name, internal))
+}
+
 /// Resolves the parent class for `class` by recursively building its `ClassInfo`.
 ///
 /// Returns `Ok(None)` if `class` has no `extends` clause. If the parent name refers to an interface,
@@ -263,14 +307,8 @@ fn resolve_parent_info(
     let Some(parent_name) = &class.extends else {
         return Ok(None);
     };
-    if checker.interfaces.contains_key(parent_name) {
-        return Err(CompileError::new(
-            crate::span::Span::dummy(),
-            &format!(
-                "Class {} cannot extend interface {}; use implements instead",
-                class_name, parent_name
-            ),
-        ));
+    if let Some(message) = parent_kind_error(class_name, parent_name, class_map, checker) {
+        return Err(CompileError::new(crate::span::Span::dummy(), &message));
     }
     checker
         .pending_class_parents
