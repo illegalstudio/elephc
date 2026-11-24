@@ -259,7 +259,12 @@ pub(super) fn resolve_trait_uses(
                             )
                         })?;
 
-                    if let Some(alias_name) = alias {
+                    // `foo as final foo` names the method itself: PHP makes it final, as
+                    // `foo as final` does, instead of adding a second copy.
+                    let same_name_final = *is_final
+                        && visibility.is_none()
+                        && alias.as_ref().is_some_and(|alias| alias.eq_ignore_ascii_case(method));
+                    if let Some(alias_name) = alias.as_ref().filter(|_| !same_name_final) {
                         let mut alias_decl = imported.decl.clone();
                         alias_decl.name = alias_name.clone();
                         if let Some(visibility) = visibility {
@@ -348,10 +353,15 @@ fn select_methods(
         let imports = candidates.remove(&method_name).unwrap_or_default();
         let (requirements, remaining): (Vec<ImportedMethod>, Vec<ImportedMethod>) = imports
             .into_iter()
+            // An abstract method made `as final` stays a requirement after `insteadof`, so the
+            // method kept in its place overrides it, as in PHP.
             .filter(|candidate| {
                 !suppressed
                     .get(&method_name)
                     .is_some_and(|set| set.contains(&candidate.source_trait))
+                    || (candidate.decl.is_abstract
+                        && final_overrides
+                            .contains(&(candidate.source_trait.clone(), method_name.clone())))
             })
             .map(|mut candidate| {
                 // Zend applies `as <visibility>` to the trait's copy before it compares two
@@ -382,10 +392,11 @@ fn select_methods(
                 concrete.push(candidate);
             }
         }
-        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
+        // Two concrete methods collide before any requirement is compared with them.
         if let [applied, rejected, ..] = concrete.as_slice() {
             return Err(trait_method_collision(span, owner_label, applied, rejected));
         }
+        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
         selected_methods.extend(concrete.into_iter().chain(requirements));
     }
 
@@ -416,8 +427,15 @@ fn unsatisfied_requirements(
     let mut kept: Vec<ImportedMethod> = Vec::new();
     for requirement in requirements {
         // A requirement made `as final` is overridden by any concrete candidate, of either kind,
-        // and overrides any requirement bound before it (`check_final_abstract_imports`).
-        if requirement.decl.is_final && !(concrete.is_empty() && kept.is_empty()) {
+        // and overrides any other requirement bound before it (`check_final_abstract_imports`).
+        // A later copy of the same trait method is that method again, and is dropped.
+        let earlier_other = kept.iter().any(|earlier| {
+            !is_same_trait_method(
+                (&earlier.origin, &earlier.decl),
+                (&requirement.origin, &requirement.decl),
+            )
+        });
+        if requirement.decl.is_final && (!concrete.is_empty() || earlier_other) {
             return Err(final_abstract_import_override(
                 span,
                 &requirement.source_trait,

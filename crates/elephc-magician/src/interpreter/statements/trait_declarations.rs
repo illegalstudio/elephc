@@ -579,11 +579,9 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
     methods: &mut Vec<EvalClassMethod>,
 ) -> Result<(), EvalStatus> {
     for method in trait_decl.methods() {
-        if trait_method_suppressed_by_insteadof(trait_decl.name(), method.name(), trait_adaptations)
-        {
-            continue;
-        }
         let key = method.name().to_ascii_lowercase();
+        let suppressed =
+            trait_method_suppressed_by_insteadof(trait_decl.name(), method.name(), trait_adaptations);
         let method = method
             .clone()
             .with_trait_origin(trait_decl.name().to_string());
@@ -592,6 +590,11 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             &method,
             trait_adaptations,
         );
+        // An abstract method made `as final` stays a requirement after `insteadof`, so the
+        // method kept in its place overrides it, as in PHP.
+        if suppressed && !(method.is_abstract() && method.is_final()) {
+            continue;
+        }
         if class_method_names.contains(&key) {
             reject_override_of_final_abstract_import(&method)?;
             continue;
@@ -713,7 +716,8 @@ pub(super) fn trait_method_suppressed_by_insteadof(
 }
 
 /// Applies the `as` adaptations without an alias (a visibility change or `as final`) to an
-/// imported trait method.
+/// imported trait method. `foo as final foo` names the method itself, so PHP makes it final
+/// like `foo as final`.
 pub(super) fn apply_trait_visibility_adaptations(
     trait_name: &str,
     method: &EvalClassMethod,
@@ -724,13 +728,21 @@ pub(super) fn apply_trait_visibility_adaptations(
         let EvalTraitAdaptation::Alias {
             trait_name: target_trait,
             method: target_method,
-            alias: None,
+            alias,
             visibility,
             is_final,
         } = adaptation
         else {
             continue;
         };
+        let same_name_final = *is_final
+            && visibility.is_none()
+            && alias
+                .as_deref()
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(target_method));
+        if alias.is_some() && !same_name_final {
+            continue;
+        }
         if trait_adaptation_target_matches(
             target_trait.as_deref(),
             target_method,

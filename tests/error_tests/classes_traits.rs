@@ -1682,3 +1682,58 @@ fn test_error_trait_alias_as_final_abstract_method_binding_order() {
         "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; }} }}\n"
     ));
 }
+
+/// The same abstract trait method reached through two traits is one method, final only when its
+/// first copy is; `insteadof` keeps an abstract `as final` import as a requirement; two
+/// concrete methods collide before any final requirement is compared; `foo as final foo` makes
+/// the method itself final; and a parent override is reported once (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_edge_cases() {
+    let t = "trait T { abstract public function foo(); }\n";
+    expect_no_error(&format!(
+        "<?php\n{t}trait A {{ use T; }}\ntrait B {{ use T {{ foo as final; }} }}\nabstract class C {{ use A, B; }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+    ));
+    expect_error(
+        &format!(
+            "<?php\n{t}trait A {{ use T; }}\ntrait B {{ use T {{ foo as final; }} }}\nabstract class C {{ use B, A; }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let a = "trait A { abstract public function foo(); }\n";
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C {{ use A, B {{ B::foo insteadof A; A::foo as final; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; B::foo insteadof A; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use B, A {{ A::foo as final; B::foo insteadof A; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ public function foo() {{ return 1; }} }}\ntrait C {{ public function foo() {{ return 2; }} }}\nclass D {{ use A, B, C {{ A::foo as final; }} }}\n"
+        ),
+        "Trait method C::foo has not been applied as D::foo, because of collision with B::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{t}abstract class C {{ use T {{ foo as final foo; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let static_parent = format!(
+        "<?php\n{a}class P {{ public static function foo() {{ return 1; }} }}\nabstract class C extends P {{ use A {{ foo as final; }} }}\n"
+    );
+    let message = check_source(&static_parent).expect_err("parent override should fail");
+    assert!(message.contains("Cannot override final method A::foo"), "{message}");
+    assert!(!message.contains("Cannot change method kind"), "{message}");
+}

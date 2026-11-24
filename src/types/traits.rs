@@ -367,7 +367,7 @@ pub fn flatten_classes(
         }
     }
 
-    errors.extend(final_abstract_parent_overrides(&final_abstract_imports, &flattened));
+    errors.extend(final_abstract_parent_overrides(&final_abstract_imports, &mut flattened));
     (flattened, flattened_enums, errors)
 }
 
@@ -382,15 +382,18 @@ struct FinalAbstractImport {
 /// Reports each abstract `as final` import that a parent class already defines. Zend binds a
 /// class's traits after its parent's methods, so any ancestor method of that name (private or
 /// static included) overrides the final import: `Cannot override final method A::foo()`.
+/// The reported import is dropped from its class, so the class schema does not report the same
+/// override again as a kind or signature mismatch.
 fn final_abstract_parent_overrides(
     imports: &[FinalAbstractImport],
-    flattened: &[FlattenedClass],
+    flattened: &mut [FlattenedClass],
 ) -> Vec<CompileError> {
     let classes: HashMap<String, &FlattenedClass> = flattened
         .iter()
         .map(|class| (php_symbol_key(&class.name), class))
         .collect();
     let mut errors = Vec::new();
+    let mut overridden = Vec::new();
     for import in imports {
         let mut visited = HashSet::new();
         let mut parent = classes
@@ -416,9 +419,19 @@ fn final_abstract_parent_overrides(
                         import.source_trait, import.method
                     ),
                 ));
+                overridden.push(import);
                 break;
             }
             parent = parent_class.extends.as_deref();
+        }
+    }
+    for import in overridden {
+        if let Some(class) = flattened.iter_mut().find(|class| class.name == import.class) {
+            class.methods.retain(|method| {
+                !(method.is_abstract
+                    && method.is_final
+                    && method.name.eq_ignore_ascii_case(&import.method))
+            });
         }
     }
     errors

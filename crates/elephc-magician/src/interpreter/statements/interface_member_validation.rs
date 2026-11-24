@@ -249,6 +249,10 @@ pub(super) fn validate_method_aot_parent_override(
             Err(EvalStatus::RuntimeFatal)
         } else { Ok(()) };
     }
+    // As for an eval parent: any AOT parent method overrides an abstract `as final` import.
+    if method.is_abstract() && method.is_final() && method.trait_origin().is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         return Ok(());
     }

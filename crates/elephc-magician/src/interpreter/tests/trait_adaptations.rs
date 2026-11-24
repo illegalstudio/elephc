@@ -519,8 +519,9 @@ class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
 
 /// Verifies an abstract eval trait method made `as final` stays abstract and final in an
 /// abstract class, while a body on the importing class, enum or trait (static or not), a concrete
-/// method of another used trait, a parent method (even a private one) or a subclass overrides
-/// the final method and fails, as in PHP 8.3+ (#2352).
+/// method of another used trait (also one `insteadof` keeps), a parent method (even a private
+/// eval or AOT one) or a subclass overrides the final method and fails, as in PHP 8.3+, and
+/// `foo as final foo` makes the method itself final (#2352).
 #[test]
 fn execute_program_applies_eval_trait_final_adaptation_to_abstract_methods() {
     let accepted = parse_fragment(
@@ -578,6 +579,23 @@ class EvalAdaptFinalAbstractReqBox {
 class EvalAdaptFinalAbstractParent { private function foo() { return 1; } }
 abstract class EvalAdaptFinalAbstractParentBox extends EvalAdaptFinalAbstractParent {
     use EvalAdaptFinalAbstractParentT { foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractAotT { abstract public function hidden(); }
+abstract class EvalAdaptFinalAbstractAotBox extends KnownClass {
+    use EvalAdaptFinalAbstractAotT { hidden as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractSkipped { abstract public function foo(); }
+trait EvalAdaptFinalAbstractKept { public function foo() { return 1; } }
+class EvalAdaptFinalAbstractSkippedBox {
+    use EvalAdaptFinalAbstractSkipped, EvalAdaptFinalAbstractKept {
+        EvalAdaptFinalAbstractKept::foo insteadof EvalAdaptFinalAbstractSkipped;
+        EvalAdaptFinalAbstractSkipped::foo as final;
+    }
+}"#,
+        br#"trait EvalAdaptFinalAbstractSelf { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractSelfBox { use EvalAdaptFinalAbstractSelf { foo as final foo; } }
+class EvalAdaptFinalAbstractSelfChild extends EvalAdaptFinalAbstractSelfBox {
+    public function foo() { return 1; }
 }"#,
         br#"trait EvalAdaptFinalAbstractKind { abstract public function foo(); }
 abstract class EvalAdaptFinalAbstractKindBox {
