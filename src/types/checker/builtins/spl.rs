@@ -346,6 +346,10 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
     if super::callables::runtime_callable_array_type(&callback_ty) {
         return Ok(());
     }
+    // An opaque value is resolved when the call runs, with php's TypeError if it is not callable.
+    if matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
 
     Err(CompileError::new(
         callback.span,
@@ -372,7 +376,9 @@ pub(crate) fn check_iterator_apply_static_callback(
         Ok(_) => Ok(()),
         Err(error) if error.message == ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG => {
             let callback_ty = checker.infer_type(callback, env)?;
-            if callback_ty != PhpType::Callable && callback_ty != PhpType::Str {
+            if callback_ty != PhpType::Callable && callback_ty != PhpType::Str
+                && !matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            {
                 return Err(error);
             }
             for arg in callback_args {

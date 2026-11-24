@@ -35,7 +35,10 @@ foreach (["viaCuf", "viaCufa", "viaMap", "viaDirect", "viaUsort"] as $route) {
         catch (Throwable $e) { echo "$route $i: ", get_class($e), ": ", $e->getMessage(), "\n"; }
     }
 }
-class Other { public function run(mixed $c) { return $c("id"); } }
+class Other {
+    private function hidden() {}
+    public function run(mixed $c) { return $c("id"); }
+}
 foreach ([3, 4, 5, 6] as $i) {
     try { (new Other())->run(opaque($i)); } catch (Throwable $e) { echo "scope $i: ", get_class($e), ": ", $e->getMessage(), "\n"; }
 }

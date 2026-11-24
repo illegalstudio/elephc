@@ -150,10 +150,25 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             ("write_static_dynamic", Op::DynamicPropSet),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let write = function.instructions.iter().find(|inst| inst.op == op).unwrap();
-            let receiver = function.value(write.operands[0]).unwrap();
+            // The merged backend publishes a delayed-view write either as the instruction itself or,
+            // for a boxed receiver, as the shared runtime property-write call whose first operand
+            // borrows the boxed receiver (measured in the EIR: `call v22 v23` after a
+            // `property.write.null` / `property.write.present` split). Both write through the
+            // boxed `Root` view and neither retypes the receiver to `Label`.
+            let write = function.instructions.iter().find(|inst| inst.op == op)
+                .or_else(|| function.instructions.iter().find(|inst| inst.op == Op::Call
+                    && function.instructions.iter().any(|producer| producer.result == Some(inst.operands[0])
+                        && producer.op == Op::Borrow)))
+                .unwrap_or_else(|| panic!("{target}: {name}: no {op:?} or boxed-receiver call"));
+            let mut receiver_value = write.operands[0];
+            if let Some(borrow) = function.instructions.iter()
+                .find(|inst| inst.result == Some(receiver_value) && inst.op == Op::Borrow)
+            {
+                receiver_value = borrow.operands[0];
+            }
+            let receiver = function.value(receiver_value).unwrap();
             assert_eq!(receiver.php_type, PhpType::Mixed, "{target}: {name}");
-            let boxed = function.instructions.iter().find(|inst| inst.result == Some(write.operands[0])).unwrap();
+            let boxed = function.instructions.iter().find(|inst| inst.result == Some(receiver_value)).unwrap();
             assert_eq!(boxed.op, Op::MixedBox, "{target}: {name}: delayed runtime view");
             assert_eq!(function.value(boxed.operands[0]).unwrap().php_type, PhpType::Object("Root".into()));
         }
