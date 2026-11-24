@@ -81,7 +81,9 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 
 `phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
 `file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
-entry in a SHA1-signed PHAR archive while preserving existing entries.
+entry in a signed PHAR archive while preserving existing entries. New archives
+default to SHA-256, and an implicit rebuild preserves the archive's existing
+hash algorithm (or its unsigned state) instead of downgrading it.
 `file_put_contents()` and write-mode `fopen()` also accept runtime-built
 `phar://` URLs. Native PHAR, tar-based PHAR, and zip-based PHAR containers are
 writable; ZIP writes preserve stored/deflated entries and compression controls
@@ -117,6 +119,9 @@ is stored PHP-`serialize()`d — in the manifest metadata field for native PHAR,
 `.phar/.metadata.bin` entry for tar, and in the ZIP archive comment for zip; the stub
 is stored as the byte prefix for native PHAR and as a `.phar/stub.php` entry for
 tar/zip. `setStub()` requires the stub to contain `__HALT_COMPILER();` (matching PHP).
+`PharData::setStub()` is rejected with `UnexpectedValueException`, as in PHP, because a
+plain tar/zip container has no executable stub; `PharData::getStub()` reports `""` until
+an archive that carries one is opened.
 The reserved `.phar/*` control entries are hidden from the entry listing and iteration.
 
 Per-file metadata persists the same way through the `PharFileInfo` returned by
@@ -142,22 +147,58 @@ Per-entry compression for native PHAR / zip stays on `compressFiles()` /
 
 Signatures are supported through `setSignatureAlgorithm()` / `getSignature()` across
 native PHAR, tar, and zip phars. `setSignatureAlgorithm(Phar::MD5|Phar::SHA1|Phar::SHA256|Phar::SHA512)`
-applies a hash signature, and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)` signs
-with RSA-SHA1 using a PEM private key (PKCS#1 or PKCS#8). Native PHARs store the signature
-in their trailer; tar and zip phars store it in a `.phar/signature.bin` control entry. The
-resulting signature is verifiable by the PHP interpreter (for OpenSSL, place the matching
-public key in `<archive>.pubkey`; signing does not create this sidecar). Elephc also
+applies a hash signature. `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)` signs
+with RSA-SHA1, while `Phar::OPENSSL_SHA256` and `Phar::OPENSSL_SHA512` sign with
+RSA-SHA256 and RSA-SHA512, all using a PEM private key (PKCS#1 or PKCS#8). Native PHARs
+store the signature in their trailer; tar and zip phars store it in a
+`.phar/signature.bin` control entry. The resulting signature is verifiable by the PHP
+interpreter (for OpenSSL, place the matching public key in `<archive>.pubkey`; signing
+does not create this sidecar). Elephc also
 requires that sidecar when opening an
 OpenSSL-signed archive: reads, entry listings, metadata access, mutations, compression,
 and `getSignature()` fail closed when the key is missing, malformed, or does not verify
 the archive. PEM public keys may use SubjectPublicKeyInfo (`BEGIN PUBLIC KEY`) or PKCS#1
 (`BEGIN RSA PUBLIC KEY`) encoding. APIs that receive archive bytes without a filesystem
 path cannot locate a sidecar and therefore reject OpenSSL-signed input.
+Switching an OpenSSL-signed archive to a hash algorithm with
+`setSignatureAlgorithm(Phar::SHA256)` rewrites the signature but leaves the
+`<archive>.pubkey` sidecar in place; because a present sidecar requires an OpenSSL
+signature, the archive then fails closed until the sidecar is removed. PHP behaves the
+same way.
 `getSignature()` returns `['hash' => <uppercase hex>,
-'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
+'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL'|'OpenSSL_SHA256'|'OpenSSL_SHA512']`.
+
+By default elephc enforces PHP's `phar.require_hash=1`: opening an executable
+phar without a signature fails, and `new Phar(...)` on an unsigned existing archive
+throws `UnexpectedValueException` instead of presenting an empty object. This applies
+to native PHARs and to tar/zip archives that contain `.phar/stub.php`; a plain tar/zip
+data archive without a stub remains readable, matching PHP's `PharData` behavior.
+`new PharData(...)` accepts unsigned containers and only authenticates a signature
+that is present. Set `ELEPHC_PHAR_REQUIRE_HASH=0` before compiling for literal
+`phar://` reads and before starting the program for runtime reads; the variable is
+read once per thread, on first use. Elephc has no `ini_set('phar.require_hash', ...)`
+equivalent: the environment variable is the only switch. New archives are still
+written SHA-256-signed by default, and an
+archive with an adjacent `<archive>.pubkey` requires an OpenSSL signature even
+under the relaxed policy.
+
+Because the byte-level reader cannot know whether the caller used `Phar` or
+`PharData`, elephc uses the presence of `.phar/stub.php` as the executable/data
+discriminator for tar/zip. PHP instead distinguishes by the construction class and
+the file extension (`.phar`). The two rules agree for containers elephc writes; an
+unsigned stub-bearing tar/zip opened through `PharData` is treated as executable and
+rejected under `phar.require_hash=1`, while PHP would accept it as data.
+
+The `<archive>.pubkey` sidecar is the trust anchor for OpenSSL-signed archives.
+Deleting it removes the OpenSSL requirement and lets a self-consistent hash
+signature be accepted, so the sidecar must be protected alongside the archive.
+PHP behaves the same way: a missing sidecar only fails to *downgrade* an archive
+that still declares an OpenSSL signature.
 
 > **Security note on OpenSSL signing.** The RSA implementation behind
-> `setSignatureAlgorithm(Phar::OPENSSL, …)` carries a known timing side-channel on
+> `setSignatureAlgorithm(Phar::OPENSSL, …)` — and behind the `OPENSSL_SHA256` /
+> `OPENSSL_SHA512` variants, which share the same PKCS#1 v1.5 signing path — carries a
+> known timing side-channel on
 > private-key operations ([RUSTSEC-2023-0071], the Marvin attack), and no fixed release of
 > that crate exists. Recovering a key through it requires an attacker who can submit many
 > chosen inputs to the signing operation **and** measure how long each one takes. Signing a

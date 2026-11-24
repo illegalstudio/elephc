@@ -10,6 +10,8 @@
 
 #[path = "support/regex_provider.rs"]
 mod regex_provider;
+#[path = "support/regex_oracle.rs"]
+mod regex_oracle;
 #[path = "regex_request/capture_output.rs"]
 mod capture_output;
 #[path = "regex_request/replace_callback.rs"]
@@ -187,16 +189,33 @@ fn regex_replace_matches_php() {
     assert!(unsafe { install_provider(regex_provider::provider()) });
     let reader = flate2::read::GzDecoder::new(include_bytes!("fixtures/regex_replace.jsonl.gz").as_slice());
     let mut count = 0;
+    let mut skipped_cases = 0;
+    let mut skipped_steps = 0;
     for line in BufReader::new(reader).lines() {
         let case: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        // PHP 8.5.13 wraps these group numbers through (int)strtoul; elephc keeps the
+        // escape literal (PHP-PrettyHorriblePatches #34). The dedicated regression
+        // covers the fixed output; the fixture keeps the PHP capture. Divergent steps
+        // are skipped individually so the rest of the case is still compared. Both
+        // counts are pinned to this fixture, so regenerate them when the capture
+        // changes.
+        if regex_oracle::has_security_divergence(&case) {
+            skipped_cases += 1;
+        }
         let session = Session::default();
         let (stack, retry) = (Cell::new(100_000), Cell::new(1_000_000));
         for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
+            if regex_oracle::step_has_security_divergence(step) {
+                skipped_steps += 1;
+                continue;
+            }
             assert_eq!(run(&session, step, &stack, &retry), case["trace"][index], "case {count}, step {index}: {case}");
         }
         count += 1;
     }
     assert_eq!(count, 1431);
+    assert_eq!(skipped_cases, 50);
+    assert_eq!(skipped_steps, 50);
 }
 
 /// Checks output initialization and exact capture values before references are materialized by backend adapters.

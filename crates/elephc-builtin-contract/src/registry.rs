@@ -188,7 +188,9 @@ mod tests {
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
         // +1: the internal `__elephc_set_memory_limit` runtime setter.
         // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
-        assert_eq!(contracts().len(), 1324 + curl_surface);
+        // +2: the internal `__elephc_unserialize_store_property` and
+        // `__elephc_phar_archive_valid` helpers.
+        assert_eq!(contracts().len(), 1326 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

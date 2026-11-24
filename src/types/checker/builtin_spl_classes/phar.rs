@@ -44,7 +44,7 @@ fn insert_phar_like_class(class_map: &mut HashMap<String, FlattenedClass>, name:
             is_final: false,
             is_readonly_class: false,
             properties: phar_properties(),
-            methods: phar_methods(),
+            methods: phar_methods(name == "PharData"),
             attributes: Vec::new(),
             constants: phar_constants(),
             used_traits: Vec::new(),
@@ -88,13 +88,17 @@ fn phar_properties() -> Vec<ClassProperty> {
 }
 
 /// Builds the supported constructor, metadata/stub helpers, write helpers, and ArrayAccess methods.
-fn phar_methods() -> Vec<ClassMethod> {
+///
+/// `is_data` mirrors PHP's `PharData` split: data archives start unsigned and never
+/// persist a default stub on construction, while executable `Phar` archives persist
+/// their default stub and receive PHP's default SHA-256 signature.
+fn phar_methods(is_data: bool) -> Vec<ClassMethod> {
     vec![
         method_with_body(
             "__construct",
             vec![param("filename", TypeExpr::Str)],
             Some(TypeExpr::Void),
-            phar_construct_body(),
+            phar_construct_body(is_data),
         ),
         method_with_body(
             "__toString",
@@ -152,7 +156,7 @@ fn phar_methods() -> Vec<ClassMethod> {
             "setStub",
             vec![param("stub", TypeExpr::Str)],
             Some(TypeExpr::Bool),
-            phar_set_stub_body(),
+            phar_set_stub_body(is_data),
         ),
         method_with_body(
             "getStub",
@@ -342,9 +346,64 @@ fn phar_file_info_methods() -> Vec<ClassMethod> {
 
 /// Builds constructor body that stores the archive path and loads any persisted
 /// stub and global metadata from the archive.
-fn phar_construct_body() -> Vec<crate::parser::ast::Stmt> {
+///
+/// For an executable `Phar`, a new archive persists the default stub immediately so
+/// it exists as a signed executable phar before the first entry write. `PharData`
+/// leaves the archive untouched until an entry is written, which keeps it unsigned.
+fn phar_construct_body(is_data: bool) -> Vec<crate::parser::ast::Stmt> {
+    let mut missing_stub = vec![property_assign_stmt(
+        this_expr(),
+        "stub",
+        // `PharData` has no executable stub in PHP; `getStub()` reports an empty
+        // string until an archive that carries one is opened.
+        string_expr(if is_data {
+            ""
+        } else {
+            "<?php __HALT_COMPILER(); ?>"
+        }),
+    )];
+    if !is_data {
+        // Only a missing archive is initialized here. An existing unsigned archive is
+        // left untouched (a `PharData` container may legitimately have no stub).
+        missing_stub.push(if_stmt(
+            binary_expr(
+                function_call("file_exists", vec![var_expr("filename")]),
+                BinOp::StrictEq,
+                bool_expr(false),
+            ),
+            vec![expr_stmt(function_call(
+                "__elephc_phar_set_stub",
+                vec![
+                    var_expr("filename"),
+                    property_access(this_expr(), "stub"),
+                ],
+            ))],
+            None,
+        ));
+    }
     vec![
         property_assign_stmt(this_expr(), "path", var_expr("filename")),
+        // An existing archive that the current `phar.require_hash` policy cannot
+        // authenticate must fail the constructor like php-src, not present an empty
+        // object through the read helpers' fallback values.
+        if_stmt(
+            not_expr(function_call(
+                "__elephc_phar_archive_valid",
+                vec![
+                    var_expr("filename"),
+                    int_expr(if is_data { 1 } else { 0 }),
+                ],
+            )),
+            vec![throw_stmt(new_object_expr(
+                "UnexpectedValueException",
+                vec![binary_expr(
+                    binary_expr(string_expr("phar \""), BinOp::Concat, var_expr("filename")),
+                    BinOp::Concat,
+                    string_expr("\" is not a valid phar archive"),
+                )],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "metadata", null_expr()),
         property_assign_stmt(this_expr(), "hasMetadata", bool_expr(false)),
         // Load the persisted stub, falling back to the default when none is stored.
@@ -355,11 +414,7 @@ fn phar_construct_body() -> Vec<crate::parser::ast::Stmt> {
         if_stmt(
             binary_expr(var_expr("loadedStub"), BinOp::StrictNotEq, string_expr("")),
             vec![property_assign_stmt(this_expr(), "stub", var_expr("loadedStub"))],
-            Some(vec![property_assign_stmt(
-                this_expr(),
-                "stub",
-                string_expr("<?php __HALT_COMPILER(); ?>"),
-            )]),
+            Some(missing_stub),
         ),
         // Load and unserialize the persisted global metadata when present.
         assign_stmt(
@@ -501,15 +556,29 @@ fn phar_file_info_del_metadata_body() -> Vec<crate::parser::ast::Stmt> {
     ]
 }
 
-/// Builds `setSignatureAlgorithm()`: `Phar::OPENSSL` (16) routes to RSA-SHA1 signing
-/// with the supplied private key; the hash algorithms (MD5/SHA1/SHA256/SHA512) route to
-/// the hash-signing bridge. The archive trailer is rewritten in place.
+/// Builds `setSignatureAlgorithm()`: `Phar::OPENSSL` (16), `OPENSSL_SHA256` (17), and
+/// `OPENSSL_SHA512` (18) route to RSA signing with the selected digest and the supplied
+/// private key; the hash algorithms (MD5/SHA1/SHA256/SHA512) route to the hash-signing
+/// bridge. The archive trailer is rewritten in place.
 fn phar_set_signature_algorithm_body() -> Vec<crate::parser::ast::Stmt> {
-    vec![if_stmt(
+    let openssl = binary_expr(
         binary_expr(var_expr("algo"), BinOp::StrictEq, int_expr(16)),
+        BinOp::Or,
+        binary_expr(
+            binary_expr(var_expr("algo"), BinOp::StrictEq, int_expr(17)),
+            BinOp::Or,
+            binary_expr(var_expr("algo"), BinOp::StrictEq, int_expr(18)),
+        ),
+    );
+    vec![if_stmt(
+        openssl,
         vec![expr_stmt(function_call(
             "__elephc_phar_sign_openssl",
-            vec![property_access(this_expr(), "path"), var_expr("privateKey")],
+            vec![
+                property_access(this_expr(), "path"),
+                var_expr("privateKey"),
+                var_expr("algo"),
+            ],
         ))],
         Some(vec![expr_stmt(function_call(
             "__elephc_phar_sign_hash",
@@ -564,7 +633,16 @@ fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
 }
 
 /// Builds `setStub()` as per-object storage plus a write-through to the archive.
-fn phar_set_stub_body() -> Vec<crate::parser::ast::Stmt> {
+///
+/// `PharData` shares the method surface but refuses a stub in PHP, so the data variant
+/// throws before touching the archive instead of converting it into an executable phar.
+fn phar_set_stub_body(is_data: bool) -> Vec<crate::parser::ast::Stmt> {
+    if is_data {
+        return vec![throw_stmt(new_object_expr(
+            "UnexpectedValueException",
+            vec![string_expr("A Phar stub cannot be set in a plain archive")],
+        ))];
+    }
     vec![
         property_assign_stmt(this_expr(), "stub", var_expr("stub")),
         return_stmt(function_call(
@@ -867,5 +945,7 @@ fn phar_constants() -> Vec<ClassConst> {
         class_const("SHA256", 3),
         class_const("SHA512", 4),
         class_const("OPENSSL", 16),
+        class_const("OPENSSL_SHA256", 17),
+        class_const("OPENSSL_SHA512", 18),
     ]
 }

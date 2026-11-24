@@ -405,9 +405,10 @@ mod tests {
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
         // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
-        // two line-aware diagnostic helpers and the internal memory limit setter, and the
-        // three compiled-pattern helpers the `preg_grep()` prelude calls.
-        assert_eq!(eval_internal, 148);
+        // two line-aware diagnostic helpers, the internal memory limit setter, the
+        // three compiled-pattern helpers the `preg_grep()` prelude calls, and the
+        // internal unserialize property store and PHAR validity probe.
+        assert_eq!(eval_internal, 150);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 381);
@@ -423,10 +424,11 @@ mod tests {
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
-        // with two line-aware tokenizer helpers, two PCRE error readers, and
-        // `__elephc_set_memory_limit`. The `preg_grep()` prelude's three internal
-        // compiled-pattern helpers add three.
-        assert_eq!(aot_registry, 847);
+        // with two line-aware tokenizer helpers, two PCRE error readers,
+        // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
+        // compiled-pattern helpers, and the internal unserialize property store and
+        // PHAR validity probe.
+        assert_eq!(aot_registry, 849);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -489,9 +491,10 @@ mod tests {
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
         // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
-        // diagnostic helpers, `__elephc_set_memory_limit`, and the `preg_grep()` prelude's
-        // three internal compiled-pattern helpers.
-        assert_eq!(unsupported, 529);
+        // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
+        // three internal compiled-pattern helpers, and the internal unserialize
+        // property store and PHAR validity probe.
+        assert_eq!(unsupported, 531);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

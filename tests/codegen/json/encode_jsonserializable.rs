@@ -126,6 +126,35 @@ echo json_encode(new Noisy()) . "\n" . json_last_error();
     assert_eq!(out, "{\"ok\":1}\n0");
 }
 
+/// Verifies dropping the last reference to the encoded object inside jsonSerialize()
+/// still encodes the returned value and leaves the heap balanced.
+#[test]
+fn test_jsonserialize_can_drop_the_last_receiver_reference() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class DroppingBar implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        global $ref;
+        $ref = null;
+        return ['k' => 1];
+    }
+}
+$arr = [new DroppingBar];
+$ref = &$arr[0];
+echo json_encode($arr), '|';
+unset($arr, $ref);
+echo 'survived';
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, r#"[{"k":1}]|survived"#, "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies a class that does NOT implement JsonSerializable walks public properties
 /// and does NOT invoke any jsonSerialize method.
 #[test]

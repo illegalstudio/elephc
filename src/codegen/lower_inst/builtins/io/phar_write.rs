@@ -271,6 +271,75 @@ pub(super) fn emit_phar_set_string_bridge(
     store_if_result(ctx, inst)
 }
 
+/// Emits a `(path: string, key: string, algo: int) -> bool` OpenSSL signing
+/// call. `algo` is 16 (SHA-1), 17 (SHA-256), or 18 (SHA-512).
+pub(super) fn emit_phar_sign_openssl_algo_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_phar_sign_openssl", 3)?;
+    let path = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let algo = expect_operand(inst, 2)?;
+    let fail = ctx.next_label("phar_sign_openssl_algo_fail");
+    let done = ctx.next_label("phar_sign_openssl_algo_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_result(algo)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, key, "phar sign openssl key")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_string_to_result(ctx, path, "phar sign openssl path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");                    // bridge arg 2/3 = key pointer/length
+            abi::emit_pop_reg(ctx.emitter, "x4");                               // bridge arg 4 = signature algorithm
+            abi::emit_symbol_address(
+                ctx.emitter,
+                "x9",
+                "_elephc_phar_sign_openssl_algo_fn",
+            );
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional algorithm bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));              // missing bridge makes signing fail
+            ctx.emitter.instruction("blr x9");                                  // re-sign the archive with the selected hash
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
+            ctx.emitter.instruction("cset x0, ne");                             // normalize to PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_result(algo)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, key, "phar sign openssl key")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_to_result(ctx, path, "phar sign openssl path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");                  // bridge arg 2/3 = key pointer/length
+            abi::emit_pop_reg(ctx.emitter, "r8");                               // bridge arg 4 = signature algorithm
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                "r10",
+                "_elephc_phar_sign_openssl_algo_fn",
+                0,
+            );
+            ctx.emitter.instruction("test r10, r10");                           // test whether the algorithm bridge was published
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes signing fail
+            ctx.emitter.instruction("call r10");                                // re-sign the archive with the selected hash
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
+            ctx.emitter.instruction("setne al");                                // normalize to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Emits a `(string) -> bool` PHAR bridge call (e.g. set the ZipCrypto password).
 ///
 /// Loads the single string argument as (pointer, length), calls the optional bridge

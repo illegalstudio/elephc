@@ -212,8 +212,10 @@ pub enum RuntimeFnId {
     ElephcPharSetMetadata,
     ElephcPharSetStub,
     ElephcPharSetZipPassword,
+    ElephcPharArchiveValid,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcUnserializeStoreProperty,
     Basename,
     Chdir,
     Chgrp,
@@ -2122,6 +2124,7 @@ impl RuntimeFnId {
             | RuntimeFnId::BcScale
             | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
             | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub
+            | RuntimeFnId::ElephcPharArchiveValid
             | RuntimeFnId::ElephcPharBzip2Archive
             | RuntimeFnId::ElephcPharDecompressArchive
             | RuntimeFnId::ElephcPharGetFileMetadata
@@ -2312,6 +2315,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcPharArchiveValid => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             // Every curl operation needs the `elephc_curl` bridge, which in turn makes
@@ -2697,7 +2701,8 @@ impl RuntimeFnId {
     pub const fn publishes_phar_symbols(self) -> bool {
         matches!(
             self,
-            RuntimeFnId::ElephcPharListEntries
+            RuntimeFnId::ElephcPharArchiveValid
+                | RuntimeFnId::ElephcPharListEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -3428,8 +3433,10 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",
             RuntimeFnId::ElephcPharSetStub => "__elephc_phar_set_stub",
             RuntimeFnId::ElephcPharSetZipPassword => "__elephc_phar_set_zip_password",
+            RuntimeFnId::ElephcPharArchiveValid => "__elephc_phar_archive_valid",
             RuntimeFnId::ElephcPharSignHash => "__elephc_phar_sign_hash",
             RuntimeFnId::ElephcPharSignOpenssl => "__elephc_phar_sign_openssl",
+            RuntimeFnId::ElephcUnserializeStoreProperty => "__elephc_unserialize_store_property",
             RuntimeFnId::Basename => "basename",
             RuntimeFnId::Chdir => "chdir",
             RuntimeFnId::Chgrp => "chgrp",

@@ -168,6 +168,30 @@ echo strlen($s), "\n";
     );
 }
 
+/// A sprintf width above the memory ceiling raises php-src's fatal instead of killing the
+/// process at the hard limit.
+#[test]
+fn test_sprintf_width_above_memory_limit_reports_allowed_memory_fatal() {
+    let source = r#"<?php
+$s = sprintf("%10000000s", "");
+echo "not reached\n";
+"#;
+    let out = compile_and_run_with_flags(
+        "elephc_memory_limit_sprintf_width",
+        source,
+        &["--ini", "memory_limit=2M"],
+    );
+    assert!(!out.success, "the sprintf width did not hit the limit");
+    assert_eq!(out.status.code(), Some(255));
+    assert!(out.stdout.is_empty(), "stdout: {}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Fatal error: Allowed memory size of 2097152 bytes exhausted"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// A malformed startup quantity that parses below the 2 MiB floor prints PHP's quantity
 /// diagnostic and then the failed-set warning, each exactly once. Removing the override during
 /// floor processing must not lose the quantity line before the one-warning pass runs.

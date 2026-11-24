@@ -12,6 +12,26 @@ use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use std::io::Write;
 
+/// Restores the thread's `phar.require_hash` policy when dropped.
+struct RequireHashGuard(bool);
+
+impl RequireHashGuard {
+    /// Allows fixtures that are intentionally unsigned, like a
+    /// `phar.require_hash=0` test process.
+    fn relaxed() -> Self {
+        let previous = require_hash();
+        set_require_hash(false);
+        Self(previous)
+    }
+}
+
+impl Drop for RequireHashGuard {
+    /// Restores the policy that was active before the fixture ran.
+    fn drop(&mut self) {
+        set_require_hash(self.0);
+    }
+}
+
 struct PharTestTrackingAllocator;
 
 static PHAR_TEST_TRACK_ALLOCATIONS: std::sync::atomic::AtomicBool =
@@ -58,6 +78,7 @@ mod extraction;
 mod fixtures;
 mod metadata;
 mod mutation;
+mod php_src_compliance;
 mod security;
 mod signatures;
 mod zip_features;

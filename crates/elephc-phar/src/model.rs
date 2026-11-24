@@ -13,8 +13,12 @@ pub(super) const PHAR_FLAG_GZIP: u32 = 0x0000_1000;
 pub(super) const PHAR_FLAG_BZIP2: u32 = 0x0000_2000;
 pub(super) const PHAR_HDR_SIGNATURE: u32 = 0x0001_0000;
 pub(super) const PHAR_FILE_MODE_0644: u32 = 0x0000_01a4;
+#[cfg(test)]
 pub(super) const PHAR_SHA1_SIGNATURE_TYPE: u32 = 0x0000_0002;
+pub(super) const PHAR_SHA256_SIGNATURE_TYPE: u32 = 0x0000_0003;
 pub(super) const PHAR_OPENSSL_SIGNATURE_TYPE: u32 = 0x0000_0010;
+pub(super) const PHAR_OPENSSL_SHA256_SIGNATURE_TYPE: u32 = 0x0000_0011;
+pub(super) const PHAR_OPENSSL_SHA512_SIGNATURE_TYPE: u32 = 0x0000_0012;
 pub(super) const ZIP_METHOD_STORE: u16 = 0;
 pub(super) const ZIP_METHOD_DEFLATE: u16 = 8;
 /// ZIP general-purpose flag bit 0: the entry is encrypted (traditional ZipCrypto).
@@ -54,6 +58,34 @@ thread_local! {
     /// parallel unit tests from clobbering each other's password state.
     pub(super) static ZIP_PASSWORD: std::cell::RefCell<Option<Vec<u8>>> =
         const { std::cell::RefCell::new(None) };
+
+    /// `phar.require_hash` analog. PHP defaults this to 1, so opening a phar
+    /// without a signature is rejected. `ELEPHC_PHAR_REQUIRE_HASH=0` (or
+    /// [`set_require_hash`]) accepts unsigned archives. Thread-local so
+    /// parallel unit tests do not clobber each other.
+    pub(super) static REQUIRE_HASH: std::cell::Cell<bool> =
+        std::cell::Cell::new(require_hash_from_env());
+}
+
+/// Reads `ELEPHC_PHAR_REQUIRE_HASH`, defaulting to PHP's `phar.require_hash=1`.
+fn require_hash_from_env() -> bool {
+    !matches!(
+        std::env::var("ELEPHC_PHAR_REQUIRE_HASH")
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
+}
+
+/// Returns whether this thread rejects unsigned phar archives.
+pub(super) fn require_hash() -> bool {
+    REQUIRE_HASH.with(std::cell::Cell::get)
+}
+
+/// Overrides the require-hash policy for this thread in tests.
+#[cfg(test)]
+pub(super) fn set_require_hash(require: bool) {
+    REQUIRE_HASH.with(|cell| cell.set(require));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +141,11 @@ pub(super) struct Archive {
     pub(super) format: ArchiveFormat,
     pub(super) metadata: Vec<u8>,
     pub(super) stub: Vec<u8>,
+    /// Signature flag declared by the source archive (native trailer or
+    /// `.phar/signature.bin`), or `None` when unsigned. An implicit rebuild
+    /// preserves it instead of downgrading SHA-256/512 to SHA-1 or stripping
+    /// a tar/zip signature.
+    pub(super) signature_flag: Option<u32>,
 }
 
 /// Returns true for the reserved `.phar/*` control entries that phars hide from
