@@ -46,6 +46,26 @@ fn scratch(tag: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Pins `store::now_ms` on this thread to noon UTC of today until the guard is
+/// dropped, and returns the guard with that time: windows placed a minute or
+/// an hour before it then fall on today whatever time the test runs (#2513).
+fn pin_noon_today() -> (PinnedNow, u64) {
+    let day = 86_400_000u64;
+    let noon = store::now_ms() / day * day + day / 2;
+    store::PINNED_NOW_MS.with(|now| now.set(Some(noon)));
+    (PinnedNow, noon)
+}
+
+/// Unpins `store::now_ms` when dropped, a failed assertion included.
+struct PinnedNow;
+
+impl Drop for PinnedNow {
+    /// Gives this thread back the wall clock.
+    fn drop(&mut self) {
+        store::PINNED_NOW_MS.with(|now| now.set(None));
+    }
+}
+
 /// Two snapshots of one run make the window between them; a restart makes the
 /// new run's own counters the window, spanning from the restart.
 #[test]
@@ -223,7 +243,7 @@ fn history_joins_the_store_and_memory_without_double_counting() {
 
 /// The newest stored window is found in a long day file whose lines are not in
 /// time order, and later appends are picked up — each call reading only what
-/// was appended since the last (review G6).
+/// was appended since the last.
 #[test]
 fn the_newest_stored_window_follows_appends() {
     let dir = scratch("newest-tail");
@@ -265,7 +285,7 @@ fn the_newest_stored_window_follows_appends() {
 /// A script run sharing the collector's store does not hide the service's
 /// recent windows: a two-hour job ending inside memory once set the cut after
 /// which memory joined, and the last hour of requests vanished from a long
-/// view (review G10). Runs come from the store over the whole range, so a run
+/// view. Runs come from the store over the whole range, so a run
 /// that ended in the last hour shows on a short view too, and reading them
 /// again costs only what was appended.
 #[test]
@@ -308,7 +328,7 @@ fn script_runs_neither_hide_nor_miss_recent_service_windows() {
 /// The stored window memory begins inside is read whole: with ten-second
 /// stored windows and one-second memory ones, the oldest memory window starts
 /// mid-window, and cutting the store there lost that window's earlier
-/// requests (review G4). One request a second, every second, once.
+/// requests. One request a second, every second, once.
 #[test]
 fn history_reads_the_stored_window_memory_begins_inside() {
     let dir = scratch("history-boundary");
@@ -469,7 +489,7 @@ fn the_dashboard_serves_its_page_data_and_metrics() {
 
 /// The dashboard refuses what a page on another site could make a browser
 /// send: a rebinding Host, a capture by GET, a cross-origin capture POST; and
-/// it bounds what it reads (review R7, R11).
+/// it bounds what it reads.
 #[test]
 fn the_dashboard_refuses_foreign_requests_and_bounds_its_input() {
     let shared: Shared = Arc::new((Mutex::new(History::new("svc:1", None, true)), Condvar::new()));
@@ -1015,7 +1035,7 @@ fn the_trace_book_keeps_the_slowest_and_the_failures() {
 }
 
 /// A slow failure is among its route's slowest too: five newer, faster
-/// failures do not push out the slowest request the route served (review G5).
+/// failures do not push out the slowest request the route served.
 #[test]
 fn the_slowest_capture_survives_newer_faster_failures() {
     let mut book = traces::TraceBook::default();
@@ -1129,7 +1149,7 @@ fn the_alert_hook_receives_the_transition() {
 
 /// A request's queries are published just before its count, so a poll can see
 /// the work before it sees the request end. That window must keep the work, and
-/// so must the record the store folds it into (review R2).
+/// so must the record the store folds it into.
 #[test]
 fn a_window_keeps_work_for_a_request_still_in_flight() {
     let before = snapshot(9, 1_000, vec![RouteStats::empty("GET /slow")]);
@@ -1150,7 +1170,7 @@ fn a_window_keeps_work_for_a_request_still_in_flight() {
     assert_eq!(rows[0].queries_per_txn, 30.0, "all thirty statements belong to the one request");
 }
 
-/// Opening a store deletes nothing; only an explicit prune does (review R4).
+/// Opening a store deletes nothing; only an explicit prune does.
 #[test]
 fn opening_a_store_never_prunes_it() {
     let dir = scratch("noprune");
@@ -1194,7 +1214,7 @@ fn only_a_collectors_window_prunes_at_midnight() {
 }
 
 /// Two services in one store over the same minute measured one minute, and
-/// their same-named routes stay apart once labelled (review R5).
+/// their same-named routes stay apart once labelled.
 #[test]
 fn a_shared_store_rates_and_names_each_service() {
     let window = |source: &str, t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
@@ -1224,13 +1244,12 @@ fn a_shared_store_rates_and_names_each_service() {
 
 /// A page over a store two services write to keeps their `GET /` apart, and
 /// its chart points and terminal trends count the seconds both covered once:
-/// each service's 10 requests a second read 10/s, and both together 20/s
-/// (review G2, G3).
+/// each service's 10 requests a second read 10/s, and both together 20/s.
 #[test]
 fn a_shared_store_page_and_trends_rate_each_service() {
     let dir = scratch("shared-page");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 2).unwrap();
-    let now = store::now_ms();
     let window = |source: &str, t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
@@ -1285,7 +1304,7 @@ fn a_live_history_reads_only_its_own_service_from_the_store() {
 }
 
 /// One long window — a stretch the collector could not reach — does not turn
-/// the chart around it into a handful of points (review R13).
+/// the chart around it into a handful of points.
 #[test]
 fn one_long_window_does_not_coarsen_the_chart() {
     let mut windows: Vec<Window> = (1..=300u64)
@@ -1296,7 +1315,7 @@ fn one_long_window_does_not_coarsen_the_chart() {
     assert_eq!(series["step_ms"], 5_000, "the typical one-second window sets the step");
 }
 
-/// Route labels carrying `<` and `>` parse with strict operators (review R17).
+/// Route labels carrying `<` and `>` parse with strict operators.
 #[test]
 fn synthetic_route_labels_parse_in_alerts() {
     let rule = alerts::parse_rule("error_pct:<other><5").unwrap();
@@ -1306,7 +1325,7 @@ fn synthetic_route_labels_parse_in_alerts() {
     assert!(alerts::parse_rule("p95:GET /<=").is_err());
 }
 
-/// An exported page of a single run without a store shows that run (review R8).
+/// An exported page of a single run without a store shows that run.
 #[test]
 fn an_export_without_a_store_shows_the_run() {
     let cmd = parse_monitor_args(&args(&["job.php", "--apm"])).unwrap();
@@ -1414,8 +1433,7 @@ fn the_alerts_json_carries_each_rules_parts() {
 }
 
 /// Retention deletes a day's file; the runs the store had read from it are
-/// dropped with it, so a page open for weeks keeps only the days on disk
-/// (review G14).
+/// dropped with it, so a page open for weeks keeps only the days on disk.
 #[test]
 fn a_pruned_day_leaves_the_read_cache() {
     let dir = scratch("cache-prune");
@@ -1588,8 +1606,8 @@ fn collectors_of_lookalike_targets_do_not_share_a_lock() {
 #[test]
 fn stored_ranges_read_only_what_was_appended() {
     let dir = scratch("ranges");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
-    let now = store::now_ms();
     let day = 86_400_000u64;
     let yesterday_noon = (now / day - 1) * day + day / 2;
     let service = |t: u64| Window {
@@ -1870,6 +1888,12 @@ fn pushed_sources_are_recognised() {
     assert_ne!(
         collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0000),
         collector::source_name("worker", "10.0.0.7", 1, 0x3333_4444_0000_0000),
+    );
+    // Two instances sharing their high half, as a clock-seeded one started in the same few
+    // seconds does, stay apart too (#2499).
+    assert_ne!(
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0001),
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0002),
     );
     for service in ["127.0.0.1:9411", "/tmp/shop.sock", "", "a@b pid x", "user@host"] {
         assert!(!collector::is_pushed_source(service), "{service}");

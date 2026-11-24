@@ -564,9 +564,12 @@ fn receive_source(mut stream: std::net::TcpStream, key: [u8; 32], sender: std::s
 /// What a pushing program's windows are labelled with: its name, where it
 /// sent from, its pid and its instance number — the same across its
 /// reconnections, apart from any other process's, two containers running the
-/// same build as pid 1 behind one address included (review).
+/// same build as pid 1 behind one address included. The label keeps 32 bits of
+/// the instance, both halves folded together: a probe that could not draw
+/// randomness numbers itself from its start time, whose high half two
+/// processes started in the same few seconds share (#2499).
 pub(super) fn source_name(program: &str, peer: &str, pid: u32, instance: u64) -> String {
-    format!("{program}@{peer}{PUSHED_PID} {pid} #{:08x}", instance >> 32)
+    format!("{program}@{peer}{PUSHED_PID} {pid} #{:08x}", ((instance >> 32) ^ instance) as u32)
 }
 
 /// What a pushing program's source name carries before its pid.

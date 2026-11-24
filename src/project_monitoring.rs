@@ -18,7 +18,11 @@
 //! - An unknown key is refused: a misspelt `exlude` must not silently stop excluding anything.
 //! - `[entry."bin/console".apm]` (or `.monitoring`) replaces, key by key, the top-level table
 //!   for the build whose entry file is that path, relative to the manifest's directory: one
-//!   project, one manifest, a web front and a console monitored differently.
+//!   project, one manifest, a web front and a console monitored differently. A path that names
+//!   no file is warned about on every build, so a typo does not silently drop its settings.
+//! - `enabled = false` wins over the keys that otherwise imply `enabled` (`functions`,
+//!   `collector`, `transactions`): an entry or a project can switch monitoring off without
+//!   deleting its settings.
 //! - `[budgets] rules` take the `--assert` syntax, one rule per string; ` # text` after a rule
 //!   is its label, as in the `.elephc` file this table replaces.
 
@@ -32,7 +36,7 @@ use serde::Deserialize;
 pub(crate) struct MonitoringTable {
     /// `true` embeds the profiler in every function (`--with-monitoring`).
     pub enabled: Option<bool>,
-    /// Only these functions (`--with-monitoring=a,b`); implies `enabled`.
+    /// Only these functions (`--with-monitoring=a,b`); implies `enabled` unless it is `false`.
     pub functions: Option<Vec<String>>,
 }
 
@@ -42,9 +46,10 @@ pub(crate) struct MonitoringTable {
 pub(crate) struct ApmTable {
     /// `true` counts transactions (`--with-apm`).
     pub enabled: Option<bool>,
-    /// Where the program sends its counters (`--apm-collector`); implies `enabled`.
+    /// Where the program sends its counters (`--apm-collector`); implies `enabled` unless it
+    /// is `false`.
     pub collector: Option<String>,
-    /// Named transactions (`--apm-transaction`); implies `enabled`.
+    /// Named transactions (`--apm-transaction`); implies `enabled` unless it is `false`.
     pub transactions: Option<Vec<String>>,
     /// Route and command patterns counted, and only them.
     pub include: Option<Vec<String>>,
@@ -133,17 +138,25 @@ fn check_patterns(apm: &ApmTable, table: &str) -> Result<(), String> {
 impl ProjectMonitoring {
     /// The `[monitoring]` and `[apm]` settings for the build whose entry file is `entry`: the
     /// top-level tables, with the keys of a matching `[entry."<path>"]` (relative to `root`)
-    /// replacing theirs.
-    pub(crate) fn for_entry(&self, root: &Path, entry: &Path) -> (MonitoringTable, ApmTable) {
+    /// replacing theirs. Also returns a warning for each `[entry."<path>"]` whose path names no
+    /// file: a mistyped path matches no build, and its settings would otherwise be dropped with
+    /// nothing said.
+    pub(crate) fn for_entry(&self, root: &Path, entry: &Path) -> (MonitoringTable, ApmTable, Vec<String>) {
         let mut monitoring = self.monitoring.clone();
         let mut apm = self.apm.clone();
-        let Ok(entry) = entry.canonicalize() else {
-            return (monitoring, apm);
-        };
+        let entry = entry.canonicalize().ok();
+        let mut matched = false;
+        let mut missing = Vec::new();
         for (path, table) in &self.entries {
-            if root.join(path).canonicalize().ok().as_deref() != Some(entry.as_path()) {
+            // A directory names no entry file either: `[entry."bin"]` matches no build.
+            let Some(file) = root.join(path).canonicalize().ok().filter(|file| file.is_file()) else {
+                missing.push(path);
+                continue;
+            };
+            if entry.as_deref() != Some(file.as_path()) {
                 continue;
             }
+            matched = true;
             if let Some(over) = &table.monitoring {
                 monitoring.enabled = over.enabled.or(monitoring.enabled);
                 monitoring.functions = over.functions.clone().or(monitoring.functions);
@@ -156,7 +169,17 @@ impl ProjectMonitoring {
                 apm.exclude = over.exclude.clone().or(apm.exclude);
             }
         }
-        (monitoring, apm)
+        let fallback = if matched { "" } else { "; this build uses the top-level [monitoring] and [apm]" };
+        let warnings = missing
+            .into_iter()
+            .map(|path| {
+                format!(
+                    "[entry.\"{path}\"] names no file under {}, so it applies to no build{fallback}",
+                    root.display()
+                )
+            })
+            .collect();
+        (monitoring, apm, warnings)
     }
 }
 
@@ -193,7 +216,9 @@ pub(crate) fn apply_to_build(
     manifest: &str,
 ) -> Result<Vec<String>, String> {
     let mut notes = Vec::new();
-    let wants_profiler = monitoring.enabled == Some(true) || monitoring.functions.is_some();
+    // An explicit `enabled = false` wins over the keys that otherwise imply it.
+    let wants_profiler =
+        monitoring.enabled != Some(false) && (monitoring.enabled == Some(true) || monitoring.functions.is_some());
     if wants_profiler && matches!(config.instrument, crate::codegen::Instrumentation::Off) {
         if config.emit.is_library() {
             notes.push(format!("{manifest}: [monitoring] skipped: a library cannot carry the profiler"));
@@ -209,7 +234,8 @@ pub(crate) fn apply_to_build(
             notes.push(format!("{manifest}: [monitoring] embeds the profiler (--with-monitoring)"));
         }
     }
-    let wants_apm = apm.enabled == Some(true) || apm.collector.is_some() || apm.transactions.is_some();
+    let wants_apm = apm.enabled != Some(false)
+        && (apm.enabled == Some(true) || apm.collector.is_some() || apm.transactions.is_some());
     if !wants_apm {
         return Ok(notes);
     }
@@ -365,12 +391,77 @@ mod tests {
             "#,
         )
         .unwrap();
-        let (_, console) = settings.for_entry(&root, &root.join("bin/console"));
+        let (_, console, warnings) = settings.for_entry(&root, &root.join("bin/console"));
         assert_eq!(console.exclude, Some(vec!["CLI console cache:*".to_string()]));
         assert_eq!(console.enabled, Some(true), "the keys it does not name stay the project's");
-        let (_, web) = settings.for_entry(&root, &root.join("index.php"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let (_, web, warnings) = settings.for_entry(&root, &root.join("index.php"));
         assert_eq!(web.exclude, Some(vec!["GET /health".to_string()]));
+        assert!(warnings.is_empty(), "another entry's table is not a typo: {warnings:?}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An `[entry."<path>"]` whose path names no file, a typo, is warned about with the path,
+    /// on the build it was meant for and on every other one (#2499).
+    #[test]
+    fn an_entry_naming_no_file_is_warned_about() {
+        let root = std::env::temp_dir().join(format!("elephc-project-monitoring-typo-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/console"), "<?php\n").unwrap();
+        std::fs::write(root.join("index.php"), "<?php\n").unwrap();
+        let settings = parse(
+            r#"
+            [apm]
+            enabled = true
+            exclude = ["GET /health"]
+
+            [entry."index.php".apm]
+            exclude = ["GET /ping"]
+
+            [entry."bin/consolle".apm]
+            exclude = ["CLI console cache:*"]
+
+            [entry."bin".apm]
+            exclude = ["CLI console about"]
+            "#,
+        )
+        .unwrap();
+        let (_, console, warnings) = settings.for_entry(&root, &root.join("bin/console"));
+        assert_eq!(console.exclude, Some(vec!["GET /health".to_string()]), "the typo's table is not applied");
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("[entry.\"bin\"] names no file")), "a directory is no entry file: {warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("[entry.\"bin/consolle\"] names no file")), "{warnings:?}");
+        assert!(warnings.iter().all(|warning| warning.contains("top-level [monitoring] and [apm]")), "{warnings:?}");
+        let (_, web, warnings) = settings.for_entry(&root, &root.join("index.php"));
+        assert_eq!(web.exclude, Some(vec!["GET /ping".to_string()]));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|warning| warning.contains("bin/consolle")), "{warnings:?}");
+        assert!(warnings.iter().all(|warning| !warning.contains("top-level")), "a matched build says nothing of it: {warnings:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An explicit `enabled = false` wins over `functions`, `collector` and `transactions`,
+    /// which otherwise imply it (#2499).
+    #[test]
+    fn enabled_false_wins_over_implied_keys() {
+        let monitoring =
+            MonitoringTable { enabled: Some(false), functions: Some(vec!["App\\Checkout::*".to_string()]) };
+        let apm = ApmTable {
+            enabled: Some(false),
+            collector: Some("10.0.0.5:9412".to_string()),
+            transactions: Some(vec!["App\\Job::run".to_string()]),
+            ..ApmTable::default()
+        };
+        let mut config = build(&["main.php"]);
+        let notes = apply_to_build(&mut config, &monitoring, &apm, "elephc.toml").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(matches!(config.instrument, crate::codegen::Instrumentation::Off));
+        assert!(!config.with_crates.contains("probe") && !config.with_crates.contains("instrument"));
+        assert!(config.apm_collector.is_none() && config.apm_transactions.is_empty());
+        let implied = ApmTable { enabled: None, ..apm };
+        let mut config = build(&["main.php"]);
+        apply_to_build(&mut config, &MonitoringTable::default(), &implied, "elephc.toml").unwrap();
+        assert!(config.with_crates.contains("probe"), "without `enabled`, a collector still implies it");
     }
 
     /// The manifest fills what the command line left unset, and never what it set.

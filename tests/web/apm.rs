@@ -189,7 +189,7 @@ fn web_apm_is_refused_without_monitoring() {
 /// slots and forwards each event — with nobody profiling. Under
 /// `--web-isolation=request` the PHP runs in a handler child and its web worker
 /// records the request: a new route's first queries, held until its answer,
-/// still land on its row (review G1).
+/// still land on its row.
 #[test]
 fn web_apm_counts_database_queries_per_route() {
     for isolation in [None, Some("--web-isolation=request")] {
@@ -281,7 +281,7 @@ fail_hard();
 /// A request whose PHP takes its worker down — an uncaught exception, `exit`
 /// — never reaches the request's end, and used to vanish from the counts:
 /// the error rate read healthy while requests died. The master counts it as a
-/// server error when it reaps the worker (review R1).
+/// server error when it reaps the worker.
 #[test]
 fn web_apm_counts_requests_that_kill_their_worker() {
     let fixture = make_test_dir("web_apm_crash");
@@ -495,7 +495,7 @@ fn web_apm_reset_routes_empties_the_table() {
 
 /// The collector end to end: a slow request whose statements span several
 /// polls reaches the store with every statement, and browsing the store reads
-/// them back (review R2, R18). One-shot reads never exercised the poll loop.
+/// them back. One-shot reads never exercised the poll loop.
 #[test]
 fn web_apm_collector_stores_a_slow_routes_work_across_polls() {
     let fixture = make_test_dir("web_apm_collect");

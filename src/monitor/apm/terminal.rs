@@ -60,7 +60,7 @@ pub(crate) fn trend(windows: &[&Window], route: &str, slots: usize) -> (Vec<Opti
     }
     // A slot's rate is over the time its windows cover, counted once, as the
     // table measures it: two services watched over the same seconds did not
-    // watch twice as long (review G3).
+    // watch twice as long.
     let rates = grouped
         .iter()
         .map(|slot| {
