@@ -1866,6 +1866,10 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         "interface Missing {}\n",
         "trait Missing {}\n",
         "class Missing extends C {}\n",
+        // A parent that fails for a reason PHP reports after the trait's incompatibility.
+        "interface I { public function foo(); }\nclass Missing implements I {}\n",
+        "class Missing extends Unknown {}\n",
+        "class D extends E {}\nclass E extends D {}\nclass Missing extends D {}\n",
     ] {
         let error = check_source_full(&format!(
             "<?php\n{trait_pair}{parent}class C extends Missing {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
@@ -1883,6 +1887,33 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
     .expect("program should fail");
     let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
     assert!(messages[0].contains("Private constant C::X cannot be final"), "{messages:?}");
+    // An earlier class's early-bound parent error is compiled before a later private final
+    // constant, and each is reported once.
+    for (parent, message) in [
+        ("final class GP {}\nclass A extends GP {}", "Class A cannot extend final class GP"),
+        ("readonly class GP {}\nclass A extends GP {}", "non-readonly class cannot extend readonly parent"),
+        ("interface GP {}\nclass A extends GP {}", "Class A cannot extend interface GP"),
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{parent}\nclass B {{ private final const X = 1; }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{parent}: {messages:?}");
+        assert_eq!(messages.len(), 2, "{parent}: {messages:?}");
+    }
+    // A class that implements an interface or uses a trait is not early-bound: its parent is
+    // rejected while linking, after every class declaration has been compiled.
+    for child in ["interface I {}\nclass A extends GP implements I {}", "trait Q {}\nclass A extends GP { use Q; }"] {
+        let error = check_source_full(&format!(
+            "<?php\nfinal class GP {{}}\n{child}\nclass B {{ private final const X = 1; }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("Private constant B::X cannot be final"), "{child}: {messages:?}");
+    }
     for source in [
         // Abstract imports bound before the failure are checked first, against the parent or
         // the method that satisfies them.
