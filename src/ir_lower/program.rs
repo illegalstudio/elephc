@@ -287,6 +287,7 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    crate::mem_stats::mark("lower: eval native default helpers");
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     function::lower_optional_interface_adapters(&mut module);
@@ -299,7 +300,9 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    crate::mem_stats::mark("lower: referenced builtin methods");
     lower_referenced_builtin_spl_methods(&mut module, check_result, &constants, &fiber_return_sigs);
+    crate::mem_stats::mark("lower: spl methods");
     builtin_datetime::lower_referenced_builtin_datetime_methods(
         &mut module,
         check_result,
@@ -316,10 +319,14 @@ fn lower_on_compiler_stack(
         &fiber_return_sigs,
     )?;
     super::erased_writes::lower_requested(&mut module);
+    crate::mem_stats::mark("lower: erased writes");
     super::boxed_operators::lower_requested(&mut module);
+    crate::mem_stats::mark("lower: boxed operators");
     include_lowered_runtime_features(&mut module);
     super::boxed_array_appends::normalize_module(&mut module);
+    crate::mem_stats::mark("lower: boxed array appends");
     super::closure_scopes::specialize_module(&mut module);
+    crate::mem_stats::mark("lower: closure scopes");
     super::effect_refinement::refine_module(&mut module);
     crate::mem_stats::mark("lower: post passes (effect refinement)");
     reserve_eval_subclass_property_storage(&mut module);

@@ -480,6 +480,41 @@ impl EirTally {
     }
 }
 
+/// Prints what the biggest body (by instruction count) is made of: the block-name prefixes
+/// (`foreach.body12` counts as `foreach.body`) and the opcodes, top 14 of each.
+fn report_biggest_body(module: &Module) {
+    let biggest = module
+        .functions
+        .iter()
+        .chain(&module.class_methods)
+        .chain(&module.closures)
+        .max_by_key(|function| function.instructions.len());
+    let Some(function) = biggest else { return };
+    let mut blocks: std::collections::BTreeMap<String, usize> = Default::default();
+    for block in &function.blocks {
+        let prefix = block.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+        *blocks.entry(prefix.to_string()).or_default() += 1;
+    }
+    let mut ops: std::collections::BTreeMap<String, usize> = Default::default();
+    for inst in &function.instructions {
+        *ops.entry(format!("{:?}", inst.op)).or_default() += 1;
+    }
+    let top = |map: std::collections::BTreeMap<String, usize>| {
+        let mut rows: Vec<(String, usize)> = map.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.iter().take(14).map(|(name, count)| format!("{name}={count}")).collect::<Vec<_>>().join(" ")
+    };
+    eprintln!(
+        "[mem] biggest body {}: {} instructions, {} blocks, {} values",
+        function.name,
+        function.instructions.len(),
+        function.blocks.len(),
+        function.values.len()
+    );
+    eprintln!("[mem]   block prefixes: {}", top(blocks));
+    eprintln!("[mem]   ops: {}", top(ops));
+}
+
 /// Reports the exact size of an EIR module's function tables and the clone-measured size of the
 /// rest of the module (class tables, data pool, declaration tables).
 pub(crate) fn report_module(label: &str, module: &Module) {
@@ -504,6 +539,7 @@ pub(crate) fn report_module(label: &str, module: &Module) {
         }
     }
     tally.print(label);
+    report_biggest_body(module);
     for (name, group) in &groups[..7] {
         let instructions: usize = group.iter().map(|f| f.instructions.len()).sum();
         eprintln!("[mem]   group {name:<28} {:>7} functions {:>10} instructions", group.len(), instructions);
