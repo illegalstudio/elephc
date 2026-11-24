@@ -1532,3 +1532,50 @@ class D extends C { public function foo() { return 2; } }
 "#,
     );
 }
+
+/// An abstract trait method made `as final` stays an abstract final method of an abstract class,
+/// as in PHP 8.3+, so only a subclass implementing it fails. A body on the importing class, enum
+/// or trait overrides the final import and fails with the trait's name, while a concrete trait
+/// method made final stays replaceable there (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method() {
+    let abstract_trait = "trait T { abstract public function foo(); }\n";
+    expect_no_error(&format!(
+        "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final; }} }}\n"
+    ));
+    expect_no_error(&format!(
+        "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final bar; }} public function foo() {{ return 1; }} }}\n"
+    ));
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    for (adaptation, body, message) in [
+        ("foo as final;", "foo", "Cannot override final method T::foo"),
+        ("foo as final bar;", "bar", "Cannot override final method T::bar"),
+    ] {
+        expect_error(
+            &format!(
+                "<?php\n{abstract_trait}class C {{ use T {{ {adaptation} }} public function {body}() {{ return 1; }} }}\n"
+            ),
+            message,
+        );
+    }
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}enum E {{ use T {{ foo as final; }} public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method T::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}trait O {{ use T {{ foo as final; }} public function foo() {{ return 1; }} }}\nclass C {{ use O; }}\n"
+        ),
+        "Cannot override final method T::foo",
+    );
+    expect_no_error(
+        "<?php\ntrait T { public function foo() { return 't'; } }\nclass C { use T { foo as final; } public function foo() { return 'c'; } }\necho (new C)->foo();\n",
+    );
+}

@@ -194,6 +194,25 @@ fn test_warning_final_private_method() {
     );
 }
 
+/// Verifies that `as final` on a private trait method warns like a written `final private`
+/// method, with or without an alias, while making a public trait method private and final does
+/// not (#2352).
+#[test]
+fn test_warning_trait_alias_as_final_private_method() {
+    for adaptation in ["foo as final;", "foo as final bar;", "T::foo as final;"] {
+        expect_warning(
+            &format!(
+                "<?php trait T {{ private function foo() {{ return 1; }} }} class C {{ use T {{ {adaptation} }} }}"
+            ),
+            "Private methods cannot be final as they are never overridden by other classes",
+        );
+    }
+    expect_no_warning(
+        "<?php trait T { public function foo() { return 1; } } class C { use T { foo as private; foo as final; } }",
+        "Private methods cannot be final",
+    );
+}
+
 /// Verifies that a final private constructor does NOT produce a warning. Unlike
 /// regular private methods, a final private constructor is a legitimate pattern
 /// (e.g., singleton enforcement) and is not redundant.

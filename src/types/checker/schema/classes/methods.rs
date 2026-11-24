@@ -51,22 +51,16 @@ pub(super) fn apply_methods(
     Ok(())
 }
 
-/// Validates shape constraints on a single method: abstract+final conflict,
-/// abstract method with a body, non-abstract method without a body, and
-/// private abstract methods are all rejected.
+/// Validates shape constraints on a single method: abstract method with a body,
+/// non-abstract method without a body, and private abstract methods are all rejected.
+///
+/// A method written `abstract final` is a parse error (`MemberModifiers::validate_for`), so an
+/// abstract final method here was imported from a trait `as final`, which PHP accepts in an
+/// abstract class.
 pub(in crate::types::checker::schema) fn validate_method_shape(
     class_name: &str,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
-    if method.is_abstract && method.is_final {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot use the final modifier on an abstract method: {}::{}",
-                class_name, method.name
-            ),
-        ));
-    }
     if method.is_abstract && method.has_body {
         return Err(CompileError::new(
             method.span,

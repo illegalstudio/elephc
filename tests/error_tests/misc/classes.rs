@@ -936,7 +936,7 @@ fn test_error_final_abstract_method() {
     // an abstract method cannot also be final.
     expect_error(
         "<?php abstract class Base { final abstract public function run(); }",
-        "Cannot use the final modifier on an abstract method: Base::run",
+        "Cannot use the final modifier on an abstract method",
     );
 }
 

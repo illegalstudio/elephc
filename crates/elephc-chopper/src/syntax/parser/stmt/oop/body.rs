@@ -433,12 +433,6 @@ fn parse_class_like_members(
                                 "Abstract static properties are not supported",
                             ));
                         }
-                        if modifiers.is_final {
-                            return Err(CompileError::runtime_unsupported(
-                                member_span,
-                                "Cannot use the final modifier on an abstract property",
-                            ));
-                        }
                         if modifiers.visibility == Visibility::Private {
                             return Err(CompileError::new(
                                 member_span,
@@ -693,8 +687,9 @@ pub(super) struct MemberModifiers {
 impl MemberModifiers {
     /// Rejects the modifiers PHP refuses on a `target` member, in source order and with
     /// php-src's messages (`zend_modifier_list_to_flags`): a modifier the member kind cannot
-    /// take (`static const`, `readonly function`), a second read or write visibility, and a
-    /// repeated `static`, `readonly`, `abstract` or `final`. PHP's parser raises these, so
+    /// take (`static const`, `readonly function`), a second read or write visibility, a
+    /// repeated `static`, `readonly`, `abstract` or `final`, and `abstract` together with `final`
+    /// (`zend_add_member_modifier`). PHP's parser raises these, so
     /// TOKEN_PARSE validation refuses them too. An eval fragment keeps reporting them as an
     /// unsupported runtime construct, the status eval used for `static static` before.
     fn validate_for(&self, target: ModifierTarget) -> Result<(), CompileError> {
@@ -731,6 +726,18 @@ impl MemberModifiers {
                 return Err(error(span, &message));
             }
             seen.push(keyword);
+            if matches!(keyword, ModifierKeyword::Abstract | ModifierKeyword::Final)
+                && seen.contains(&ModifierKeyword::Abstract)
+                && seen.contains(&ModifierKeyword::Final)
+            {
+                return Err(error(
+                    span,
+                    &format!(
+                        "Cannot use the final modifier on an abstract {}",
+                        target.member_name()
+                    ),
+                ));
+            }
         }
         Ok(())
     }

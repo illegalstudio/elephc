@@ -569,7 +569,8 @@ pub(super) fn eval_trait_abstract_properties_are_compatible(
         && existing.default() == incoming.default()
 }
 
-/// Appends trait methods unless the class provides a same-name method.
+/// Appends trait methods unless the class provides a same-name method, which may not replace
+/// an abstract trait method made `as final`.
 pub(in crate::interpreter) fn append_eval_trait_methods(
     trait_decl: &EvalTrait,
     trait_adaptations: &[EvalTraitAdaptation],
@@ -583,9 +584,6 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             continue;
         }
         let key = method.name().to_ascii_lowercase();
-        if class_method_names.contains(&key) {
-            continue;
-        }
         let method = method
             .clone()
             .with_trait_origin(trait_decl.name().to_string());
@@ -594,6 +592,10 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             &method,
             trait_adaptations,
         );
+        if class_method_names.contains(&key) {
+            reject_override_of_final_abstract_import(&method)?;
+            continue;
+        }
         if !trait_method_names.insert(key) {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -657,6 +659,7 @@ pub(super) fn append_eval_trait_method_aliases(
         }
         let key = alias_method.name().to_ascii_lowercase();
         if class_method_names.contains(&key) {
+            reject_override_of_final_abstract_import(&alias_method)?;
             continue;
         }
         if trait_method_names.contains(&key)
@@ -671,6 +674,17 @@ pub(super) fn append_eval_trait_method_aliases(
         methods.push(alias_method);
     }
     Ok(())
+}
+
+/// Rejects a receiver method that replaces `imported`, an adapted trait method, when the import
+/// is abstract and made final with `as final`: Zend checks the receiver's method against an
+/// abstract trait method as an override. A concrete trait method stays replaceable.
+fn reject_override_of_final_abstract_import(imported: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if imported.is_abstract() && imported.is_final() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
 }
 
 /// Returns whether an `insteadof` adaptation suppresses this trait method import.
@@ -802,7 +816,9 @@ pub(super) fn validate_eval_class_modifiers(
         validate_eval_method_attribute_targets(method.attributes())?;
         for attributes in method.parameter_attributes() { validate_eval_core_attribute_targets(attributes, 32)?; }
         validate_eval_magic_method(method)?;
-        if method.is_abstract() && method.is_final() {
+        // A written `abstract final` is a parse error; a trait method made final `as final`
+        // may stay abstract in an abstract class.
+        if method.is_abstract() && method.is_final() && method.trait_origin().is_none() {
             return Err(EvalStatus::RuntimeFatal);
         }
         if method.is_abstract() && method.visibility() == EvalVisibility::Private {

@@ -222,28 +222,33 @@ fn parse_trait_adaptation_target(
 /// `final` flag. `readonly` is refused by PHP's parser (`zend_modifier_token_to_flag` for a
 /// method), so TOKEN_PARSE refuses it too. `static` and `abstract` parse, and PHP rejects them
 /// while compiling the class (`zend_check_trait_alias_modifiers`), so only compilation does.
-/// `final` is accepted since PHP 8.3.
+/// `final` is accepted since PHP 8.3. An eval fragment reports these errors as an unsupported
+/// runtime construct, like the member modifier errors of `MemberModifiers::validate_for`.
 fn trait_alias_modifier(
     modifier: Option<(&Token, Span)>,
 ) -> Result<(Option<Visibility>, bool), CompileError> {
     let Some((token, span)) = modifier else {
         return Ok((None, false));
     };
+    let error = |message: &str| {
+        if crate::syntax::parser::runtime_fragment() {
+            CompileError::runtime_unsupported(span, message)
+        } else {
+            CompileError::new(span, message)
+        }
+    };
     match token {
         Token::Public => Ok((Some(Visibility::Public), false)),
         Token::Protected => Ok((Some(Visibility::Protected), false)),
         Token::Private => Ok((Some(Visibility::Private), false)),
         Token::Final => Ok((None, true)),
-        Token::ReadOnly => Err(CompileError::new(
-            span,
-            "Cannot use the readonly modifier on a method",
-        )),
+        Token::ReadOnly => Err(error("Cannot use the readonly modifier on a method")),
         Token::Static | Token::Abstract if !crate::syntax::parser::validation_only() => {
             let name = if matches!(token, Token::Static) { "static" } else { "abstract" };
-            Err(CompileError::new(
-                span,
-                &format!("Cannot use \"{}\" as method modifier in trait alias", name),
-            ))
+            Err(error(&format!(
+                "Cannot use \"{}\" as method modifier in trait alias",
+                name
+            )))
         }
         _ => Ok((None, false)),
     }

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -89,7 +89,8 @@ pub(super) fn merge_property_into(
 
 /// Merges `imported` trait methods with `local` class/trait methods.
 /// Validates that `local` has no duplicate method keys (name + is_static).
-/// Imported methods with the same key as local are skipped (local wins).
+/// Imported methods with the same key as local are skipped (local wins), except an abstract
+/// import made final with `as final`, which the local method cannot override.
 /// Duplicate imported methods (same key from multiple traits) are resolved by
 /// `resolve_duplicate_imported_method`; `resolve_trait_uses` has already merged them, so a
 /// collision here is reported without trait names.
@@ -104,16 +105,28 @@ pub(super) fn merge_methods(
 ) -> Result<Vec<TraitMethod>, CompileError> {
     validate_direct_method_duplicates(local, span, owner_label)?;
 
-    let mut local_keys = HashSet::new();
+    let mut local_keys = HashMap::new();
     for method in local {
-        local_keys.insert((php_symbol_key(&method.name), method.is_static));
+        local_keys.insert((php_symbol_key(&method.name), method.is_static), method.span);
     }
 
     let mut merged: Vec<TraitMethod> = Vec::new();
     let mut seen_imported: HashMap<(String, bool), usize> = HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.decl.name), imported_method.decl.is_static);
-        if local_keys.contains(&key) {
+        if let Some(local_span) = local_keys.get(&key) {
+            // Zend checks a local method against an abstract trait method as an override, so an
+            // abstract method made `as final` cannot be implemented here. A concrete trait
+            // method stays replaceable, final or not.
+            if imported_method.decl.is_abstract && imported_method.decl.is_final {
+                return Err(CompileError::new(
+                    *local_span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        imported_method.origin, imported_method.decl.name
+                    ),
+                ));
+            }
             continue;
         }
         if let Some(&index) = seen_imported.get(&key) {
