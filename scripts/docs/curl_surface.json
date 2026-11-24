@@ -33,7 +33,8 @@
         "8.2": "not installed locally; skipped (no PHP-8.2-only names known to exist)",
         "8.3": "not installed locally; skipped (no PHP-8.3-only names known to exist)",
         "8.4": "8.4.20 (installed at /Users/nahime/Library/Application Support/Herd/bin/php; bundled libcurl 8.19.0; live source for functions/classes/constants)",
-        "8.5": "not installed locally; curl_multi_get_handles, curl_share_init_persistent, CurlSharePersistentHandle, CURLFOLLOW_*, and CURLOPT_INFILESIZE_LARGE hand-added from php.net docs / curl.h, marked source \"php-8.5 (plan/docs)\". CURLINFO_CONN_ID, CURLINFO_QUEUE_TIME_T, CURLINFO_USED_PROXY, CURLINFO_HTTPAUTH_USED, CURLINFO_PROXYAUTH_USED and CURLOPT_SSL_SIGNATURE_ALGORITHMS hand-added with values read from the PINNED curl-8.21.0 include/curl/curl.h (each CURLINFO_* carries its type mask: CURLINFO_LONG 0x200000 / CURLINFO_OFF_T 0x600000 plus the enum offset, so typed curl_getinfo() dispatch is the header's own; CURLOPT_SSL_SIGNATURE_ALGORITHMS is CURLOPT(name, CURLOPTTYPE_STRINGPOINT, 328) = 10328), marked source \"php-8.5 (curl.h-verified)\". CURLINFO_POSTTRANSFER_TIME_T is deliberately NOT in that group: PHP 8.4.20 already defines it (6291523) and it has been in `constants` since the original freeze."
+        "8.5": "not installed locally; curl_multi_get_handles, curl_share_init_persistent, CurlSharePersistentHandle, CURLFOLLOW_*, and CURLOPT_INFILESIZE_LARGE hand-added from php.net docs / curl.h, marked source \"php-8.5 (plan/docs)\". CURLINFO_CONN_ID, CURLINFO_QUEUE_TIME_T, CURLINFO_USED_PROXY, CURLINFO_HTTPAUTH_USED, CURLINFO_PROXYAUTH_USED and CURLOPT_SSL_SIGNATURE_ALGORITHMS hand-added with values read from the PINNED curl-8.21.0 include/curl/curl.h (each CURLINFO_* carries its type mask: CURLINFO_LONG 0x200000 / CURLINFO_OFF_T 0x600000 plus the enum offset, so typed curl_getinfo() dispatch is the header's own; CURLOPT_SSL_SIGNATURE_ALGORITHMS is CURLOPT(name, CURLOPTTYPE_STRINGPOINT, 328) = 10328), marked source \"php-8.5 (curl.h-verified)\". CURLINFO_POSTTRANSFER_TIME_T is deliberately NOT in that group: PHP 8.4.20 already defines it (6291523) and it has been in `constants` since the original freeze.",
+        "8.6": "not installed locally; six curl constants hand-added from php-src PHP-8.6's curl.stub.php/curl_arginfo.h, marked source \"php-8.6 (php-src stub/arginfo + curl.h)\" (see constant_verification.php_8_6_only_constants_hand_added). CURLOPT_SEEKDATA is not registered by PHP 8.6 and is not part of the surface."
     },
     "functions": {
         "curl_close": {
@@ -414,6 +415,7 @@
         "CURLINFO_RTSP_SERVER_CSEQ": 2097190,
         "CURLINFO_RTSP_SESSION_ID": 1048612,
         "CURLINFO_SCHEME": 1048625,
+        "CURLINFO_SIZE_DELIVERED": 6291527,
         "CURLINFO_SIZE_DOWNLOAD": 3145736,
         "CURLINFO_SIZE_DOWNLOAD_T": 6291464,
         "CURLINFO_SIZE_UPLOAD": 3145735,
@@ -649,6 +651,7 @@
         "CURLOPT_SAFE_UPLOAD": -1,
         "CURLOPT_SASL_AUTHZID": 10289,
         "CURLOPT_SASL_IR": 218,
+        "CURLOPT_SEEKFUNCTION": 20167,
         "CURLOPT_SERVER_RESPONSE_TIMEOUT": 112,
         "CURLOPT_SERVICE_NAME": 10236,
         "CURLOPT_SHARE": 10100,
@@ -857,6 +860,7 @@
         "CURL_PREREQFUNC_OK": 0,
         "CURL_PUSH_DENY": 1,
         "CURL_PUSH_OK": 0,
+        "CURL_READFUNC_ABORT": 268435456,
         "CURL_READFUNC_PAUSE": 268435457,
         "CURL_REDIR_POST_301": 1,
         "CURL_REDIR_POST_302": 2,
@@ -873,6 +877,9 @@
         "CURL_RTSPREQ_SETUP": 4,
         "CURL_RTSPREQ_SET_PARAMETER": 9,
         "CURL_RTSPREQ_TEARDOWN": 7,
+        "CURL_SEEKFUNC_CANTSEEK": 2,
+        "CURL_SEEKFUNC_FAIL": 1,
+        "CURL_SEEKFUNC_OK": 0,
         "CURL_SSLVERSION_DEFAULT": 0,
         "CURL_SSLVERSION_MAX_DEFAULT": 65536,
         "CURL_SSLVERSION_MAX_NONE": 0,
@@ -1140,6 +1147,7 @@
         "CURLOPT_SAFE_UPLOAD": "php_layer",
         "CURLOPT_SASL_AUTHZID": "string",
         "CURLOPT_SASL_IR": "long",
+        "CURLOPT_SEEKFUNCTION": "callback",
         "CURLOPT_SERVER_RESPONSE_TIMEOUT": "long",
         "CURLOPT_SERVICE_NAME": "string",
         "CURLOPT_SHARE": "file",
@@ -1234,14 +1242,14 @@
     },
     "constant_verification": {
         "method": "Every curl_-family constant PHP exposes is classified into exactly one bucket: (a) a curl_setopt/curl_multi_setopt OPTION, cross-checked via the precise CURLOPT(name,type,num) macro table (see option_kinds / value_cross_check_mismatches above); a curl_share_setopt OPTION (CURLSHOPT_*) is cross-checked the same way but against the general symbol table instead, since curl.h declares CURLSHOPT_* as a plain `typedef enum { CURLSHOPT_NONE, ... } CURLSHoption;` rather than via the CURLOPT() macro, (b) a non-option constant verified against the same general #define + enum symbol table built from the pinned headers, (c) explicitly exempt (header expression uses bitwise-NOT or references an unresolvable identifier -- PHP's probed value is kept, never guessed), or (d) genuinely not present in the pinned headers at all (the 3 PHP-invented pseudo-options, listed here, not silently dropped).",
-        "total_constants": 689,
-        "options_verified_against_pinned_curlopt_table": 280,
+        "total_constants": 695,
+        "options_verified_against_pinned_curlopt_table": 281,
         "options_php_only_no_libcurl_equivalent": [
             "CURLOPT_BINARYTRANSFER",
             "CURLOPT_RETURNTRANSFER",
             "CURLOPT_SAFE_UPLOAD"
         ],
-        "non_option_constants_verified_against_pinned_header": 404,
+        "non_option_constants_verified_against_pinned_header": 409,
         "non_option_constants_exempt": {
             "CURLAUTH_ANY": {
                 "reason": "tilde",
@@ -1257,7 +1265,19 @@
             }
         },
         "non_option_constants_not_found_in_pinned_header": [],
-        "php_8_5_only_constants_hand_added": {
+        "php_8_6_only_constants_hand_added": {
+   "source": "php-src PHP-8.6 ext/curl/curl.stub.php + curl_arginfo.h (values cross-checked against the pinned curl-8.21.0 headers)",
+   "reason": "PHP 8.4.20 -- the live extraction source for this surface -- does not define these; they are PHP 8.6 additions. Each name is present in PHP-8.6's generated registration table. CURLOPT_SEEKFUNCTION = CURLOPT(name, CURLOPTTYPE_FUNCTIONPOINT, 167), CURLINFO_SIZE_DELIVERED = CURLINFO_OFF_T + 71, CURL_READFUNC_ABORT = 0x10000000, and CURL_SEEKFUNC_OK/FAIL/CANTSEEK = 0/1/2 come from the pinned curl.h. PHP 8.6 still does not register CURLOPT_SEEKDATA, matching php-src; it is deliberately absent from constants.",
+   "names": {
+    "CURLINFO_SIZE_DELIVERED": 6291527,
+    "CURLOPT_SEEKFUNCTION": 20167,
+    "CURL_READFUNC_ABORT": 268435456,
+    "CURL_SEEKFUNC_CANTSEEK": 2,
+    "CURL_SEEKFUNC_FAIL": 1,
+    "CURL_SEEKFUNC_OK": 0
+   }
+  },
+  "php_8_5_only_constants_hand_added": {
             "source": "php-8.5 (curl.h-verified)",
             "reason": "PHP 8.4.20 -- the live extraction source for this surface -- does not define these; they are PHP 8.5 additions. The values are neither guessed nor probed from a PHP build: each is transcribed from the pinned curl-8.21.0 headers, which is also where every other constant's value in this file is cross-checked against.",
             "names": {

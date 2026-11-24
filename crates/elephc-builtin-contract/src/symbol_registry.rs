@@ -205,7 +205,7 @@ mod tests {
             })
             .collect();
         actual.sort_unstable();
-        assert_eq!(actual.len(), 689, "curl surface size changed; regenerate the table");
+        assert_eq!(actual.len(), 695, "curl surface size changed; regenerate the table");
         assert_eq!(actual, expected, "catalog_constants_curl.rs drifted from curl_surface.json");
         for constant in crate::catalog_constants_curl::CURL_CONSTANTS {
             assert_eq!(constant.module, crate::PhpModule::Curl, "{}", constant.name);

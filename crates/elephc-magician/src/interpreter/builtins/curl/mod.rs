@@ -111,7 +111,7 @@
 //!
 //! ## Scope shipped vs. deferred
 //!
-//! SHIPPED: the complete easy interface above, the full 689-entry `CURLOPT_*`/
+//! SHIPPED: the complete easy interface above, the full 695-entry `CURLOPT_*`/
 //! `CURLINFO_*`/`CURLE_*`/`CURL_*` constant table (`elephc_builtin_contract` `catalog_constants_curl`,
 //! unconditional — see that module's own doc for why constants need no feature gate), and
 //! `curl_setopt()`'s generic option-KIND dispatch (the same table-driven mechanism

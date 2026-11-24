@@ -352,7 +352,7 @@ mod curl_constant_fallback_tests {
 
     /// `CURLOPT_URL`/`CURLOPT_RETURNTRANSFER` resolve through the same predefined-constant
     /// path `JSON_PRETTY_PRINT` etc. use, table-driven through the shared constant catalog
-    /// (`elephc_builtin_contract` `catalog_constants_curl`) rather than a 689-arm hand-written
+    /// (`elephc_builtin_contract` `catalog_constants_curl`) rather than a 695-entry hand-written
     /// match — this is a pure-data lookup, so it needs no bridge, no feature flag, and no
     /// linked libcurl to verify (the catalog publishes curl constants unconditionally).
     #[test]

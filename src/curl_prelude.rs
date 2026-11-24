@@ -2198,7 +2198,7 @@ mod version_tests {
 ///   `detect::program_uses_curl` so the declaration is actually injected.
 /// - CONSTANTS — the shared constant catalog (`elephc_builtin_contract` `catalog_constants_curl`)
 ///   (`curl_constants_match_frozen_surface` in that crate's `symbol_registry`, both
-///   directions, 689 names); Magician reads the same catalog, there is no eval fork.
+///   directions, 695 names); Magician reads the same catalog, there is no eval fork.
 /// - `CURLOPT_*` BEHAVIOUR — `elephc_curl::tests`
 ///   (`every_frozen_curlopt_is_classified` proves none is silently unknown;
 ///   `option_table_matches_the_frozen_surface` proves none is silently misclassified,

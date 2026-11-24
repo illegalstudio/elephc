@@ -5,7 +5,7 @@ sidebar:
   order: 18
 ---
 
-elephc implements PHP's `ext/curl` — all 35 functions, all 6 classes, and all 689
+elephc implements PHP's `ext/curl` — all 35 functions, all 6 classes, and all 695
 constants — on top of a **statically pinned libcurl 8.21.0** built by elephc's own
 managed-native-package system. There is no dependency on a system, Homebrew, or
 distro libcurl: the archive is compiled from a checksum-pinned tarball, linked
@@ -454,14 +454,16 @@ elephc targets PHP 8.5 by default. `curl_multi_get_handles()`,
 `curl_share_init_persistent()` and `CurlSharePersistentHandle` are 8.5 additions,
 so compiling with `--php-version 8.4` (or 8.3/8.2) leaves them **undeclared**,
 and calling one fails as an undefined function — exactly as it would on that
-runtime. Everything else is identical across the four profiles.
+runtime. Everything else is identical across the five profiles.
 
 **Constants are not version-fenced.** Only functions and classes are. Every one of
-the 689 `CURLOPT_*` / `CURLINFO_*` / `CURLE_*` / `CURL_*` names is declared at every
+the 695 `CURLOPT_*` / `CURLINFO_*` / `CURLE_*` / `CURL_*` names is declared at every
 target version, the same way `JSON_*` is — including the PHP 8.5 additions
 (`CURLINFO_CONN_ID`, `CURLINFO_QUEUE_TIME_T`, `CURLINFO_USED_PROXY`,
 `CURLINFO_HTTPAUTH_USED`, `CURLINFO_PROXYAUTH_USED`,
-`CURLOPT_SSL_SIGNATURE_ALGORITHMS`, `CURLFOLLOW_*`, `CURLOPT_INFILESIZE_LARGE`).
+`CURLOPT_SSL_SIGNATURE_ALGORITHMS`, `CURLFOLLOW_*`, `CURLOPT_INFILESIZE_LARGE`) and
+the PHP 8.6 additions (`CURLOPT_SEEKFUNCTION`, `CURL_SEEKFUNC_OK`/`FAIL`/`CANTSEEK`,
+`CURL_READFUNC_ABORT`, `CURLINFO_SIZE_DELIVERED`).
 Their values are frozen from the pinned libcurl 8.21.0 headers, which understands
 all of them at every profile, so `--php-version 8.4` still resolves them.
 `CURLOPT_BINARYTRANSFER`, which PHP 8.4 deprecates, raises `E_DEPRECATED` with
@@ -502,7 +504,7 @@ so it cannot drift from the code:
 | Options | Why |
 |---|---|
 | `CURLOPT_CAINFO_BLOB`, `CURLOPT_ISSUERCERT_BLOB`, `CURLOPT_PROXY_CAINFO_BLOB`, `CURLOPT_PROXY_ISSUERCERT_BLOB`, `CURLOPT_PROXY_SSLCERT_BLOB`, `CURLOPT_PROXY_SSLKEY_BLOB`, `CURLOPT_SSLCERT_BLOB`, `CURLOPT_SSLKEY_BLOB` | In-memory certificate/key blobs. The **file-path** forms (`CURLOPT_SSLCERT`, `CURLOPT_CAINFO`, …) all work — write the material to a file. |
-| `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the six implemented ones (below). SSH itself *is* built in, so `CURLOPT_SSH_KNOWNHOSTS` and the rest of the `CURLOPT_SSH_*` family work — it is only the host-key **callback** that is unimplemented. |
+| `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the seven implemented ones (below). SSH itself *is* built in, so `CURLOPT_SSH_KNOWNHOSTS` and the rest of the `CURLOPT_SSH_*` family work — it is only the host-key **callback** that is unimplemented. |
 
 `CURLINFO_HEADER_OUT` — which is a `curl_setopt()` option despite its name — is
 rejected the same way, so `curl_getinfo($ch, CURLINFO_HEADER_OUT)` has nothing to
@@ -690,7 +692,7 @@ wire, not `basename()`.
 
 ## Callbacks
 
-Six libcurl callbacks invoke real PHP callables (closures, `'function_name'`
+Seven libcurl callbacks invoke real PHP callables (closures, `'function_name'`
 strings, `[$obj, 'method']` arrays, first-class callables):
 
 | Option | Signature |
@@ -701,6 +703,7 @@ strings, `[$obj, 'method']` arrays, first-class callables):
 | `CURLOPT_PROGRESSFUNCTION` | `fn(CurlHandle $ch, int $dlTotal, int $dlNow, int $ulTotal, int $ulNow): int` |
 | `CURLOPT_XFERINFOFUNCTION` | same as `CURLOPT_PROGRESSFUNCTION` |
 | `CURLOPT_DEBUGFUNCTION` | `fn(CurlHandle $ch, int $type, string $data): int` |
+| `CURLOPT_SEEKFUNCTION` | `fn(CurlHandle $ch, int $offset, int $origin): int` — must return `CURL_SEEKFUNC_OK`, `_FAIL` or `_CANTSEEK` (PHP 8.6; a 307 upload resend calls it to rewind the source) |
 
 An exception thrown inside a callback propagates out of `curl_exec()` /
 `curl_multi_exec()` and can be caught normally; the transfer is aborted and the
@@ -717,7 +720,7 @@ R3-C work — ships **almost the whole compiled surface**:
 
 **Available in `eval()`:**
 
-- The complete **easy** interface (16 functions) and all 689 constants, with
+- The complete **easy** interface (16 functions) and all 695 constants, with
   `curl_setopt()`'s full table-driven option dispatch — every LONG / STRING /
   SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
 - The **multi** interface: `curl_multi_init`, `_add_handle`, `_remove_handle`,
@@ -734,6 +737,8 @@ R3-C work — ships **almost the whole compiled surface**:
   `curl_mime` structure compiled code builds.
 - All six **callback** options: `CURLOPT_WRITEFUNCTION`, `_HEADERFUNCTION`,
   `_READFUNCTION`, `_PROGRESSFUNCTION`, `_XFERINFOFUNCTION`, `_DEBUGFUNCTION`.
+  PHP 8.6's `CURLOPT_SEEKFUNCTION` is compiled-only for now: `eval()` refuses it
+  with the standard unsupported-option warning and `false`.
   A PHP exception thrown inside one aborts the transfer and surfaces as an
   ordinary catchable throwable *after* `curl_exec()` returns, with
   `curl_errno()` answering `0` — exactly what compiled code and php-src do.
@@ -1041,6 +1046,6 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 Classes: `CURLFile`, `CurlHandle`, `CurlMultiHandle`, `CurlShareHandle`, `CurlSharePersistentHandle`, `CURLStringFile`.
 
-Constants: 689 constants: `CURLOPT_*` (271), `CURL_*` (94), `CURLINFO_*` (80), `CURLE_*` (74), `CURLPX_*` (34), `CURLPROTO_*` (30), `CURLAUTH_*` (14), `CURLMOPT_*` (9), `CURLSSH_*` (9), `CURLFTPSSL_*` (7), `CURLM_*` (7), `CURLPROXY_*` (7), `CURLPAUSE_*` (6), `CURLSSLOPT_*` (6), `CURLALTSVC_*` (4), `CURLFTPMETHOD_*` (4), `CURLKHMATCH_*` (4), `CURLUSESSL_*` (4), `CURLFOLLOW_*` (3), `CURLFTPAUTH_*` (3), `CURLFTP_*` (3), `CURLPIPE_*` (3), `CURLSHOPT_*` (3), `CURLGSSAPI_*` (2), `CURLHEADER_*` (2), `CURLHSTS_*` (2), `CURLMIMEOPT_*` (1), `CURLMSG_*` (1), `CURLVERSION_*` (1), `CURLWS_*` (1).
+Constants: 695 constants: `CURLOPT_*` (272), `CURL_*` (98), `CURLINFO_*` (81), `CURLE_*` (74), `CURLPX_*` (34), `CURLPROTO_*` (30), `CURLAUTH_*` (14), `CURLMOPT_*` (9), `CURLSSH_*` (9), `CURLFTPSSL_*` (7), `CURLM_*` (7), `CURLPROXY_*` (7), `CURLPAUSE_*` (6), `CURLSSLOPT_*` (6), `CURLALTSVC_*` (4), `CURLFTPMETHOD_*` (4), `CURLKHMATCH_*` (4), `CURLUSESSL_*` (4), `CURLFOLLOW_*` (3), `CURLFTPAUTH_*` (3), `CURLFTP_*` (3), `CURLPIPE_*` (3), `CURLSHOPT_*` (3), `CURLGSSAPI_*` (2), `CURLHEADER_*` (2), `CURLHSTS_*` (2), `CURLMIMEOPT_*` (1), `CURLMSG_*` (1), `CURLVERSION_*` (1), `CURLWS_*` (1).
 
 <!-- elephc:generated:symbols:end -->

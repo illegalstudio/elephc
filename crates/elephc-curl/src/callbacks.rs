@@ -102,6 +102,11 @@ const CURLOPT_DEBUGDATA: c_int = 10095;
 const RESULT_INT: i64 = 0;
 /// `result_kind`: the PHP return value is read as a string and copied into
 /// `CallSpec::out_buf`, capped at `out_cap` (php-src's `MIN(size * nmemb, len)`).
+///
+/// The compiled write/header handlers live in the curl prelude (`KIND_STREAM`), so this
+/// Rust module never builds a spec with this kind; the value is still part of the C ABI
+/// the generated adapter switches on and must stay pinned.
+#[allow(dead_code)]
 const RESULT_STRING: i64 = 1;
 /// `result_kind`: a string is copied into `out_buf`; an integer is returned raw so the
 /// read trampoline can honour PHP 8.6's `CURL_READFUNC_ABORT`/`CURL_READFUNC_PAUSE`.
