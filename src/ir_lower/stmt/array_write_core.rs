@@ -817,6 +817,7 @@ pub(super) fn lower_boxed_array_set_values(
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
+        if crate::ir_lower::erased_writes::is_lent_operand(ctx, operand.value) { return operand; }
         let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
         if let Some(owner) = owner {
             roots.push(owner);

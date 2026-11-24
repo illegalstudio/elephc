@@ -167,6 +167,16 @@ pub(super) fn lends_parameter(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
             if name == KEY || name == DIAGNOSED_KEY || name == VALUE)
 }
 
+/// Whether `value` is a load of the key or value parameter of the helper being lowered, which the
+/// helper's caller holds for the whole call: a writer needs no owner record or copy of it.
+pub(super) fn is_lent_operand(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
+    if !inside_helper(ctx) { return false; }
+    let Some(inst) = ctx.builder.value_defining_instruction(value) else { return false; };
+    if inst.op != Op::LoadLocal { return false; }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+    [KEY, DIAGNOSED_KEY, VALUE].iter().any(|name| ctx.local_slots.get(*name) == Some(&slot))
+}
+
 /// Whether the body being lowered is one of the helpers.
 fn inside_helper(ctx: &LoweringContext<'_, '_>) -> bool {
     ctx.builder.function().name.starts_with(PREFIX)
