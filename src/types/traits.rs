@@ -105,6 +105,7 @@ pub fn flatten_classes(
     let mut trait_keys = HashSet::new();
     let mut class_like_keys = HashSet::new();
     let mut errors = Vec::new();
+    let mut final_abstract_imports = Vec::new();
 
     for stmt in program {
         match &stmt.kind {
@@ -214,7 +215,20 @@ pub fn flatten_classes(
                     stmt.span,
                     &format!("class {}", name),
                 ) {
-                    Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
+                    Ok(methods) => {
+                        final_abstract_imports.extend(
+                            methods
+                                .iter()
+                                .filter(|method| method.decl.is_abstract && method.decl.is_final)
+                                .map(|method| FinalAbstractImport {
+                                    class: name.clone(),
+                                    method: method.decl.name.clone(),
+                                    source_trait: method.source_trait.clone(),
+                                    span: stmt.span,
+                                }),
+                        );
+                        methods.into_iter().map(|method| method.decl).collect()
+                    }
                     Err(error) => {
                         errors.extend(error.flatten());
                         continue;
@@ -353,7 +367,61 @@ pub fn flatten_classes(
         }
     }
 
+    errors.extend(final_abstract_parent_overrides(&final_abstract_imports, &flattened));
     (flattened, flattened_enums, errors)
+}
+
+/// An abstract trait method made `as final` on a class, recorded while flattening the class.
+struct FinalAbstractImport {
+    class: String,
+    method: String,
+    source_trait: String,
+    span: Span,
+}
+
+/// Reports each abstract `as final` import that a parent class already defines. Zend binds a
+/// class's traits after its parent's methods, so any ancestor method of that name (private or
+/// static included) overrides the final import: `Cannot override final method A::foo()`.
+fn final_abstract_parent_overrides(
+    imports: &[FinalAbstractImport],
+    flattened: &[FlattenedClass],
+) -> Vec<CompileError> {
+    let classes: HashMap<String, &FlattenedClass> = flattened
+        .iter()
+        .map(|class| (php_symbol_key(&class.name), class))
+        .collect();
+    let mut errors = Vec::new();
+    for import in imports {
+        let mut visited = HashSet::new();
+        let mut parent = classes
+            .get(&php_symbol_key(&import.class))
+            .and_then(|class| class.extends.as_deref());
+        while let Some(parent_name) = parent {
+            let parent_key = php_symbol_key(parent_name.trim_start_matches('\\'));
+            if !visited.insert(parent_key.clone()) {
+                break;
+            }
+            let Some(parent_class) = classes.get(&parent_key) else {
+                break;
+            };
+            if parent_class
+                .methods
+                .iter()
+                .any(|method| method.name.eq_ignore_ascii_case(&import.method))
+            {
+                errors.push(CompileError::new(
+                    import.span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        import.source_trait, import.method
+                    ),
+                ));
+                break;
+            }
+            parent = parent_class.extends.as_deref();
+        }
+    }
+    errors
 }
 
 /// Returns the direct trait names from a group of trait-use declarations.

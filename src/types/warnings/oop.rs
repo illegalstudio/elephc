@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileWarning;
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{ClassMethod, Stmt, StmtKind, TraitAdaptation, TraitUse, Visibility};
 
 /// The methods and nested trait uses of each declared trait, by lowercase name.
@@ -85,15 +85,9 @@ fn collect_final_adaptation_warnings(
             if method.eq_ignore_ascii_case("__construct") {
                 continue;
             }
-            let candidates: Vec<&str> = match trait_name {
-                Some(trait_name) => vec![trait_name.as_str()],
-                None => trait_use.trait_names.iter().map(|name| name.as_str()).collect(),
-            };
-            let private = candidates.into_iter().any(|trait_name| {
-                trait_method_visibility(trait_name, method, traits, &mut HashSet::new())
-                    == Some(Visibility::Private)
-            });
-            if private {
+            let supplied =
+                supplying_trait(trait_use, trait_name.as_ref(), method, traits, &mut HashSet::new());
+            if matches!(supplied, Some((_, Visibility::Private))) {
                 warnings.push(CompileWarning::new(
                     trait_use.span,
                     "Private methods cannot be final as they are never overridden by other classes",
@@ -127,43 +121,81 @@ fn trait_method_visibility(
 
 /// Returns the visibility of `method` as imported by one nested `use` clause: an alias named
 /// `method` takes its adaptation's visibility or the aliased method's, and a method imported
-/// under its own name takes the last visibility change (`foo as private;`) or its own.
+/// under its own name comes from the first used trait `insteadof` does not exclude and takes
+/// the last visibility change aimed at that trait's copy (`foo as private;`) or its own.
 fn use_method_visibility(
     trait_use: &TraitUse,
     method: &str,
     traits: &TraitTable,
     visited: &mut HashSet<(String, String)>,
 ) -> Option<Visibility> {
-    let mut source_visibility = |source_trait: &Option<crate::names::Name>, source: &str| {
-        let candidates: Vec<&str> = match source_trait {
-            Some(source_trait) => vec![source_trait.as_str()],
-            None => trait_use.trait_names.iter().map(|name| name.as_str()).collect(),
-        };
-        candidates
-            .into_iter()
-            .find_map(|candidate| trait_method_visibility(candidate, source, traits, visited))
-    };
     for adaptation in &trait_use.adaptations {
         if let TraitAdaptation::Alias { trait_name, method: source, alias: Some(alias), visibility, .. } =
             adaptation
         {
             if alias.eq_ignore_ascii_case(method) {
-                if let Some(original) = source_visibility(trait_name, source) {
+                if let Some((_, original)) =
+                    supplying_trait(trait_use, trait_name.as_ref(), source, traits, visited)
+                {
                     return Some(visibility.clone().unwrap_or(original));
                 }
             }
         }
     }
-    let original = source_visibility(&None, method)?;
+    let (supplier, original) = supplying_trait(trait_use, None, method, traits, visited)?;
     let changed = trait_use.adaptations.iter().rev().find_map(|adaptation| match adaptation {
-        TraitAdaptation::Alias { method: target, alias: None, visibility: Some(visibility), .. }
-            if target.eq_ignore_ascii_case(method) =>
+        TraitAdaptation::Alias {
+            trait_name,
+            method: target,
+            alias: None,
+            visibility: Some(visibility),
+            ..
+        } if target.eq_ignore_ascii_case(method)
+            && trait_name
+                .as_ref()
+                .map_or(true, |trait_name| trait_key(trait_name.as_str()) == supplier) =>
         {
             Some(visibility.clone())
         }
         _ => None,
     });
     Some(changed.unwrap_or(original))
+}
+
+/// Returns the lookup key and visibility of the trait copy of `method` a `use` clause binds:
+/// the named trait when the adaptation qualifies it, otherwise the first used trait that
+/// provides the method and is not excluded for it by `insteadof`.
+fn supplying_trait(
+    trait_use: &TraitUse,
+    qualifier: Option<&Name>,
+    method: &str,
+    traits: &TraitTable,
+    visited: &mut HashSet<(String, String)>,
+) -> Option<(String, Visibility)> {
+    let excluded = |candidate: &str| {
+        trait_use.adaptations.iter().any(|adaptation| match adaptation {
+            TraitAdaptation::InsteadOf { method: target, instead_of, .. } => {
+                target.eq_ignore_ascii_case(method)
+                    && instead_of
+                        .iter()
+                        .any(|excluded| trait_key(excluded.as_str()) == trait_key(candidate))
+            }
+            _ => false,
+        })
+    };
+    let candidates: Vec<&str> = match qualifier {
+        Some(qualifier) => vec![qualifier.as_str()],
+        None => trait_use
+            .trait_names
+            .iter()
+            .map(|name| name.as_str())
+            .filter(|candidate| !excluded(candidate))
+            .collect(),
+    };
+    candidates.into_iter().find_map(|candidate| {
+        trait_method_visibility(candidate, method, traits, visited)
+            .map(|visibility| (trait_key(candidate), visibility))
+    })
 }
 
 /// The lookup key of a trait name: case-insensitive, without a leading namespace separator.

@@ -1622,3 +1622,63 @@ fn test_error_trait_alias_as_final_abstract_method_override_sources() {
         expect_error(&format!("<?php\n{source}\n"), message);
     }
 }
+
+/// Two imports of one name follow Zend's binding order: a later abstract `as final` import
+/// overrides any earlier one, an earlier one is overridden by a later concrete method (an `as
+/// final` alias included), and a parent method of any visibility or kind overrides it too.
+/// A later plain abstract redeclaration of an earlier final one stays valid (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_binding_order() {
+    let a = "trait A { abstract public function foo(); }\n";
+    for (source, message) in [
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use B, A { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use A, B { B::foo as final; } }",
+            "Cannot override final method B::foo",
+        ),
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use A, B { A::foo as final; B::foo as final; } }",
+            "Cannot override final method B::foo",
+        ),
+        (
+            "trait B { public function bar() { return 1; } }\nabstract class C { use A, B { A::foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "trait B { public function bar() { return 1; } }\nabstract class C { use A { foo as final bar; } use B; }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "trait B { public static function bar() { return 1; } }\nabstract class C { use A, B { A::foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "class P { public function foo() { return 1; } }\nclass C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { private function foo() { return 1; } }\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { public static function foo() { return 1; } }\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class G { public function foo() { return 1; } }\nclass P extends G {}\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { public function bar() { return 1; } }\nabstract class C extends P { use A { foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+    ] {
+        expect_error(&format!("<?php\n{a}{source}\n"), message);
+    }
+    expect_no_error(&format!(
+        "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; }} }}\n"
+    ));
+}

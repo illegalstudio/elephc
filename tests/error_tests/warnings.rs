@@ -223,10 +223,12 @@ fn test_warning_trait_alias_as_final_private_method() {
             "Private methods cannot be final as they are never overridden by other classes",
         );
     }
-    expect_no_warning(
+    for source in [
         "<?php trait Inner { private function foo() { return 1; } } trait Outer { use Inner { foo as public; } } class C { use Outer { foo as final; } }",
-        "Private methods cannot be final",
-    );
+        "<?php trait A { public function foo() { return 1; } } trait B { public function foo() { return 2; } } trait Outer { use A, B { A::foo insteadof B; B::foo as private; } } class C { use Outer { foo as final; } }",
+    ] {
+        expect_no_warning(source, "Private methods cannot be final");
+    }
 }
 
 /// Verifies that a final private constructor does NOT produce a warning. Unlike

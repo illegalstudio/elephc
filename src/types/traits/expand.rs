@@ -19,9 +19,9 @@ use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
 use super::merge::{
-    check_abstract_redeclaration, final_abstract_import_override, is_same_trait_method,
-    merge_constants, merge_imported_constant_set, merge_imported_method_set, merge_methods,
-    merge_properties, merge_property_into, trait_method_collision,
+    check_abstract_redeclaration, check_final_abstract_imports, final_abstract_import_override,
+    is_same_trait_method, merge_constants, merge_imported_constant_set, merge_imported_method_set,
+    merge_methods, merge_properties, merge_property_into, trait_method_collision,
 };
 use super::validation::validate_direct_members;
 
@@ -330,7 +330,9 @@ pub(super) fn resolve_trait_uses(
 ///
 /// Two concrete candidates for the same method key are a fatal collision (the caller must use
 /// insteadof to choose), unless they are the same trait method reached along two `use` paths
-/// (`is_same_trait_method`): PHP keeps that one silently.
+/// (`is_same_trait_method`): PHP keeps that one silently. Each alias is checked against the
+/// methods and aliases bound before it for an abstract `as final` override
+/// (`check_final_abstract_imports`).
 fn select_methods(
     mut candidates: HashMap<String, Vec<ImportedMethod>>,
     method_order: Vec<String>,
@@ -387,6 +389,11 @@ fn select_methods(
         selected_methods.extend(concrete.into_iter().chain(requirements));
     }
 
+    for (index, alias) in alias_methods.iter().enumerate() {
+        for earlier in selected_methods.iter().chain(&alias_methods[..index]) {
+            check_final_abstract_imports(earlier, alias, span)?;
+        }
+    }
     selected_methods.extend(alias_methods);
 
     Ok(selected_methods)
@@ -408,8 +415,9 @@ fn unsatisfied_requirements(
 ) -> Result<Vec<ImportedMethod>, CompileError> {
     let mut kept: Vec<ImportedMethod> = Vec::new();
     for requirement in requirements {
-        // A requirement made `as final` is overridden by any concrete candidate, of either kind.
-        if requirement.decl.is_final && !concrete.is_empty() {
+        // A requirement made `as final` is overridden by any concrete candidate, of either kind,
+        // and overrides any requirement bound before it (`check_final_abstract_imports`).
+        if requirement.decl.is_final && !(concrete.is_empty() && kept.is_empty()) {
             return Err(final_abstract_import_override(
                 span,
                 &requirement.source_trait,
