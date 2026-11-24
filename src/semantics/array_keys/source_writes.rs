@@ -890,10 +890,19 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
     /// Validates array targets kept in expression form before target pruning can erase them.
     fn expression(&mut self, expr: &Expr) {
         let source = self.source.enter_expression(expr);
-        if self.error.is_some()
-            || self.statement_depth != 1
-            || source.mode == crate::source::SourceMode::Internal
-        {
+        if self.error.is_some() || self.statement_depth != 1 {
+            return;
+        }
+        if let ExprKind::Assignment { prelude, .. } = &expr.kind {
+            apply_prelude_facts(
+                prelude,
+                &mut self.locals,
+                self.properties,
+                self.profile,
+                self.current_class,
+            );
+        }
+        if source.mode == crate::source::SourceMode::Internal {
             return;
         }
         if is_lazy_flow_expression(expr) {
@@ -923,7 +932,6 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         let ExprKind::Assignment {
             target,
             value,
-            prelude,
             ..
         } = &expr.kind
         else {
@@ -939,13 +947,6 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         );
         let value = apply_expression_facts(
             value,
-            &mut locals,
-            self.properties,
-            self.profile,
-            self.current_class,
-        );
-        apply_prelude_facts(
-            prelude,
             &mut locals,
             self.properties,
             self.profile,
@@ -973,17 +974,9 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             if let ExprKind::Assignment {
                 target,
                 value,
-                prelude,
                 ..
             } = &expr.kind
             {
-                apply_prelude_facts(
-                    prelude,
-                    &mut self.locals,
-                    self.properties,
-                    self.profile,
-                    self.current_class,
-                );
                 let value = self
                     .assignment_values
                     .remove(&expression_id(expr))
@@ -1201,7 +1194,7 @@ struct ExpressionFactUpdater<'a> {
 }
 
 impl AstVisitor for ExpressionFactUpdater<'_> {
-    /// Applies lazy expression effects through independent branch states.
+    /// Evaluates lazy branches or the captures that precede assignment operands.
     fn expression(&mut self, expr: &Expr) {
         if is_lazy_flow_expression(expr) {
             let value = apply_lazy_expression_facts(
@@ -1212,6 +1205,14 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
                 self.current_class,
             );
             self.expression_values.insert(expression_id(expr), value);
+        } else if let ExprKind::Assignment { prelude, .. } = &expr.kind {
+            apply_prelude_facts(
+                prelude,
+                self.locals,
+                self.properties,
+                self.profile,
+                self.current_class,
+            );
         }
     }
 
@@ -1240,16 +1241,8 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
             ExprKind::Assignment {
                 target,
                 value,
-                prelude,
                 ..
             } => {
-                apply_prelude_facts(
-                    prelude,
-                    self.locals,
-                    self.properties,
-                    self.profile,
-                    self.current_class,
-                );
                 let value = self.expression_value(value);
                 record_assignment_fact(
                     target,
@@ -1690,7 +1683,7 @@ fn record_assignment_fact(
     );
 }
 
-/// Records only local facts needed to type stabilized assignment targets.
+/// Evaluates local captures and their side effects before a stabilized assignment.
 fn apply_prelude_facts(
     statements: &[Stmt],
     locals: &mut LocalFacts,
@@ -1701,7 +1694,7 @@ fn apply_prelude_facts(
     for stmt in statements {
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
-                let fact = infer_expr(value, locals, properties, profile, current_class);
+                let fact = apply_expression_facts(value, locals, properties, profile, current_class);
                 locals.assign(name, fact);
             }
             StmtKind::TypedAssign {

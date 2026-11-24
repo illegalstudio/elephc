@@ -189,6 +189,22 @@ fn strict_array_key_source_validation_tracks_local_inc_dec() {
     }
 }
 
+/// A captured index increments before the assignment evaluates its right-hand side.
+#[test]
+fn strict_array_key_source_validation_keeps_inc_dec_capture_order() {
+    let setup = "<?php $key = 0; $cells = [0, 0]; $result = ($cells[$key++] = $key);";
+    for index in ["$key", "$result"] {
+        let accepted = format!("{setup} $values = [[], 'ab']; $values[{index}][false] = 'x';");
+        crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+        let rejected = format!("{setup} $values = ['ab', []]; $values[{index}][false] = 'x';");
+        let error = crate::semantics::validate_source(&parse(&rejected, SourceMode::Php), profile())
+            .expect_err("the capture and the assignment result both select the updated slot");
+        assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+    }
+}
+
 /// Negative maximum keys advance implicit appends by one instead of resetting to zero.
 #[test]
 fn strict_array_key_source_validation_tracks_negative_append_keys() {

@@ -80,6 +80,24 @@ echo $next, $values[1];
     );
 }
 
+/// A saved subscript keeps the postfix side effect visible to later reads and writes.
+#[test]
+fn test_strict_array_keys_preserves_inc_dec_capture_order() {
+    let source = r#"<?php
+$key = 0;
+$cells = [0, 0];
+$result = ($cells[$key++] = $key);
+$values = [[], 'ab'];
+$values[$key][false] = 'x';
+$values[$result][1.0] = 'y';
+echo $cells[0], ':', $result, ':', $values[1];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "1:1:xy"
+    );
+}
+
 /// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
 #[test]
 fn test_strict_array_keys_interpolation_uses_integer_offsets() {
