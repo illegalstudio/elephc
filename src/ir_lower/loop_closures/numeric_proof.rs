@@ -108,6 +108,16 @@ fn seed(ctx: &LoweringContext<'_, '_>, name: &str) -> Domain {
         return Domain::Unknown;
     };
     let logical = ctx.local_type(name);
+    // The loop's storage contract boxed a plain numeric entry (`$value = 10` before a loop that
+    // also stores `1.5`): the box is only the representation, the entry value is still the
+    // scalar it was, and the replay's proof reads it as that scalar.
+    if logical.codegen_repr() == PhpType::Mixed && ctx.loop_scalar_entry_boxed.contains(name) {
+        match ctx.loop_scalar_entry_types.get(name) {
+            Some(PhpType::Int) => return Domain::Int,
+            Some(PhpType::Float) => return Domain::Float,
+            _ => return Domain::Unknown,
+        }
+    }
     let storage = ctx.builder.local_php_type(slot);
     let ir = ctx.builder.function().locals.get(slot.as_raw() as usize).map(|local| local.ir_type);
     if logical == PhpType::Int && storage.codegen_repr() == PhpType::Int && ir == Some(IrType::I64) {

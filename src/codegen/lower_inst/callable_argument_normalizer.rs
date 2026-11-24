@@ -53,7 +53,7 @@ pub(in crate::codegen) fn emit_callable_argument_normalizer(
         let offset = ctx.local_offset(slot)?;
         abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     }
-    super::callables::emit_runtime_mixed_callable_descriptor_value_with_type_error(
+    super::callables::emit_runtime_normalizer_descriptor_value(
         &mut ctx, helper_value(), "callable argument",
         "Argument must be a valid callback",
     )?;

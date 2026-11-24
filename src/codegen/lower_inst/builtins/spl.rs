@@ -49,6 +49,8 @@ enum IteratorApplyCallback {
     DescriptorCallable {
         callable: ValueId,
         arg_container: Option<ValueId>,
+        /// The callback is a boxed `mixed`: resolved at run time, with php's `TypeError` when invalid.
+        boxed: bool,
     },
     DescriptorString {
         callable: ValueId,
@@ -326,6 +328,16 @@ fn emit_apply_callback_state(
             abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
             Ok(())
         }
+        IteratorApplyCallback::DescriptorCallable { callable, boxed: true, .. } => {
+            callables::emit_runtime_mixed_callable_descriptor_value_with_type_error(
+                ctx,
+                *callable,
+                "iterator_apply",
+                "iterator_apply(): Argument #2 ($callback) must be a valid callback",
+            )?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            Ok(())
+        }
         IteratorApplyCallback::DescriptorCallable { callable, .. } => {
             ctx.load_value_to_result(*callable)?;
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
@@ -497,8 +509,16 @@ fn iterator_apply_callback(
             Ok(IteratorApplyCallback::DescriptorCallable {
                 callable: callback,
                 arg_container: iterator_apply_arg_container(ctx, inst)?,
+                boxed: false,
             })
         }
+        // An opaque callback is resolved when the call runs: a value that names no callable
+        // raises php's catchable TypeError there, as it does for every other callable parameter.
+        PhpType::Mixed | PhpType::Union(_) => Ok(IteratorApplyCallback::DescriptorCallable {
+            callable: callback,
+            arg_container: iterator_apply_arg_container(ctx, inst)?,
+            boxed: true,
+        }),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             Ok(IteratorApplyCallback::DescriptorCallableArray {
                 callable: callback,

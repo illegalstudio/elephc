@@ -964,6 +964,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Locals whose loop-storage contract boxed a plain scalar entry (`$sum = 0` before
     /// `$sum += $f(1)`). Set by the loop being lowered just before its closure-fact check.
     pub(crate) loop_scalar_entry_boxed: HashSet<String>,
+    /// The plain scalar type each name in `loop_scalar_entry_boxed` held before its contract
+    /// boxed it, so a numeric proof can seed the entry domain from the value, not the box.
+    pub(crate) loop_scalar_entry_types: HashMap<String, PhpType>,
     /// Named storage epochs of counters whose checked-arithmetic seed (`$j = $i + 1`) the
     /// numeric storage proof showed always fits an integer, keyed like `final_mixed_locals`.
     ///
@@ -1211,6 +1214,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             conditional_local_declarations: HashSet::default(),
             numeric_proof_sealed: false,
             loop_scalar_entry_boxed: HashSet::default(),
+            loop_scalar_entry_types: HashMap::default(),
             int_seed_bindings: HashMap::default(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,

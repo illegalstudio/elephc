@@ -2271,16 +2271,31 @@ fn emit_cleanup_locals(
     locals: Vec<(String, LocalSlotId, PhpType, usize)>,
     runtime_return_slot: Option<usize>,
 ) {
-    // A return path that picks the transferred owner at run time guards every slot's release
-    // with a comparison against it, which no batched run or table can express: walk slot by slot.
+    // A return path that picks the transferred owner at run time guards the release of every slot
+    // a return can transfer with a comparison against it, which no batched run or table can
+    // express: those walk slot by slot. A slot no return transfers is released the same way on
+    // every path, so each maximal run of them keeps the batched forms below.
     if runtime_return_slot.is_some() {
-        for (name, slot, ty, offset) in locals {
-            let done = return_epilogues::emit_transfer_guard(ctx, slot, runtime_return_slot);
+        let transferable = transferable_return_slots(ctx);
+        let mut plain: Vec<(String, LocalSlotId, PhpType, usize)> = Vec::new();
+        for entry in locals {
+            let (name, slot, ty, offset) = &entry;
+            if transferable.as_ref().is_some_and(|slots| !slots.contains(slot)) {
+                plain.push(entry);
+                continue;
+            }
+            if !plain.is_empty() {
+                emit_cleanup_locals(ctx, std::mem::take(&mut plain), None);
+            }
+            let done = return_epilogues::emit_transfer_guard(ctx, *slot, runtime_return_slot);
             ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
-            emit_owned_local_cleanup(ctx, slot, offset, &ty);
+            emit_owned_local_cleanup(ctx, *slot, *offset, ty);
             if let Some(done) = done {
                 ctx.emitter.label(&done);
             }
+        }
+        if !plain.is_empty() {
+            emit_cleanup_locals(ctx, plain, None);
         }
         return;
     }
@@ -2500,6 +2515,24 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
     )
+}
+
+/// Every local slot some return of the function can transfer to its caller, or `None` when the
+/// answer is not derivable from the return values (a by-reference return picks its own owner).
+///
+/// A slot outside the set is released identically on every return path, whichever slot the
+/// path's run-time selection names.
+fn transferable_return_slots(ctx: &FunctionContext<'_>) -> Option<HashSet<LocalSlotId>> {
+    if ctx.function.flags.by_ref_return {
+        return None;
+    }
+    let mut slots = HashSet::default();
+    for block in &ctx.function.blocks {
+        if let Some(Terminator::Return { value: Some(value) }) = &block.terminator {
+            slots.extend(return_cleanup_skip_slot(ctx, *value));
+        }
+    }
+    Some(slots)
 }
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.

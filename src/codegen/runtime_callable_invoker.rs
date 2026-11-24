@@ -4669,13 +4669,21 @@ mod tests {
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
             let mut ctx = InvokerEmitContext::new("tagged_ref_value", owners, false, false, Vec::new(), target);
             let (storage, source_tag, load_tag) = match target.arch {
-                Arch::AArch64 => ("x19", "x20", "ldr x20, [x19, #8]"),
-                Arch::X86_64 => ("r12", "r13", "mov r13, QWORD PTR [r12 + 8]"),
+                Arch::AArch64 => ("x19", "x20", "ldr x1, [x9, #8]"),
+                Arch::X86_64 => ("r12", "r13", "mov rsi, QWORD PTR [rdi + 8]"),
             };
+            // The merged invoker hands the source tag to the shared out-of-line helper, which
+            // reads the nullable-integer cell's own tag word before boxing; the argument body no
+            // longer carries the load (measured: the same `bl __rt_invoker_ref_cell_to_mixed`
+            // call as every other ref-cell argument).
             emit_materialize_invoker_ref_cell_value_as_mixed(storage, source_tag, &mut emitter, &mut ctx);
             let assembly = emitter.output();
-            assert!(assembly.contains(load_tag), "{name}: {assembly}");
-            assert!(assembly.find(load_tag).unwrap() < assembly.find("__rt_mixed_from_value").unwrap(), "{name}");
+            assert!(assembly.contains("__rt_invoker_ref_cell_to_mixed"), "{name}: {assembly}");
+            let mut runtime = Emitter::new(target);
+            crate::codegen_support::runtime::callables::emit_invoker_ref_cell_to_mixed(&mut runtime);
+            let helper = runtime.output();
+            assert!(helper.contains(load_tag), "{name}: {helper}");
+            assert!(helper.find(load_tag).unwrap() < helper.find("__rt_mixed_from_value").unwrap(), "{name}");
         }
     }
 

@@ -111,6 +111,7 @@ mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;
 mod enum_result_owners;
+mod dynamic_call_footprint;
 mod string_append;
 mod eval_ownership;
 mod eval_native_reference_layout;

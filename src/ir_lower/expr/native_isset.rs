@@ -494,7 +494,11 @@ pub(super) fn checked_object_expr_class(
     member: &Expr,
 ) -> Option<(String, bool)> {
     let checked = isset_object_expr_type(ctx, object).and_then(|ty| {
-        let ty = checked_member_receiver_type(ctx, &ty, member).unwrap_or(ty);
+        let declared_storage = matches!(
+            object.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        );
+        let ty = checked_member_receiver_type(ctx, &ty, member, declared_storage).unwrap_or(ty);
         let (class_name, nullable) = singular_object_class(&ty)?;
         normalized_class_name(class_name).map(|name| (name, nullable))
     });

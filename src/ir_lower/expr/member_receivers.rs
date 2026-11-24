@@ -45,7 +45,12 @@ pub(crate) fn refine_member_receiver_at_span(
     span: Span,
 ) -> LoweredValue {
     let original = ctx.builder.value_php_type(value.value);
-    let Some(PhpType::Object(class)) = checked_member_receiver_type_at_span(ctx, &original, span) else {
+    let declared_storage = matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(Op::PropGet | Op::LoadStaticProperty)
+    );
+    let Some(PhpType::Object(class)) =
+        checked_member_receiver_type_at_span(ctx, &original, span, declared_storage) else {
         return value;
     };
     if matches!(original, PhpType::Union(_)) {
@@ -58,19 +63,29 @@ pub(crate) fn refine_member_receiver_at_span(
 }
 
 /// Resolves the checked raw-object view before a silent probe chooses its property behavior.
+///
+/// `declared_storage` is true when the receiver is read from a declared property, whose
+/// interface type the program wrote and the checker did not infer.
 pub(super) fn checked_member_receiver_type(
     ctx: &LoweringContext<'_, '_>,
     original: &PhpType,
     member: &Expr,
+    declared_storage: bool,
 ) -> Option<PhpType> {
-    checked_member_receiver_type_at_span(ctx, original, member.span)
+    checked_member_receiver_type_at_span(ctx, original, member.span, declared_storage)
 }
 
 /// Looks up a raw-object receiver view shared by expression and statement mutation sites.
+///
+/// A receiver read from a declared property (`$holder->item instanceof Label`) keeps the checked
+/// class whatever else implements the interface: its declared type is the program's, so the
+/// `instanceof` narrowing is sound. Only an inferred receiver, an untyped parameter the checker
+/// typed by its first call site, needs the sibling-implementer guard below.
 fn checked_member_receiver_type_at_span(
     ctx: &LoweringContext<'_, '_>,
     original: &PhpType,
     span: Span,
+    declared_storage: bool,
 ) -> Option<PhpType> {
     let (original, nullable) = singular_object_class(original)?;
     // Raw concrete views remain valid; nullable projection requires a checked interface view.
@@ -88,7 +103,8 @@ fn checked_member_receiver_type_at_span(
     // class a call site passes, so `function d($x) { $x instanceof Coll && $x->first(); }` called
     // with `IntColl` and then `Sq` records `IntColl` for the call: retyping the receiver to it
     // dispatched `Sq`'s object through `IntColl`'s method slot.
-    if original != class
+    if !declared_storage
+        && original != class
         && ctx.interfaces.contains_key(original)
         && !ctx.interfaces.contains_key(class)
         && interface_has_implementer_outside(ctx, original, class)

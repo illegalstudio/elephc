@@ -1272,6 +1272,7 @@ pub(super) fn apply_loop_storage_contracts(
         ) && target_repr == PhpType::Mixed
         {
             scalar_entry_boxed.insert(name.clone());
+            ctx.loop_scalar_entry_types.insert(name.clone(), source_ty.clone());
         }
         if matches!(source_ty, PhpType::Void | PhpType::Never)
             && target_repr == PhpType::TaggedScalar

@@ -855,6 +855,28 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
     )
 }
 
+/// Resolves a boxed callback for the module-wide normalizer, whose failures are worded by the
+/// site that is calling it (see `_callable_failure_prefix`): a plain call of an unreachable
+/// method raises php's `Error`, a validated callback the `TypeError` with `message`.
+pub(in crate::codegen) fn emit_runtime_normalizer_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    message: &'static str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx,
+        callable,
+        op_name,
+        true,
+        crate::strict_php::is_enabled(),
+        Some(message),
+        Some(message),
+        None,
+        Some(InaccessibleMethodError::DirectOrGeneric(message.to_string())),
+    )
+}
+
 /// Resolves a boxed callback whose host always invokes it with one PHP argument.
 pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
     ctx: &mut FunctionContext<'_>, callable: ValueId, op_name: &str, message: &'static str,
@@ -894,7 +916,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         }
         Some(InaccessibleMethodError::DirectCall) => Some(Some(CallableResolverMiss::DirectCall)),
         // Names a value of the frame it runs in, which a shared body does not have.
-        Some(InaccessibleMethodError::Dynamic(_)) => None,
+        Some(InaccessibleMethodError::Dynamic(_) | InaccessibleMethodError::DirectOrGeneric(_)) => None,
     };
     if let Some(miss) = miss.filter(|_| callable_resolver_is_shareable(ctx, callable)) {
         let spec = CallableResolverSpec {
@@ -1785,6 +1807,10 @@ enum InaccessibleMethodError {
     /// the module-wide helper, which serves `call_user_func()`, `call_user_func_array()` and
     /// plain calls alike.
     Dynamic(ValueId),
+    /// Chosen at run time by the wording the failing site left in `_callable_failure_prefix`: an
+    /// empty wording is a plain call (`Error: Call to private method ...`), anything else, or no
+    /// wording at all, is a validated callback with this prefix. Used by the shared normalizer.
+    DirectOrGeneric(String),
 }
 
 /// Resolves a callable array whose method the class does not offer to the class's `__call()`.
@@ -2043,6 +2069,36 @@ fn emit_inaccessible_method_error(
     // quotes the method name exactly as the caller spelled it).
     match error {
         InaccessibleMethodError::Ignore => unreachable!("filtered above"),
+        InaccessibleMethodError::DirectOrGeneric(prefix) => {
+            // The failing site left its wording in `_callable_failure_prefix`: a non-null pointer
+            // with a zero length is a plain call, anything else a validated callback. Only the
+            // scratch registers are touched, the record address waits in the result register.
+            let direct = ctx.next_label("callable_array_inaccessible_direct");
+            let generic = ctx.next_label("callable_array_inaccessible_generic");
+            let address = abi::symbol_scratch_reg(ctx.emitter);
+            let word = abi::secondary_scratch_reg(ctx.emitter);
+            abi::emit_symbol_address(ctx.emitter, address, "_callable_failure_prefix");
+            abi::emit_load_from_address(ctx.emitter, word, address, 0);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {word}, {generic}")), // no site left a wording: the builtin's own
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {word}, {word}"));   // no site left a wording?
+                    ctx.emitter.instruction(&format!("jz {generic}"));          // use the builtin's own
+                }
+            }
+            abi::emit_load_from_address(ctx.emitter, word, address, 8);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {word}, {direct}")), // an empty wording is a plain call
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {word}, {word}"));   // empty wording?
+                    ctx.emitter.instruction(&format!("jz {direct}"));           // a plain call
+                }
+            }
+            ctx.emitter.label(&generic);
+            emit_inaccessible_method_throw(ctx, &InaccessibleMethodError::InvalidCallback(prefix.clone()));
+            ctx.emitter.label(&direct);
+            emit_inaccessible_method_throw(ctx, &InaccessibleMethodError::DirectCall);
+        }
         InaccessibleMethodError::Dynamic(kind) => {
             let user_func = ctx.next_label("callable_array_inaccessible_user_func");
             let user_func_array = ctx.next_label("callable_array_inaccessible_user_func_array");
@@ -5143,7 +5199,7 @@ fn emit_mixed_callable_array_descriptor_lookup(
             CallableResolverMiss::InvalidCallback(prefix.clone())
         }
         InaccessibleMethodError::DirectCall => CallableResolverMiss::DirectCall,
-        InaccessibleMethodError::Dynamic(_) => {
+        InaccessibleMethodError::Dynamic(_) | InaccessibleMethodError::DirectOrGeneric(_) => {
             return emit_inline_callable_array_lookup(
                 ctx, instance_targets, static_cases, miss_label, inaccessible,
             );

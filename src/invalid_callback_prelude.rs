@@ -88,7 +88,120 @@ fn arity_error_helper() -> Stmt {
 pub(crate) fn declarations(program: &Program, deep: bool) -> Program {
     let abstract_methods = abstract_method_keys(program);
     let classes = declared_class_names(program);
-    php_semantics_declarations(|| vec![helper(&abstract_methods, &classes, deep), arity_error_helper()])
+    let tables = method_tables(program);
+    php_semantics_declarations(|| {
+        vec![helper(&abstract_methods, &classes, &tables, deep), arity_error_helper()]
+    })
+}
+
+/// Most `class::method` entries the light helper embeds; a larger program answers every missing
+/// method as "does not have a method" instead of growing the binary by an unbounded string.
+const INSTANCE_TABLE_LIMIT: usize = 200_000;
+
+/// One declaration the instance-method table is flattened from.
+struct MethodOwner {
+    parent: Option<String>,
+    traits: Vec<String>,
+    instance_methods: Vec<String>,
+    /// Methods only the class (private) or its family (protected) can reach, with that word.
+    restricted_methods: Vec<(String, &'static str)>,
+}
+
+/// The two compile-time method tables the light helper reads with `strpos`.
+struct MethodTables {
+    /// `|class::method|...` for every non-static method.
+    instance: String,
+    /// `|class::method:private|` and `|class::method:protected|` entries.
+    restricted: String,
+}
+
+/// `|class::method|class::method|` for every non-static method a declared class has, its
+/// ancestors' and its traits' included, all lower-cased. The light helper looks a callable's
+/// method up in it with one `strpos`, which is how it tells "exists but is not static" (php's
+/// non-static wording) from "does not exist" without asking the class tables by name. Empty when
+/// there is nothing to say or the table would pass [`INSTANCE_TABLE_LIMIT`]. Trait adaptations
+/// (`insteadof`, `as`) are not applied: an aliased trait method is judged by its own name.
+///
+/// The second table lists the methods php refuses with `cannot access private method C::m()`
+/// (`Call to private method C::m() from global scope` when called directly): a private method
+/// belongs to its own class only, a protected one is inherited.
+fn method_tables(program: &Program) -> MethodTables {
+    let mut owners: std::collections::BTreeMap<String, MethodOwner> = std::collections::BTreeMap::new();
+    let mut classes: Vec<String> = Vec::new();
+    crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+        let (name, extends, trait_uses, methods, is_class) = match &stmt.kind {
+            StmtKind::ClassDecl { name, extends, trait_uses, methods, .. } => {
+                (name, extends.as_ref().map(|parent| parent.as_str()), trait_uses.as_slice(), methods, true)
+            }
+            StmtKind::TraitDecl { name, trait_uses, methods, .. } => {
+                (name, None, trait_uses.as_slice(), methods, false)
+            }
+            _ => return,
+        };
+        let key = name.trim_start_matches('\\').to_ascii_lowercase();
+        if is_class {
+            classes.push(key.clone());
+        }
+        owners.insert(key, MethodOwner {
+            parent: extends.map(|parent| parent.trim_start_matches('\\').to_ascii_lowercase()),
+            traits: trait_uses.iter()
+                .flat_map(|used| used.trait_names.iter())
+                .map(|used| used.as_str().trim_start_matches('\\').to_ascii_lowercase())
+                .collect(),
+            instance_methods: methods.iter()
+                .filter(|method| !method.is_static && !method.is_abstract)
+                .map(|method| method.name.to_ascii_lowercase())
+                .collect(),
+            restricted_methods: methods.iter()
+                .filter_map(|method| match method.visibility {
+                    crate::parser::ast::Visibility::Public => None,
+                    crate::parser::ast::Visibility::Protected => {
+                        Some((method.name.to_ascii_lowercase(), "protected"))
+                    }
+                    crate::parser::ast::Visibility::Private => {
+                        Some((method.name.to_ascii_lowercase(), "private"))
+                    }
+                })
+                .collect(),
+        });
+    });
+    let mut instance = String::new();
+    let mut restricted = String::new();
+    let mut entries = 0usize;
+    for class in &classes {
+        let mut pending = vec![class.clone()];
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(owner) = pending.pop() {
+            if !seen.insert(owner.clone()) {
+                continue;
+            }
+            let Some(decl) = owners.get(&owner) else { continue };
+            for method in &decl.instance_methods {
+                entries += 1;
+                if entries > INSTANCE_TABLE_LIMIT {
+                    return MethodTables { instance: String::new(), restricted: String::new() };
+                }
+                instance.push_str(&format!("|{class}::{method}"));
+            }
+            for (method, word) in &decl.restricted_methods {
+                // A private method is not part of a subclass; a trait's methods are the using
+                // class's own.
+                if *word == "private" && owner != *class && classes.contains(&owner) {
+                    continue;
+                }
+                restricted.push_str(&format!("|{class}::{method}:{word}"));
+            }
+            pending.extend(decl.parent.iter().cloned());
+            pending.extend(decl.traits.iter().cloned());
+        }
+    }
+    if !instance.is_empty() {
+        instance.push('|');
+    }
+    if !restricted.is_empty() {
+        restricted.push('|');
+    }
+    MethodTables { instance, restricted }
 }
 
 /// Lower-cased names of the classes and interfaces the program declares.
@@ -173,7 +286,8 @@ fn quoted(lead: &str, middle: Expr, tail: &str) -> Expr {
 }
 
 /// Builds `__elephc_invalid_callback(mixed $callback, string $prefix): mixed`.
-fn helper(abstract_methods: &[String], classes: &[String], deep: bool) -> Stmt {
+fn helper(abstract_methods: &[String], classes: &[String], tables: &MethodTables, deep: bool) -> Stmt {
+    let instance_methods = tables.instance.as_str();
     let not_string_or_object = e_binop(
         e_not(e_call("is_string", vec![e_var("first")])),
         BinOp::And,
@@ -283,12 +397,68 @@ fn helper(abstract_methods: &[String], classes: &[String], deep: bool) -> Stmt {
             ],
         ));
     }
+    // A method the caller's scope cannot reach: php words it as its own reason, naming the
+    // visibility. A scope that could reach it never gets here, so the answer needs no scope but
+    // the direct call's `from global scope` tail.
+    if !tables.restricted.is_empty() {
+        for word in ["private", "protected"] {
+            let key = e_concat_all(vec![
+                e_str("|"),
+                e_call("strtolower", vec![e_var("class")]),
+                e_str("::"),
+                e_call("strtolower", vec![e_var("method")]),
+                e_str(&format!(":{word}|")),
+            ]);
+            array_arm.push(s_if(
+                e_binop(
+                    e_call("strpos", vec![e_str(&tables.restricted), key]),
+                    BinOp::StrictNotEq,
+                    e_bool(false),
+                ),
+                fail(
+                    e_concat_all(vec![
+                        e_str(&format!("Call to {word} method ")),
+                        e_var("class"),
+                        e_str("::"),
+                        e_var("method"),
+                        e_str("() from global scope"),
+                    ]),
+                    e_concat_all(vec![
+                        e_str(&format!("cannot access {word} method ")),
+                        e_var("class"),
+                        e_str("::"),
+                        e_var("method"),
+                        e_str("()"),
+                    ]),
+                ),
+                vec![],
+                None,
+            ));
+        }
+    }
     // A method the class does not have. Without the introspection builtins this is the answer for
     // every method that is not abstract, which is the common failure of a callable array.
     let method_missing = if deep {
         e_not(e_call("method_exists", vec![e_var("first"), e_var("method")]))
-    } else {
+    } else if instance_methods.is_empty() {
         e_bool(true)
+    } else {
+        // The program's own non-static methods, flattened at compile time: a hit is a method that
+        // exists and only lacks an object, which php words as its own reason below.
+        e_binop(
+            e_call("strpos", vec![
+                e_str(instance_methods),
+                e_concat_all(vec![
+                    e_str("|"),
+                    e_call("strtolower", vec![e_var("class")]),
+                    e_str("::"),
+                    e_call("strtolower", vec![e_var("method")]),
+                    e_str("|"),
+                ]),
+            ]),
+            BinOp::StrictEq,
+            e_bool(false),
+        )
     };
     array_arm.push(s_if(
         method_missing,

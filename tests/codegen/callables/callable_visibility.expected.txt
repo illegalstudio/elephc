@@ -1,0 +1,55 @@
+viaCuf 0: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method H::priv()
+viaCuf 1: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::prot()
+viaCuf 2: ok
+viaCuf 3: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaCuf 4: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaCuf 5: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaCuf 6: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaCuf 7: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nosuch"
+viaCuf 8: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class "NoClass" not found
+viaCuf 9: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, function "nofunction" not found or invalid function name
+viaCuf 10: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given
+viaCufa 0: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access private method H::priv()
+viaCufa 1: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::prot()
+viaCufa 2: ok
+viaCufa 3: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaCufa 4: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaCufa 5: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaCufa 6: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaCufa 7: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nosuch"
+viaCufa 8: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, class "NoClass" not found
+viaCufa 9: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nofunction" not found or invalid function name
+viaCufa 10: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given
+viaMap 0: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access private method H::priv()
+viaMap 1: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access protected method H::prot()
+viaMap 2: ok
+viaMap 3: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access private method H::spriv()
+viaMap 4: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access protected method H::sprot()
+viaMap 5: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access private method H::spriv()
+viaMap 6: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access protected method H::sprot()
+viaMap 7: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, class H does not have a method "nosuch"
+viaMap 8: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, class "NoClass" not found
+viaMap 9: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, function "nofunction" not found or invalid function name
+viaMap 10: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, no array or string given
+viaDirect 0: Error: Call to private method H::priv() from global scope
+viaDirect 1: Error: Call to protected method H::prot() from global scope
+viaDirect 2: ok
+viaDirect 3: Error: Call to private method H::spriv() from global scope
+viaDirect 4: Error: Call to protected method H::sprot() from global scope
+viaDirect 5: Error: Call to private method H::spriv() from global scope
+viaDirect 6: Error: Call to protected method H::sprot() from global scope
+viaDirect 7: Error: Call to undefined method H::nosuch()
+viaDirect 8: Error: Class "NoClass" not found
+viaDirect 9: Error: Call to undefined function nofunction()
+viaDirect 10: Error: Value of type int is not callable
+viaUsort 0: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access private method H::priv()
+viaUsort 1: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access protected method H::prot()
+viaUsort 2: ok
+viaUsort 3: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaUsort 4: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaUsort 5: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access private method H::spriv()
+viaUsort 6: TypeError: usort(): Argument #2 ($callback) must be a valid callback, cannot access protected method H::sprot()
+viaUsort 7: TypeError: usort(): Argument #2 ($callback) must be a valid callback, class H does not have a method "nosuch"
+viaUsort 8: TypeError: usort(): Argument #2 ($callback) must be a valid callback, class "NoClass" not found
+viaUsort 9: TypeError: usort(): Argument #2 ($callback) must be a valid callback, function "nofunction" not found or invalid function name
+viaUsort 10: TypeError: usort(): Argument #2 ($callback) must be a valid callback, no array or string given

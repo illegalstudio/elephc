@@ -2563,3 +2563,47 @@ fn test_unresolvable_boxed_callables_raise_php_catchable_errors_with_eval_linked
     let out = run_invalid_callbacks("$code = $argc > 9 ? 'return 1;' : ''; eval($code);");
     assert_eq!(out, include_str!("invalid_callbacks.expected.txt"));
 }
+
+/// A private or protected method named by an opaque callable (`[$h, 'priv']`, `['H', 'spriv']`,
+/// `'H::sprot'`) from the global scope is refused with php's visibility wording through every
+/// route: `cannot access private method H::spriv()` for a validating builtin and
+/// `Call to private method H::spriv() from global scope` for `$f()`. Oracle: `php -n` printed
+/// `callable_visibility.expected.txt`.
+#[test]
+fn test_inaccessible_boxed_callables_name_their_visibility_like_php() {
+    let source = include_str!("callable_visibility.php").replace("EVAL_LINE", "");
+    assert_eq!(compile_and_run(&source), include_str!("callable_visibility.expected.txt"));
+}
+
+/// The same matrix with the eval bridge linked, where the module-wide callback normalizer and
+/// the eval fallbacks sit in front of the dispatchers.
+#[test]
+fn test_inaccessible_boxed_callables_name_their_visibility_with_eval_linked() {
+    let source = include_str!("callable_visibility.php")
+        .replace("EVAL_LINE", "$code = $argc > 9 ? 'return 1;' : ''; eval($code);");
+    assert_eq!(compile_and_run(&source), include_str!("callable_visibility.expected.txt"));
+}
+
+/// `iterator_apply()` with an opaque (`mixed`) callback resolves it when the call runs: a valid
+/// name applies, a missing function or a non-callable raises php's `TypeError` with its reason.
+/// Oracle: `php -n` printed `iterator_apply_mixed.expected.txt`.
+#[test]
+fn test_iterator_apply_accepts_a_mixed_callback_and_rejects_invalid_ones_like_php() {
+    assert_eq!(
+        compile_and_run(include_str!("iterator_apply_mixed.php")),
+        include_str!("iterator_apply_mixed.expected.txt")
+    );
+}
+
+/// The same matrix in a program that never asks a class about its methods by name, which keeps
+/// the closed world small and so gets the helper's light form: an unknown class, an abstract
+/// method and a non-static method called statically must read exactly as in the full form.
+/// Oracle: the same `php -n` output.
+#[test]
+fn test_unresolvable_boxed_callables_keep_php_reasons_without_class_introspection() {
+    let source = include_str!("invalid_callbacks.php")
+        .replace("if ($argc > 99) { var_dump(method_exists(\"H\", \"greet\")); }", "")
+        .replace("EVAL_LINE", "");
+    assert!(!source.contains("method_exists"));
+    assert_eq!(compile_and_run(&source), include_str!("invalid_callbacks.expected.txt"));
+}

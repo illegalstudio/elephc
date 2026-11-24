@@ -1,0 +1,4 @@
+case 0: 3
+case 1: TypeError: iterator_apply(): Argument #2 ($callback) must be a valid callback, function "nosuchfunction" not found or invalid function name
+case 2: TypeError: iterator_apply(): Argument #2 ($callback) must be a valid callback, no array or string given
+ticks 3
