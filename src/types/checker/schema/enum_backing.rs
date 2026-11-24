@@ -51,22 +51,22 @@ pub(super) fn fold_backing_value(
     // A joined concatenation can decide a ternary whose skipped branch is not a literal
     // (`('n' . 1) ? 6 : $v`); the forms check already let PHP's compile-time pruning skip it.
     crate::types::deferred_defaults::prune_literal_branches(&mut value);
+    // An array literal is an array value once it builds cleanly (empty, keyed and nested ones
+    // too). A key PHP refuses or reports before the type check (an array, `null`, a fractional
+    // float, an append past `PHP_INT_MAX`) leaves it undecided, as for a ternary condition.
+    if matches!(
+        value.kind,
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
+    ) {
+        return crate::types::deferred_defaults::literal_truthiness(&value)
+            .map(|_| FoldedBacking::OtherType("array"));
+    }
     match value.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value)),
         ExprKind::FloatLiteral(_) => Some(FoldedBacking::OtherType("float")),
         ExprKind::BoolLiteral(_) => Some(FoldedBacking::OtherType("bool")),
         ExprKind::Null => Some(FoldedBacking::OtherType("null")),
-        // A keyed literal can hold a key PHP refuses before the type check, so only a list of
-        // scalar literals is known to be an array value.
-        ExprKind::ArrayLiteral(values) if values.iter().all(|value| matches!(
-            value.kind,
-            ExprKind::IntLiteral(_)
-                | ExprKind::StringLiteral(_)
-                | ExprKind::FloatLiteral(_)
-                | ExprKind::BoolLiteral(_)
-                | ExprKind::Null
-        )) => Some(FoldedBacking::OtherType("array")),
         _ => None,
     }
 }

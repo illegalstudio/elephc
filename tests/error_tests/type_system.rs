@@ -3919,6 +3919,10 @@ fn test_error_enum_case_type_mismatch_uses_php_message() {
         ("int", "true", "bool"),
         ("int", "null", "null"),
         ("int", "[1]", "array"),
+        ("int", "[]", "array"),
+        ("int", "['a' => 1]", "array"),
+        ("int", "[[1]]", "array"),
+        ("int", "[1 => 2, 3]", "array"),
         ("string", "1", "int"),
         ("string", "1.5", "float"),
     ] {
