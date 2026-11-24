@@ -51,6 +51,7 @@ pub(crate) use compilation_context::{
     compile_is_web_sapi, compile_php_version, linked_extensions, memory_limit_bytes,
     opcache_api_restricted, opcache_manifest_len,
 };
+pub use compilation_context::parse_memory_limit_bytes;
 #[allow(unused_imports)]
 pub use compilation_context::{
     autoload_rule_count, ini_bool, ini_overrides, parse_startup_memory_limit_bytes,

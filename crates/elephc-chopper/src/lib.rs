@@ -8,5 +8,6 @@
 //! - The scanner keeps original source bytes and exposes shared lexical rules.
 //! - The syntax module builds compiler ASTs and validates TOKEN_PARSE requests.
 
+pub mod pfa;
 pub mod scanner;
 pub mod syntax;

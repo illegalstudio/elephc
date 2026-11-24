@@ -472,11 +472,6 @@ pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
 }
 
-/// `clone value`.
-pub fn e_clone(value: Expr) -> Expr {
-    Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
-}
-
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -810,12 +805,12 @@ impl ClosureBuilder {
 
     /// Builds the closure expression.
     pub fn build(self) -> Expr {
-        let mut param_attributes = Vec::new();
+        let mut param_attributes: Vec<Vec<crate::parser::ast::AttributeGroup>> = Vec::new();
         param_attributes.resize(self.params.len(), Vec::new());
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
-                param_attributes: Vec::new(),
+                param_attributes,
                 variadic: None,
                 variadic_by_ref: false,
                 variadic_type: None,

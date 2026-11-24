@@ -395,6 +395,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         resolved,
         false,
         false,
+        false,
         &mut prelude_inventory,
     );
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -890,6 +891,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     );
     let resolved = elephc::core_prelude::inject_if_used(
         resolved,
+        false,
         false,
         false,
         &mut prelude_inventory,

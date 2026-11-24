@@ -84,6 +84,20 @@ pub(crate) fn emit_runtime_data_fixed(
         super::super::concat_scratch_capacity(heap_size),
         target,
     ));
+    for name in [
+        "__elephc_stream_read_count",
+        "__elephc_stream_read_excess",
+        "__elephc_stream_read_class",
+        "__elephc_stream_read_missing",
+        "__elephc_stream_cast_count",
+        "__elephc_stream_cast_class",
+        "__elephc_stream_write_returned",
+        "__elephc_stream_write_requested",
+        "__elephc_stream_write_missing",
+        "__elephc_stream_write_class",
+    ] {
+        out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
+    }
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.

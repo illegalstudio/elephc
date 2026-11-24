@@ -103,6 +103,16 @@ pub mod optimize;
 /// Parser for PHP syntax.
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
+/// PHP 8.6 partial function application desugaring.
+pub mod pfa;
+/// PHP 8.6 stream-error rewriting helpers.
+pub mod stream_errors;
+/// PHP 8.6 stream-error prelude injection.
+pub(crate) mod stream_errors_prelude;
+/// PHP 8.6 `Io\Poll` prelude injection.
+pub(crate) mod io_poll_prelude;
+/// PHP 8.6 `pack()`/`unpack()` endianness prelude injection.
+pub(crate) mod pack_prelude;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
 /// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.

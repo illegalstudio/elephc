@@ -51,15 +51,65 @@ struct Projection<'a> {
 impl CompilerOutput for Projection<'_> {
     /// Materializes one scanner event and stops at the first compiler diagnostic.
     fn emit(&mut self, lexeme: CompilerLexeme, start: usize, end: usize) -> Option<usize> {
-        self.cursor.skip_bytes(start - self.cursor.position());
-        match self.project(lexeme, end - start) {
+        // The byte scanner skips comments, so recover the last doc comment from the gap
+        // before this token and attach it to the first token the event emits (a string or
+        // heredoc event emits several tokens; PHP's doc comment belongs to the literal).
+        let gap_start = self.cursor.position();
+        let gap_len = start - gap_start;
+        let gap = &self.cursor.remaining()[..gap_len];
+        let doc_comment = last_doc_comment(gap);
+        self.cursor.skip_bytes(gap_len);
+        let first_token = self.tokens.len();
+        let result = match self.project(lexeme, end - start) {
             Ok(()) => Some(self.cursor.position()),
             Err(error) => {
                 self.error = Some(error);
                 None
             }
+        };
+        if let Some(doc) = doc_comment {
+            if let Some((_, metadata)) = self.tokens.get_mut(first_token) {
+                let span = metadata.span;
+                *metadata = std::mem::replace(metadata, TokenMetadata::new(span))
+                    .with_doc_comment(Some(doc));
+            }
         }
+        result
     }
+}
+
+/// Returns the last `/** ... */` doc comment in the whitespace/comment gap before a token.
+///
+/// Mirrors PHP's lexer rules: only `/**` followed by whitespace opens a doc comment, a later
+/// ordinary comment does not erase an earlier doc comment, and `#[` starts an attribute rather
+/// than a `#` line comment.
+fn last_doc_comment(gap: &str) -> Option<String> {
+    let mut rest = gap;
+    let mut doc_comment = None;
+    loop {
+        rest = rest.trim_start();
+        if let Some(tail) = rest.strip_prefix("//") {
+            rest = tail.split_once('\n').map_or("", |(_, rest)| rest);
+            continue;
+        }
+        if rest.starts_with('#') && !rest.starts_with("#[") {
+            rest = rest[1..].split_once('\n').map_or("", |(_, rest)| rest);
+            continue;
+        }
+        if rest.starts_with("/*") {
+            let is_doc = rest.starts_with("/**")
+                && rest.as_bytes().get(3).is_some_and(u8::is_ascii_whitespace);
+            let Some(close) = rest[2..].find("*/") else { break };
+            let end = 2 + close + 2;
+            if is_doc {
+                doc_comment = Some(rest[..end].to_string());
+            }
+            rest = &rest[end..];
+            continue;
+        }
+        break;
+    }
+    doc_comment
 }
 
 impl Projection<'_> {

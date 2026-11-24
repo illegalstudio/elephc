@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1114 / 2169** (51%), classes **202 / 329** (61%), constants **1617 / 3181** (51%).
+Overall coverage: functions **1118 / 2169** (52%), classes **203 / 329** (62%), constants **1617 / 3181** (51%).
 
 ## Coverage by PHP module
 
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 392 / 545 · 72% | 3 / 6 · 50% | 174 / 400 · 44% |
+| `standard` | 396 / 545 · 73% | 3 / 6 · 50% | 174 / 400 · 44% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -98,7 +98,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 392 / 353
+- `standard` functions: 396 / 355
 - `standard` constants: 174 / 153
 
 Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
@@ -109,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 26 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `CURLINFO_SIZE_DELIVERED` (PHP 8.6), `CURLOPT_SEEKFUNCTION` (PHP 8.6), `CURL_READFUNC_ABORT` (PHP 8.6), `CURL_SEEKFUNC_CANTSEEK` (PHP 8.6), `CURL_SEEKFUNC_FAIL` (PHP 8.6), `CURL_SEEKFUNC_OK` (PHP 8.6), `MYSQLI_OPT_COMPRESS` (PHP 8.6), `STREAM_CRYPTO_STATUS_NONE` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_READ` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_WRITE` (PHP 8.6), `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `Uri\Rfc3986\UriBuilder` (PHP 8.6), `Uri\Rfc3986\UriHostType` (PHP 8.6), `Uri\Rfc3986\UriType` (PHP 8.6), `Uri\WhatWg\UrlBuilder` (PHP 8.6), `Uri\WhatWg\UrlHostType` (PHP 8.6), `Uri\WhatWg\UrlPercentEncodingMode` (PHP 8.6), `clamp()` (PHP 8.6), `gmp_powm_sec()` (PHP 8.6), `gmp_prevprime()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6), `stream_socket_get_crypto_status()` (PHP 8.6), `url_percent_encode()` (PHP 8.6).
+elephc also implements 20 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `CURLINFO_SIZE_DELIVERED` (PHP 8.6), `CURLOPT_SEEKFUNCTION` (PHP 8.6), `CURL_READFUNC_ABORT` (PHP 8.6), `CURL_SEEKFUNC_CANTSEEK` (PHP 8.6), `CURL_SEEKFUNC_FAIL` (PHP 8.6), `CURL_SEEKFUNC_OK` (PHP 8.6), `MYSQLI_OPT_COMPRESS` (PHP 8.6), `STREAM_CRYPTO_STATUS_NONE` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_READ` (PHP 8.6), `STREAM_CRYPTO_STATUS_WANT_WRITE` (PHP 8.6), `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `clamp()` (PHP 8.6), `gmp_powm_sec()` (PHP 8.6), `gmp_prevprime()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6), `stream_socket_get_crypto_status()` (PHP 8.6), `url_percent_encode()` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 

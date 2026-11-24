@@ -720,12 +720,9 @@ fn parse_closure_params(
                 break;
             }
         }
-        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+        let leading_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
-        let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
-        if retain_attributes {
-            param_attributes.push(attributes);
-        }
+        let mut attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
         // Promotion modifiers are grammar-valid on closure parameters too; PHP rejects them
         // while compiling the declaration.
         if validation_only() {
@@ -760,6 +757,11 @@ fn parse_closure_params(
             variadic = Some(name.to_owned());
             variadic_by_ref = is_ref;
             variadic_type = type_ann;
+            let trailing_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
+            if retain_attributes || leading_doc.is_some() || trailing_doc.is_some() {
+                append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
+                param_attributes.push(attributes);
+            }
             *pos += 1;
             continue;
         }
@@ -774,6 +776,11 @@ fn parse_closure_params(
         } else {
             None
         };
+        let trailing_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
+        if retain_attributes || leading_doc.is_some() || trailing_doc.is_some() {
+            append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
+            param_attributes.push(attributes);
+        }
         params.push((name.to_owned(), type_ann, default, is_ref));
     }
     if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
@@ -781,6 +788,19 @@ fn parse_closure_params(
     }
     *pos += 1;
     Ok((params, param_attributes, variadic, variadic_by_ref, variadic_type))
+}
+
+/// Attaches a leading or trailing closure-parameter doc comment to its attribute list.
+fn append_param_doc_comment(
+    tokens: &[SpannedToken],
+    pos: usize,
+    leading: Option<String>,
+    attributes: &mut Vec<crate::syntax::parser::ast::AttributeGroup>,
+) {
+    let trailing = crate::syntax::parser::doc_comments::doc_comment_before(tokens, pos);
+    if let Some(doc) = trailing.or(leading) {
+        attributes.push(crate::syntax::parser::doc_comments::doc_comment_attribute(doc));
+    }
 }
 
 /// Parses the tail of a function-style call once the name and its opening `(` have been

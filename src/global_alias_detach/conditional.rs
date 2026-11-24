@@ -888,7 +888,8 @@ impl ConditionalDetach {
             | ExprKind::This
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::MagicConstant(_) => None,
+            | ExprKind::MagicConstant(_)
+            | ExprKind::Runtime(_) => None,
         };
         if let Some(replacement) = replacement {
             *expr = replacement;

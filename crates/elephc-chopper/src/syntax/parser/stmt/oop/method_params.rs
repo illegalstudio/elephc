@@ -86,10 +86,10 @@ pub(super) fn parse_method_params(
                 break;
             }
         }
-        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+        let leading_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.
-        let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        let mut attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
         // PHP accepts a parameter after the variadic and promoted properties on any method
         // through TOKEN_PARSE; both are rejected while COMPILING the declaration, so the
         // validation build must not fail them.
@@ -364,8 +364,8 @@ fn append_param_doc_comment(
     leading: Option<String>,
     attributes: &mut Vec<AttributeGroup>,
 ) {
-    let trailing = crate::parser::doc_comments::doc_comment_before(tokens, pos);
+    let trailing = crate::syntax::parser::doc_comments::doc_comment_before(tokens, pos);
     if let Some(doc) = trailing.or(leading) {
-        attributes.push(crate::parser::doc_comments::doc_comment_attribute(doc));
+        attributes.push(crate::syntax::parser::doc_comments::doc_comment_attribute(doc));
     }
 }

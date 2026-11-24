@@ -411,11 +411,3 @@ pub(super) fn lower_reflection_function_invoke_unsupported(
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }
-
-/// Returns whether `class_name` is one of the contract's internal-final classes.
-fn is_final_internal_class(class_name: &str) -> bool {
-    let key = php_symbol_key(class_name.trim_start_matches('\\'));
-    elephc_builtin_contract::INTERNAL_FINAL_CLASSES
-        .iter()
-        .any(|name| php_symbol_key(name) == key)
-}

@@ -143,6 +143,20 @@ fn reject_non_list_args(argument: &Expr, parameter: &str) -> Result<(), CompileE
                 reject_nul_value(value, parameter)?;
                 next += 1;
             }
+            ArrayEntry::Reference(value) => {
+                reject_nul_value(value, parameter)?;
+                next += 1;
+            }
+            ArrayEntry::KeyReference(key, value) => {
+                if !matches!(&key.kind, ExprKind::IntLiteral(found) if *found == next) {
+                    return Err(CompileError::new(
+                        argument.span,
+                        "pcntl_exec(): Argument #2 ($args) must be a list array",
+                    ));
+                }
+                reject_nul_value(value, parameter)?;
+                next += 1;
+            }
             // A spread's shape is only known at runtime.
             ArrayEntry::Spread(_) => {}
         }

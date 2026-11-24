@@ -43,6 +43,11 @@ pub(crate) use callables::{
 };
 
 impl Checker {
+    /// Returns whether a name is a language construct that the deprecation pass must skip.
+    fn is_lazy_construct_for_deprecation(name: &str) -> bool {
+        matches!(name, "isset" | "unset" | "empty" | "exit" | "die")
+    }
+
     /// Records an external link library required on every target.
     pub(crate) fn require_builtin_library(&mut self, library: &str) {
         self.require_builtin_library_identity(library);

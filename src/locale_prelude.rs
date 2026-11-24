@@ -35,6 +35,12 @@ const LOCALE_NAME_LIMIT: i64 = 255;
 /// `null` and `""` take the locale from the environment, only `"0"` queries the current
 /// locale, and a name of 255 bytes or more warns and moves on to the next candidate.
 fn setlocale_function() -> Stmt {
+    let php86 = || {
+        e_bool(
+            crate::codegen_support::compile_php_version()
+                >= crate::php_version::PhpVersion::Php86,
+        )
+    };
     let coercible_scalar = e_binop(
         e_binop(
             e_call("is_string", vec![e_var("argument")]),
@@ -109,6 +115,26 @@ fn setlocale_function() -> Stmt {
         // `null` becomes "", a nested array warns and becomes "Array", and an object without
         // `__toString()` throws.
         s_assign("name", e_cast(CastType::String, e_var("locale"))),
+        // PHP 8.6: locale names cannot contain NUL bytes.
+        s_if(
+            e_binop(
+                php86(),
+                BinOp::And,
+                e_binop(
+                    e_call("strpos", vec![e_var("name"), e_str("\0")]),
+                    BinOp::StrictNotEq,
+                    e_bool(false),
+                ),
+            ),
+            vec![s_throw(e_new(
+                "ValueError",
+                vec![e_str(
+                    "setlocale(): Argument #2 ($locales) must not contain any null bytes",
+                )],
+            ))],
+            vec![],
+            None,
+        ),
         s_if(
             e_binop(e_var("name"), BinOp::StrictEq, e_str("0")),
             vec![s_return(e_call(
@@ -149,6 +175,26 @@ fn setlocale_function() -> Stmt {
         ),
     ];
     let body = vec![
+        // PHP 8.6: an array $locales cannot be followed by additional arguments.
+        s_if(
+            e_binop(
+                php86(),
+                BinOp::And,
+                e_binop(
+                    e_call("is_array", vec![e_var("locales")]),
+                    BinOp::And,
+                    e_binop(e_call("count", vec![e_var("rest")]), BinOp::Gt, e_int(0)),
+                ),
+            ),
+            vec![s_throw(e_new(
+                "ArgumentCountError",
+                vec![e_str(
+                    "setlocale() expects exactly 2 arguments when argument #2 ($locales) is an array",
+                )],
+            ))],
+            vec![],
+            None,
+        ),
         s_assign("arguments", e_array(vec![e_var("locales")])),
         s_foreach(
             e_var("rest"),

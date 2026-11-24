@@ -146,6 +146,7 @@ pub(super) fn reflection_property_hook_members(
                 get_by_ref,
                 return_type,
                 None,
+                None,
                 info.method_attribute_names
                     .get(&php_symbol_key(&property_hook_get_method(property_name)))
                     .cloned()
@@ -184,6 +185,7 @@ pub(super) fn reflection_property_hook_members(
                     reflection_builtin_named_type("void", false),
                 )),
                 parameter_type,
+                set_parameter_doc_comment,
                 info.method_attribute_names
                     .get(&php_symbol_key(&property_hook_set_method(property_name)))
                     .cloned()
@@ -210,6 +212,7 @@ pub(super) fn reflection_property_hook_method_member(
     returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
+    parameter_doc_comment: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<crate::types::AttrArgEntry>>>,
 ) -> ReflectionListedMember {

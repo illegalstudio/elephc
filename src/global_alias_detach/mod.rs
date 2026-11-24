@@ -625,7 +625,8 @@ fn rewrite_expr(expr: &mut Expr, name: &str, hidden: &str) {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::MagicConstant(_) => {}
+        | ExprKind::MagicConstant(_)
+        | ExprKind::Runtime(_) => {}
         ExprKind::Variable(_) => {}
         ExprKind::NewGeneric { args, .. } => {
             for arg in args {

@@ -52,11 +52,15 @@ mod codegen {
     mod xml;
     mod tokenizer;
     mod calendar;
+    mod time_duration_php_src;
+    mod time_duration_serialization;
+    mod php86_argument_validation;
     mod system;
     mod json;
     mod preg_errors_grep;
     mod preg_runtime_parity;
     mod uri_php_src;
+    mod uri86_php_src;
     mod uri;
     mod preg_match_window;
     mod serialize;
@@ -71,6 +75,7 @@ mod codegen {
     mod fileinfo_wrapper_stat;
     mod fileinfo_stream_magic;
     mod gmp_phpt;
+    mod gmp_php86;
     mod gmp_eval;
     mod gmp_class;
     mod gmp_math;

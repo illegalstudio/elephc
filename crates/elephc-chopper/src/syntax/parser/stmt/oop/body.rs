@@ -1379,9 +1379,10 @@ fn parse_property_hooks(
         // property type governs); the default parameter name is `$value`.
         let mut set_param = "value".to_string();
         let mut set_param_type = None;
+        let mut hook_param_attributes = Vec::new();
         if is_set && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
             *pos += 1;
-            let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+            let leading_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
             if looks_like_typed_param(tokens, *pos) {
                 set_param_type = Some(parse_type_expr(tokens, pos, hook_span)?);
             } else if crate::syntax::parser::runtime_fragment() && prop_type.is_some() {
@@ -1399,10 +1400,10 @@ fn parse_property_hooks(
                     ))
                 }
             }
-            let trailing_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+            let trailing_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
             if let Some(doc) = trailing_doc.or(leading_doc) {
                 hook_param_attributes
-                    .push(crate::parser::doc_comments::doc_comment_attribute(doc));
+                    .push(crate::syntax::parser::doc_comments::doc_comment_attribute(doc));
             }
             expect_token(
                 tokens,
@@ -1504,7 +1505,7 @@ fn parse_property_hooks(
                         None,
                         false,
                     )],
-                    param_attributes: vec![Vec::new()],
+                    param_attributes: vec![hook_param_attributes],
                     variadic: None,
                     variadic_by_ref: false,
                     variadic_type: None,

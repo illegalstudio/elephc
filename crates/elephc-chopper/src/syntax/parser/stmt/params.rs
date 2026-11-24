@@ -949,9 +949,9 @@ pub(super) fn parse_params(
                 break;
             }
         }
-        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+        let leading_doc = crate::syntax::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
-        let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        let mut attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
         if !validation_only() && variadic.is_some() {
             return Err(CompileError::runtime_unsupported(
                 span,
@@ -985,6 +985,7 @@ pub(super) fn parse_params(
             variadic = Some(name.to_owned());
             variadic_by_ref = is_ref;
             variadic_type = type_ann;
+            append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
             param_attributes.push(attributes);
             *pos += 1;
             continue;
@@ -1000,6 +1001,7 @@ pub(super) fn parse_params(
         } else {
             None
         };
+        append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
         param_attributes.push(attributes);
         params.push((name.to_owned(), type_ann, default, is_ref));
     }
@@ -1134,8 +1136,8 @@ fn append_param_doc_comment(
     leading: Option<String>,
     attributes: &mut Vec<AttributeGroup>,
 ) {
-    let trailing = crate::parser::doc_comments::doc_comment_before(tokens, pos);
+    let trailing = crate::syntax::parser::doc_comments::doc_comment_before(tokens, pos);
     if let Some(doc) = trailing.or(leading) {
-        attributes.push(crate::parser::doc_comments::doc_comment_attribute(doc));
+        attributes.push(crate::syntax::parser::doc_comments::doc_comment_attribute(doc));
     }
 }

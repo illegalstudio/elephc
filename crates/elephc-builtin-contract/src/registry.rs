@@ -190,7 +190,10 @@ mod tests {
         // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
         // +2: the internal `__elephc_unserialize_store_property` and
         // `__elephc_phar_archive_valid` helpers.
-        assert_eq!(contracts().len(), 1326 + curl_surface);
+        // +7: `get_debug_type`, `stream_context_set_options`, `stream_socket_get_crypto_status`,
+        // `url_percent_encode`, `pack`, `unpack`, and the internal `__elephc_poll_revents` probe.
+        // +2: the PHP 8.6 GMP functions `gmp_powm_sec` and `gmp_prevprime`.
+        assert_eq!(contracts().len(), 1335 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

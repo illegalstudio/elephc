@@ -179,7 +179,7 @@
   ],
   "coverage": {
     "classes": {
-      "have": 202,
+      "have": 203,
       "total": 329
     },
     "constants": {
@@ -1751,30 +1751,6 @@
       },
       {
         "name": "Time\\TimeException",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriBuilder",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriHostType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlBuilder",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlHostType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlPercentEncodingMode",
         "since": "8.6"
       }
     ],

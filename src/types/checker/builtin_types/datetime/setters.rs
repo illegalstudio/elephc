@@ -358,5 +358,6 @@ pub(super) fn datetime_shared_methods() -> Vec<ClassMethod> {
         datetime_get_offset(),
         datetime_diff_method(),
         datetime_unserialize(),
+        super::interface::datetime_compare_adapter(),
     ]
 }

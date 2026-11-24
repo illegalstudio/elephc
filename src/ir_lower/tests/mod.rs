@@ -297,7 +297,7 @@ fn try_lower_source_at_for_target_with_reachability(
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, false, false, false, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);

@@ -410,7 +410,8 @@ mod tests {
         // two line-aware diagnostic helpers, the internal memory limit setter, the
         // three compiled-pattern helpers the `preg_grep()` prelude calls, and the
         // internal unserialize property store and PHAR validity probe.
-        assert_eq!(eval_internal, 150);
+        // Includes the internal `__elephc_poll_revents` Io\Poll probe.
+        assert_eq!(eval_internal, 151);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 384);
@@ -430,7 +431,9 @@ mod tests {
         // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
         // compiled-pattern helpers, and the internal unserialize property store and
         // PHAR validity probe.
-        assert_eq!(aot_registry, 849);
+        // +6: `get_debug_type`, `stream_context_set_options`,
+        // `stream_socket_get_crypto_status`, `url_percent_encode`, `pack`, and `unpack`.
+        assert_eq!(aot_registry, 855);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -498,7 +501,9 @@ mod tests {
         // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
         // three internal compiled-pattern helpers, and the internal unserialize
         // property store and PHAR validity probe.
-        assert_eq!(unsupported, 531);
+        // Also includes the internal `__elephc_poll_revents` Io\Poll probe and the
+        // PHP 8.6 pack/unpack and debug-type additions.
+        assert_eq!(unsupported, 535);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -100,36 +100,6 @@ pub(crate) fn linked_extensions() -> Vec<String> {
     LINKED_EXTENSIONS.with(|names| names.borrow().clone())
 }
 
-/// Parses a PHP `memory_limit` quantity into bytes.
-///
-/// `-1` and `0` mean no lower limit (php-src refuses zero while memory is already in use and
-/// keeps the previous value); `K`, `M`, and `G` use PHP's 1024-based multipliers.
-#[cfg(test)]
-pub fn parse_memory_limit_bytes(value: &str) -> Result<Option<usize>, String> {
-    let trimmed = value.trim();
-    if trimmed == "-1" || trimmed == "0" {
-        return Ok(None);
-    }
-    let (digits, multiplier) = match trimmed.as_bytes().last() {
-        Some(b'K' | b'k') => (&trimmed[..trimmed.len() - 1], 1024u64),
-        Some(b'M' | b'm') => (&trimmed[..trimmed.len() - 1], 1024u64 * 1024),
-        Some(b'G' | b'g') => (&trimmed[..trimmed.len() - 1], 1024u64 * 1024 * 1024),
-        _ => (trimmed, 1),
-    };
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(format!("invalid memory_limit value `{value}`"));
-    }
-    let number = digits
-        .parse::<u64>()
-        .map_err(|_| format!("invalid memory_limit value `{value}`"))?;
-    let bytes = number
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("memory_limit value `{value}` overflows"))?;
-    usize::try_from(bytes)
-        .map(Some)
-        .map_err(|_| format!("memory_limit value `{value}` overflows"))
-}
-
 /// Returns whether a positive PHP quantity exceeds `u64::MAX` before the signed mirror wraps it.
 fn unsigned_quantity_overflows_u64(value: &str) -> bool {
     let bytes = value.trim().as_bytes();

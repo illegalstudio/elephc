@@ -12,6 +12,7 @@
 mod alt_syntax;
 /// Defines AST node types representing the PHP syntax tree produced by the parser.
 pub mod ast;
+pub(crate) mod doc_comments;
 mod attributes;
 /// Control flow statements: `if`, `while`, `for`, `foreach`, `switch`, `try`, `goto`, and `label` parsing.
 mod control;

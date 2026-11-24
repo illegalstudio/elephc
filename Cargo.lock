@@ -907,10 +907,6 @@ name = "elephc-openssl"
 version = "0.1.0"
 
 [[package]]
-name = "elephc-pack"
-version = "0.1.0"
-
-[[package]]
 name = "elephc-pcntl"
 version = "0.1.0"
 dependencies = [

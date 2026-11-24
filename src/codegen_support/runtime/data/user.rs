@@ -55,20 +55,6 @@ fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
             .is_some_and(|class| class.property_is_hidden(property))
 }
 
-/// Returns whether `declaring_class::$prop_name` is the URI prelude's opaque native handle slot.
-///
-/// PHP's internal `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` expose no properties. The prelude
-/// keeps the bridge handle in this private slot, so every property walker omits it while the
-/// prelude itself can still read and write it. The check is gated on the DECLARING class:
-/// a user class may legitimately declare its own property with that name.
-pub(crate) fn is_uri_opaque_handle(declaring_class: &str, prop_name: &str) -> bool {
-    prop_name == "__elephc_uri_handle"
-        && matches!(
-            crate::names::php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
-            "uri\\rfc3986\\uri" | "uri\\whatwg\\url"
-        )
-}
-
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;

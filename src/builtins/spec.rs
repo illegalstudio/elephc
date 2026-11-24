@@ -116,7 +116,9 @@ impl std::ops::Deref for BuiltinSpec {
     fn deref(&self) -> &Self::Target {
         match &self.contract {
             BuiltinContractRef::Shared(id) => elephc_builtin_contract::lookup_id(*id)
-                .expect("AOT builtin implementation must reference a shared contract"),
+                .unwrap_or_else(|| panic!(
+                    "AOT builtin implementation must reference a shared contract: {id:?}"
+                )),
             #[cfg(test)]
             BuiltinContractRef::Inline(contract) => contract,
         }
