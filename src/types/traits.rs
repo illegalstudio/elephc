@@ -68,7 +68,10 @@ struct ExpandedTrait {
 /// `origin` names the declaring trait after generic instantiation (`Holder<int>` and
 /// `Holder<string>` are two traits), so two copies of one method reached along two `use`
 /// paths share it, while two instantiations of one generic method, which share a span, do not.
+/// `source_trait` names the trait in the `use` that brought the method in (the class-like itself
+/// for its own methods), the name PHP prints when a body overrides an abstract `as final` import.
 struct TraitMethod {
+    source_trait: String,
     origin: String,
     decl: ClassMethod,
 }

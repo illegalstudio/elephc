@@ -1579,3 +1579,46 @@ fn test_error_trait_alias_as_final_abstract_method() {
         "<?php\ntrait T { public function foo() { return 't'; } }\nclass C { use T { foo as final; } public function foo() { return 'c'; } }\necho (new C)->foo();\n",
     );
 }
+
+/// An abstract trait method made `as final` is overridden by a concrete method from another trait
+/// or by a body of the other kind (static or instance), and the fatal names the trait in the
+/// `use` that imported it, which differs from the declaring trait once it is re-exported (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_override_sources() {
+    for (source, message) in [
+        (
+            "trait A { abstract public function foo(); }\ntrait B { public function foo() { return 1; } }\nclass C { use A, B { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait A { abstract public function foo(); }\ntrait B { public static function foo() { return 1; } }\nclass C { use A, B { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait A { use T { foo as final; } }\ntrait B { public function foo() { return 1; } }\nclass C { use A, B; }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait O { use T { foo as final; } }\nclass C { use O; public function foo() { return 1; } }",
+            "Cannot override final method O::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait M { use T { foo as final; } }\ntrait O { use M; public function foo() { return 1; } }\nclass C { use O; }",
+            "Cannot override final method M::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait O { use T { foo as final bar; } }\nclass C { use O; public function bar() { return 1; } }",
+            "Cannot override final method O::bar",
+        ),
+        (
+            "trait T { abstract public function foo(); }\nabstract class C { use T { foo as final; } public static function foo() { return 1; } }",
+            "Cannot override final method T::foo",
+        ),
+        (
+            "trait T { abstract public static function foo(); }\nabstract class C { use T { foo as final; } public function foo() { return 1; } }",
+            "Cannot override final method T::foo",
+        ),
+    ] {
+        expect_error(&format!("<?php\n{source}\n"), message);
+    }
+}

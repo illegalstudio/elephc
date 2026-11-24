@@ -195,8 +195,8 @@ fn test_warning_final_private_method() {
 }
 
 /// Verifies that `as final` on a private trait method warns like a written `final private`
-/// method, with or without an alias, while making a public trait method private and final does
-/// not (#2352).
+/// method, with or without an alias and through nested trait uses, while making a public trait
+/// method private and final does not (#2352).
 #[test]
 fn test_warning_trait_alias_as_final_private_method() {
     for adaptation in ["foo as final;", "foo as final bar;", "T::foo as final;"] {
@@ -209,6 +209,22 @@ fn test_warning_trait_alias_as_final_private_method() {
     }
     expect_no_warning(
         "<?php trait T { public function foo() { return 1; } } class C { use T { foo as private; foo as final; } }",
+        "Private methods cannot be final",
+    );
+    // A nested `use` decides the visibility the outer `as final` sees: a visibility change or
+    // an alias of a private method counts, the declaration it replaced does not.
+    for source in [
+        "<?php trait Inner { public function foo() { return 1; } } trait Outer { use Inner { foo as private; } } class C { use Outer { foo as final; } }",
+        "<?php trait Inner { private function foo() { return 1; } } trait Outer { use Inner { foo as bar; } } class C { use Outer { bar as final; } }",
+        "<?php trait Inner { private function foo() { return 1; } } trait Outer { use Inner; } class C { use Outer { foo as final; } }",
+    ] {
+        expect_warning(
+            source,
+            "Private methods cannot be final as they are never overridden by other classes",
+        );
+    }
+    expect_no_warning(
+        "<?php trait Inner { private function foo() { return 1; } } trait Outer { use Inner { foo as public; } } class C { use Outer { foo as final; } }",
         "Private methods cannot be final",
     );
 }

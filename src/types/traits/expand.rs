@@ -19,9 +19,9 @@ use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
 use super::merge::{
-    check_abstract_redeclaration, is_same_trait_method, merge_constants, merge_imported_constant_set,
-    merge_imported_method_set, merge_methods, merge_properties, merge_property_into,
-    trait_method_collision,
+    check_abstract_redeclaration, final_abstract_import_override, is_same_trait_method,
+    merge_constants, merge_imported_constant_set, merge_imported_method_set, merge_methods,
+    merge_properties, merge_property_into, trait_method_collision,
 };
 use super::validation::validate_direct_members;
 
@@ -162,7 +162,7 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for TraitMethod { origin, decl: method } in methods {
+            for TraitMethod { origin, decl: method, .. } in methods {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -314,7 +314,11 @@ pub(super) fn resolve_trait_uses(
 
     let all_methods = all_methods
         .into_iter()
-        .map(|imported| TraitMethod { origin: imported.origin, decl: imported.decl })
+        .map(|imported| TraitMethod {
+            source_trait: imported.source_trait,
+            origin: imported.origin,
+            decl: imported.decl,
+        })
         .collect();
     Ok((all_properties, all_methods, all_constants))
 }
@@ -393,7 +397,8 @@ fn select_methods(
 /// An abstract trait method is a requirement, not a definition, so it is never one of the
 /// candidates `insteadof` has to choose between: a concrete candidate of the same kind (static or
 /// instance) satisfies it, and several abstract ones of one kind are one requirement once
-/// `check_abstract_redeclaration` accepts them. A requirement of the other kind is kept, so the
+/// `check_abstract_redeclaration` accepts them. A requirement made `as final` cannot be
+/// satisfied: any concrete candidate overrides a final method, which PHP reports. A requirement of the other kind is kept, so the
 /// class schema reports the static/instance mismatch as it does for separate `use` statements.
 fn unsatisfied_requirements(
     requirements: Vec<ImportedMethod>,
@@ -403,6 +408,14 @@ fn unsatisfied_requirements(
 ) -> Result<Vec<ImportedMethod>, CompileError> {
     let mut kept: Vec<ImportedMethod> = Vec::new();
     for requirement in requirements {
+        // A requirement made `as final` is overridden by any concrete candidate, of either kind.
+        if requirement.decl.is_final && !concrete.is_empty() {
+            return Err(final_abstract_import_override(
+                span,
+                &requirement.source_trait,
+                &requirement.decl.name,
+            ));
+        }
         let same_kind = concrete
             .iter()
             .chain(kept.iter())

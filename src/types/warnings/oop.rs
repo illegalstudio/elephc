@@ -67,7 +67,8 @@ fn collect_oop_stmt_warnings(stmts: &[Stmt], traits: &TraitTable, warnings: &mut
 }
 
 /// Warns, as PHP does, when an `as final` adaptation (with or without an alias) makes a trait
-/// method final that the trait declares private, since a private method is never overridden.
+/// method final that is private in the trait, as declared or as a nested `use` adapted it,
+/// since a private method is never overridden.
 /// The warning follows the trait method's own visibility: `foo as private; foo as final` on a
 /// public trait method does not warn. Constructors are exempt, as for a written `final private`.
 fn collect_final_adaptation_warnings(
@@ -102,17 +103,17 @@ fn collect_final_adaptation_warnings(
     }
 }
 
-/// Returns the declared visibility of `method` in trait `trait_name`, looking through the
-/// traits it uses when it does not declare the method itself, or `None` when no known trait
-/// declares it.
+/// Returns the visibility `method` has in trait `trait_name` as PHP composes it: the trait's own
+/// declaration, otherwise the method one of its `use` clauses brings in (`use_method_visibility`),
+/// or `None` when no known trait provides it.
 fn trait_method_visibility(
     trait_name: &str,
     method: &str,
     traits: &TraitTable,
-    visited: &mut HashSet<String>,
+    visited: &mut HashSet<(String, String)>,
 ) -> Option<Visibility> {
     let key = trait_key(trait_name);
-    if !visited.insert(key.clone()) {
+    if !visited.insert((key.clone(), php_symbol_key(method))) {
         return None;
     }
     let (methods, trait_uses) = traits.get(&key)?;
@@ -121,8 +122,48 @@ fn trait_method_visibility(
     }
     trait_uses
         .iter()
-        .flat_map(|trait_use| trait_use.trait_names.iter())
-        .find_map(|nested| trait_method_visibility(nested.as_str(), method, traits, visited))
+        .find_map(|trait_use| use_method_visibility(trait_use, method, traits, visited))
+}
+
+/// Returns the visibility of `method` as imported by one nested `use` clause: an alias named
+/// `method` takes its adaptation's visibility or the aliased method's, and a method imported
+/// under its own name takes the last visibility change (`foo as private;`) or its own.
+fn use_method_visibility(
+    trait_use: &TraitUse,
+    method: &str,
+    traits: &TraitTable,
+    visited: &mut HashSet<(String, String)>,
+) -> Option<Visibility> {
+    let mut source_visibility = |source_trait: &Option<crate::names::Name>, source: &str| {
+        let candidates: Vec<&str> = match source_trait {
+            Some(source_trait) => vec![source_trait.as_str()],
+            None => trait_use.trait_names.iter().map(|name| name.as_str()).collect(),
+        };
+        candidates
+            .into_iter()
+            .find_map(|candidate| trait_method_visibility(candidate, source, traits, visited))
+    };
+    for adaptation in &trait_use.adaptations {
+        if let TraitAdaptation::Alias { trait_name, method: source, alias: Some(alias), visibility, .. } =
+            adaptation
+        {
+            if alias.eq_ignore_ascii_case(method) {
+                if let Some(original) = source_visibility(trait_name, source) {
+                    return Some(visibility.clone().unwrap_or(original));
+                }
+            }
+        }
+    }
+    let original = source_visibility(&None, method)?;
+    let changed = trait_use.adaptations.iter().rev().find_map(|adaptation| match adaptation {
+        TraitAdaptation::Alias { method: target, alias: None, visibility: Some(visibility), .. }
+            if target.eq_ignore_ascii_case(method) =>
+        {
+            Some(visibility.clone())
+        }
+        _ => None,
+    });
+    Some(changed.unwrap_or(original))
 }
 
 /// The lookup key of a trait name: case-insensitive, without a leading namespace separator.

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -105,28 +105,30 @@ pub(super) fn merge_methods(
 ) -> Result<Vec<TraitMethod>, CompileError> {
     validate_direct_method_duplicates(local, span, owner_label)?;
 
-    let mut local_keys = HashMap::new();
+    let mut local_keys = HashSet::new();
+    let mut local_names = HashMap::new();
     for method in local {
-        local_keys.insert((php_symbol_key(&method.name), method.is_static), method.span);
+        local_keys.insert((php_symbol_key(&method.name), method.is_static));
+        local_names.entry(php_symbol_key(&method.name)).or_insert(method.span);
     }
 
     let mut merged: Vec<TraitMethod> = Vec::new();
     let mut seen_imported: HashMap<(String, bool), usize> = HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.decl.name), imported_method.decl.is_static);
-        if let Some(local_span) = local_keys.get(&key) {
-            // Zend checks a local method against an abstract trait method as an override, so an
-            // abstract method made `as final` cannot be implemented here. A concrete trait
-            // method stays replaceable, final or not.
-            if imported_method.decl.is_abstract && imported_method.decl.is_final {
-                return Err(CompileError::new(
+        // Zend checks a local method against an abstract trait method as an override, so an
+        // abstract method made `as final` cannot be implemented here, static or not. A concrete
+        // trait method stays replaceable, final or not.
+        if imported_method.decl.is_abstract && imported_method.decl.is_final {
+            if let Some(local_span) = local_names.get(&key.0) {
+                return Err(final_abstract_import_override(
                     *local_span,
-                    &format!(
-                        "Cannot override final method {}::{}",
-                        imported_method.origin, imported_method.decl.name
-                    ),
+                    &imported_method.source_trait,
+                    &imported_method.decl.name,
                 ));
             }
+        }
+        if local_keys.contains(&key) {
             continue;
         }
         if let Some(&index) = seen_imported.get(&key) {
@@ -155,10 +157,20 @@ pub(super) fn merge_methods(
     }
 
     merged.extend(local.iter().map(|method| TraitMethod {
+        source_trait: local_origin.to_string(),
         origin: local_origin.to_string(),
         decl: method.clone(),
     }));
     Ok(merged)
+}
+
+/// Reports a method that overrides `name`, an abstract trait method made `as final`, with the
+/// trait in the `use` that imported it, as PHP prints it (`Cannot override final method T::foo()`).
+pub(super) fn final_abstract_import_override(span: Span, source_trait: &str, name: &str) -> CompileError {
+    CompileError::new(
+        span,
+        &format!("Cannot override final method {}::{}", source_trait, name),
+    )
 }
 
 /// Appends each method in `incoming` to `existing`, tracking seen (name, is_static)

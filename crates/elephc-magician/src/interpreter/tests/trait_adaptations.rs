@@ -518,8 +518,9 @@ class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
 }
 
 /// Verifies an abstract eval trait method made `as final` stays abstract and final in an
-/// abstract class, while a body on the importing class, enum or trait, or a subclass, overrides
-/// the final method and fails, as in PHP 8.3+ (#2352).
+/// abstract class, while a body on the importing class, enum or trait (static or not), a concrete
+/// method of another used trait, or a subclass overrides the final method and fails, as in
+/// PHP 8.3+ (#2352).
 #[test]
 fn execute_program_applies_eval_trait_final_adaptation_to_abstract_methods() {
     let accepted = parse_fragment(
@@ -568,6 +569,16 @@ trait EvalAdaptFinalAbstractOuter {
     public function foo() { return 1; }
 }
 class EvalAdaptFinalAbstractOuterBox { use EvalAdaptFinalAbstractOuter; }"#,
+        br#"trait EvalAdaptFinalAbstractReq { abstract public function foo(); }
+trait EvalAdaptFinalAbstractImpl { public function foo() { return 1; } }
+class EvalAdaptFinalAbstractReqBox {
+    use EvalAdaptFinalAbstractReq, EvalAdaptFinalAbstractImpl { EvalAdaptFinalAbstractReq::foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractKind { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractKindBox {
+    use EvalAdaptFinalAbstractKind { foo as final; }
+    public static function foo() { return 1; }
+}"#,
     ] {
         let program = parse_fragment(source).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
