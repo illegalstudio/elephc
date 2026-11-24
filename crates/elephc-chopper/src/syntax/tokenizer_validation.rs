@@ -11,6 +11,7 @@
 //!   stay stable, so parser diagnostics keep PHP's source lines.
 //! - Accepted keyword identifiers are mapped back to byte offsets for token reclassification.
 
+use crate::scanner::HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE;
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
 use std::cell::OnceCell;
@@ -77,6 +78,11 @@ mod tok {
     pub const T_ENCAPSED_AND_WHITESPACE: i64 = id("T_ENCAPSED_AND_WHITESPACE");
     pub const T_END_HEREDOC: i64 = id("T_END_HEREDOC");
     pub const T_EXTENDS: i64 = id("T_EXTENDS");
+    pub const T_FINAL: i64 = id("T_FINAL");
+    pub const T_VAR: i64 = id("T_VAR");
+    pub const T_PUBLIC_SET: i64 = id("T_PUBLIC_SET");
+    pub const T_PROTECTED_SET: i64 = id("T_PROTECTED_SET");
+    pub const T_PRIVATE_SET: i64 = id("T_PRIVATE_SET");
     pub const T_FN: i64 = id("T_FN");
     pub const T_FUNCTION: i64 = id("T_FUNCTION");
     pub const T_GOTO: i64 = id("T_GOTO");
@@ -143,6 +149,11 @@ const _: () = {
     assert!(tok::T_ATTRIBUTE != -1, "T_ATTRIBUTE missing from the tokenizer catalog");
     assert!(tok::T_DECLARE != -1, "T_DECLARE missing from the tokenizer catalog");
     assert!(tok::T_EXTENDS != -1, "T_EXTENDS missing from the tokenizer catalog");
+    assert!(tok::T_FINAL != -1, "T_FINAL missing from the tokenizer catalog");
+    assert!(tok::T_VAR != -1, "T_VAR missing from the tokenizer catalog");
+    assert!(tok::T_PUBLIC_SET != -1, "T_PUBLIC_SET missing from the tokenizer catalog");
+    assert!(tok::T_PROTECTED_SET != -1, "T_PROTECTED_SET missing from the tokenizer catalog");
+    assert!(tok::T_PRIVATE_SET != -1, "T_PRIVATE_SET missing from the tokenizer catalog");
     assert!(tok::T_END_HEREDOC != -1, "T_END_HEREDOC missing from the tokenizer catalog");
     assert!(tok::T_ENDDECLARE != -1, "T_ENDDECLARE missing from the tokenizer catalog");
     assert!(tok::T_ENDFOR != -1, "T_ENDFOR missing from the tokenizer catalog");
@@ -352,6 +363,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     view_error,
                     reference_error,
@@ -396,6 +408,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     error,
                     reference_error,
@@ -423,12 +436,16 @@ fn prefer_reference_error(
 ///
 /// A parser failure on an earlier token can be a same-statement refinement (the precheck
 /// reports the real member after `::`), so only a separator between the two positions proves
-/// the parser reached an earlier statement. Unterminated backticks report at EOF and stay
-/// authoritative. A reference diagnostic may displace a later precheck only after comparing it
-/// with the original parser position. Later prechecks also yield to earlier parser errors inside
-/// the reference.
-fn earlier_error(
+/// the parser reached an earlier statement. That separator does not apply when the parser's
+/// `Unclosed '{'` is the block `__halt_compiler()` already ended: the scanner stops there, the
+/// closing brace becomes inline HTML, and the halt diagnostic stays authoritative. The same
+/// applies to `Unclosed '('` when the halt diagnostic is a `for` header clause.
+/// Unterminated backticks report at EOF and stay authoritative. A reference diagnostic may
+/// displace a later precheck only after comparing it with the original parser position. Later
+/// prechecks also yield to earlier parser errors inside the reference.
+fn earlier_error<T: SourceToken>(
     source: &[u8],
+    tokens: &[T],
     precheck: Option<ValidationError>,
     main: ValidationError,
     reference: Option<ReferenceError>,
@@ -437,6 +454,8 @@ fn earlier_error(
         precheck.pos <= main.pos
             || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
             || !statement_boundary_between(source, main.pos, precheck.pos)
+            || halt_diagnostic_inside_unclosed_brace(tokens, precheck, &main)
+            || halt_for_header_inside_unclosed_paren(tokens, precheck, &main)
     });
     if let Some(reference) = reference {
         let preferred = precheck.as_ref().unwrap_or(&main);
@@ -452,6 +471,187 @@ fn earlier_error(
         }
     }
     precheck.unwrap_or(main)
+}
+
+/// Returns whether a halt diagnostic sits inside the brace the parser reported as unclosed.
+///
+/// `__halt_compiler();` ends tokenization, so a `}` after it is not a brace token. A real `}`
+/// token before the halt means this opener already closed and the parser error is an earlier
+/// block. A `}` inside a string is not a token, so it does not close the block. An argument
+/// inside `__halt_compiler(…)`, and a cast token written where `(` should be, stay
+/// authoritative across a newline in that same block.
+fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '{'"
+        || precheck.pos <= main.pos
+        || !(halt_scope_diagnostic(precheck) || halt_argument_diagnostic(tokens, precheck))
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && is_halt_brace_open(token.id())
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if is_halt_brace_open(id) {
+            depth += 1;
+        } else if id == i64::from(b'}') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether `error` belongs to a malformed `__halt_compiler` call.
+///
+/// The parser can report the enclosing `Unclosed '{'` first, including across a newline.
+/// An argument after `(` expects `)`. A cast such as `(array)` is one token, so that
+/// diagnostic expects `(` and has no parenthesis to look behind. A heredoc argument is
+/// reported on its body line. When the header newline ends the start token, that byte is
+/// the next token, so a miss there still checks the heredoc span.
+fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) {
+        if error.message.ends_with("expecting \")\"") && halt_parenthesized_argument(tokens, index)
+        {
+            return true;
+        }
+        if error.message.ends_with("expecting \"(\"")
+            && previous_significant_index(tokens, index).is_some_and(|halt| {
+                tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+            })
+        {
+            return true;
+        }
+    }
+    heredoc_halt_argument(tokens, error)
+}
+
+/// Returns whether `index` is the first significant token inside `__halt_compiler(`.
+fn halt_parenthesized_argument<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let Some(open) = previous_significant_index(tokens, index) else {
+        return false;
+    };
+    if tokens[open].id() != i64::from(b'(') {
+        return false;
+    }
+    previous_significant_index(tokens, open).is_some_and(|halt| {
+        tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+    })
+}
+
+/// Returns whether `error` is the body-line diagnostic of a halt heredoc argument.
+///
+/// The reported offset is the byte after the header newline, so it can sit on the following
+/// token. Inside `__halt_compiler(` the expectation is `)`. A heredoc written where `(` should
+/// be expects `(`, and the previous significant token is the halt itself.
+fn heredoc_halt_argument<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if !error.message.starts_with("syntax error, unexpected heredoc start ") {
+        return false;
+    }
+    let inside = error.message.ends_with("expecting \")\"");
+    let opens = error.message.ends_with("expecting \"(\"");
+    if !inside && !opens {
+        return false;
+    }
+    tokens.iter().enumerate().any(|(index, token)| {
+        if token.id() != tok::T_START_HEREDOC
+            || token.pos() >= error.pos
+            || error.pos > token.pos() + token.len()
+        {
+            return false;
+        }
+        if inside {
+            return halt_parenthesized_argument(tokens, index);
+        }
+        previous_significant_index(tokens, index).is_some_and(|halt| {
+            tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+        })
+    })
+}
+
+/// Returns whether the halt at `index` is a member or namespace name.
+fn halt_used_as_name_token<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index).is_some_and(|previous| {
+        let id = tokens[previous].id();
+        id == tok::T_OBJECT_OPERATOR
+            || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+            || id == i64::from(b'\\')
+            || id == tok::T_NS_SEPARATOR
+    })
+}
+
+/// Returns whether the diagnostic is one of the halt-scope messages.
+///
+/// A parse error that names `__halt_compiler` counts too. The scanner has already stopped,
+/// so an enclosing `Unclosed '{'` is the missing closer after that halt, not an earlier fault.
+fn halt_scope_diagnostic(error: &ValidationError) -> bool {
+    error.message == HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE
+        || error.message == "Unclosed '{'"
+        || error.message.starts_with("Unclosed '{' on line ")
+        || error.message.starts_with("syntax error, unexpected token \"__halt_compiler\"")
+}
+
+/// Returns whether a `for`-header halt diagnostic sits inside the `(` the parser left open.
+///
+/// `__halt_compiler();` ends tokenization, so the header's closing `)` becomes inline HTML.
+/// A semicolon that separates `for` clauses is inside that header, not an earlier statement.
+fn halt_for_header_inside_unclosed_paren<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '('"
+        || precheck.pos <= main.pos
+        || !for_header_halt_message(precheck)
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && token.id() == i64::from(b'(')
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if id == i64::from(b'(') {
+            depth += 1;
+        } else if id == i64::from(b')') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether `error` is the halt diagnostic for a `for` init, condition or update clause.
+fn for_header_halt_message(error: &ValidationError) -> bool {
+    error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \";\""
+        || error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \")\""
+}
+
+/// Returns whether `id` opens a brace the halt-scope walk treats as a real block.
+fn is_halt_brace_open(id: i64) -> bool {
+    id == i64::from(b'{')
+        || id == tok::T_CURLY_OPEN
+        || id == tok::T_DOLLAR_OPEN_CURLY_BRACES
 }
 
 /// Returns whether a statement boundary separates two source positions.

@@ -2,7 +2,7 @@
 //! Checks every Unicode scalar against PHP's four mobile UTF-8 conversion variants.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test mobile_utf8`.
+//! - `cargo test -p elephc-mbstring --test engine mobile_utf8::`.
 //!
 //! Key details:
 //! - Decoder and encoder hashes are independent, preserving non-bijective carrier mappings.

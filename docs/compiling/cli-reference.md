@@ -1494,6 +1494,13 @@ overrides. Native-package variables select the cache and target C toolchain:
 | `ELEPHC_NATIVE_CC_<TARGET_ENV>` | executable | Target-specific C compiler; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_AR_<TARGET_ENV>` | executable | Target-specific archiver; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` | executable | Target-specific archive indexer; takes precedence over the unsuffixed value |
+| `ELEPHC_WARN_UNREBUILDABLE_BRIDGE` | any non-empty value | None; opts into a diagnostic |
+
+A bridge archive found outside the build's own output directory cannot be
+refreshed there, which is normal for a compiler unpacked from a CI archive but
+also what a custom `build.target-dir` looks like. Setting
+`ELEPHC_WARN_UNREBUILDABLE_BRIDGE` reports each such archive once, and only when
+its sources are newer than it.
 
 `TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
 as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.

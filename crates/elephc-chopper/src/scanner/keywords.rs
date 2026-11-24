@@ -82,6 +82,47 @@ pub(crate) fn keyword_diagnostic_spelling(token: i64, source: &[u8]) -> Option<S
     }
 }
 
+/// Returns Zend's canonical cast spelling for a cast token.
+///
+/// `(integer)`, `( Array )` and `(binary)` share the ids of `(int)`, `(array)` and `(string)`.
+/// The source spelling is not the diagnostic text. `(real)` is a removed-cast error and does
+/// not use this spelling.
+pub(crate) fn cast_diagnostic_text(token_id: i64) -> Option<&'static str> {
+    use elephc_builtin_contract::token_const_id;
+
+    Some(if token_id == const { token_const_id("T_ARRAY_CAST") } {
+        "(array)"
+    } else if token_id == const { token_const_id("T_BOOL_CAST") } {
+        "(bool)"
+    } else if token_id == const { token_const_id("T_DOUBLE_CAST") } {
+        "(float)"
+    } else if token_id == const { token_const_id("T_INT_CAST") } {
+        "(int)"
+    } else if token_id == const { token_const_id("T_OBJECT_CAST") } {
+        "(object)"
+    } else if token_id == const { token_const_id("T_STRING_CAST") } {
+        "(string)"
+    } else if token_id == const { token_const_id("T_UNSET_CAST") } {
+        "(unset)"
+    } else if token_id == const { token_const_id("T_VOID_CAST") } {
+        "(void)"
+    } else {
+        return None;
+    })
+}
+
+/// Returns the heredoc header Zend prints for a start token.
+///
+/// The cut is the first `\n` only, so a carriage return stays visible. One trailing `'` or
+/// `"` is dropped. A nowdoc header still uses the `heredoc start` noun.
+pub(crate) fn heredoc_start_header(text: &[u8]) -> &[u8] {
+    let header = text.split(|byte| *byte == b'\n').next().unwrap_or(text);
+    match header.last() {
+        Some(b'\'') | Some(b'"') => &header[..header.len() - 1],
+        _ => header,
+    }
+}
+
 /// Returns the cast token for the word between parentheses, or `None`.
 pub(crate) fn cast_id(word: &[u8]) -> Option<i64> {
     if word.len() > MAX_CAST_LEN {

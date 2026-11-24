@@ -2,7 +2,7 @@
 //! Cross-checks the entire GB18030 four-byte address space and Unicode-range encoder inputs.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test gb18030`.
+//! - `cargo test -p elephc-mbstring --test engine gb18030::`.
 //!
 //! Key details:
 //! - Both the original and 2022 revision are checked against independent PHP hashes.

@@ -867,7 +867,45 @@ pub(crate) fn token_noun_error<T: SourceToken>(
             pos,
             lexical: false,
         },
-        _ => unexpected_token_at(source, pos, len, Some(expecting)),
+        id if id == tok::T_NAME_FULLY_QUALIFIED => {
+            unexpected_noun_at(source, pos, len, "fully qualified name", Some(expecting))
+        }
+        id if id == tok::T_NAME_QUALIFIED => {
+            unexpected_noun_at(source, pos, len, "namespaced name", Some(expecting))
+        }
+        id if id == tok::T_NAME_RELATIVE => {
+            unexpected_noun_at(source, pos, len, "namespace-relative name", Some(expecting))
+        }
+        _ => {
+            let text = &source[pos..pos + len];
+            if text == b"\"" {
+                ValidationError {
+                    message: format!("syntax error, unexpected double-quote mark, expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
+            } else if let Some(cast) = crate::scanner::cast_diagnostic_text(token.id()) {
+                ValidationError {
+                    message: format!("syntax error, unexpected token \"{cast}\", expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
+            } else if token.id() == tok::T_CLOSE_TAG {
+                ValidationError {
+                    message: format!("syntax error, unexpected token \";\", expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
+            } else if let Some(keyword) = crate::scanner::keyword_diagnostic_spelling(token.id(), text) {
+                ValidationError {
+                    message: format!("syntax error, unexpected token \"{keyword}\", expecting {expecting}"),
+                    pos,
+                    lexical: false,
+                }
+            } else {
+                unexpected_token_at(source, pos, len, Some(expecting))
+            }
+        }
     }
 }
 
