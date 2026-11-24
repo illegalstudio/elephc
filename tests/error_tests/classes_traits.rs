@@ -1945,6 +1945,20 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         (format!("{two_traits}enum E {{ use U, T; case X; }}"), "bar"),
         (format!("{two_traits}trait A {{ abstract public function foo(); }}\ninterface I {{ public function foo(); }}\nclass Base implements I {{}}\nclass C extends Base {{ use A, U {{ A::foo as final; }} public function foo() {{}} }}\nclass E extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "bar"),
         ("trait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C { use T; }".to_string(), "baz"),
+        // A class or enum PHP declares at run time fails in source order with the traits, and a
+        // backed case value is only checked when the enum is first used, after every trait.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I { public function foo(); }\nclass Base implements I {}".to_string(), "bar"),
+        ("interface I { public function foo(); }\nclass Base implements I {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "I::foo"),
+        ("enum F: int { case A = 1; case C = 1; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "bar"),
+        ("enum F: int { case A = \"x\"; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "bar"),
+        ("trait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nenum Apple { use T; case Y; }\nenum Zebra { use U; case X; }".to_string(), "baz"),
+        // A trait whose only user is an enum that failed to build is still checked.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nenum F: int { use T; case A = 1; case C = 1; }".to_string(), "bar"),
+        // A method of the other kind cannot satisfy a requirement, used or not.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public static function bar(): string { return \"a\"; } }\necho 1;".to_string(), "Cannot make non static method N::bar() static in class T"),
+        ("trait N { abstract public static function bar(): string; }\ntrait T { use N; public function bar(): string { return \"a\"; } }\necho 1;".to_string(), "Cannot make static method N::bar() non static in class T"),
+        ("trait N { abstract public function bar(): int; }\ntrait S { public static function bar(): int { return 1; } }\ntrait T { use N, S; }".to_string(), "Cannot make non static method N::bar() static in class T"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public static function bar(): string { return \"a\"; } }\nenum E { use T; case X; }".to_string(), "Cannot make non static method N::bar() static in class T"),
     ] {
         let error = check_source_full(&format!("<?php\n{source}\n"))
             .err()

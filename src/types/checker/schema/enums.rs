@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
+//! - A backed case value of the wrong type or repeating an earlier case's value is an
+//!   `EnumBuildError::CaseValue`: PHP only evaluates the cases when the enum is first used, so
+//!   the driver reports it after every declaration error.
 
 use std::collections::{HashMap, HashSet};
 
@@ -95,6 +98,24 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
     }
 }
 
+/// Why `build_enum_info` rejected an enum declaration.
+#[derive(Debug)]
+pub(crate) enum EnumBuildError {
+    /// An error PHP raises while it compiles or declares the enum.
+    Declaration(CompileError),
+    /// A backed case value of the wrong type, or repeating an earlier case's value, which PHP
+    /// only raises when the enum's cases are first used (`Duplicate value in enum E for cases A
+    /// and B`), after every declaration error.
+    CaseValue(CompileError),
+}
+
+impl From<CompileError> for EnumBuildError {
+    /// Wraps an error raised while declaring the enum.
+    fn from(error: CompileError) -> Self {
+        Self::Declaration(error)
+    }
+}
+
 /// Validates and builds metadata for a single enum declaration.
 ///
 /// Checks for duplicate class/enum/interface names, validates backing type (int or string only),
@@ -118,7 +139,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
-/// Returns: `Ok(())` on success, `CompileError` for invalid declarations.
+/// Returns: `Ok(())` on success, `EnumBuildError` for an invalid declaration or case value.
 ///
 /// Side effects:
 /// - Inserts `ClassInfo` into `checker.classes` with synthesized methods
@@ -142,7 +163,7 @@ pub(crate) fn build_enum_info(
     global_constants: &HashMap<String, crate::parser::ast::Expr>,
     checker: &mut Checker,
     next_class_id: &mut u64,
-) -> Result<(), CompileError> {
+) -> Result<(), EnumBuildError> {
     let enum_key = php_symbol_key(name);
     if checker
         .classes
@@ -160,7 +181,7 @@ pub(crate) fn build_enum_info(
         return Err(CompileError::new(
             span,
             &format!("Duplicate class or enum declaration: {}", name),
-        ));
+        ).into());
     }
 
     for method in user_methods {
@@ -174,7 +195,7 @@ pub(crate) fn build_enum_info(
         return Err(CompileError::new(
             method.span,
             &format!("Enum method {}::{} cannot be abstract", name, method.name),
-        ));
+        ).into());
     }
 
     let resolved_backing = match backing_type {
@@ -186,7 +207,7 @@ pub(crate) fn build_enum_info(
                     return Err(CompileError::new(
                         span,
                         "Enum backing type must be int or string",
-                    ))
+                    ).into())
                 }
             }
         }
@@ -197,12 +218,12 @@ pub(crate) fn build_enum_info(
     for interface in implements {
         let key = php_symbol_key(interface.as_str());
         if matches!(key.as_str(), "unitenum" | "backedenum") {
-            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum"));
+            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum").into());
         }
         if resolved_backing.is_none()
             && checker.interface_extends_interface(interface.as_str(), "BackedEnum")
         {
-            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
+            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum").into());
         }
     }
     // Each backing value maps to the first case that declared it, for PHP's
@@ -215,7 +236,7 @@ pub(crate) fn build_enum_info(
             return Err(CompileError::new(
                 case.span,
                 &format!("Duplicate enum case: {}::{}", name, case.name),
-            ));
+            ).into());
         }
 
         let mut deprecated_mt_rand_php = false;
@@ -228,13 +249,13 @@ pub(crate) fn build_enum_info(
                 return Err(CompileError::new(
                     case.span,
                     "Pure enum cases cannot declare a backing value",
-                ))
+                ).into())
             }
             (Some(_), None) => {
                 return Err(CompileError::new(
                     case.span,
                     "Backed enum cases must declare a value",
-                ))
+                ).into())
             }
             (Some(PhpType::Int), Some(expr))
                 if matches!(&expr.kind, ExprKind::ConstRef(reference)
@@ -243,7 +264,7 @@ pub(crate) fn build_enum_info(
                 // php-src accepts the deprecated constant as an int backing value and
                 // raises `E_DEPRECATED` when the case is first fetched.
                 if let Some(first) = seen_int_values.insert(1, case.name.clone()) {
-                    return Err(duplicate_backing_value(name, &first, case));
+                    return Err(EnumBuildError::CaseValue(duplicate_backing_value(name, &first, case)));
                 }
                 deprecated_mt_rand_php = true;
                 Some(EnumCaseValue::Int(1))
@@ -253,22 +274,22 @@ pub(crate) fn build_enum_info(
             ) {
                 Some(FoldedBacking::Int(value)) => {
                     if let Some(first) = seen_int_values.insert(value, case.name.clone()) {
-                        return Err(duplicate_backing_value(name, &first, case));
+                        return Err(EnumBuildError::CaseValue(duplicate_backing_value(name, &first, case)));
                     }
                     Some(EnumCaseValue::Int(value))
                 }
-                folded => return Err(mismatched_backing_value(name, case, folded, "int")),
+                folded => return Err(EnumBuildError::CaseValue(mismatched_backing_value(name, case, folded, "int"))),
             },
             (Some(PhpType::Str), Some(expr)) => match fold_backing_value(
                 checker, global_constants, name, expr,
             ) {
                 Some(FoldedBacking::Str(value)) => {
                     if let Some(first) = seen_string_values.insert(value.clone(), case.name.clone()) {
-                        return Err(duplicate_backing_value(name, &first, case));
+                        return Err(EnumBuildError::CaseValue(duplicate_backing_value(name, &first, case)));
                     }
                     Some(EnumCaseValue::Str(value))
                 }
-                folded => return Err(mismatched_backing_value(name, case, folded, "string")),
+                folded => return Err(EnumBuildError::CaseValue(mismatched_backing_value(name, case, folded, "string"))),
             },
             _ => unreachable!("enum backing type already validated"),
         };
@@ -288,7 +309,7 @@ pub(crate) fn build_enum_info(
             return Err(CompileError::new(
                 constant.span,
                 &format!("Enum constant {}::{} conflicts with enum case", name, constant.name),
-            ));
+            ).into());
         }
     }
 

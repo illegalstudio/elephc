@@ -230,8 +230,8 @@ fn resolve_duplicate_imported_method(
 /// accepted: the same parameter types, by-reference flags, optionality and variadic, and the
 /// same return type and by-reference return. Visibility is not compared, as PHP does not. A
 /// CONCRETE method that implements a requirement is not checked here:
-/// `validate_class_trait_requirements` and `validate_enum_trait_requirements` run PHP's
-/// compatibility rules on it once the class schema is known.
+/// `validate_trait_requirements` runs PHP's compatibility rules on it once the class schema is
+/// known.
 pub(super) fn check_abstract_redeclaration(
     required: &ClassMethod,
     other: &ClassMethod,
