@@ -1268,7 +1268,30 @@ impl BridgeStaticlib {
         let Some(workspace) = self.find_workspace() else {
             return archive;
         };
-        if !rebuild_replaces(&archive, &rebuild_output_dir(&workspace)) {
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR");
+        let mut output_dir = rebuild_output_dir(&workspace, target_dir.as_deref());
+        let in_default_output = rebuild_replaces(&archive, &output_dir);
+        // OUT_DIR sits under <profile>/build/<package-hash>/out. It identifies
+        // archives found in the compiler's original build tree, without a
+        // Cargo subprocess on the common path or for unpacked CI archives.
+        let in_original_output = !in_default_output
+            && Path::new(env!("OUT_DIR"))
+                .ancestors()
+                .nth(3)
+                .is_some_and(|directory| rebuild_replaces(&archive, directory));
+        let warn = std::env::var_os(UNREBUILDABLE_BRIDGE_DIAGNOSTIC).is_some();
+        if !(in_default_output || in_original_output || warn)
+            || !self.sources_are_newer_than(&workspace, &archive)
+        {
+            return archive;
+        }
+        if in_original_output {
+            if let Some(target_dir) = cargo_configured_target_dir(&workspace, &mut Command::new("cargo"))
+            {
+                output_dir = rebuild_output_dir(&workspace, Some(target_dir.as_os_str()));
+            }
+        }
+        if !in_default_output && !rebuild_replaces(&archive, &output_dir) {
             // The rebuild can only ever write Cargo's own output directory, so an archive
             // found anywhere else is one it cannot refresh. Two very different situations
             // reach this point and they must not be reported the same way:
@@ -1277,26 +1300,19 @@ impl BridgeStaticlib {
             //   clones the checkout beside them, so every archive here looks stale. That is the
             //   case this skip exists for, and the tests on those shards assert an empty
             //   stderr, so saying anything breaks them.
-            // - A `build.target-dir` in a Cargo config, or a custom profile, means Cargo writes
-            //   somewhere this function does not guess, and a genuinely stale bridge would be
-            //   linked without a word.
+            // - A custom profile, or a Cargo output directory outside the compiler's original
+            //   build tree, can leave a genuinely stale bridge outside the rebuild destination.
             //
             // They are indistinguishable without resolving Cargo's own configuration, so the
             // diagnostic is opt-in: silent by default, and available on request.
-            if std::env::var_os(UNREBUILDABLE_BRIDGE_DIAGNOSTIC).is_some()
-                && self.sources_are_newer_than(&workspace, &archive)
-                && self.warn_once_about_unrebuildable_archive()
-            {
+            if warn && self.warn_once_about_unrebuildable_archive() {
                 eprintln!(
                     "warning: {} looks stale but sits outside this build's output directory ({}); \
                      cargo cannot refresh it there, so it is linked as-is",
                     archive.display(),
-                    rebuild_output_dir(&workspace).display()
+                    output_dir.display()
                 );
             }
-            return archive;
-        }
-        if !self.sources_are_newer_than(&workspace, &archive) {
             return archive;
         }
         if !self.claim_rebuild_attempt() {
@@ -1425,13 +1441,27 @@ fn compiler_runs_from_release_profile() -> bool {
 ///
 /// That is Cargo's own choice for a `cargo build` run in `workspace`, which inherits this
 /// process's environment, under the profile `build_staticlib` selects.
-fn rebuild_output_dir(workspace: &Path) -> PathBuf {
+fn rebuild_output_dir(workspace: &Path, target_dir: Option<&OsStr>) -> PathBuf {
     cargo_output_dir(
         workspace,
-        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+        target_dir,
         std::env::var_os("CARGO_BUILD_TARGET").as_deref(),
         compiler_runs_from_release_profile(),
     )
+}
+
+/// Reads Cargo's resolved target directory without building or fetching dependencies.
+fn cargo_configured_target_dir(workspace: &Path, cargo: &mut Command) -> Option<PathBuf> {
+    let output = cargo
+        .args(["metadata", "--format-version", "1", "--no-deps", "--offline"])
+        .current_dir(workspace)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    metadata.get("target_directory")?.as_str().map(PathBuf::from)
 }
 
 /// Returns Cargo's output directory for a build run in `workspace`.
@@ -1464,7 +1494,7 @@ fn cargo_output_dir(
 ///
 /// An archive found outside Cargo's output directory cannot be refreshed, which is normal on
 /// a CI shard that unpacks the bridges into the runner's temp directory. It is ALSO what a
-/// `build.target-dir` in a Cargo config or a custom profile looks like, where the skip hides
+/// a custom profile or different build tree looks like, where the skip hides
 /// a genuinely stale bridge. The two are indistinguishable without resolving Cargo's own
 /// configuration, and shard tests assert an empty stderr, so the explanation is opt-in.
 const UNREBUILDABLE_BRIDGE_DIAGNOSTIC: &str = "ELEPHC_WARN_UNREBUILDABLE_BRIDGE";
@@ -1706,6 +1736,44 @@ mod tests {
             cargo_output_dir(Path::new("/checkout"), None, None, false),
             Path::new("/checkout/target/debug")
         );
+    }
+
+    #[test]
+    fn configured_target_directory_matches_cargo_output() {
+        let workspace = scratch("configured_cargo_output");
+        let root = std::fs::canonicalize(&workspace).expect("canonical workspace path");
+        std::fs::create_dir_all(root.join(".cargo")).expect("Cargo config directory");
+        std::fs::write(root.join(".cargo/config.toml"), "[build]\ntarget-dir = 'bridge-output'\n")
+            .expect("write Cargo config");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = 'fixture'\nversion = '0.1.0'\nedition = '2021'\n[lib]\npath = 'lib.rs'\ncrate-type = ['staticlib']\n[workspace]\n",
+        ).expect("write workspace manifest");
+        std::fs::write(root.join("lib.rs"), "").expect("write library");
+
+        let mut cargo = Command::new(env!("CARGO"));
+        cargo.env_remove("CARGO_TARGET_DIR").env_remove("CARGO_BUILD_TARGET_DIR");
+        let configured = cargo_configured_target_dir(&root, &mut cargo).expect("Cargo target directory");
+        assert_eq!(configured, root.join("bridge-output"));
+
+        let build = Command::new(env!("CARGO"))
+            .args(["build", "--offline"])
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET")
+            .current_dir(&root)
+            .output()
+            .expect("run Cargo build");
+        assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+        let profile = configured.join("debug");
+        let archive = profile.join("libfixture.a");
+        assert!(archive.is_file());
+        assert!(!rebuild_replaces(&archive, &root.join("target/debug")));
+        assert!(rebuild_replaces(
+            &archive,
+            &cargo_output_dir(&root, Some(configured.as_os_str()), None, false),
+        ));
+        let _ = std::fs::remove_dir_all(workspace);
     }
 
     /// The manifest walk reads the three dependency kinds and ignores registry dependencies.
