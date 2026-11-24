@@ -95,13 +95,18 @@ struct ImportedMethod {
 /// Class-like declarations with traits are processed in program order; each declaration's trait
 /// uses are resolved recursively, then merged with the declaration's own members.
 /// Circular trait composition and duplicate declarations are reported as errors.
-/// Returns `(flattened_classes, flattened_enums, errors, final_abstract_imports)`; the last are
-/// checked by `final_abstract_import_overrides` once builtin classes are registered too.
+/// Returns `(flattened_classes, flattened_enums, errors, redeclarations,
+/// final_abstract_imports)`: `redeclarations` are the errors for a trait whose name an earlier
+/// trait or any class-like declaration has, and for a class-like declaration named like a trait,
+/// each at its declaration statement, which PHP raises when it declares it, not while compiling;
+/// the imports are checked by `final_abstract_import_overrides` once builtin classes are
+/// registered too.
 pub fn flatten_classes(
     program: &Program,
 ) -> (
     Vec<FlattenedClass>,
     HashMap<String, FlattenedClass>,
+    Vec<CompileError>,
     Vec<CompileError>,
     Vec<FinalAbstractImport>,
 ) {
@@ -109,6 +114,7 @@ pub fn flatten_classes(
     let mut trait_keys = HashSet::new();
     let mut class_like_keys = HashSet::new();
     let mut errors = Vec::new();
+    let mut redeclarations = Vec::new();
     let mut final_abstract_imports = Vec::new();
 
     for stmt in program {
@@ -125,7 +131,7 @@ pub fn flatten_classes(
             } => {
                 let trait_key = php_symbol_key(name);
                 if class_like_keys.contains(&trait_key) || !trait_keys.insert(trait_key) {
-                    errors.push(CompileError::new(
+                    redeclarations.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate trait declaration: {}", name),
                     ));
@@ -147,7 +153,7 @@ pub fn flatten_classes(
             | StmtKind::InterfaceDecl { name, .. } => {
                 let class_like_key = php_symbol_key(name);
                 if trait_keys.contains(&class_like_key) {
-                    errors.push(CompileError::new(
+                    redeclarations.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate class or interface declaration: {}", name),
                     ));
@@ -378,7 +384,7 @@ pub fn flatten_classes(
         }
     }
 
-    (flattened, flattened_enums, errors, final_abstract_imports)
+    (flattened, flattened_enums, errors, redeclarations, final_abstract_imports)
 }
 
 /// A class whose trait uses bind an abstract `as final` import, recorded while flattening it and

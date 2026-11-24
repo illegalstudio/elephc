@@ -470,8 +470,10 @@ class C { use A, B; }
 }
 
 /// A trait's own method, or another used trait's, that satisfies a nested requirement must be
-/// compatible with it, as php 8.5.12 reports `Declaration of A::foo(): string must be compatible
-/// with N::foo(): int`, even though the requirement no longer reaches the class.
+/// compatible with it, even though the requirement no longer reaches the class. PHP checks it
+/// when it declares the trait and names that trait, as php 8.5.12 reports `Declaration of
+/// A::foo(): string must be compatible with N::foo(): int` and `Declaration of W::foo(): string
+/// must be compatible with N::foo(): int`.
 #[test]
 fn test_error_requirement_satisfied_inside_a_trait_must_be_compatible() {
     expect_error(
@@ -480,7 +482,7 @@ trait N { abstract public function foo(): int; }
 trait A { use N; public function foo(): string { return "a"; } }
 class C { use A; }
 "#,
-        "Cannot change return type when implementing trait method: C::foo",
+        "Cannot change return type when implementing trait method: A::foo",
     );
     expect_error(
         r#"<?php
@@ -489,7 +491,7 @@ trait G { public function foo(): string { return "g"; } }
 trait W { use N, G; }
 class C { use W; }
 "#,
-        "Cannot change return type when implementing trait method: C::foo",
+        "Cannot change return type when implementing trait method: W::foo",
     );
 }
 
@@ -506,7 +508,7 @@ trait Q { public function foo(): string { return "q"; } }
 trait W { use N, P, Q { P::foo insteadof Q; Q::foo as bar; } }
 class C { use W; }
 "#,
-        "Cannot change return type when implementing trait method: C::bar",
+        "Cannot change return type when implementing trait method: W::bar",
     );
 }
 
@@ -1959,12 +1961,43 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         ("trait N { abstract public static function bar(): string; }\ntrait T { use N; public function bar(): string { return \"a\"; } }\necho 1;".to_string(), "Cannot make static method N::bar() non static in class T"),
         ("trait N { abstract public function bar(): int; }\ntrait S { public static function bar(): int { return 1; } }\ntrait T { use N, S; }".to_string(), "Cannot make non static method N::bar() static in class T"),
         ("trait N { abstract public function bar(): string; }\ntrait T { use N; public static function bar(): string { return \"a\"; } }\nenum E { use T; case X; }".to_string(), "Cannot make non static method N::bar() static in class T"),
+        // PHP names the trait, whichever class or enum uses it.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C { use T; }".to_string(), "implementing trait method: T::bar"),
+        // Interfaces with parents and redeclarations fail when PHP declares them, in source
+        // order with the traits.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface Z extends Nope {}\ninterface A extends Missing {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass P {}\ninterface I extends P {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C {}\nclass C {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I {}\ninterface I {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait Q {}\ntrait Q {}".to_string(), "bar"),
+        ("class C {}\nclass C {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate class declaration: C"),
+        ("trait Q {}\ntrait Q {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate trait declaration: Q"),
     ] {
         let error = check_source_full(&format!("<?php\n{source}\n"))
             .err()
             .expect("program should fail");
         let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
         assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+    // A trait's own pair is reported once, named after the trait, not after its users.
+    for users in ["class Zebra { use U; }\nclass Apple { use U; }", "enum Zebra { use U; case X; }\nenum Apple { use U; case Y; }"] {
+        let error = check_source_full(&format!(
+            "<?php\ntrait M {{ abstract public function baz(): string; }}\ntrait U {{ use M; public function baz(): int {{ return 1; }} }}\n{users}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("implementing trait method: U::baz"), "{users}: {messages:?}");
+        assert!(messages.iter().all(|message| !message.contains("Apple") && !message.contains("Zebra")), "{users}: {messages:?}");
+    }
+    // A private or protected method satisfies an abstract public trait method in an enum too.
+    for visibility in ["private", "protected"] {
+        for source in [
+            format!("trait N {{ abstract public function bar(): string; }}\ntrait T {{ use N; {visibility} function bar(): string {{ return 'a'; }} }}\nenum E {{ use T; case X; }}"),
+            format!("trait N {{ abstract public function bar(): string; }}\nenum E {{ use N; {visibility} function bar(): string {{ return 'a'; }} case X; }}"),
+        ] {
+            assert!(check_source_full(&format!("<?php\n{source}\n")).is_ok(), "{source}");
+        }
     }
     // An unused trait whose own requirement is satisfied compatibly is valid.
     assert!(

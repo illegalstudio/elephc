@@ -32,4 +32,7 @@ pub(crate) use classes::{final_internal_class, parent_kind_error};
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;
-pub(crate) use enum_traits::{declaration_positions, position_of, validate_trait_requirements, LinkOrder};
+pub(crate) use enum_traits::{
+    declaration_positions, declaration_statement_positions, position_of, validate_trait_requirements,
+    LinkOrder,
+};

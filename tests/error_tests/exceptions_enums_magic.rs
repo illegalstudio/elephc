@@ -735,12 +735,13 @@ fn test_enum_review_nested_trait_requirement_stops_at_the_satisfying_trait() {
 }
 
 /// The intermediate trait's own implementation must honour the requirement it satisfies, as
-/// php 8.5.12 reports `Declaration of Middle::f(): string must be compatible with T::f(): int`.
+/// php 8.5.12 reports `Declaration of Middle::f(): string must be compatible with T::f(): int`:
+/// the trait is checked, and named, before the enum that uses it.
 #[test]
 fn test_error_enum_review_nested_trait_return_requirement() {
     expect_error(
         "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): string { return 'bad'; } } enum E { case Ready; use Middle; }",
-        "incompatible return type",
+        "Cannot change return type when implementing trait method: Middle::f",
     );
 }
 

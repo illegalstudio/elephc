@@ -1,28 +1,28 @@
 //! Purpose:
 //! Validates abstract trait method requirements against an enum's or a class's final
-//! implementations.
+//! implementations, and the requirements traits satisfy themselves.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::check_types_impl()` after enum schema construction.
 //!
 //! Key details:
 //! - Local methods win trait composition but must not erase abstract requirements.
-//! - Nested trait requirements bind relative types to the consuming enum or class.
 //! - For a class, flattening drops a requirement that another trait's method or the class's own
 //!   method satisfies; that method must still be compatible with it, as PHP checks
 //!   (`Declaration of C::foo() must be compatible with T::foo()`). Visibility is not compared:
-//!   PHP 8.5 lets a private method satisfy an abstract public trait method.
+//!   PHP 8.5 lets a private or protected method satisfy an abstract public trait method, in a
+//!   class, an enum or a trait.
 //! - A requirement a trait implements itself, by its own method or another used trait's, is
 //!   checked against that method and does not reach the trait's users or their `as` aliases:
 //!   a class may replace or alias the trait's concrete method freely, as in PHP.
+//! - PHP checks such a pair once, when it declares the trait, so it is checked at the trait, in
+//!   trait declaration order, named after it, whether a class or enum uses the trait or not. A
+//!   method of the other kind (static or not) cannot satisfy a requirement, and PHP rejects the
+//!   trait that pairs them. Only a pair naming `self`, `parent` or `static` is checked for each
+//!   user, against which those names resolve (PHP resolves them against the trait: #2536).
 //! - Each trait's contract is memoized once complete (`RequirementWalk`), and copies of one
 //!   method reached along several `use` paths are kept once, keyed by the declaring trait
 //!   instantiation, so traits shared along many paths are not walked again per path.
-//! - PHP checks a requirement a trait satisfied itself when it declares that trait, so those
-//!   pairs are checked in trait declaration order (not `use` order), once for every class and
-//!   enum, and a trait no walked user checks (unused, or used only by an enum that failed to
-//!   build) is checked on its own. A method of the other kind (static or not) cannot satisfy a
-//!   requirement, and PHP rejects the trait that pairs them.
 //! - Each error carries the `LinkOrder` PHP reports it in: the trait's declaration for a pair it
 //!   satisfied, the class or enum otherwise. The driver sorts every linking error by it.
 
@@ -36,46 +36,32 @@ use crate::types::{traits::FlattenedClass, PhpType};
 
 use super::super::Checker;
 use super::class_constants::strict_type_accepts;
-use super::validation::{
-    build_method_sig, late_static_return_compatible, validate_abstract_trait_signature, visibility_rank,
-};
+use super::validation::{build_method_sig, late_static_return_compatible, validate_abstract_trait_signature};
 
 /// Raw requirements remain available even when trait flattening selects a concrete override:
 /// the trait's declared name, its `use` lists and its methods.
 type TraitMembers<'a> = (&'a str, &'a [TraitUse], &'a [ClassMethod]);
 
-/// When PHP reports an error it raises while linking declarations: an early-bound class links
-/// while PHP compiles the file (`false`), before every declaration PHP links when it runs the
-/// file (`true`), and each group follows source order (`declaration_positions`). Sorting the
-/// linking errors by it puts first the error PHP reports.
+/// When PHP reports an error it raises while linking declarations: a declaration PHP links while
+/// it compiles the file (`false`: an early-bound class, a parentless interface) comes before
+/// every declaration it links when it runs the file (`true`), and each group follows source
+/// order (`declaration_positions`). Sorting the linking errors by it puts first the error PHP
+/// reports.
 pub(crate) type LinkOrder = (bool, usize);
-
-/// What the requirement walk has done with the pairs traits satisfied themselves.
-#[derive(Default)]
-struct PairChecks {
-    /// Pairs checked once for all users: those free of `self`, `parent` and `static`, which
-    /// resolve against each consuming class (the pair is then checked for every user).
-    checked: HashSet<RequirementPairKey>,
-    /// Checked pairs that failed, so a later class reports the same trait error only once.
-    failed: HashSet<RequirementPairKey>,
-    /// Traits with a failed pair: PHP stops declaring a trait at its first incompatibility.
-    failed_traits: HashSet<String>,
-    /// Pairs of a class whose parent failed while PHP compiled the file, which PHP never reaches.
-    suppressed: HashSet<RequirementPairKey>,
-}
 
 /// Checks the abstract trait methods every class and enum imports, and adds each error to
 /// `linked` with the order PHP reports it in.
 ///
-/// A requirement a class or enum method satisfies is checked at that class or enum. A
-/// requirement still abstract after flattening (left to a subclass, or satisfied by an
-/// inherited method) has no such method and is not checked here. A requirement a trait
-/// satisfied itself is checked by the first class or enum that uses the trait, in trait
-/// declaration order, and its error is ordered at that trait; a trait no walked user checks
-/// (unused, or used only by an enum that failed to build) is checked on its own, named after
-/// itself. A class with an abstract trait binding failure has an error slot in `linked` (the
-/// failure, or the build error `class_build_errors` locates), which a used trait's own
-/// incompatibility takes when PHP declares that trait first.
+/// A requirement a trait satisfied itself is checked at that trait (see the module notes): the
+/// first incompatible pair of each trait, in trait declaration order. A requirement a class or
+/// enum method satisfies is checked at that class or enum; one still abstract after flattening
+/// (left to a subclass, or satisfied by an inherited method) has no such method and is not
+/// checked here. A class with an abstract trait binding failure has an error slot in `linked`
+/// (the failure, or the build error `class_build_errors` locates), which PHP never reports when
+/// a trait the class uses failed first: the slot is dropped, or takes the class's own
+/// incompatibility with such a trait's `self`/`parent`/`static` requirement. A class whose
+/// parent failed while PHP compiled the file never reaches its traits, whose pairs are then not
+/// checked unless another class or an enum uses them.
 pub(crate) fn validate_trait_requirements(
     checker: &Checker,
     program: &Program,
@@ -93,24 +79,21 @@ pub(crate) fn validate_trait_requirements(
     let mut class_uses = HashMap::new();
     collect_class_trait_uses(program, &mut class_uses);
     let mut walk = RequirementWalk::new(&traits);
-    let mut checks = PairChecks::default();
-    let mut errors: Vec<(LinkOrder, CompileError)> = Vec::new();
-    // Edits to `linked`, applied once every class is walked so the indices stay valid.
-    let mut replacements: Vec<(usize, LinkOrder, CompileError)> = Vec::new();
-    let mut removals: Vec<usize> = Vec::new();
+    // Each class to walk with its contract, whether it has a binding failure, and its error slot.
+    let mut walked = Vec::new();
+    // The pairs of the classes whose parent failed while compiling, and of every other user.
+    let mut suppressed = HashSet::new();
+    let mut reached = HashSet::new();
     for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
         // A class with an abstract trait binding failure checked the requirements bound before
-        // it while it was built, and PHP never binds the ones after it. A pair a used trait
-        // satisfied itself is still checked: PHP declares that trait before it binds the class,
-        // so its error takes the place of the class's binding failure.
+        // it while it was built, and PHP never binds the ones after it.
         let binding_failure =
             checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name));
-
         // The error the class schema reported for a class with a binding failure: the failure
         // itself, or an inheritance error PHP reports before it, either one after the used
-        // traits are declared.
+        // traits are declared. A class whose build error is its parent's compile error has none.
         let class_error = binding_failure.and_then(|failure| {
             linked
                 .iter()
@@ -119,34 +102,55 @@ pub(crate) fn validate_trait_requirements(
                 })
                 .or_else(|| class_build_errors.get(&php_symbol_key(&class.name)).copied())
         });
-        // A class whose build error is its parent's compile error (`class_build_errors` has no
-        // entry) reports that error, and PHP stops before it declares any trait.
+        let keys = contract.satisfied.iter().map(SatisfiedPair::key);
         if binding_failure.is_some() && class_error.is_none() {
-            checks.suppressed.extend(contract.satisfied.iter().map(SatisfiedPair::key));
-            continue;
+            suppressed.extend(keys);
+        } else {
+            reached.extend(keys);
+            walked.push((class, contract, binding_failure.is_some(), class_error));
         }
+    }
+    let mut enum_uses = Vec::new();
+    collect_enum_trait_uses(program, &mut enum_uses);
+    for uses in enum_uses {
+        reached.extend(walk.uses_contract(uses).satisfied.iter().map(SatisfiedPair::key));
+    }
+    let mut errors: Vec<(LinkOrder, CompileError)> = Vec::new();
+    let failed_traits =
+        trait_requirement_errors(checker, program, &traits, &mut walk, &positions, &mut errors, |pair| {
+            let key = pair.key();
+            reached.contains(&key) || !suppressed.contains(&key)
+        });
+    // Edits to `linked`, applied once every class is walked so the indices stay valid.
+    let mut replacements: Vec<(usize, LinkOrder, CompileError)> = Vec::new();
+    let mut removals: Vec<usize> = Vec::new();
+    for (class, contract, has_binding_failure, class_error) in walked {
         // The class's error slot, when PHP reports the trait declared at `position` first.
         let slot_after = |position: usize| {
             class_error.filter(|index| (true, position) < linked[*index].0)
         };
         let mut failure = None;
+        let mut stopped = false;
         for pair in in_declaration_order(&contract.satisfied, &positions) {
             let composer = position_of(&positions, &pair.composer);
-            let key = pair.key();
-            if checks.checked.contains(&key) {
-                if checks.failed.contains(&key) {
+            if pair.is_user_independent() {
+                // Checked at the trait, which PHP declares before it binds the class.
+                if failed_traits.contains(&pair.composer) {
                     removals.extend(slot_after(composer));
+                    stopped = true;
+                    break;
                 }
                 continue;
             }
-            if let Err(error) = checks.check(pair, &traits, |required, actual| {
-                validate_class_requirement(checker, class, required, actual)
-            }) {
+            if let Err(error) =
+                validate_class_requirement(checker, class, &pair.required.method, &pair.actual.method)
+            {
                 failure = Some((composer, error));
+                stopped = true;
                 break;
             }
         }
-        if failure.is_none() && binding_failure.is_none() {
+        if !stopped && !has_binding_failure {
             failure = contract.required.iter().find_map(|required| {
                 let actual = class.methods.iter().find(|method| {
                     !method.is_abstract && method.is_static == required.method.is_static
@@ -167,37 +171,99 @@ pub(crate) fn validate_trait_requirements(
     for enum_unit in enums.iter().filter(|enum_unit| !enum_unit.used_traits.is_empty()) {
         let Some(uses) = enum_trait_uses(program, &enum_unit.name) else { continue };
         if let Some((position, error)) =
-            enum_requirement_error(checker, &traits, &mut walk, &mut checks, &positions, enum_unit, uses)
+            enum_requirement_error(checker, &mut walk, &positions, &failed_traits, enum_unit, uses)
         {
             errors.extend(error.flatten().into_iter().map(|error| ((true, position), error)));
         }
     }
-    errors.extend(unchecked_trait_requirement_errors(checker, program, &traits, &mut walk, &checks, &positions));
     apply_class_error_edits(linked, replacements, removals);
     linked.extend(errors);
 }
 
-/// The first incompatible requirement of one enum, with the source position of the declaration
-/// PHP reports it for: a pair a used trait satisfied itself (in trait declaration order, at that
-/// trait, unless an earlier user checked it), then a requirement the enum's own method or a
-/// synthesized `from`/`tryFrom` factory satisfies (at the enum).
-fn enum_requirement_error(
+/// Checks the requirements each trait satisfied itself, as PHP does when it declares the trait:
+/// for each trait in declaration order, the first incompatible pair `included` accepts that
+/// does not name `self`, `parent` or `static`, named after the trait, added to `errors` at the
+/// trait's position. Returns the keys of the traits that failed.
+fn trait_requirement_errors(
     checker: &Checker,
+    program: &Program,
     traits: &HashMap<String, TraitMembers<'_>>,
     walk: &mut RequirementWalk<'_, '_>,
-    checks: &mut PairChecks,
     positions: &HashMap<String, usize>,
+    errors: &mut Vec<(LinkOrder, CompileError)>,
+    included: impl Fn(&SatisfiedPair) -> bool,
+) -> HashSet<String> {
+    let mut declared: Vec<(usize, String)> = Vec::new();
+    collect_trait_names(program, &mut declared, positions);
+    declared.sort_by_key(|(position, _)| *position);
+    let mut seen = HashSet::new();
+    let mut failed = HashSet::new();
+    for (position, name) in declared {
+        let trait_key = php_symbol_key(&name);
+        if !seen.insert(trait_key.clone()) {
+            continue;
+        }
+        let owner = FlattenedClass {
+            name: name.clone(),
+            span: Span::dummy(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: true,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        };
+        let contract = walk.trait_contract(&trait_key);
+        let failure = contract
+            .satisfied
+            .iter()
+            .filter(|pair| pair.composer == trait_key && pair.is_user_independent() && included(pair))
+            .find_map(|pair| {
+                let outcome = match pair.kind_error(traits) {
+                    Some(error) => Err(error),
+                    None => validate_class_requirement(
+                        checker, &owner, &pair.required.method, &pair.actual.method,
+                    ),
+                };
+                outcome.err()
+            });
+        if let Some(error) = failure {
+            errors.extend(error.flatten().into_iter().map(|error| ((true, position), error)));
+            failed.insert(trait_key);
+        }
+    }
+    failed
+}
+
+/// The first incompatible requirement of one enum, with the source position of the declaration
+/// PHP reports it for. A used trait's own pair is checked at the trait, and the enum is never
+/// bound once such a trait failed. Otherwise: a trait's `self`/`parent`/`static` pair resolved
+/// against the enum (in trait declaration order, at that trait), then a requirement the enum's
+/// own method or a synthesized `from`/`tryFrom` factory satisfies (at the enum).
+fn enum_requirement_error(
+    checker: &Checker,
+    walk: &mut RequirementWalk<'_, '_>,
+    positions: &HashMap<String, usize>,
+    failed_traits: &HashSet<String>,
     enum_unit: &FlattenedClass,
     uses: &[TraitUse],
 ) -> Option<(usize, CompileError)> {
     let contract = walk.uses_contract(uses);
     for pair in in_declaration_order(&contract.satisfied, positions) {
-        if checks.checked.contains(&pair.key()) {
+        if pair.is_user_independent() {
+            if failed_traits.contains(&pair.composer) {
+                return None;
+            }
             continue;
         }
-        if let Err(error) = checks.check(pair, traits, |required, actual| {
-            validate_requirement(checker, enum_unit, required, actual)
-        }) {
+        if let Err(error) =
+            validate_requirement(checker, enum_unit, &pair.required.method, &pair.actual.method)
+        {
             return Some((position_of(positions, &pair.composer), error));
         }
     }
@@ -222,91 +288,15 @@ fn enum_requirement_error(
     })
 }
 
-impl PairChecks {
-    /// Checks `pair` with `validate`, which receives the required and the satisfying method
-    /// (a pair of two kinds fails without it), and records the outcome: a pair checked once for
-    /// all users is marked checked, and a failure marks its composing trait.
-    fn check(
-        &mut self,
-        pair: &SatisfiedPair,
-        traits: &HashMap<String, TraitMembers<'_>>,
-        validate: impl FnOnce(&ClassMethod, &ClassMethod) -> Result<(), CompileError>,
-    ) -> Result<(), CompileError> {
-        let recorded = pair.is_user_independent();
-        if recorded {
-            self.checked.insert(pair.key());
-        }
-        let outcome = match pair.kind_error(traits) {
-            Some(error) => Err(error),
-            None => validate(&pair.required.method, &pair.actual.method),
-        };
-        if outcome.is_err() {
-            if recorded {
-                self.failed.insert(pair.key());
-            }
-            self.failed_traits.insert(pair.composer.clone());
-        }
-        outcome
-    }
-}
-
-/// Checks the requirements each trait satisfied itself that no class or enum walk checked (the
-/// trait is unused, or its users failed to build), which PHP checks when it declares the trait:
-/// the first incompatible pair of each such trait, in declaration order, named after the trait.
-/// A trait that already failed is not reported again. Pairs naming `self`, `parent` or `static`
-/// resolve against a consuming class and are left to it.
-fn unchecked_trait_requirement_errors(
-    checker: &Checker,
-    program: &Program,
-    traits: &HashMap<String, TraitMembers<'_>>,
-    walk: &mut RequirementWalk<'_, '_>,
-    checks: &PairChecks,
-    positions: &HashMap<String, usize>,
-) -> Vec<(LinkOrder, CompileError)> {
-    let mut declared: Vec<(usize, String)> = Vec::new();
-    collect_trait_names(program, &mut declared, positions);
-    declared.sort_by_key(|(position, _)| *position);
-    let mut errors = Vec::new();
-    for (position, name) in declared {
-        let trait_key = php_symbol_key(&name);
-        if checks.failed_traits.contains(&trait_key) {
-            continue;
-        }
-        let owner = FlattenedClass {
-            name: name.clone(),
-            span: Span::dummy(),
-            extends: None,
-            implements: Vec::new(),
-            is_abstract: true,
-            is_final: false,
-            is_readonly_class: false,
-            properties: Vec::new(),
-            methods: Vec::new(),
-            attributes: Vec::new(),
-            constants: Vec::new(),
-            used_traits: Vec::new(),
-            trait_aliases: Vec::new(),
-        };
-        let contract = walk.trait_contract(&trait_key);
-        for pair in contract.satisfied.iter().filter(|pair| pair.composer == trait_key) {
-            let key = pair.key();
-            if !pair.is_user_independent()
-                || checks.checked.contains(&key)
-                || checks.suppressed.contains(&key)
-            {
-                continue;
-            }
-            let outcome = match pair.kind_error(traits) {
-                Some(error) => Err(error),
-                None => validate_class_requirement(checker, &owner, &pair.required.method, &pair.actual.method),
-            };
-            if let Err(error) = outcome {
-                errors.extend(error.flatten().into_iter().map(|error| ((true, position), error)));
-                break;
-            }
+/// Collects each enum declaration's trait `use` lists, through namespace blocks.
+fn collect_enum_trait_uses<'a>(program: &'a [crate::parser::ast::Stmt], uses: &mut Vec<&'a [TraitUse]>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::EnumDecl { trait_uses, .. } if !trait_uses.is_empty() => uses.push(trait_uses.as_slice()),
+            StmtKind::NamespaceBlock { body, .. } => collect_enum_trait_uses(body, uses),
+            _ => {}
         }
     }
-    errors
 }
 
 /// Collects each trait declaration's name with its source position, through namespace blocks.
@@ -324,26 +314,46 @@ fn collect_trait_names(
     }
 }
 
-/// The source position of each class, enum and trait declaration, keyed by `php_symbol_key`,
-/// counted through namespace blocks: the position half of a `LinkOrder`.
-pub(crate) fn declaration_positions(program: &Program) -> HashMap<String, usize> {
-    /// Numbers the declarations of `stmts` from `next`, recursing into namespace blocks.
-    fn walk(stmts: &[crate::parser::ast::Stmt], next: &mut usize, positions: &mut HashMap<String, usize>) {
-        for stmt in stmts {
-            match &stmt.kind {
-                StmtKind::ClassDecl { name, .. }
-                | StmtKind::EnumDecl { name, .. }
-                | StmtKind::TraitDecl { name, .. } => {
-                    positions.entry(php_symbol_key(name)).or_insert(*next);
-                    *next += 1;
-                }
-                StmtKind::NamespaceBlock { body, .. } => walk(body, next, positions),
-                _ => {}
-            }
+/// Calls `visit` with each class, interface, trait and enum declaration statement and its name,
+/// in source order, through namespace blocks.
+fn for_each_declaration<'a>(
+    stmts: &'a [crate::parser::ast::Stmt],
+    visit: &mut impl FnMut(&'a crate::parser::ast::Stmt, &'a str),
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. } => visit(stmt, name),
+            StmtKind::NamespaceBlock { body, .. } => for_each_declaration(body, visit),
+            _ => {}
         }
     }
+}
+
+/// The source position of each class, interface, trait and enum declaration, keyed by
+/// `php_symbol_key` (the first one of a redeclared name), counted through namespace blocks: the
+/// position half of a `LinkOrder`.
+pub(crate) fn declaration_positions(program: &Program) -> HashMap<String, usize> {
     let mut positions = HashMap::new();
-    walk(program, &mut 0, &mut positions);
+    let mut next = 0;
+    for_each_declaration(program, &mut |_, name| {
+        positions.entry(php_symbol_key(name)).or_insert(next);
+        next += 1;
+    });
+    positions
+}
+
+/// The source position (as in `declaration_positions`) of each declaration statement, keyed by
+/// its span, so a redeclaration has its own.
+pub(crate) fn declaration_statement_positions(program: &Program) -> HashMap<Span, usize> {
+    let mut positions = HashMap::new();
+    let mut next = 0;
+    for_each_declaration(program, &mut |stmt, _| {
+        positions.entry(stmt.span).or_insert(next);
+        next += 1;
+    });
     positions
 }
 
@@ -778,7 +788,8 @@ fn collect_trait_members<'a>(program: &'a Program, traits: &mut HashMap<String, 
     }
 }
 
-/// Applies shared override rules and non-coercive parameter variance to one abstract requirement.
+/// Applies shared override rules and non-coercive parameter variance to one abstract requirement
+/// of an enum. Visibility is not compared (see the module notes).
 fn validate_requirement(
     checker: &Checker,
     enum_unit: &FlattenedClass,
@@ -800,12 +811,6 @@ fn validate_requirement(
         checker, required.return_type.as_ref().filter(|hint| hint.contains_late_static()),
         actual.return_type.as_ref(), &actual_sig.return_type, &enum_unit.name, actual.span,
     )?;
-    if visibility_rank(&actual.visibility) < visibility_rank(&required.visibility) {
-        return Err(CompileError::new(actual.span, &format!(
-            "Cannot reduce visibility when implementing trait method: {}::{}",
-            enum_unit.name, actual.name,
-        )));
-    }
     if required_sig.by_ref_return && !actual_sig.by_ref_return {
         return Err(CompileError::new(actual.span, &format!(
             "Cannot remove by-reference return when implementing trait method: {}::{}",

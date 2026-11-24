@@ -43,7 +43,7 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
-    collect_global_constants, declaration_positions,
+    collect_global_constants, declaration_positions, declaration_statement_positions,
     drop_unresolvable_attribute_arg_refs, position_of, validate_deferred_class_constants,
     validate_deferred_declaration_defaults, validate_trait_requirements,
     expand_enum_interfaces, validate_enum_interface_contracts,
@@ -113,9 +113,26 @@ pub(super) fn check_types_impl(
     constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
-    let (mut flattened_classes, mut flattened_enums, flatten_errors, final_abstract_imports) =
-        flatten_classes(program);
+    let (
+        mut flattened_classes,
+        mut flattened_enums,
+        flatten_errors,
+        redeclarations,
+        final_abstract_imports,
+    ) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // The errors PHP raises while it compiles (an early-bound class, a parentless interface) or
+    // declares (every other class, interface, trait and enum) a declaration, each with when PHP
+    // reports it, sorted once every declaration is linked so the first is PHP's.
+    let order = declaration_order(program);
+    let positions = declaration_positions(program);
+    let statement_positions = declaration_statement_positions(program);
+    let mut linked: Vec<(LinkOrder, CompileError)> = Vec::new();
+    // A trait or class-like declaration reusing a trait's name fails when PHP declares it.
+    for error in redeclarations {
+        let position = statement_positions.get(&error.span).copied().unwrap_or(usize::MAX);
+        linked.push(((true, position), error));
+    }
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
     checker.trait_method_requirements =
@@ -145,9 +162,13 @@ pub(super) fn check_types_impl(
     for class in &flattened_classes {
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
-            errors.push(CompileError::new(
-                class.span,
-                &format!("Duplicate class declaration: {}", class.name),
+            // PHP raises it when it declares the second class.
+            linked.push((
+                (true, statement_positions.get(&class.span).copied().unwrap_or(usize::MAX)),
+                CompileError::new(
+                    class.span,
+                    &format!("Duplicate class declaration: {}", class.name),
+                ),
             ));
             continue;
         }
@@ -173,9 +194,12 @@ pub(super) fn check_types_impl(
                     .keys()
                     .any(|existing| php_symbol_key(existing) == interface_key)
             {
-                errors.push(CompileError::new(
-                    stmt.span,
-                    &format!("Duplicate interface declaration: {}", name),
+                linked.push((
+                    (true, statement_positions.get(&stmt.span).copied().unwrap_or(usize::MAX)),
+                    CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate interface declaration: {}", name),
+                    ),
                 ));
                 continue;
             }
@@ -330,6 +354,9 @@ pub(super) fn check_types_impl(
     // parents, so the walk decides numbering and nothing else.
     let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
     interface_names.sort();
+    // An interface without parents is linked while PHP compiles the file, any other when PHP
+    // declares it.
+    let interfaces_start = linked.len();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -339,7 +366,11 @@ pub(super) fn check_types_impl(
             &mut next_interface_id,
             &mut building_interfaces,
         ) {
-            errors.extend(error.flatten());
+            let link_order = (
+                interface_map.get(&interface_name).is_some_and(|interface| !interface.extends.is_empty()),
+                position_of(&positions, &interface_name),
+            );
+            link_errors(&mut linked, interfaces_start, &errors, error.flatten(), link_order);
         }
     }
 
@@ -371,18 +402,14 @@ pub(super) fn check_types_impl(
     }
     // PHP compiles the class declarations in source order before it links any class, and while
     // compiling one it rejects its early-bound parent (a final class, an interface, a readonly
-    // mismatch) and its private final constants. Those errors precede every later inheritance
-    // and trait diagnostic, and the class builds below do not report them again.
-    errors.extend(class_compile_errors(program, &flattened_classes, &class_map, &checker));
-    // The errors PHP raises while linking the class, enum and trait declarations, each with when
-    // PHP reports it, sorted once every declaration is linked so the first is PHP's.
-    let order = declaration_order(program);
-    let positions = declaration_positions(program);
-    let mut linked: Vec<(LinkOrder, CompileError)> = Vec::new();
+    // mismatch) and its private final constants. Those errors precede every diagnostic raised
+    // when PHP declares a class, and the class builds below do not report them again.
+    linked.extend(class_compile_errors(program, &flattened_classes, &class_map, &checker, &positions));
     // Where each class's own build error starts in `linked`, so a used trait's own requirement
     // incompatibility can take its place (`validate_trait_requirements`). A class whose build
-    // only repeats an error reported before linking (its own compile error, or its parent's)
-    // has none.
+    // only repeats an error reported before the class builds (its own compile error, or its
+    // parent's) has none.
+    let builds_start = linked.len();
     let mut class_build_errors: HashMap<String, usize> = HashMap::new();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
@@ -398,30 +425,11 @@ pub(super) fn check_types_impl(
                     .is_some_and(|class| is_early_bound(class, &order, &class_map, &checker)),
                 position_of(&positions, &class_name),
             );
-            // A parent's error repeated by the child keeps one copy, reported when PHP links the
-            // first of them, which is also where the child's own build error starts, so a used
-            // trait's incompatibility replaces it.
-            let mut first = None;
-            for error in error.flatten() {
-                let same = |reported: &CompileError| {
-                    reported.span == error.span && reported.message == error.message
-                };
-                if errors.iter().any(same) {
-                    continue;
-                }
-                let index = match linked.iter().position(|(_, reported)| same(reported)) {
-                    Some(index) => {
-                        linked[index].0 = linked[index].0.min(link_order);
-                        index
-                    }
-                    None => {
-                        linked.push((link_order, error));
-                        linked.len() - 1
-                    }
-                };
-                first.get_or_insert(index);
-            }
-            if let Some(index) = first {
+            // A parent's error repeated by the child keeps one copy, which is also where the
+            // child's own build error starts, so a used trait's incompatibility replaces it.
+            if let Some(index) =
+                link_errors(&mut linked, builds_start, &errors, error.flatten(), link_order)
+            {
                 class_build_errors.insert(php_symbol_key(&class_name), index);
             }
         }
@@ -483,7 +491,9 @@ pub(super) fn check_types_impl(
             ) {
                 Ok(()) => {}
                 Err(EnumBuildError::Declaration(error)) => {
-                    let link_order = (true, position_of(&positions, name));
+                    // At this enum's own statement, which a redeclared enum does not share.
+                    let position = statement_positions.get(&stmt.span).copied();
+                    let link_order = (true, position.unwrap_or_else(|| position_of(&positions, name)));
                     linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
                 }
                 Err(EnumBuildError::CaseValue(error)) => case_value_errors.extend(error.flatten()),
@@ -836,8 +846,9 @@ var_dump((new Mw())->check(new Req()));
     }
 }
 
-/// The errors PHP raises while compiling the class declarations, in source order: for each
-/// class, its private final constants (PHP compiles the class body first), then, when PHP
+/// The errors PHP raises while compiling the class declarations, in source order and each with its
+/// `LinkOrder`: for each class, its private final constants (PHP compiles the class body first),
+/// then, when PHP
 /// early-binds the class (see [`is_compile_bound`]), a parent that is a trait, an interface or a
 /// final class, or that differs in `readonly`. The messages are those of the class schema build
 /// (`validate_parent_constraints`, `resolve_parent_info`), which reports them again at the class
@@ -848,19 +859,21 @@ fn class_compile_errors(
     classes: &[FlattenedClass],
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
-) -> Vec<CompileError> {
+    positions: &HashMap<String, usize>,
+) -> Vec<(LinkOrder, CompileError)> {
     let order = declaration_order(program);
     let mut errors = Vec::new();
     for class in classes {
+        let link_order = (false, position_of(positions, &class.name));
         for constant in &class.constants {
             if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
-                errors.push(CompileError::new(
+                errors.push((link_order, CompileError::new(
                     constant.span,
                     &format!(
                         "Private constant {}::{} cannot be final",
                         class.name, constant.name
                     ),
-                ));
+                )));
             }
         }
         if !is_early_bound(class, &order, class_map, checker) {
@@ -870,27 +883,60 @@ fn class_compile_errors(
             continue;
         };
         if let Some(message) = super::schema::parent_kind_error(&class.name, parent_name, class_map, checker) {
-            errors.push(CompileError::new(class.span, &message));
+            errors.push((link_order, CompileError::new(class.span, &message)));
         } else if let Some(parent) = class_map.get(parent_name) {
             if parent.is_final {
-                errors.push(CompileError::new(
+                errors.push((link_order, CompileError::new(
                     class.span,
                     &format!("Class {} cannot extend final class {}", class.name, parent_name),
-                ));
+                )));
             } else if class.is_readonly_class != parent.is_readonly_class {
                 let relation = if class.is_readonly_class {
                     "readonly class cannot extend non-readonly parent"
                 } else {
                     "non-readonly class cannot extend readonly parent"
                 };
-                errors.push(CompileError::new(
+                errors.push((link_order, CompileError::new(
                     class.span,
                     &format!("{}: {} extends {}", relation, class.name, parent_name),
-                ));
+                )));
             }
         }
     }
     errors
+}
+
+/// Adds the errors one declaration's build reported to `linked` at `link_order`, each once. An
+/// error reported before (in `reported`, or in `linked` before `start`) is skipped, and one
+/// already linked from `start` on (a parent's, repeated by its child) keeps the earlier order.
+/// Returns the index of the declaration's first error linked from `start` on.
+fn link_errors(
+    linked: &mut Vec<(LinkOrder, CompileError)>,
+    start: usize,
+    reported: &[CompileError],
+    errors: Vec<CompileError>,
+    link_order: LinkOrder,
+) -> Option<usize> {
+    let mut first = None;
+    for error in errors {
+        let same = |other: &CompileError| other.span == error.span && other.message == error.message;
+        if reported.iter().any(same) || linked[..start].iter().any(|(_, other)| same(other)) {
+            continue;
+        }
+        let index = match linked[start..].iter().position(|(_, other)| same(other)) {
+            Some(offset) => {
+                let index = start + offset;
+                linked[index].0 = linked[index].0.min(link_order);
+                index
+            }
+            None => {
+                linked.push((link_order, error));
+                linked.len() - 1
+            }
+        };
+        first.get_or_insert(index);
+    }
+    first
 }
 
 /// Whether PHP links `class` while it compiles the file (early binding): a top-level class that
