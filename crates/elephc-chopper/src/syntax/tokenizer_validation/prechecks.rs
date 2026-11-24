@@ -10,7 +10,7 @@
 use crate::scanner::{newline_count, operator, Operator, HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE};
 
 use super::diagnostics::*;
-use super::parser_view::{parser_view, ternary_colon_before_label};
+use super::parser_view::{enclosing_braces, parser_view, ternary_colon_before_label};
 use super::reference_scan::{
     is_reference_marker, is_write_continuation, reference_chain_end, reference_target_starts_at,
 };
@@ -318,6 +318,7 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
 ) -> Option<ValidationError> {
     let close_of = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
     let enclosing = enclosing_delimiters(tokens);
+    let braces = enclosing_braces(tokens);
     for index in 0..tokens.len() {
         if !is_reference_marker(tokens[index].id()) {
             continue;
@@ -328,11 +329,13 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         let previous_id = tokens[previous].id();
         let assignment = previous_id == i64::from(b'=');
         let foreach_value = previous_id == tok::T_AS;
+        let arrow_entry = previous_id == tok::T_DOUBLE_ARROW
+            && arrow_introduces_reference_entry(tokens, previous, &enclosing, &braces);
         let use_capture = previous_id == i64::from(b'(')
             && enclosing[index] != u32::MAX
             && previous_significant_index(tokens, enclosing[index] as usize)
                 .is_some_and(|before| tokens[before].id() == tok::T_USE);
-        if !assignment && !foreach_value && !use_capture {
+        if !assignment && !foreach_value && !arrow_entry && !use_capture {
             continue;
         }
         if assignment
@@ -359,7 +362,7 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         }
         let error = if assignment {
             token_error_at(source, tokens, tokens[after].pos())
-        } else if foreach_value {
+        } else if foreach_value || arrow_entry {
             reference_chain_error(source, tokens, after)
         } else {
             with_expectation(token_error_at(source, tokens, tokens[after].pos()), "\")\"")
@@ -367,6 +370,38 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         return Some(error);
     }
     None
+}
+
+/// Returns whether a `=>` directly introduces an array/list entry or keyed `foreach` value.
+///
+/// Those contexts accept a reference marker on the value, but not a write operator after its
+/// target. Match arms and arrow-function bodies also use `=>` and must keep their marker so the
+/// ordinary parser reports `unexpected token "&"`.
+fn arrow_introduces_reference_entry<T: SourceToken>(
+    tokens: &[T],
+    arrow: usize,
+    enclosing: &[u32],
+    braces: &[u32],
+) -> bool {
+    let delimiter =
+        (enclosing[arrow] != u32::MAX).then_some(enclosing[arrow] as usize);
+    let brace = (braces[arrow] != u32::MAX).then_some(braces[arrow] as usize);
+    if brace.is_some_and(|brace| delimiter.is_none_or(|delimiter| brace > delimiter)) {
+        return false;
+    }
+    let Some(open) = delimiter else {
+        return false;
+    };
+    match tokens[open].id() {
+        id if id == i64::from(b'[') => bracket_opens_array_literal(tokens, open),
+        id if id == i64::from(b'(') => previous_significant_index(tokens, open).is_some_and(|before| {
+            matches!(
+                tokens[before].id(),
+                id if id == tok::T_ARRAY || id == tok::T_LIST || id == tok::T_FOREACH
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// Rejects a malformed `array(&…)`, `list(&…)` or `[&…]` reference entry.

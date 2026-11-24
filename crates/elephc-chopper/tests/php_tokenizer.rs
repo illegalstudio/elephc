@@ -24,7 +24,7 @@ fn linearity_budget() -> std::time::Duration {
     let seconds = std::env::var("ELEPHC_LINEARITY_BUDGET_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(60);
+        .unwrap_or(30);
     std::time::Duration::from_secs(seconds)
 }
 
@@ -2901,12 +2901,32 @@ fn tokenizer_reference_write_continuations_are_errors() {
             "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
         ),
         (
+            b"<?php foreach ($a as $k => &$v = 1) {}",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $a = [1 => &$v = 1];",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $a = [1 => &$v++];",
+            "syntax error, unexpected token \"++\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
             b"<?php $f = function () use (&$x = 1) {};",
             "syntax error, unexpected token \"=\", expecting \")\"",
         ),
     ] {
         let error = tokenize(source, TOKEN_PARSE).expect_err("write continuation must fail");
         assert_eq!(error.message, message, "{}", String::from_utf8_lossy(source));
+    }
+    for source in [
+        b"<?php foreach ($a as $k => &$v) {}".as_slice(),
+        b"<?php $a = [1 => &$v];",
+        b"<?php $f = function () use (&$x) {};",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
     }
 }
 
