@@ -92,15 +92,15 @@ mod tests {
     /// Pending native pins expose their actual owner field, and native consumption removes it.
     #[test]
     fn pending_argument_pin_owner_slot_disappears_at_native_consumption() {
-        let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let mut cell = 0u64;
+        let value = RuntimeCellHandle::from_raw((&raw mut cell).cast());
         let owner = RuntimeArgumentOwner::new(value);
-        let mut record = std::ptr::null_mut::<ArgumentPin>();
+        let mut installed_slot = None;
         let old = owner.try_pin(16, std::ptr::null_mut(), |value, storage, _, _| {
-            record = storage.cast();
-            unsafe {
-                (*record).validation.owner = value.as_ptr() as u64;
-                (*record).validation.kind = ArgumentPin::PENDING as u64;
-            }
+            installed_slot = Some(storage as usize + ArgumentPin::OWNER);
+            let record = unsafe { &mut *storage.cast::<ArgumentPin>() };
+            record.validation.owner = value.as_ptr() as u64;
+            record.validation.kind = ArgumentPin::PENDING as u64;
             Ok::<_, ()>(true)
         });
         assert_eq!(old, Ok(Some(value)));
@@ -109,12 +109,16 @@ mod tests {
             assert_eq!(unsafe { *slot }, value.as_ptr());
             slots.push(slot as usize);
         });
-        assert_eq!(slots, [unsafe { record.cast::<u8>().add(ArgumentPin::OWNER) } as usize],
+        assert_eq!(slots, [installed_slot.expect("the installer ran")],
             "only the native pin field owns the transferred source lease");
         // This is the native activate transition, which clears before releasing the source.
-        unsafe {
-            (*record).validation.owner = 0;
-            (*record).validation.kind = ArgumentPin::ACTIVE as u64;
+        {
+            let mut lease = owner.0.borrow_mut();
+            let pin = lease.as_mut().and_then(|lease| lease.pin.as_deref_mut())
+                .expect("the installed pin is still owned");
+            let record = pin.get_mut();
+            record.validation.owner = 0;
+            record.validation.kind = ArgumentPin::ACTIVE as u64;
         }
         owner.visit_owned_slots(&mut |_| panic!("the consumed pin and stale descriptor own no value"));
         assert_eq!(owner.take(|_| Ok::<_, ()>(None)), Ok(None));
