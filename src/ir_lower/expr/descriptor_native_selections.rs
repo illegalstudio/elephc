@@ -21,10 +21,19 @@ pub(super) fn prepare(
     ctx: &mut LoweringContext<'_, '_>, callback: &mut RootedDescriptorCallback,
     args: &[Expr], span: Span,
 ) -> Vec<Option<SelectionArgument>> {
-    if !args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg)) {
+    // Compiler-generated helpers (`__elephc_usort_mixed`, ...) hand their callback elements of
+    // plain PHP arrays, never SimpleXML selections, so the passing-mode query is provably useless.
+    if ctx.owner_name().starts_with("__elephc_")
+        || !args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg))
+    {
         return (0..args.len()).map(|_| None).collect();
     }
-    ctx.declare_eval_context_local();
+    // The passing-mode query asks the interpreter's bridge only for a callable the interpreter
+    // owns. A closed world has none: the query is answered from the compiled callable's own
+    // descriptor, so no eval context is declared (it would link the whole interpreter).
+    if !crate::closed_world::is_enabled() {
+        ctx.declare_eval_context_local();
+    }
     let ty = ctx.builder.value_php_type(callback.value.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![callback.value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));

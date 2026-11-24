@@ -103,6 +103,13 @@ pub(in crate::codegen::lower_inst) fn lower_callable_parameter_is_by_ref(
     let callback = expect_operand(inst, 0)?;
     let name = expect_operand(inst, 1)?;
     let position = expect_operand(inst, 2)?;
+    // Without the interpreter no callable is interpreter-owned, so the descriptor every compiled
+    // callable carries answers the query; the bridge is only asked when it is linked.
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return crate::codegen::lower_inst::callables::lower_native_callable_parameter_is_by_ref(
+            ctx, inst, callback, name, position,
+        );
+    }
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
     let target = ctx.emitter.target;

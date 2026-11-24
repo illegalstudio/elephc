@@ -49,8 +49,15 @@ pub(crate) const CALLABLE_DESC_NAME_LEN_OFFSET: usize = 24;
 /// Same offset as [`CALLABLE_DESC_NAME_LEN_OFFSET`], under the spelling main's literal-parameter
 /// guards use.
 pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = CALLABLE_DESC_NAME_LEN_OFFSET;
-#[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
+/// Byte offset, inside the signature record, of the visible (public) parameter count.
+pub(crate) const CALLABLE_SIG_VISIBLE_COUNT_OFFSET: usize = 0;
+/// Byte offset of the source-variadic index (`u64::MAX` when the signature has none).
+pub(crate) const CALLABLE_SIG_VARIADIC_INDEX_OFFSET: usize = 24;
+/// Byte offset of the `(pointer, length)` parameter-name table (0 when there is no parameter).
+pub(crate) const CALLABLE_SIG_PARAM_NAMES_OFFSET: usize = 56;
+/// Byte offset of the per-parameter by-reference word table (0 when there is no parameter).
+pub(crate) const CALLABLE_SIG_REF_FLAGS_OFFSET: usize = 80;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
 #[allow(dead_code)]

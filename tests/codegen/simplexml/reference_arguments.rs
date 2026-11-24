@@ -266,3 +266,25 @@ echo $plain->value, '|';
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+
+/// Every callable form (closures, first-class callables, bound methods, names, arrays, invokable
+/// objects, builtins, variadics, named arguments, `__call` trampolines), by value and by
+/// reference, over array elements, properties and SimpleXML selections prints what `php -n`
+/// prints, leaks nothing, and -- the program being a closed world -- answers the passing-mode
+/// query from the callable's own descriptor instead of linking the interpreter.
+#[test]
+fn test_callable_parameter_query_answers_every_callable_form_natively() {
+    if skip_without_xml_native("test_callable_parameter_query_answers_every_callable_form_natively") { return; }
+    let source = include_str!("../../fixtures/callable_by_ref_forms.php");
+    let path = std::env::temp_dir().join(format!("elephc_by_ref_forms_{}.php", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let php = std::process::Command::new("php").arg("-n").arg(&path).output().expect("php -n reference");
+    let _ = std::fs::remove_file(&path);
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, String::from_utf8_lossy(&php.stdout));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!asm.contains("__elephc_eval_callable_parameter_is_by_ref"), "the query must not reach the bridge");
+    assert!(asm.contains("__rt_callable_param_is_by_ref"), "the shared native routine answers it");
+}

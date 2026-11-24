@@ -19,6 +19,7 @@ mod invoke_owned_args;
 mod named_parameter_errors;
 mod invoker_names;
 mod invoker_ref_marker;
+mod param_is_by_ref;
 
 pub(crate) use closure_bind::{emit_closure_bind, emit_closure_set_scope};
 pub(crate) use descriptor_method_name::emit_callable_descriptor_method_name;
@@ -29,6 +30,7 @@ pub(crate) use is_callable::emit_is_callable_runtime;
 pub(crate) use lookup::emit_callable_lookup;
 pub(crate) use invoke_owned_args::emit_callable_invoke_owned_args;
 pub(crate) use invoker_ref_marker::{emit_invoker_borrowed_ref_marker, emit_invoker_ref_cell_to_mixed};
+pub(crate) use param_is_by_ref::emit_callable_param_is_by_ref;
 pub(crate) use invoker_names::{emit_invoker_lookup_param, emit_invoker_param_name_index};
 pub(crate) use named_parameter_errors::{
     emit_throw_named_parameter_overwrite, emit_throw_positional_after_named,

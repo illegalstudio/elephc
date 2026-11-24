@@ -728,6 +728,66 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     )
 }
 
+/// Answers whether a boxed callable takes the argument at a position or name by reference.
+///
+/// The callable is resolved to its descriptor exactly as the invocation that follows will resolve
+/// it (same scope, same errors for a callable that cannot be called), so a closure, first-class
+/// callable, bound method, `'f'` / `'A::b'` string, `[$obj, 'm']` / `['C', 'm']` array, invokable
+/// object, builtin or extern function all answer from the one signature record their descriptor
+/// carries. `__rt_callable_param_is_by_ref` then reads that record: one shared body, no per-site
+/// ladder. A descriptor the resolution freshly allocated is released again; one borrowed from the
+/// boxed cell is left alone.
+pub(in crate::codegen) fn lower_native_callable_parameter_is_by_ref(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    name: ValueId,
+    position: ValueId,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx,
+        callback,
+        "callable_descriptor_invoke",
+        false,
+        super::instruction_strict_php_profile(inst),
+        None,
+        None,
+        None,
+        Some(InaccessibleMethodError::DirectCall),
+    )?;
+    // Keep the descriptor and its ownership flag across the operand loads and the helper call.
+    let owned_flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    abi::emit_push_reg(ctx.emitter, owned_flag_reg);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let target = ctx.emitter.target;
+    ctx.load_value_to_reg(position, abi::int_arg_reg_name(target, 3))?;
+    ctx.load_string_value_to_regs(
+        name,
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+    )?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 0), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_callable_param_is_by_ref");
+    // The answer survives the conditional release of a freshly built descriptor.
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let borrowed_label = ctx.next_label("callable_query_borrowed");
+    let flag_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flag_reg, 32);
+    match target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {flag_reg}, {borrowed_label}")),
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {flag_reg}, {flag_reg}"));
+            ctx.emitter.instruction(&format!("jz {borrowed_label}"));
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+    ctx.emitter.label(&borrowed_label);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    super::store_if_result(ctx, inst)
+}
+
 /// Materializes a boxed callable descriptor while turning an unknown string name into `TypeError`.
 pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
     ctx: &mut FunctionContext<'_>,

@@ -57,3 +57,46 @@ passRuntimeTargetXmlSelections(replaceTargetXmlSelection(...), $xml);
 }
 
 supported_target_cases!(simplexml_reference_argument_write_selections, verify_simplexml_reference_argument_write_selections);
+
+/// A closed world answers the passing-mode query natively: no eval context is declared, so no
+/// function carries an `EvalContext` local and the interpreter bridge is not requested.
+fn verify_closed_world_passing_mode_query_declares_no_eval_context(target: &str) {
+    let source = r#"<?php
+function mkXml() { return new SimpleXMLElement('<r><q>1</q></r>'); }
+function viaCallable(callable $callback, array $items, object $holder): void {
+    $callback($items['k']);
+    $callback($holder->p);
+    $callback(string: $items['n']);
+}
+function viaClosureVariable(): void {
+    $f = function (&$value) { $value .= 'x'; };
+    $items = ['k' => 'a'];
+    $f($items['k']);
+}
+function viaMixed(mixed $callback, mixed $xml): void { $callback($xml->q); }
+function sorted(array $rows, callable $by): array {
+    usort($rows, fn($a, $b) => $by($a['n'], $b['n']));
+    uasort($rows, fn($a, $b) => $a['n'] <=> $b['n']);
+    return $rows;
+}
+sorted([['n' => 2], ['n' => 1]], fn($x, $y) => $x <=> $y);
+viaCallable('strtoupper', ['k' => 'a', 'n' => 'b'], (object) ['p' => 'c']);
+viaClosureVariable();
+viaMixed(fn($v) => $v, mkXml());
+"#;
+    crate::closed_world::set_enabled(true);
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    crate::closed_world::set_enabled(false);
+    for function in &module.functions {
+        assert!(!function.locals.iter().any(|local| matches!(local.kind, crate::ir::LocalKind::EvalContext)),
+            "{target}: {} must declare no eval context in a closed world", function.name);
+    }
+    let query = module.functions.iter().find(|function| function.name == "viaMixed").unwrap();
+    assert!(query.instructions.iter().any(|inst| inst.op == crate::ir::Op::RuntimeCall
+        && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CallableParameterIsByRef))),
+        "{target}: the passing-mode query is still emitted");
+    assert!(!module.required_runtime_features.eval_bridge, "{target}: no interpreter requested");
+}
+
+supported_target_cases!(closed_world_passing_mode_query_declares_no_eval_context, verify_closed_world_passing_mode_query_declares_no_eval_context);
