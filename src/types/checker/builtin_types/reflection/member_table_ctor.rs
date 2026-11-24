@@ -920,6 +920,14 @@ fn function_constructor() -> ClassMethod {
         vec![],
         None,
     ));
+    // A reflected Closure value is a closure whatever function it wraps: `strlen(...)` has the
+    // row of the builtin `strlen`, which is no closure, but php answers true for the object.
+    fill.push(s_if(
+        crate::synthetic_class::e_not(e_call("is_string", vec![e_var("function")])),
+        vec![s_prop_assign(e_this(), "__is_closure", e_bool(true))],
+        vec![],
+        None,
+    ));
     fill.push(s_assign("split", e_call("strrpos", vec![e_this_prop("__name"), e_str("\\")])));
     fill.push(s_if(
         e_binop(e_var("split"), BinOp::StrictEq, e_bool(false)),
