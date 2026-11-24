@@ -11,34 +11,45 @@
 
 use super::*;
 
-/// Assembly bytes of `probe()` for one write form, in a program with `classes` `__set` classes
-/// that declare the written property and, when `xml`, a `SimpleXMLElement` in the program.
-fn probe_bytes(form: &str, classes: usize, xml: bool) -> usize {
+/// Every write form a probe measures, with the statement of its `probe<form>()` function.
+const PROBE_FORMS: [(&str, &str); 7] = [
+    ("set", "$o->p[\"k\"] = $v; return 1;"),
+    ("ret", "return $o->p[\"k\"] = $v;"),
+    ("push", "$o->p[] = $v; return 1;"),
+    ("compound", "$o->p[\"k\"] .= $v; return 1;"),
+    ("coalesce", "return $o->p[\"k\"] ??= $v;"),
+    ("incdec", "$o->p[\"k\"]++; return 1;"),
+    ("assign", "$o->p = $v; return 1;"),
+];
+
+/// Assembly bytes of each `probe<form>()` in ONE program (one compile for all the forms), in a
+/// program with `classes` `__set` classes that declare the written property and, when `xml`, a
+/// `SimpleXMLElement` in the program. A write site calls a shared helper, so a site's size does
+/// not depend on the other sites beside it.
+fn probe_bytes(classes: usize, xml: bool) -> Vec<(&'static str, usize)> {
     let declared: String = (0..classes)
         .map(|i| format!("class C{i} {{ public array $p = []; public function __set($n, $v) {{}} }}\n"))
         .collect();
     let make = if xml { "$n > 9 ? new SimpleXMLElement(\"<r/>\") : new H" } else { "new H" };
-    let body = match form {
-        "set" => "$o->p[\"k\"] = $v; return 1;",
-        "ret" => "return $o->p[\"k\"] = $v;",
-        "push" => "$o->p[] = $v; return 1;",
-        "compound" => "$o->p[\"k\"] .= $v; return 1;",
-        "coalesce" => "return $o->p[\"k\"] ??= $v;",
-        "incdec" => "$o->p[\"k\"]++; return 1;",
-        "assign" => "$o->p = $v; return 1;",
-        other => panic!("unknown form {other}"),
-    };
+    let probes: String = PROBE_FORMS.iter()
+        .map(|(form, body)| format!("function probe{form}(mixed $o, mixed $v): mixed {{ {body} }}\n"))
+        .collect();
+    let calls: String = PROBE_FORMS.iter()
+        .map(|(form, _)| format!("echo json_encode(probe{form}(make($argc), $argc));\n"))
+        .collect();
     let source = format!(
         "<?php\n{declared}class H {{ public array $p = []; protected array $q = []; }}\n\
-         function make(int $n): mixed {{ return {make}; }}\n\
-         function probe(mixed $o, mixed $v): mixed {{ {body} }}\n\
-         echo json_encode(probe(make($argc), $argc));"
+         function make(int $n): mixed {{ return {make}; }}\n{probes}{calls}"
     );
     let dir = make_cli_test_dir("erased_write_size");
     let (asm, _runtime, _libs) = compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
     let _ = std::fs::remove_dir_all(&dir);
-    let body = &asm[asm.find("fn_probe:").expect("the probe() label")..];
-    body.find("fn_probe_epilogue:").expect("the probe() epilogue")
+    PROBE_FORMS.iter().map(|(form, _)| {
+        let start = asm.find(&format!("fn_probe{form}:")).unwrap_or_else(|| panic!("the probe{form}() label"));
+        let end = asm[start..].find(&format!("fn_probe{form}_epilogue:"))
+            .unwrap_or_else(|| panic!("the probe{form}() epilogue"));
+        (*form, end)
+    }).collect()
 }
 
 /// A site's assembly bytes (comments included) stay below this whatever the program holds: the
@@ -50,14 +61,16 @@ const MAX_SITE_BYTES: usize = 32_000;
 /// or with SimpleXML, and stays near the size it had before the ladders were inlined.
 #[test]
 fn test_erased_property_writes_do_not_grow_with_classes_or_simplexml() {
-    for form in ["set", "ret", "push", "compound", "coalesce", "incdec", "assign"] {
-        let (few, many) = (probe_bytes(form, 1, false), probe_bytes(form, 20, false));
-        let (xml_few, xml_many) = (probe_bytes(form, 1, true), probe_bytes(form, 20, true));
+    // Four compiles for all seven forms: the bounds of every form stay.
+    let (few, many) = (probe_bytes(1, false), probe_bytes(20, false));
+    let (xml_few, xml_many) = (probe_bytes(1, true), probe_bytes(20, true));
+    for (at, (form, _)) in PROBE_FORMS.iter().enumerate() {
+        let (few, many, xml_few, xml_many) = (few[at].1, many[at].1, xml_few[at].1, xml_many[at].1);
         assert!(many < few + 512, "{form}: grew with __set classes: {few} -> {many}");
         assert!(xml_many < xml_few + 512, "{form}: grew with __set classes beside SimpleXML: {xml_few} -> {xml_many}");
         // `??=` also holds the quiet element read of its probe, whose native XML arm is the read
         // side's own (flat in the number of classes, as the assertion above shows).
-        let xml_allowance = if form == "coalesce" { 12_288 } else { 1_024 };
+        let xml_allowance = if *form == "coalesce" { 12_288 } else { 1_024 };
         assert!(xml_few < few + xml_allowance, "{form}: SimpleXML in the program grew the site: {few} -> {xml_few}");
         assert!(xml_many < MAX_SITE_BYTES, "{form}: a write site is {xml_many} bytes");
     }
@@ -541,10 +554,8 @@ Error: Cannot access protected property Prot::$p
 "####, "{}", out.stderr);
 }
 
-/// Callable arrays inside array_map inside usort, in a generator and in a fiber: every wrapper reached while another is being emitted is queued and emitted once.
-#[test]
-fn test_nested_runtime_call_wrappers_are_all_emitted() {
-    let out = compile_and_run_with_heap_debug(r####"<?php
+/// Callable arrays and callable strings nested inside array_map inside usort, in a generator and in a fiber.
+const NESTED_WRAPPER_PROGRAM: &str = r####"<?php
 class K {
   public static function cmp($a, $b) { return $a <=> $b; }
   public function dbl($x) { return $x * 2; }
@@ -566,7 +577,12 @@ echo "\n";
 $fib = new Fiber(function () { $r = array_map(['K', 'up'], ['a', 'b']); Fiber::suspend(json_encode($r)); $q = [3, 1, 2]; usort($q, ['K', 'cmp']); return json_encode($q); });
 echo $fib->start(), $fib->resume() ?? $fib->getReturn(), "\n";
 echo call_user_func_array([new K, 'dbl'], [21]), call_user_func(["K", "up"], "z"), "\n";
-"####);
+"####;
+
+/// Callable arrays inside array_map inside usort, in a generator and in a fiber: every wrapper reached while another is being emitted is queued and emitted once.
+#[test]
+fn test_nested_runtime_call_wrappers_are_all_emitted() {
+    let out = compile_and_run_with_heap_debug(NESTED_WRAPPER_PROGRAM);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, r####"[2,6,10,18]
 ["BA","DC"]
@@ -576,4 +592,182 @@ cccccccccc
 ["A","B"][1,2,3]
 42Z
 "####, "{}", out.stderr);
+}
+
+/// Spells each `callable_builtin_*` / `callable_extern_*` wrapper symbol of one assembly line, with
+/// the suffix of its companion labels (`_epilogue`, `__gc_frame_owners`, ...) cut off, and whether
+/// the line defines that very symbol.
+fn wrapper_symbols(line: &str) -> Vec<(String, bool)> {
+    let mut found = Vec::new();
+    let mut rest = line;
+    while let Some(at) = rest.find("callable_") {
+        let tail = &rest[at..];
+        let end = tail.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(tail.len());
+        let symbol = &tail[..end];
+        rest = &tail[end..];
+        if !(symbol.starts_with("callable_builtin_") || symbol.starts_with("callable_extern_")) { continue; }
+        let base = symbol.split("_epilogue").next().unwrap_or(symbol).split("__").next().unwrap_or(symbol);
+        let defined = symbol == base && line.trim().trim_start_matches('_').trim_start_matches("eir_shared_") == format!("{symbol}:");
+        found.push((base.to_string(), defined));
+    }
+    found
+}
+
+/// Every wrapper symbol the nested-callable program references is defined exactly once: a wrapper
+/// queued behind the module copy another wrapper holds is emitted, and emitted a single time, also
+/// when the last take of the copy is the one that queued it.
+#[test]
+fn test_every_referenced_runtime_call_wrapper_is_defined_exactly_once() {
+    let dir = make_cli_test_dir("erased_write_wrappers");
+    let (asm, runtime, _libs) = compile_source_to_asm_with_options(NESTED_WRAPPER_PROGRAM, &dir, 8_388_608, false, false);
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut definitions: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut references: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for line in asm.lines().chain(runtime.lines()) {
+        for (symbol, defined) in wrapper_symbols(line) {
+            if defined { *definitions.entry(symbol.clone()).or_default() += 1; }
+            references.insert(symbol);
+        }
+    }
+    assert!(references.len() > 100, "the program reaches the runtime callable table: {} wrappers", references.len());
+    for symbol in &references {
+        assert_eq!(definitions.get(symbol).copied().unwrap_or(0), 1, "{symbol} is defined once");
+    }
+}
+
+/// Redeclared, typed or untyped-as-mixed, magic, ArrayAccess, readonly, conditionally declared and shadowed-private slots, uninitialized typed slots after magic, and the lines of the diagnostics of each write form: php -n output, one program compiled twice (without and with eval linked).
+const REDECLARED_SLOT_PROGRAM: &str = r####"<?php
+set_error_handler(function($no,$str,$file,$line){ echo "E[$no] $str @$line\n"; return true; });
+function w(mixed $o, $k, $v) { $o->p[$k] = $v; }
+function a(mixed $o, $v) { $o->p[] = $v; }
+function s(mixed $o, $v) { $o->p = $v; }
+function c(mixed $o, $k, $v) { $o->p[$k] .= $v; }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+function show($o) { echo get_class($o), ' ', json_encode($o->p ?? 'unset'), "\n"; }
+function all($o) { t(fn() => w($o, 'k', 1)); t(fn() => a($o, 2)); t(fn() => s($o, [3])); t(fn() => c($o, 'k', 'x')); t(fn() => show($o)); }
+
+class Base { public array $p = ['base']; }
+class MixedTyped { public mixed $p = ["mixed"]; }
+class MixedKid extends MixedTyped { public array $q = []; }
+class MagicSetKid extends Base { public function __set($n, $v) { echo "set($n)\n"; } }
+class UninitMagic { public array $p; public function __set($n, $v) { echo "magic-set($n)\n"; } public function __get($n) { echo "magic-get($n)\n"; return []; } }
+class UninitMagicKid extends UninitMagic {}
+class AAOnly implements ArrayAccess { public array $p = ['aa']; public function offsetExists(mixed $o): bool { return true; } public function offsetGet(mixed $o): mixed { return 1; } public function offsetSet(mixed $o, mixed $v): void { echo "offsetSet\n"; } public function offsetUnset(mixed $o): void {} }
+class WithRO { public function __construct(public readonly array $p = []) {} }
+if (!class_exists("Cond", false)) { class Cond { public array $p = ["cond"]; } }
+class Lv1 { private array $p = ['lv1']; function mine() { return $this->p; } }
+class Lv2 extends Lv1 { private array $p = ['lv2']; function w2(mixed $o, $k, $v) { $o->p[$k] = $v; return $o->p; } }
+class Lv3 extends Lv2 {}
+$objs = [new Base, new MixedTyped, new MixedKid, new MagicSetKid, new AAOnly, new Cond, new WithRO, new Lv2, new Lv3];
+foreach ($objs as $o) { echo "== ", get_class($o), "\n"; all($o); }
+echo "== uninit magic\n";
+foreach ([new UninitMagic, new UninitMagicKid] as $o) { t(fn() => w($o, 'a', 1)); t(fn() => a($o, 1)); t(fn() => c($o, 'a', 'z')); t(fn() => show($o)); }
+echo "== lv\n";
+$l2 = new Lv2; t(fn() => print(json_encode($l2->w2($l2, 'x', 1)) . json_encode($l2->mine()) . "\n"));
+$l3 = new Lv3; t(fn() => print(json_encode($l3->w2($l3, 'x', 1)) . json_encode($l3->mine()) . "\n"));
+$l1 = new Lv1; t(fn() => print(json_encode($l2->w2($l1, 'x', 1)) . "\n"));
+echo "== lines\n";
+function lines(mixed $o) {
+    try {
+        $o->p['a'] = 1;
+    } catch (Error $x) { echo $x->getMessage(), " @", $x->getLine(), "\n"; }
+    try {
+        $o->p['b'] .= 'x';
+    } catch (Error $x) { echo $x->getMessage(), " @", $x->getLine(), "\n"; }
+    try {
+        $o->p['n']++;
+    } catch (Error $x) { echo $x->getMessage(), " @", $x->getLine(), "\n"; }
+}
+echo "-- base\n"; lines(new Base); echo "-- null\n"; lines(null); echo "-- lv2\n"; lines(new Lv2);
+function multi(mixed $o, $k) {
+    $o
+      ->p[$k]
+      = 1;
+}
+t(fn() => multi(null, 'k'));
+function nullpush(mixed $o) {
+    try {
+        $o->p[] = 1;
+    } catch (Error $x) { echo $x->getMessage(), " @", $x->getLine(), "\n"; }
+    try {
+        $o->p = [1];
+    } catch (Error $x) { echo $x->getMessage(), " @", $x->getLine(), "\n"; }
+}
+nullpush(null);
+"####;
+
+/// php -n output of [`REDECLARED_SLOT_PROGRAM`].
+const REDECLARED_SLOT_OUTPUT: &str = r####"== Base
+E[2] Undefined array key "k" @6
+Base {"0":3,"k":"x"}
+== MixedTyped
+E[2] Undefined array key "k" @6
+MixedTyped {"0":3,"k":"x"}
+== MixedKid
+E[2] Undefined array key "k" @6
+MixedKid {"0":3,"k":"x"}
+== MagicSetKid
+E[2] Undefined array key "k" @6
+MagicSetKid {"0":3,"k":"x"}
+== AAOnly
+E[2] Undefined array key "k" @6
+AAOnly {"0":3,"k":"x"}
+== Cond
+E[2] Undefined array key "k" @6
+Cond {"0":3,"k":"x"}
+== WithRO
+Error: Cannot indirectly modify readonly property WithRO::$p
+Error: Cannot indirectly modify readonly property WithRO::$p
+Error: Cannot modify readonly property WithRO::$p
+Error: Cannot indirectly modify readonly property WithRO::$p
+WithRO []
+== Lv2
+Error: Cannot access private property Lv2::$p
+Error: Cannot access private property Lv2::$p
+Error: Cannot access private property Lv2::$p
+Error: Cannot access private property Lv2::$p
+Lv2 "unset"
+== Lv3
+E[8192] Creation of dynamic property Lv3::$p is deprecated @3
+E[2] Undefined array key "k" @6
+Lv3 {"0":3,"k":"x"}
+== uninit magic
+UninitMagic {"a":"1z","0":1}
+UninitMagicKid {"a":"1z","0":1}
+== lv
+{"0":"lv2","x":1}["lv1"]
+{"0":"lv2","x":1}["lv1"]
+Error: Cannot access private property Lv1::$p
+== lines
+-- base
+E[2] Undefined array key "b" @37
+E[2] Undefined array key "n" @40
+-- null
+Attempt to modify property "p" on null @34
+Attempt to modify property "p" on null @37
+Attempt to modify property "p" on null @40
+-- lv2
+Cannot access private property Lv2::$p @34
+Cannot access private property Lv2::$p @37
+Cannot access private property Lv2::$p @40
+Error: Attempt to modify property "p" on null
+Attempt to modify property "p" on null @52
+Attempt to assign property "p" on null @55
+"####;
+
+/// The redeclared-slot program, compiled without eval.
+#[test]
+fn test_redeclared_slot_writes_match_php() {
+    let out = compile_and_run_with_heap_debug(REDECLARED_SLOT_PROGRAM);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, REDECLARED_SLOT_OUTPUT, "{}", out.stderr);
+}
+
+/// The same program with eval linked: the helpers are shared per scope group and the caller's scope travels as an operand (line 1 carries the eval so the lines stay put).
+#[test]
+fn test_redeclared_slot_writes_match_php_with_eval_linked() {
+    let source = REDECLARED_SLOT_PROGRAM.replacen("<?php\n", "<?php eval($argc > 5 ? \"echo 1;\" : \"\");\n", 1);
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, REDECLARED_SLOT_OUTPUT, "{}", out.stderr);
 }
