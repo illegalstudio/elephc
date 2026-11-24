@@ -1250,6 +1250,66 @@ fn prune_recomputes_builtin_required_libraries() {
     );
 }
 
+/// Verifies a pruned call that needed the mbstring runtime stops enabling it while a live
+/// native UTF-8 check keeps the library linked for extension identity.
+#[test]
+fn prune_drops_runtime_bridge_owned_only_by_dead_calls() {
+    let (_, check) = prune(
+        "<?php function unused(string $text): void { echo mb_convert_encoding($text, 'UTF-8', 'SJIS'); } function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } var_dump(valid('Caffe'));",
+    );
+    assert!(
+        check.required_libraries.iter().any(|library| library == "elephc_mbstring"),
+        "the live native check keeps mbstring linked for extension identity"
+    );
+    assert!(
+        check.runtime_bridge_libraries.iter().all(|library| library != "elephc_mbstring"),
+        "only the pruned conversion reached the mbstring runtime"
+    );
+}
+
+/// Verifies a live call that needs the mbstring runtime keeps it after dead-call pruning.
+#[test]
+fn prune_keeps_runtime_bridge_of_live_calls() {
+    let (_, check) = prune(
+        "<?php function unused(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } echo mb_convert_encoding('Caffe', 'UTF-8', 'SJIS');",
+    );
+    assert!(
+        check.runtime_bridge_libraries.iter().any(|library| library == "elephc_mbstring"),
+        "the live conversion still reaches the mbstring runtime"
+    );
+}
+
+/// Verifies a builtin returned as a declared `callable` literal keeps its bridge runtime next
+/// to a dead direct call; invoking it through a variable is a dynamic call, which keeps every
+/// function and so the direct call too.
+#[test]
+fn prune_keeps_runtime_bridge_of_returned_builtin_callable() {
+    let (_, check) = prune(
+        "<?php function unused(string $text): void { echo mb_convert_encoding($text, 'UTF-8', 'SJIS'); } function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } function pick(): callable { return 'mb_strlen'; } $f = pick(); var_dump(valid('Caffe'), $f('abc'));",
+    );
+    assert!(
+        check.runtime_bridge_libraries.iter().any(|library| library == "elephc_mbstring"),
+        "the live callable wrapper still reaches the mbstring runtime"
+    );
+}
+
+/// Verifies a builtin string callback keeps its bridge linked when the only direct call that
+/// required the same library is pruned.
+#[test]
+fn prune_keeps_library_of_builtin_string_callback() {
+    let (_, check) = prune(
+        "<?php function unused(string $text): int { return mb_strlen($text); } print_r(array_map('mb_strtoupper', ['a', 'b']));",
+    );
+    assert!(
+        check.required_libraries.iter().any(|library| library == "elephc_mbstring"),
+        "the live string callback still links mbstring"
+    );
+    assert!(
+        check.runtime_bridge_libraries.iter().any(|library| library == "elephc_mbstring"),
+        "the live string callback still reaches the mbstring runtime"
+    );
+}
+
 /// Verifies named builtin arguments preserve a live conditional bridge after dead-call pruning.
 #[test]
 fn prune_normalizes_builtin_arguments_before_recomputing_libraries() {

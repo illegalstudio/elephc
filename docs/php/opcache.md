@@ -67,7 +67,7 @@ either build off. Both are compile-time flags; see
 [CLI reference — INI directives](../compiling/cli-reference.md#ini-directives).
 
 ```bash
-elephc --ini opcache.enable_cli=1 app.php
+elephc build --ini opcache.enable_cli=1 app.php
 ```
 
 Because the state is baked, `opcache.enable` / `opcache.enable_cli` are **not**
@@ -385,7 +385,7 @@ Compile with `--strict-opcache` to make that case throw a `RuntimeException`
 instead:
 
 ```console
-$ elephc --strict-opcache --ini opcache.enable=1 --ini opcache.enable_cli=1 app.php
+$ elephc build --strict-opcache --ini opcache.enable=1 --ini opcache.enable_cli=1 app.php
 ```
 
 The throw is deliberately narrow — only the request that cannot be honored:
@@ -593,10 +593,10 @@ size has moved.
 
 ```bash
 # Pick up a changed include immediately, at the cost of a stat per include.
-elephc --ini opcache.enable_cli=1 --ini opcache.revalidate_freq=0 app.php
+elephc build --ini opcache.enable_cli=1 --ini opcache.revalidate_freq=0 app.php
 
 # Never stat again: the entry is authoritative until opcache_reset().
-elephc --ini opcache.enable_cli=1 --ini opcache.validate_timestamps=0 app.php
+elephc build --ini opcache.enable_cli=1 --ini opcache.validate_timestamps=0 app.php
 ```
 
 **This is a behaviour change with the cache on**: at the default
@@ -965,7 +965,7 @@ of parsed scripts** there, so a process that starts cold skips the read, the
 `<?php` scan and the parse for anything it cached before:
 
 ```bash
-elephc --ini opcache.enable_cli=1 --ini opcache.file_cache=/var/cache/elephc app.php
+elephc build --ini opcache.enable_cli=1 --ini opcache.file_cache=/var/cache/elephc app.php
 ```
 
 That matters most under `--web`, where workers are forked from a master that has
@@ -1036,7 +1036,7 @@ error reporting, so the line carries its timestamp and pid and the process exits
 with status **254** (php-src's `exit(-2)`):
 
 ```console
-$ elephc --ini opcache.enable_cli=1 --ini opcache.file_cache=/no/such/dir app.php
+$ elephc build --ini opcache.enable_cli=1 --ini opcache.file_cache=/no/such/dir app.php
 $ ./app
 Sat Sep 12 18:19:28 2026 (26639): Fatal Error opcache.file_cache must be a full path of an accessible directory
 $ echo $?

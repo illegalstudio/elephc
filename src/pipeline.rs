@@ -3,7 +3,7 @@
 //! Resolves typed managed dependencies only when the selected path performs a final link.
 //!
 //! Called from:
-//! - `crate::main()` after `crate::cli::parse_args()`.
+//! - `crate::entry::run()` after `crate::cli::parse_args()`.
 //!
 //! Key details:
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
@@ -129,10 +129,16 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 }
 
 /// Runs compiler passes with the output kind's host-callback profile installed.
-fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
+fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
+    // A direct pipeline caller may hand us a config whose project `[ini]` table was merged
+    // without the CLI helper. Reapply the floor, quantity parse, and arena sizing here so the
+    // emitted `_heap_limit` always reflects the final merged list. Main's earlier application
+    // is idempotent: refused values are already gone and a valid limit never shrinks the arena.
+    crate::cli::apply_startup_memory_limit(&mut config, true);
     let CliConfig {
         filename,
         heap_size,
+        heap_size_explicit: _,
         gc_stats,
         counters,
         instrument,
@@ -166,11 +172,27 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates,
         apm_collector,
         apm_transactions,
+        apm_include,
+        apm_exclude,
         quiet,
         ini_overrides,
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
+    // ext/uri ships with PHP 8.5. Force-linking its bridge on an older profile would make
+    // `extension_loaded('uri')` true while every URI class stays undeclared, so reject the
+    // combination instead of exposing a false extension promise.
+    if with_crates.contains("uri") && php_version < crate::php_version::PhpVersion::Php85 {
+        crate::progress::clear();
+        errors::report(
+            &errors::CompileError::new(
+                Span::new(0, 0),
+                "--with-uri requires --php-version 8.5 or later",
+            )
+            .with_file(filename.to_string()),
+        );
+        process::exit(1);
+    }
     // Reject incompatible options before check/EIR output can return without the backend.
     if emit == Emit::Phpext && (web || !extra_link_libs.is_empty()
         || !extra_link_paths.is_empty() || !extra_frameworks.is_empty()
@@ -303,9 +325,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
-        HashSet::new()
+        autoload::prelude_probe::AutoloadedPreludes::default()
     } else {
-        autoload::prelude_probe::autoloaded_prelude_groups(
+        autoload::prelude_probe::autoloaded_preludes(
             &ast,
             parent,
             &autoload_registry,
@@ -313,7 +335,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("autoload-prelude-probe", phase_started);
-    let autoloaded = |group: &str| autoloaded_preludes.contains(group);
+    let autoloaded = |group: &str| autoloaded_preludes.groups.contains(group);
 
     // Decide XML usage while the AST still contains only user and resolved-include code.
     // Opaque eval pulls in the large core prelude below; running XML's namespace-aware DOM
@@ -344,6 +366,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("bcmath"), "bcmath"),
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
+        (with_crates.contains("uri"), "uri"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -514,6 +537,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &opcache_manifest,
         &opcache_preload_symbols,
     );
+    // The tokenizer memory guard reads `memory_limit` through Core INI. When the user configured
+    // a limit but the program itself never mentions `ini_get`, force that surface so the guard
+    // sees the configured value instead of the compiled heap size.
+    let force_ini_get = ini_overrides
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("memory_limit"))
+        && crate::tokenizer_prelude::program_uses_surface(&ast);
     let (ast, opcache_bake_sites) = opcache_prelude::inject_if_used(
         ast,
         php_version,
@@ -523,6 +553,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
         strict_opcache,
+        force_ini_get,
+        &autoloaded_preludes.functions,
         &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
@@ -550,9 +582,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(
+    let ast = crate::tokenizer_prelude::inject_if_used_with_web(
         ast,
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
+        heap_size,
+        web,
         &mut prelude_inventory,
     );
     let uri_supported = php_version >= crate::php_version::PhpVersion::Php85;
@@ -739,6 +773,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::version_prelude::inject_if_used(
         ast,
         php_version,
+        &autoloaded_preludes.functions,
         &mut prelude_inventory,
     );
     timings.record_since("version-prelude", phase_started);
@@ -897,6 +932,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("object-cast-prelude", phase_started);
 
+    // A namespaced `--web` program gets its catch-all here, its namespaces flattened and
+    // its autoloaded classes in: the injection could not wrap it across namespace blocks.
+    let ast = if web && !web_application { web_prelude::wrap_resolved_catch_all(ast) } else { ast };
+
     // Transaction boundaries outside HTTP (Messenger's messages, the methods
     // `--apm-transaction` names), in a build that counts transactions. After
     // `autoload::run`, because the boundaries are mostly vendor classes.
@@ -1023,6 +1062,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     for warning in errors::take_deferred_warnings().iter().chain(&check_result.warnings) {
         errors::report_warning(warning);
     }
+    crate::uri_prelude::apply_reflection_signatures(&mut check_result);
     // The instantiation report is printed here, before declaration pruning and codegen: every
     // template is already gone and every remaining `<...>` name is a concrete instantiation, so
     // this is the complete monomorphization set. It is diagnostic only and changes nothing.
@@ -1297,6 +1337,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
 
     ir_module.apm_collector = apm_collector;
+    // What the probe reads at start: the project's `[apm]` patterns (`+` includes, `-`
+    // excludes) and the build's identity (`@`), which its snapshots carry so a collector
+    // marks deploys.
+    if with_crates.contains("probe") {
+        let mut rules = String::new();
+        for pattern in &apm_include {
+            rules.push_str(&format!("+{pattern}\n"));
+        }
+        for pattern in &apm_exclude {
+            rules.push_str(&format!("-{pattern}\n"));
+        }
+        let build = crate::project_monitoring::build_identity(std::path::Path::new(filename));
+        rules.push_str(&format!("@{build}\n"));
+        ir_module.apm_rules = Some(rules);
+    }
     backend::emit_and_link(backend::BackendInputs {
         repl_build: entry.is_repl_host(),
         announce_success: !entry.is_test_suite(),

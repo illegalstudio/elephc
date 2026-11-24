@@ -1,6 +1,6 @@
 <?php
 
-// Build with `cargo run --features pdo-oci -- examples/pdo-oci/main.php`.
+// Build with `cargo run --features pdo-oci -- build examples/pdo-oci/main.php`.
 // Oracle Instant Client must be discoverable by the platform dynamic loader.
 $dsn = getenv("ELEPHC_OCI_DSN");
 if ($dsn === false || $dsn === "") {

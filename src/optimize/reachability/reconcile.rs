@@ -9,6 +9,10 @@
 //! - Synthetic checker-only classes are preserved unless backed by a pruned source declaration.
 //! - Vtable survivor order is stable and slots are compacted from zero.
 //! - Shared virtual methods retain identical slots along every live inheritance lineage.
+//! - Bridge runtimes are recomputed apart from link identity, so a pruned call that needed a
+//!   bridge runtime stops enabling it even when a native call keeps the library linked.
+//! - Libraries a builtin callable reference requires are never dropped: the usage scan sees
+//!   only direct calls, so it cannot prove such a reference died with its declaration.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,13 +21,32 @@ use crate::types::{CheckResult, ClassInfo};
 
 use super::graph::{ClassKind, DeclarationIndex, Reachability};
 
+/// Link libraries the builtin calls of one program version contribute.
+pub(super) struct BuiltinLibraries {
+    /// Every library a builtin call links, identity-only requirements included.
+    required: HashSet<String>,
+    /// Libraries whose bridge runtime a builtin call reaches.
+    runtime_bridges: HashSet<String>,
+}
+
+impl BuiltinLibraries {
+    /// Collects the builtin link requirements of every call in `program`.
+    pub(super) fn scan(program: &[crate::parser::ast::Stmt]) -> Self {
+        let usage = super::usage::scan_program(program);
+        Self {
+            required: usage.required_libraries,
+            runtime_bridges: usage.runtime_bridge_libraries,
+        }
+    }
+}
+
 /// Mutates checker metadata so every declaration table agrees with the pruned AST.
 pub(super) fn check_result(
     check: &mut CheckResult,
     reachability: &Reachability,
     declarations: &DeclarationIndex,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
+    original_builtin_libraries: &BuiltinLibraries,
+    remaining_builtin_libraries: &BuiltinLibraries,
 ) {
     let declared_extern_libraries: HashSet<String> = check
         .extern_functions
@@ -197,8 +220,13 @@ fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
         };
         for (method, parent_slot) in &parent.vtable_slots {
             if let Some(child_slot) = child.vtable_slots.get(method) {
-                debug_assert_eq!(
-                    child_slot, parent_slot,
+                // A widening override moves the method key to a new slot and keeps the
+                // parent's slot under a generated key that still names the same method.
+                let retired = child.narrowed_vtable_slots.iter().any(|(key, narrowed)| {
+                    narrowed.method == *method && child.vtable_slots.get(key) == Some(parent_slot)
+                });
+                debug_assert!(
+                    child_slot == parent_slot || retired,
                     "instance vtable slot for {class_name}::{method} diverged from {parent_name}",
                 );
             }
@@ -318,11 +346,18 @@ fn prune_class_methods(
     // `assert_inherited_vtable_slots_aligned` guards the same property across an inheritance
     // edge; variance relates two classes with no such edge, which is why it needs its own.
     let instantiated = class_key.contains('<');
+    // A retired slot left by a widening override lives exactly as long as its method's slot.
+    let narrowed = std::mem::take(&mut info.narrowed_vtable_slots);
     info.vtable_methods.retain(|key| {
+        let method = narrowed.get(key).map_or(key.as_str(), |slot| slot.method.as_str());
         instantiated
-            || keep_instance.contains(key)
-            || reachable_instance_slots.contains(key.as_str())
+            || keep_instance.contains(method)
+            || reachable_instance_slots.contains(method)
     });
+    info.narrowed_vtable_slots = narrowed
+        .into_iter()
+        .filter(|(key, _)| info.vtable_methods.contains(key))
+        .collect();
     info.vtable_slots = compact_slots(&info.vtable_methods);
     info.static_vtable_methods.retain(|key| {
         instantiated || keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
@@ -419,15 +454,25 @@ fn retain_callable_parameter_metadata(
 fn recompute_required_libraries(
     check: &mut CheckResult,
     declared_extern_libraries: &HashSet<String>,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
+    original: &BuiltinLibraries,
+    remaining: &BuiltinLibraries,
 ) {
+    let original_builtin_libraries = &original.required;
+    let remaining_builtin_libraries = &remaining.required;
     let remaining_extern_libraries: HashSet<String> = check
         .extern_functions
         .values()
         .filter_map(|signature| signature.library.clone())
         .collect();
+    let callable_libraries: HashSet<&str> = check
+        .callable_builtin_libraries
+        .iter()
+        .map(String::as_str)
+        .collect();
     check.required_libraries.retain(|library| {
+        if callable_libraries.contains(library.as_str()) {
+            return true;
+        }
         let removed_builtin_requirement = original_builtin_libraries.contains(library)
             && !remaining_builtin_libraries.contains(library)
             && !remaining_extern_libraries.contains(library);
@@ -435,5 +480,14 @@ fn recompute_required_libraries(
             && !remaining_extern_libraries.contains(library)
             && !remaining_builtin_libraries.contains(library);
         !removed_builtin_requirement && !removed_extern_requirement
+    });
+    // A surviving identity-only call keeps the library linked, but must not keep the bridge
+    // runtime that only pruned calls reached.
+    let required = &check.required_libraries;
+    check.runtime_bridge_libraries.retain(|library| {
+        let removed_runtime_requirement = original.runtime_bridges.contains(library)
+            && !remaining.runtime_bridges.contains(library)
+            && !callable_libraries.contains(library.as_str());
+        required.contains(library) && !removed_runtime_requirement
     });
 }

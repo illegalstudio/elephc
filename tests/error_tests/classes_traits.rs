@@ -59,7 +59,7 @@ fn test_error_instanceof_parent_requires_parent_class() {
 }
 
 /// Verifies that a class using two traits with conflicting method names (both `foo`)
-/// reports "ambiguous trait method" when no `insteadof` resolution is provided.
+/// reports PHP's collision error when no `insteadof` resolution is provided.
 #[test]
 fn test_error_trait_method_conflict_requires_insteadof() {
     expect_error(
@@ -68,7 +68,60 @@ trait A { public function foo() { return 1; } }
 trait B { public function foo() { return 2; } }
 class C { use A, B; }
 "#,
-        "ambiguous trait method 'foo'",
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+}
+
+/// Two traits that reach one trait method are not a collision (see the codegen tests), but the
+/// collision rule still compares the method's origin: a trait that overrides the shared method,
+/// a copy whose visibility `as` changed, or an alias that meets another trait's method of that
+/// name still collides, with php 8.5.12's message.
+#[test]
+fn test_error_trait_method_collision_compares_origin() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T; public function foo() { return "A"; } }
+trait B { use T; }
+class C { use A, B; }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T { foo as protected; } }
+trait B { use T; }
+class C { use A, B; }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T; }
+trait B { use T; }
+class C { use A, B { A::foo as protected; } }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T { foo as bar; } }
+trait B { public function bar() { return "B"; } }
+class C { use A, B; }
+"#,
+        "Trait method B::bar has not been applied as C::bar, because of collision with A::bar",
+    );
+    expect_error(
+        r#"<?php
+namespace N;
+trait T { public function foo() { return "T"; } }
+trait A { public function foo() { return "A"; } }
+class C { use T, A; }
+"#,
+        "Trait method N\\A::foo has not been applied as N\\C::foo, because of collision with N\\T::foo",
     );
 }
 
@@ -170,7 +223,7 @@ trait A { public function foo() { return 1; } }
 trait B { public function foo() { return 2; } }
 class C { use A; use B; }
 "#,
-        "imports duplicate trait method 'foo'",
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
     );
 }
 
@@ -223,17 +276,237 @@ class C { use W; #[\Override] public function foo(): string { return "C"; } }
 
 /// A trait method that satisfies another trait's abstract method, or a second abstract
 /// declaration of it, must keep its signature: php 8.5.12 reports `Declaration of ... must be
-/// compatible with A::foo(...)` for each case below, so none may merge silently. Flattening
-/// accepts only an identical signature for now.
+/// compatible with A::foo(...)` for each case below, so none may merge silently. A concrete
+/// implementation gets PHP's compatibility check; two abstract declarations must be identical.
 #[test]
 fn test_error_trait_requirement_merge_needs_a_compatible_signature() {
-    for source in [
+    expect_error(
         "<?php trait A { abstract public function foo(int $x): string; } trait B { public function foo(): array { return []; } } class C { use A; use B; }",
+        "when implementing trait method: C::foo",
+    );
+    expect_error(
         "<?php trait A { abstract public function foo(int $x): int; } trait B { public function foo(string $s): string { return $s; } } final class C { use A, B; }",
+        "when implementing trait method: C::foo",
+    );
+    for source in [
         "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } class C { use A; use B; public function foo(): int { return 1; } }",
         "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } abstract class C { use A, B; }",
     ] {
-        expect_error(source, "with a signature that differs from the abstract trait method it implements");
+        expect_error(source, "imports abstract trait method 'foo' twice with different signatures");
+    }
+}
+
+/// The method that satisfies an abstract trait method, whether another trait's or the class's
+/// own, must be compatible with it, as php 8.5.12 checks (`Declaration of C::foo(string $x): int
+/// must be compatible with X::foo(int $x): string`).
+#[test]
+fn test_error_trait_requirement_signature_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+trait Y { public function foo(string $x): int { return 1; } }
+class C { use X, Y; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+trait Y { public function foo(string $x): int { return 1; } }
+class C { use Y; use X; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $a, int $b): string; }
+trait Y { public function foo(int $a): string { return "y"; } }
+class C { use X, Y; }
+"#,
+        "Incompatible parameter shape when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(): string; }
+trait Y { public function foo(): int { return 1; } }
+class C { use X; use Y; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function &foo(): array; }
+trait Y { public function foo(): array { return []; } }
+class C { use X, Y; }
+"#,
+        "Cannot remove by-reference return when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+class C { use X; public function foo(string $x): int { return 1; } }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(): string; }
+class C { use X; public function foo() { return "c"; } }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );    // A by-reference variadic keeps its declared element type for the comparison.
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+trait Y { function foo(string &...$xs): void {} }
+class C { use X, Y; }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+trait Y { function foo(string &...$xs): void {} }
+enum E { use X, Y; case A; }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: E::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract function foo(int &...$xs): void; }
+class C { use X; function foo(string &...$xs): void {} }
+"#,
+        "Cannot narrow parameter $xs when implementing trait method: C::foo",
+    );
+}
+
+/// `void` is not a value type: a `void` method satisfies only a `void` requirement, and a
+/// `void` requirement only a `void` or `never` method, for classes and enums alike. php 8.5.12
+/// rejects each pair below ("Declaration of C::foo(): void must be compatible with
+/// X::foo(): mixed") and accepts `null`/`void`/`never`/untyped requirements as listed.
+#[test]
+fn test_error_trait_requirement_void_return_must_match() {
+    for (required, actual) in [("mixed", "void"), ("?int", "void"), ("void", "?int")] {
+        let body = if actual == "void" { "" } else { "return 1;" };
+        expect_error(
+            &format!(
+                "<?php\ntrait X {{ abstract function foo(): {required}; }}\n\
+                 trait Y {{ function foo(): {actual} {{ {body} }} }}\nclass C {{ use X, Y; }}\n"
+            ),
+            "Cannot change return type when implementing trait method: C::foo",
+        );
+        expect_error(
+            &format!(
+                "<?php\ntrait X {{ abstract function foo(): {required}; }}\n\
+                 trait Y {{ function foo(): {actual} {{ {body} }} }}\nenum E {{ use X, Y; }}\n"
+            ),
+            "Enum method E::foo has incompatible return type for abstract trait method",
+        );
+    }
+    for (required, actual, body) in [
+        (": ?int", ": null", "return null;"),
+        (": mixed", ": null", "return null;"),
+        (": void", ": void", ""),
+        (": void", ": never", "throw new Exception();"),
+        ("", ": void", ""),
+    ] {
+        expect_no_error(&format!(
+            "<?php\ntrait X {{ abstract function foo(){required}; }}\n\
+             trait Y {{ function foo(){actual} {{ {body} }} }}\nclass C {{ use X, Y; }}\n"
+        ));
+    }
+}
+
+/// Two instantiations of one generic trait reached along two `use` paths are two traits, so
+/// their methods collide even when only a body mentions the type parameter, while one
+/// instantiation reached twice is one method (`tests/codegen/oop/traits.rs`).
+#[test]
+fn test_error_generic_trait_instantiations_reached_twice_collide() {
+    expect_error(
+        r#"<?php
+class P { public function n(): string { return "P"; } }
+class Q { public function n(): string { return "Q"; } }
+trait Make<T> { public function make(): string { $o = new T(); return $o->n(); } }
+trait A { use Make<P>; }
+trait B { use Make<Q>; }
+class C { use A, B; }
+"#,
+        "Trait method B::make has not been applied as C::make, because of collision with A::make",
+    );
+}
+
+/// A trait's own method, or another used trait's, that satisfies a nested requirement must be
+/// compatible with it, as php 8.5.12 reports `Declaration of A::foo(): string must be compatible
+/// with N::foo(): int`, even though the requirement no longer reaches the class.
+#[test]
+fn test_error_requirement_satisfied_inside_a_trait_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): int; }
+trait A { use N; public function foo(): string { return "a"; } }
+class C { use A; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): int; }
+trait G { public function foo(): string { return "g"; } }
+trait W { use N, G; }
+class C { use W; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+}
+
+/// An alias of a method excluded by `insteadof` still satisfies a requirement of the trait that
+/// takes it, so it must be compatible with it, as php 8.5.12 reports
+/// `Declaration of W::bar(): string must be compatible with N::bar(): int`.
+#[test]
+fn test_error_alias_of_excluded_method_must_satisfy_requirement() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function bar(): int; }
+trait P { public function foo(): int { return 1; } }
+trait Q { public function foo(): string { return "q"; } }
+trait W { use N, P, Q { P::foo insteadof Q; Q::foo as bar; } }
+class C { use W; }
+"#,
+        "Cannot change return type when implementing trait method: C::bar",
+    );
+}
+
+/// Two instantiations of one generic trait are two traits whose methods share the template's
+/// declaration: `Needs<int>::foo` and `Needs<string>::foo` are two different abstract
+/// declarations, not one requirement, so the program is rejected (the requirement walk also keys
+/// its copies by the instantiated trait).
+#[test]
+fn test_error_each_generic_trait_instantiation_requirement_is_checked() {
+    expect_error(
+        r#"<?php
+trait Needs<T> { abstract public function foo(): T; }
+class C { use Needs<int>, Needs<string>; public function foo(): int { return 1; } }
+"#,
+        "class C imports abstract trait method 'foo' twice with different signatures",
+    );
+}
+
+/// A requirement a trait satisfies that names `self` is checked for every class using the
+/// trait, so the outcome does not depend on which class is declared first: with
+/// `N::f(): self` and `W::f(): Base`, the class `Other` breaks it in either order. (php 8.5.12
+/// checks the pair once at `W`, with `self` naming `W`, and rejects even `Base` alone.)
+#[test]
+fn test_error_trait_satisfied_self_requirement_is_checked_for_every_user() {
+    let traits = "trait N { abstract public function f(): self; } \
+                  trait W { use N; public function f(): Base { return new Base(); } }";
+    for classes in [
+        "class Base { use W; } class Other { use W; }",
+        "class Other { use W; } class Base { use W; }",
+    ] {
+        expect_error(
+            &format!("<?php {traits} {classes}"),
+            "Cannot change return type when implementing trait method: Other::f",
+        );
     }
 }
 
@@ -603,14 +876,15 @@ fn test_error_override_attribute_on_static_with_no_parent() {
     );
 }
 
-/// Verifies that `#[AllowDynamicProperties]` inside a namespace is treated as a
-/// user-defined attribute (not the built-in), so dynamic properties are rejected
-/// with "Undefined property".
+/// Verifies that `#[AllowDynamicProperties]` inside a namespace stays a user-defined attribute
+/// (not the built-in) and therefore does not suppress PHP 8.5's creation deprecation.
+///
+/// The write itself is legal on an ordinary class; `tests/codegen/objects/property_access/`
+/// pins the emitted `Creation of dynamic property N\Bag::$x is deprecated` notice.
 #[test]
-fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin() {
-    expect_error(
+fn test_allow_dynamic_properties_namespaced_lookalike_does_not_grant_the_exemption() {
+    expect_no_error(
         "<?php namespace N; #[AllowDynamicProperties] class Bag {} $b = new Bag(); $b->x = 1;",
-        "Undefined property: N\\Bag::x",
     );
 }
 

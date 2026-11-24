@@ -516,6 +516,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
     /// Emits the supplied warning bytes through the native diagnostic path.
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
+    /// Emits warning bytes through the native diagnostic path at the supplied source line.
+    pub(super) fn __elephc_eval_warning_at(message_ptr: *const u8, message_len: u64, line: u64);
     /// Emits a fatal diagnostic and terminates through the native runtime path.
     pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
     /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.

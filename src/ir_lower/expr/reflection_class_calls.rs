@@ -35,6 +35,7 @@ pub(super) fn lower_reflection_class_new_instance(
         expr.span,
     );
     let class_name_pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -64,6 +65,11 @@ pub(super) fn lower_reflection_class_new_instance(
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
@@ -124,6 +130,12 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
             ctx.builder.terminate(Terminator::Throw {
                 value: exception.value,
             });
+            // A value-context call still lowers the surrounding expression. Continue in an
+            // unreachable block so the caller has a well-formed insertion point.
+            let unreachable = ctx
+                .builder
+                .create_named_block("reflection_without_constructor_unreachable", Vec::new());
+            ctx.builder.position_at_end(unreachable);
             return placeholder;
         }
     }
@@ -142,6 +154,14 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
     result
+}
+
+/// Returns whether `class_name` is one of the contract's internal-final classes.
+fn is_final_internal_class(class_name: &str) -> bool {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    elephc_builtin_contract::INTERNAL_FINAL_CLASSES
+        .iter()
+        .any(|name| php_symbol_key(name) == key)
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

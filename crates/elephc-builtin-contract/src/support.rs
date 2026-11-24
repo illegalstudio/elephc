@@ -402,13 +402,15 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // Also includes the SimpleXML allocation and diagnostic adapters,
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
-        // random prelude's `__elephc_call_strict_types` reader and the internal Io\Poll
-        // revents probe.
-        assert_eq!(eval_internal, 143);
+        // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
+        // two line-aware diagnostic helpers, the internal memory limit setter, the
+        // three compiled-pattern helpers the `preg_grep()` prelude calls, and the
+        // internal unserialize property store and PHAR validity probe.
+        assert_eq!(eval_internal, 150);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 384);
@@ -424,11 +426,11 @@ mod tests {
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
-        // and `preg_last_error` and `preg_last_error_msg` add two more. So do
-        // `get_debug_type` and the PHP 8.6
-        // pack/stream_context_set_options/url_percent_encode/stream_socket_get_crypto_status
-        // contracts, plus the two GMP 8.6 functions.
-        assert_eq!(aot_registry, 847);
+        // with two line-aware tokenizer helpers, two PCRE error readers,
+        // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
+        // compiled-pattern helpers, and the internal unserialize property store and
+        // PHAR validity probe.
+        assert_eq!(aot_registry, 849);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -492,9 +494,11 @@ mod tests {
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
-        // `__elephc_call_strict_types` reader, and the four PHP 8.6 pack contracts
-        // (`pack`, `unpack`, and the prelude's `zval_pack`/`zval_unpack` helpers).
-        assert_eq!(unsupported, 527);
+        // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
+        // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
+        // three internal compiled-pattern helpers, and the internal unserialize
+        // property store and PHAR validity probe.
+        assert_eq!(unsupported, 531);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

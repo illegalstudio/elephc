@@ -1,91 +1,72 @@
 //! Purpose:
-//! Runs the vendored php-src `ext/uri` PHPT suite against Elephc's `Uri\Rfc3986\Uri` and
-//! `Uri\WhatWg\Url`, comparing each `--FILE--` result with PHP's `--EXPECT--`/`--EXPECTF--`.
+//! Runs the Rust-native table of php-src `ext/uri` compliance cases against Elephc's
+//! `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url`, comparing each case's output with php-src's
+//! recorded result.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_uri_php_src_phpt_bundle`.
+//! - `cargo test --test codegen_tests_ext test_uri_php_src_bundle`.
 //!
 //! Key details:
-//! - Safe fixtures are bundled (one compile per chunk) because each PHPT would otherwise pay a
-//!   full frontend, codegen, assemble and link cycle. Fixtures that inspect object identities,
-//!   serialize, redeclare helpers, or assert compile-time fatal text stay isolated.
-//! - `--EXPECTF--` is matched with PHP's run-tests wildcards; `%r...%r` passes raw regex text.
-//! - `--INI-- memory_limit` fixtures run with that heap capacity and compare the PHP fatal
-//!   diagnostic; other php-src harness sections are skipped, not silently counted as passing.
+//! - `cases.rs` embeds the PHP sources and expectations; this harness never reads `.phpt`
+//!   files at run time.
+//! - Safe cases are bundled (one compile per chunk) because each case would otherwise pay a
+//!   full frontend, codegen, assemble and link cycle. Cases that inspect object identities,
+//!   serialize, redeclare helpers, or assert compile-time fatal text stay isolated; the
+//!   `zend_test` cases stay isolated too because each injects the same helper declaration.
+//! - Wildcard expectations use php-src run-tests wildcards; `%r...%r` passes raw regex text.
+//! - OOM cases run with their recorded heap capacity and compare the PHP fatal diagnostic; `zend_test` cases receive the local `zend_test_uri_parser()` stand-in.
 
 use crate::support::*;
 use regex::Regex;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-/// One parsed PHPT fixture.
-struct Phpt {
-    /// Path relative to the fixture root, used in failure messages.
-    name: String,
-    /// The `--FILE--` body, including its `<?php` tag.
+mod cases;
+use cases::{UriCase, CASES};
+
+/// One case prepared for execution, with its `zend_test` helper injected when needed.
+struct PreparedCase<'a> {
+    /// The embedded source and expectation metadata.
+    case: &'a UriCase,
+    /// The source actually compiled for this run.
     source: String,
-    /// The expected output.
-    expected: String,
-    /// Whether the expectation uses EXPECTF wildcards.
-    expectf: bool,
-    /// Why the fixture cannot be executed by this harness, if it cannot.
-    skip: Option<String>,
-    /// Whether the fixture must compile and run on its own.
-    isolate: bool,
-    /// Whether the fixture is expected to fail during compilation.
-    compile_failure: bool,
-    /// The `--INI-- memory_limit` value, when the fixture expects an OOM fatal.
-    heap_size: Option<usize>,
 }
 
-/// Runs the vendored php-src `ext/uri` PHPT matrix, bundling safe fixtures and isolating
-/// identity-, serialization-, redeclaration-, and compile-failure-sensitive ones.
+/// Runs the embedded php-src `ext/uri` matrix, bundling safe cases and isolating
+/// identity-, serialization-, redeclaration-, OOM-, and compile-failure-sensitive ones.
 #[test]
-fn test_uri_php_src_phpt_bundle() {
-    let root = fixture_root();
-    let mut files = Vec::new();
-    collect_phpt(&root, &mut files);
-    files.sort();
-
+fn test_uri_php_src_bundle() {
     let mut failures = Vec::new();
-    let mut skipped = Vec::new();
-    let mut isolated = Vec::new();
     let mut fatal = Vec::new();
     let mut oom = Vec::new();
+    let mut isolated = Vec::new();
     let mut bundled = Vec::new();
-    let mut total = 0usize;
 
-    for path in files {
-        let relative = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
-        let Some(phpt) = parse_phpt(&relative, &path) else {
-            failures.push(format!("{relative}: could not parse PHPT sections"));
-            continue;
-        };
-        total += 1;
-        if let Some(reason) = &phpt.skip {
-            skipped.push(format!("{relative}: {reason}"));
-            continue;
-        }
-        if phpt.compile_failure {
-            fatal.push(phpt);
-        } else if phpt.heap_size.is_some() {
-            oom.push(phpt);
-        } else if phpt.isolate {
-            isolated.push(phpt);
+    for case in CASES {
+        let source = if case.zend_test {
+            case.source
+                .replacen("<?php", &format!("<?php{ZEND_TEST_URI_PARSER}"), 1)
         } else {
-            bundled.push(phpt);
+            case.source.to_string()
+        };
+        let prepared = PreparedCase { case, source };
+        if case.compile_failure {
+            fatal.push(prepared);
+        } else if case.heap_size.is_some() {
+            oom.push(prepared);
+        } else if case.isolate || case.zend_test {
+            // The three `zend_test` cases each receive the same helper declaration, so they
+            // cannot share a bundle's declaration namespace.
+            isolated.push(prepared);
+        } else {
+            bundled.push(prepared);
         }
     }
 
-    // Compile-time fatal fixtures: compare the semantic diagnostic (Elephc's compile-error
+    // Compile-time fatal cases: compare the semantic diagnostic (Elephc's compile-error
     // formatting is not PHP's runtime fatal format, but the class and rule must agree).
-    for phpt in fatal {
-        let diagnostic = compile_expect_type_error(&phpt.source);
-        let expected_class = phpt
+    for prepared in fatal {
+        let diagnostic = compile_expect_type_error(&prepared.source);
+        let expected_class = prepared
+            .case
             .expected
             .split("Class ")
             .nth(1)
@@ -94,24 +75,27 @@ fn test_uri_php_src_phpt_bundle() {
         if expected_class.is_empty() || !diagnostic.contains(expected_class) {
             failures.push(format!(
                 "{}: compile diagnostic did not name {expected_class}:\n{diagnostic}",
-                phpt.name
+                prepared.case.name
             ));
         }
         if !diagnostic.contains("cannot extend final class") {
             failures.push(format!(
                 "{}: compile diagnostic lacked the final-class rule:\n{diagnostic}",
-                phpt.name
+                prepared.case.name
             ));
         }
     }
 
-    for phpt in oom {
-        let heap_size = phpt.heap_size.expect("OOM fixture carries a memory_limit");
-        let output = compile_and_run_capture_with_heap_size(&phpt.source, heap_size);
+    for prepared in oom {
+        let heap_size = prepared
+            .case
+            .heap_size
+            .expect("OOM case carries a memory_limit");
+        let output = compile_and_run_capture_with_heap_size(&prepared.source, heap_size);
         if output.success {
             failures.push(format!(
                 "{}: expected a heap-exhaustion fatal, but the program exited successfully:\n{}",
-                phpt.name, output.stdout
+                prepared.case.name, output.stdout
             ));
             continue;
         }
@@ -120,25 +104,25 @@ fn test_uri_php_src_phpt_bundle() {
         } else {
             output.stderr
         };
-        if !matches_expected(&actual, &phpt.expected, phpt.expectf) {
-            failures.push(failure_message(&phpt, &actual));
+        if !matches_expected(&actual, prepared.case.expected, prepared.case.expectf) {
+            failures.push(failure_message(prepared.case, &actual));
         }
     }
 
-    for phpt in isolated {
-        let actual = compile_and_run(&phpt.source);
-        if !matches_expected(&actual, &phpt.expected, phpt.expectf) {
-            failures.push(failure_message(&phpt, &actual));
+    for prepared in isolated {
+        let actual = compile_and_run(&prepared.source);
+        if !matches_expected(&actual, prepared.case.expected, prepared.case.expectf) {
+            failures.push(failure_message(prepared.case, &actual));
         }
     }
 
     for chunk in bundled.chunks(20) {
         let cases = chunk
             .iter()
-            .map(|phpt| BundleCase {
-                name: &phpt.name,
-                source: &phpt.source,
-                expected: &phpt.expected,
+            .map(|prepared| BundleCase {
+                name: prepared.case.name,
+                source: &prepared.source,
+                expected: prepared.case.expected,
             })
             .collect::<Vec<_>>();
         let program = bundle_source(&cases);
@@ -147,16 +131,20 @@ fn test_uri_php_src_phpt_bundle() {
             Err(_) => {
                 // A crash in one case ends the bundle. Re-run each case on its own so the
                 // failure is attributed and later cases still get their chance.
-                for phpt in chunk {
-                    match std::panic::catch_unwind(|| compile_and_run(&phpt.source)) {
+                for prepared in chunk {
+                    match std::panic::catch_unwind(|| compile_and_run(&prepared.source)) {
                         Ok(actual) => {
-                            if !matches_expected(&actual, &phpt.expected, phpt.expectf) {
-                                failures.push(failure_message(phpt, &actual));
+                            if !matches_expected(
+                                &actual,
+                                prepared.case.expected,
+                                prepared.case.expectf,
+                            ) {
+                                failures.push(failure_message(prepared.case, &actual));
                             }
                         }
                         Err(_) => failures.push(format!(
                             "{}: program exited unsuccessfully (see panic above)",
-                            phpt.name
+                            prepared.case.name
                         )),
                     }
                 }
@@ -167,70 +155,51 @@ fn test_uri_php_src_phpt_bundle() {
             Ok(outputs) => outputs,
             Err(error) => {
                 failures.push(format!("bundle failed before splitting:\n{error}"));
-                for phpt in chunk {
-                    match std::panic::catch_unwind(|| compile_and_run(&phpt.source)) {
+                for prepared in chunk {
+                    match std::panic::catch_unwind(|| compile_and_run(&prepared.source)) {
                         Ok(actual) => {
-                            if !matches_expected(&actual, &phpt.expected, phpt.expectf) {
-                                failures.push(failure_message(phpt, &actual));
+                            if !matches_expected(
+                                &actual,
+                                prepared.case.expected,
+                                prepared.case.expectf,
+                            ) {
+                                failures.push(failure_message(prepared.case, &actual));
                             }
                         }
                         Err(_) => failures.push(format!(
                             "{}: program exited unsuccessfully (see panic above)",
-                            phpt.name
+                            prepared.case.name
                         )),
                     }
                 }
                 continue;
             }
         };
-        for (phpt, actual) in chunk.iter().zip(outputs) {
-            if !matches_expected(&actual, &phpt.expected, phpt.expectf) {
-                failures.push(failure_message(phpt, &actual));
+        for (prepared, actual) in chunk.iter().zip(outputs) {
+            if !matches_expected(&actual, prepared.case.expected, prepared.case.expectf) {
+                failures.push(failure_message(prepared.case, &actual));
             }
         }
     }
 
+    let total = CASES.len();
     eprintln!(
-        "uri PHPT: {} passed, {} failed, {} skipped",
-        total.saturating_sub(failures.len() + skipped.len()),
-        failures.len(),
-        skipped.len()
+        "uri cases: {} passed, {} failed",
+        total.saturating_sub(failures.len()),
+        failures.len()
     );
-    for reason in &skipped {
-        eprintln!("  skipped {reason}");
-    }
     assert!(
         failures.is_empty(),
-        "{} URI PHPT failures:\n\n{}",
+        "{} URI case failures:\n\n{}",
         failures.len(),
         failures.join("\n\n")
     );
 }
 
-/// Returns the fixture directory.
-fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/php_src_uri")
-}
-
-/// Collects every `.phpt` below `dir`.
-fn collect_phpt(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_phpt(&path, out);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("phpt") {
-            out.push(path);
-        }
-    }
-}
-
 /// Test-only stand-in for php-src's `zend_test_uri_parser()`.
 ///
 /// The real helper lives in the `zend_test` testing extension and exposes ext/uri's internal
-/// parser structs. These fixtures exercise that struct through the same public surface, so the
+/// parser structs. These cases exercise that struct through the same public surface, so the
 /// harness supplies an equivalent built from `Uri\\Rfc3986\\Uri` and `Uri\\WhatWg\\Url`.
 const ZEND_TEST_URI_PARSER: &str = r#"
 function zend_test_uri_parser(string $uri, string $parser): array
@@ -288,130 +257,7 @@ function zend_test_uri_parser(string $uri, string $parser): array
 }
 "#;
 
-/// Parses one PHPT file, returning `None` when the section framing is invalid.
-fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
-    let text = fs::read_to_string(path).ok()?;
-    let sections = parse_sections(&text);
-    let mut skip = None;
-    let mut source = sections.get("FILE")?.clone();
-    if let Some(index) = source.rfind("?>") {
-        source.truncate(index);
-    }
-    // Property reads through an interface-typed catch variable are not lowered yet; the
-    // fixture's own expectation only needs the concrete exception, so name it.
-    if name.ends_with("multiple_error_with_warnings.phpt") {
-        source = source.replace(
-            "catch (Throwable $e)",
-            "catch (\\Uri\\WhatWg\\InvalidUrlException $e)",
-        );
-    }
-    if name.ends_with("withPath_success_file_invalid_drive_letter.phpt") {
-        source = source.replace("<?php\n", "<?php\n$errors = [];\n");
-        // The by-ref output parameter is untyped, so the checker knows it as mixed; PHP's
-        // array_map() only sees the runtime array.
-        source = source.replace("$error->type->name, $errors)", "$error->type->name, (array) $errors)");
-    }
-    if name == "056.phpt" {
-        // The fixture ends in inline HTML after `?>`; this harness compiles PHP bodies only.
-        // Its failure branch also uses a string `die()`, which this compiler does not model.
-        source = source.replace("die(\"FAIL\")", "exit(1)");
-        source.push_str("echo \"==DONE==\\n\";\n");
-    }
-    if name == "gh19892.phpt" {
-        source = source.replace("<?php\n", "<?php\n$errors = null;\n");
-    }
-    if name.starts_with("oom_") {
-        // php-src's memory-limit fatal text includes the requested byte count; elephc's
-        // generic heap-exhaustion fatal is tracked separately from the URI surface.
-        skip = Some("memory_limit fatal text is not yet php-src-parity".to_string());
-    }
-    if name == "057.phpt" {
-        // The typed-property write-back raises a TypeError, not an InvalidUrlException, so
-        // name the concrete class the fixture should catch.
-        source = source.replace("catch (Throwable $e)", "catch (\\TypeError $e)");
-    }
-    let heap_size = sections.get("INI").and_then(|ini| {
-        ini.lines()
-            .rev()
-            .find_map(|line| line.strip_prefix("memory_limit="))
-            .and_then(|value| {
-                elephc::codegen_support::parse_memory_limit_bytes(value)
-                    .ok()
-                    .flatten()
-            })
-    });
-    let (expected, expectf) = match (sections.get("EXPECTF"), sections.get("EXPECT")) {
-        (Some(expected), _) => (expected.clone(), true),
-        (_, Some(expected)) => (expected.clone(), false),
-        _ => return None,
-    };
-
-    if ["SKIPIF", "FILE_EXTERNAL", "ENV", "STDIN", "POST", "GET", "COOKIE"]
-        .iter()
-        .any(|section| sections.contains_key(*section))
-    {
-        skip = Some("requires a php-src harness section".to_string());
-    }
-    if sections
-        .get("EXTENSIONS")
-        .is_some_and(|extensions| extensions.contains("zend_test"))
-    {
-        source = source.replacen("<?php", &format!("<?php{ZEND_TEST_URI_PARSER}"), 1);
-    }
-
-    let compile_failure = heap_size.is_none() && expected.contains("Fatal error:");
-    let isolate = heap_size.is_some() || compile_failure
-        || expected.contains("#1")
-        || expected.contains("#2")
-        || expected.contains("#3")
-        || expected.contains("#4")
-        || source.contains("serialize(")
-        || source.contains("unserialize(")
-        || source.contains("ReflectionClass")
-        || source.contains("__construct(")
-        || source.contains("var_export(")
-        || source.contains("json_encode(")
-        || source.lines().any(|line| {
-            let line = line.trim_start();
-            line.starts_with("use ") || line.starts_with("function ") || line.starts_with("class ")
-        });
-
-    Some(Phpt {
-        name: name.to_string(),
-        source,
-        expected,
-        expectf,
-        skip,
-        isolate,
-        compile_failure,
-        heap_size,
-    })
-}
-
-/// Splits a PHPT file into its `--SECTION--` blocks.
-fn parse_sections(text: &str) -> std::collections::HashMap<String, String> {
-    let mut sections = std::collections::HashMap::new();
-    let mut current: Option<String> = None;
-    let mut body = String::new();
-    for line in text.lines() {
-        if let Some(name) = line.strip_prefix("--").and_then(|line| line.strip_suffix("--")) {
-            if let Some(previous) = current.take() {
-                sections.insert(previous, body.clone());
-                body.clear();
-            }
-            current = Some(name.to_string());
-        } else if current.is_some() {
-            body.push_str(line);
-            body.push('\n');
-        }
-    }
-    if let Some(previous) = current {
-        sections.insert(previous, body);
-    }
-    sections
-}
-
-/// Matches one fixture's actual output against its expectation.
+/// Matches one case's actual output against its expectation.
 fn matches_expected(actual: &str, expected: &str, expectf: bool) -> bool {
     let actual = actual.replace("\r\n", "\n");
     let expected = expected.replace("\r\n", "\n");
@@ -468,9 +314,9 @@ fn expectf_pattern(expected: &str) -> String {
 }
 
 /// Builds a failure message with the expected and actual output.
-fn failure_message(phpt: &Phpt, actual: &str) -> String {
+fn failure_message(case: &UriCase, actual: &str) -> String {
     format!(
         "{}: output mismatch\n--- expected ---\n{}\n--- actual ---\n{}",
-        phpt.name, phpt.expected, actual
+        case.name, case.expected, actual
     )
 }

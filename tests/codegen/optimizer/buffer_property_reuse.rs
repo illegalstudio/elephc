@@ -5,7 +5,7 @@
 //! `buffer_free()`, calls and index writes between the reads keep them apart.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::buffer_property_reuse`.
+//! - `cargo test --test codegen_tests_core optimizer::buffer_property_reuse`.
 //!
 //! Key details:
 //! - Textual EIR of one method pins the access shape; every fixture also runs natively with the

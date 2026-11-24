@@ -41,6 +41,8 @@ mod ref_place_args;
 mod boxed_user_sort;
 pub(crate) mod declared_callables;
 mod scalar_literals;
+mod element_values;
+pub(crate) use element_values::{container_element_type, project_element_value};
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
@@ -92,6 +94,8 @@ mod array_builtin_args;
 mod stream_filter_params;
 mod array_push_spread;
 mod borrowed_string_args;
+mod boxed_iterable_source;
+mod preg_match_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
@@ -157,6 +161,7 @@ mod nullable_method_calls;
 mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
+mod private_late_static_calls;
 mod scoped_values;
 mod buffer_length;
 mod generators;
@@ -263,8 +268,10 @@ pub(crate) use call_operand_owners::{
 };
 pub(crate) use property_access::singular_object_class;
 pub(crate) use enum_argument_guards::{
-    guard_declared_callable_return, guard_declared_callable_variadic_entry,
-    guard_reference_parameter_entry, reference_parameter_needs_entry_guard,
+    guard_declared_callable_return, guard_declared_callable_value,
+    guard_declared_callable_variadic_entry,
+    guard_reference_argument_value, guard_reference_parameter_entry,
+    reference_parameter_needs_entry_guard,
 };
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
@@ -384,6 +391,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
     }
 
     match &expr.kind {
+        ExprKind::Runtime(_) => unreachable!("runtime fragment syntax must be lowered by Magician"),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

@@ -27,3 +27,28 @@ fn cold_fragment_and_token_parsing_fit_small_caller_stacks() {
         assert_eq!(fragment, included);
     }).expect("small parser caller must start").join().expect("parser caller must finish");
 }
+
+/// Parses short and deeply nested type syntax from a small caller stack.
+#[test]
+fn standalone_type_parsing_fits_small_caller_stacks() {
+    use elephc_generics::Type;
+
+    std::thread::Builder::new().stack_size(192 * 1024).spawn(|| {
+        for depth in [24, 96] {
+            let source = format!("{}int{}", "Box<".repeat(depth), ">".repeat(depth));
+            let mut ty = crate::parser::generics::parse_type_string(&source).expect("nested generic type");
+            for _ in 0..depth {
+                let Type::Apply(name, mut args) = ty else { panic!("expected a nested application") };
+                assert_eq!(name, "Box");
+                assert_eq!(args.len(), 1);
+                ty = args.pop().expect("one generic argument");
+            }
+            assert_eq!(ty, Type::atom("int"));
+
+            let declaration = format!("<T: {source}>");
+            let tokens = crate::lexer::tokenize(&declaration).expect("generic parameter tokens");
+            let names = crate::lower::type_parameter_names(tokens).expect("nested parameter bound");
+            assert_eq!(names, ["T"]);
+        }
+    }).expect("small parser caller must start").join().expect("parser caller must finish");
+}

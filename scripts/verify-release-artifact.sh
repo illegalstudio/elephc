@@ -22,7 +22,7 @@
 # Usage: scripts/verify-release-artifact.sh <tarball>
 #
 # Focused fixture (mock packaged binary, no cargo suite):
-#   cargo test --test verify_release_artifact
+#   cargo test --test integration verify_release_artifact::
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -156,7 +156,7 @@ while IFS=$'\t' read -r kind name fields; do
     if [ "$native_ready" = false ]; then
         continue
     fi
-    if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
+    if ! "$ELEPHC" build "--with-$name" probe.php >compile.log 2>&1; then
         fail "$kind $name: --with-$name did not link"
         sed 's/^/          /' compile.log
         continue

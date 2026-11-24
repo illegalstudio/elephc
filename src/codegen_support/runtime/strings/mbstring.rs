@@ -50,6 +50,14 @@ mod variables;
 mod regex;
 mod callback;
 
+/// Emits the leaf UTF-8 validator/counter `__rt_mb_strlen_utf8`.
+///
+/// Emitted for every program, outside [`emit_mbstring`]: a native `mb_check_encoding()`
+/// UTF-8 call reaches it without enabling the optional mbstring bridge runtime.
+pub fn emit_mb_strlen_utf8(emitter: &mut Emitter) {
+    utf8_strlen::emit(emitter);
+}
+
 /// Emits boxed invocation entries with caller strictness/context plus the separate wire-result adapter.
 pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     native::emit(emitter, mbregex);
@@ -73,7 +81,6 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     exception::emit(emitter);
     if mbregex { regex::emit(emitter); callback::emit(emitter, eval_bridge); }
     invoke::emit(emitter, mbregex);
-    utf8_strlen::emit(emitter);
     ascii_case::emit(emitter);
     mime_b64::emit(emitter);
     kana::emit(emitter);

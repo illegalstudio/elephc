@@ -357,7 +357,7 @@ if (true) {
 
 After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
 
-`examples/exception-routing/` shows the exception-aware side on a whole program: an order pipeline with a ten-class exception hierarchy writes ten `catch` clauses, and four of them can never run (a handler disjoint from everything the `try` can throw, a handler that cannot match a narrowed `throw $e`, a parent clause after handlers for all of its thrown children, and a child clause shadowed by its parent). `elephc --emit-ir examples/exception-routing/main.php` keeps six handlers, and the two classes and two functions that only the dead clauses referenced never reach EIR, because declaration reachability (Pass 6) runs after this pass.
+`examples/exception-routing/` shows the exception-aware side on a whole program: an order pipeline with a ten-class exception hierarchy writes ten `catch` clauses, and four of them can never run (a handler disjoint from everything the `try` can throw, a handler that cannot match a narrowed `throw $e`, a parent clause after handlers for all of its thrown children, and a child clause shadowed by its parent). `elephc build --emit-ir examples/exception-routing/main.php` keeps six handlers, and the two classes and two functions that only the dead clauses referenced never reach EIR, because declaration reachability (Pass 6) runs after this pass.
 
 AST-only optimizer entry points seed the standard SPL exception parent tree from the same table as the checker. This lets an `Exception` handler shadow a later `RuntimeException` handler even without checker metadata, while explicit source or checker hierarchy facts remain authoritative.
 
@@ -841,7 +841,7 @@ temporary fails CI even when functional output stays correct.
 
 `tests/codegen/perf_regressions.rs` adds opt-in wall-clock ceilings for the same
 paths. It is ignored by default because runner speed varies; run it explicitly with
-`cargo test --test codegen_tests perf_regressions -- --ignored` (use a release
+`cargo test --test codegen_tests_core perf_regressions -- --ignored` (use a release
 build locally for the closest numbers). The ceilings are deliberately loose and
 catch order-of-magnitude regressions rather than small timing noise.
 

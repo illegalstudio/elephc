@@ -58,7 +58,7 @@ pub(crate) fn serve_one_request(mut stream: std::net::TcpStream, path: &str) -> 
 pub(crate) fn compile_php_monitored(source: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate elephc: {e}"))?;
     let status = process::Command::new(exe)
-        .args(["--with-monitoring", source])
+        .args(["build", "--with-monitoring", source])
         .status()
         .map_err(|e| format!("cannot run elephc: {e}"))?;
     if !status.success() {
@@ -212,10 +212,11 @@ pub(crate) fn await_activation(channel: &ControlChannel, timeout: std::time::Dur
 /// leaks. That is the direction to fail in — and the reason this is a list a
 /// reader can check against `elephc-instr`/`elephc-probe` rather than a rule
 /// that quietly covers whatever it happens to cover.
-const PROFILER_LINE_PREFIXES: [&str; 9] = [
+const PROFILER_LINE_PREFIXES: [&str; 10] = [
     "elephc-instr:",
     "elephc-instr-edge:",
     "elephc-instr-query:",
+    "elephc-instr-query-from:",
     "elephc-instr-query-dropped:",
     "elephc-instr-trace:",
     "elephc-probe:",
@@ -572,7 +573,7 @@ pub(crate) fn require_monitoring(path: &std::path::Path) -> Result<(), String> {
     }
     Err(format!(
         "{} was not built with --with-monitoring, so there is nothing to monitor.\n  \
-         Rebuild it:  elephc --with-monitoring <source>.php\n  \
+         Rebuild it:  elephc build --with-monitoring <source>.php\n  \
          Or point monitor at the source and let it build:  elephc monitor <source>.php",
         path.display()
     ))

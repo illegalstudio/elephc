@@ -262,7 +262,7 @@ fn web_application_cli_rejects_unsupported_lifecycles() {
         (vec!["--web", "--web-isolation=pool", "--web-lifecycle=application"], "requires --web-isolation=worker"),
         (vec!["--web", "--web-isolation=request", "--web-lifecycle=application"], "requires --web-isolation=worker"),
     ] {
-        let result = Command::new(elephc_bin()).args(flags).arg(fixture.0.join("missing.php")).output().unwrap();
+        let result = Command::new(elephc_bin()).arg("build").args(flags).arg(fixture.0.join("missing.php")).output().unwrap();
         assert!(!result.status.success());
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(stderr.contains(expected), "{stderr}");
@@ -275,7 +275,7 @@ fn web_application_registration_is_typed() {
     let fixture = Fixture(make_test_dir("web_application_type"));
     let source = fixture.0.join("invalid.php");
     fs::write(&source, "<?php Elephc\\Web\\Worker::register(new stdClass());").unwrap();
-    let result = Command::new(elephc_bin()).args(["--web", "--web-lifecycle=application"]).arg(source).output().unwrap();
+    let result = Command::new(elephc_bin()).arg("build").args(["--web", "--web-lifecycle=application"]).arg(source).output().unwrap();
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("WorkerApplication"), "{stderr}");

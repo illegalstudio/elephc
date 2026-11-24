@@ -3,7 +3,7 @@
 //! control flow — and never the caller, with the include's value and `finally` blocks intact.
 //!
 //! Called from:
-//! - `cargo test --test include_scoped_return_tests` through Rust's test harness.
+//! - `cargo test --test integration include_scoped_return_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - elephc inlines an include's body into the caller, so a `return` in it would return from the
@@ -50,8 +50,9 @@ fn run_program(prefix: &str, files: &[(&str, &str)]) -> String {
     for (name, source) in files {
         fs::write(dir.join(name), source).unwrap();
     }
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .output()
@@ -232,8 +233,9 @@ fn compile_with(
     for (name, source) in files {
         fs::write(dir.join(name), source).unwrap();
     }
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .args(args)
         .arg(dir.join("main.php"))

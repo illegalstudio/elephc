@@ -4,7 +4,7 @@
 // constant and exception class become part of this program.
 //
 //   elephc extension install     # builds ext/wordstat (declared in elephc.toml)
-//   elephc main.php && ./main
+//   elephc build main.php && ./main
 
 $text = <<<TEXT
 The compiler compiles PHP. The compiled program hosts the extension,

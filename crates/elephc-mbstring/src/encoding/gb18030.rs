@@ -9,14 +9,14 @@
 //! - Supplementary characters use the standard linear four-byte address space.
 //! - Byte cutting uses PHP's raw grammar, including invalid sequences and partial tails.
 
-use super::{mapping::word, Decoded, Substitute, BAD_INPUT};
+use super::{mapping::Dense, Decoded, Substitute, BAD_INPUT};
 
 /// Revision-specific BMP mappings combined with the common GB18030 byte grammar.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Gb18030 {
-    pub pairs: &'static [u8],
-    pub bmp: &'static [u8],
-    pub encode: &'static [u8],
+    pub pairs: Dense,
+    pub bmp: Dense,
+    pub encode: Dense,
 }
 
 impl Gb18030 {
@@ -47,7 +47,7 @@ impl Gb18030 {
                                 let pointer = (((u32::from(lead - 0x81) * 10 + u32::from(second - 0x30))
                                     * 126 + u32::from(third - 0x81)) * 10) + u32::from(fourth - 0x30);
                                 if pointer <= 39419 {
-                                    word(self.bmp, pointer as usize * 4)
+                                    self.bmp.word(pointer as usize)
                                 } else if (189000..=1237575).contains(&pointer) {
                                     pointer - 189000 + 0x10000
                                 } else { BAD_INPUT }
@@ -55,7 +55,7 @@ impl Gb18030 {
                         } else { BAD_INPUT }
                     } else { BAD_INPUT }
                 } else {
-                    word(self.pairs, (usize::from(lead - 0x81) * 256 + usize::from(second)) * 4)
+                    self.pairs.word(usize::from(lead - 0x81) * 256 + usize::from(second))
                 }
             };
             output.push(code, start);
@@ -77,7 +77,7 @@ impl Gb18030 {
     /// Emits one representable codepoint without changing output on a rejected value.
     fn append(self, code: u32, output: &mut Vec<u8>) -> bool {
         if code < 0x10000 {
-            let mapped = word(self.encode, code as usize * 4);
+            let mapped = self.encode.word(code as usize);
             if mapped == BAD_INPUT { return false; }
             let bytes = mapped.to_be_bytes();
             let width = if mapped < 0x100 { 1 } else if mapped < 0x10000 { 2 } else { 4 };

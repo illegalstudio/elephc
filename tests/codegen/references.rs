@@ -834,6 +834,598 @@ err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
 
+/// A declared property passed to a `mixed` by-reference parameter is validated against its
+/// declared type after the call: an incompatible write raises PHP's reference-held `TypeError`
+/// and leaves the property unchanged, while a compatible write is stored back.
+#[test]
+fn test_by_reference_typed_property_write_is_validated() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedPropertyReference { public string $value = "old"; }
+function write_array(mixed &$slot): void { $slot = ["new"]; }
+function write_string(mixed &$slot): void { $slot = "new"; }
+$object = new TypedPropertyReference();
+try {
+    write_array($object->value);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $object->value, "\n";
+write_string($object->value);
+echo $object->value, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property TypedPropertyReference::$value of type string\nold\nnew\n"
+    );
+}
+
+/// A by-reference array element of a declared property still binds the property's reference
+/// cell: the callee replaces the element in place.
+#[test]
+fn test_by_reference_property_array_element_writes_through() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceArrayBox { public array $items = [1]; }
+function replace_element(mixed &$slot): void { $slot = 99; }
+$box = new ReferenceArrayBox();
+replace_element($box->items[0]);
+var_dump($box->items);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  int(99)\n}\n");
+}
+
+/// Nested and nullable property receivers resolve to a single declared property, so the
+/// boxed-temporary write-back reaches them instead of dropping the callee's write.
+#[test]
+fn test_by_reference_nested_and_nullable_property_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceInner { public string $value = "inner"; }
+class ReferenceOuter { public ReferenceInner $inner; public function __construct() { $this->inner = new ReferenceInner(); } }
+function replace_text(mixed &$slot): void { $slot = "changed"; }
+$outer = new ReferenceOuter();
+replace_text($outer->inner->value);
+echo $outer->inner->value, "\n";
+function replace_nullable(?ReferenceInner $inner): void {
+    replace_text($inner->value);
+    echo $inner->value, "\n";
+}
+replace_nullable(new ReferenceInner());
+"#,
+    );
+    assert_eq!(out, "changed\nchanged\n");
+}
+
+/// The reference-held diagnostic names the class that DECLARES the property, not the
+/// receiver's subclass.
+#[test]
+fn test_by_reference_typed_property_names_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceBase { public string $value = "base"; }
+class ReferenceSubclass extends ReferenceBase {}
+function replace_with_array(mixed &$slot): void { $slot = []; }
+$value = new ReferenceSubclass();
+try {
+    replace_with_array($value->value);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $value->value, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property ReferenceBase::$value of type string\nbase\n"
+    );
+}
+
+/// Verifies a by-reference parameter rooted in a concretely typed property writes back to the
+/// declared property slot, preserving the property's int, string, and array types.
+#[test]
+fn test_by_reference_concretely_typed_property_parameter_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedReferenceBox { public int $number = 1; public string $text = "a"; public array $items = [1]; }
+function increment_reference(int &$number): void { $number++; }
+function extend_reference(string &$text): void { $text .= "!"; }
+function append_reference(array &$items): void { $items[] = 2; }
+$box = new TypedReferenceBox();
+increment_reference($box->number);
+extend_reference($box->text);
+append_reference($box->items);
+var_dump($box->number, $box->text, $box->items);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(2)\n",
+            "string(2) \"a!\"\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+        )
+    );
+}
+
+/// An untyped property is widened to boxed Mixed storage when passed by reference: a user
+/// function and a re-typing builtin both write through the temporary back into the slot.
+#[test]
+fn test_by_reference_untyped_property_widens_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedReference { public $text = "x"; public $missing; }
+function set_text(mixed &$slot): void { $slot = "42"; }
+$box = new UntypedReference();
+set_text($box->text);
+var_dump($box->text);
+settype($box->text, "int");
+var_dump($box->text);
+set_text($box->missing);
+var_dump($box->missing);
+"#,
+    );
+    assert_eq!(out, "string(2) \"42\"\nint(42)\nstring(2) \"42\"\n");
+}
+
+/// An untyped property's array element can also be passed by reference: the property is
+/// widened and promoted so the element cell is published back into the property array.
+#[test]
+fn test_by_reference_untyped_property_array_element_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedArrayReference { public $items = [1, 2]; public $missing; }
+function bump_element(mixed &$element): void { $element = 99; }
+$box = new UntypedArrayReference();
+bump_element($box->items[0]);
+var_dump($box->items);
+$box->missing = [7];
+bump_element($box->missing[0]);
+var_dump($box->missing);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [0]=>\n  int(99)\n  [1]=>\n  int(2)\n}\n",
+            "array(1) {\n  [0]=>\n  int(99)\n}\n",
+        )
+    );
+}
+
+/// A property passed to an untyped by-reference parameter shares its live cell during the call,
+/// so another view of the same object observes the callee's write immediately.
+#[test]
+fn test_property_reference_argument_is_live_during_the_call() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefLiveOwner { public $value = 1; }
+function ref_live_bump(&$slot, RefLiveOwner $same): void {
+    $slot = 3;
+    echo "inside=", $same->value, "\n";
+}
+$owner = new RefLiveOwner();
+ref_live_bump($owner->value, $owner);
+echo "after=", $owner->value, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "inside=3\nafter=3\n", "{}", out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
+
+/// A typed property whose storage cannot satisfy a declared by-reference parameter raises PHP's
+/// call-site `TypeError` at runtime; the property keeps its previous value and no compile error
+/// is reported for the call.
+#[test]
+fn test_property_reference_argument_type_error_is_raised_at_call_entry() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefTypedMismatch { public string $text = "x"; }
+function ref_typed_int(int &$slot): void { $slot = 1; echo "not reached\n"; }
+$owner = new RefTypedMismatch();
+try {
+    ref_typed_int($owner->text);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($owner->text);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ref_typed_int(): Argument #1 ($slot) must be of type int, string given\nstring(1) \"x\"\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// A callee that writes through an untyped property reference and then throws publishes the
+/// write. Typed slots instead use the typed-reference cell path, whose guarded write-back runs
+/// on normal return.
+#[test]
+fn test_property_reference_argument_write_survives_a_throw() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefThrowUntyped { public $value = 1; }
+function ref_throw_untyped(&$slot): void {
+    $slot = 5;
+    throw new Exception("untyped");
+}
+$untyped = new RefThrowUntyped();
+try { ref_throw_untyped($untyped->value); } catch (Exception $error) { echo $error->getMessage(), "\n"; }
+echo "untyped=", $untyped->value, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "untyped\nuntyped=5\n", "{}", out.stderr);
+}
+
+/// Method receivers and by-reference variadics share the same live property cell as direct
+/// function calls.
+#[test]
+fn test_property_reference_arguments_stay_live_through_methods_and_variadics() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefLiveTarget { public $value = 1; }
+class RefLiveMethods {
+    public function bump(&$slot): void { $slot = 11; }
+    public function bumpAll(&...$slots): void { $slots[0] = 13; }
+}
+$owner = new RefLiveTarget();
+$methods = new RefLiveMethods();
+$methods->bump($owner->value);
+echo "method=", $owner->value, "\n";
+$methods->bumpAll($owner->value);
+echo "variadic=", $owner->value, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "method=11\nvariadic=13\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// A union-typed property is checked by its CURRENT value at the by-reference call boundary:
+/// a compatible member reaches the callee, while an incompatible member raises PHP's argument
+/// `TypeError` with the runtime type and leaves the property unchanged.
+#[test]
+fn test_union_property_reference_argument_checks_the_current_value() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefUnionIntString { public int|string $value = 1; }
+class RefUnionIntFloat { public int|float $value = 1; }
+class RefStaticMismatch {
+    public array $items = [];
+    public static function set(int &$slot): void {}
+}
+function ref_union_inc(int &$slot): void { $slot++; }
+$ints = new RefUnionIntString();
+ref_union_inc($ints->value);
+echo "int-string=", $ints->value, "\n";
+$ints->value = "x";
+try { ref_union_inc($ints->value); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo "int-string-after=", $ints->value, "\n";
+$floats = new RefUnionIntFloat();
+ref_union_inc($floats->value);
+echo "int-float=", $floats->value, "\n";
+$floats->value = 1.5;
+try { ref_union_inc($floats->value); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo "int-float-after=", $floats->value, "\n";
+$static = new RefStaticMismatch();
+try { RefStaticMismatch::set($static->items); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo "static-after=", count($static->items), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int-string=2\nref_union_inc(): Argument #1 ($slot) must be of type int, string given\nint-string-after=x\nint-float=2\nref_union_inc(): Argument #1 ($slot) must be of type int, float given\nint-float-after=1.5\n\
+RefStaticMismatch::set(): Argument #1 ($slot) must be of type int, array given\n\
+static-after=0\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// An UNTYPED property is PHP's ordinary writable zval: a weak call coerces its current value
+/// to the declared by-reference parameter and the callee's result is written back. A value the
+/// weak predicate refuses raises the call-site `TypeError` without changing the property.
+/// A declared `mixed` property is different and keeps its strict current-value check.
+#[test]
+fn test_untyped_property_reference_argument_weakly_coerces_the_current_value() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefUntypedScalar { public $value; }
+class RefUntypedInitialized { public $value = "7"; }
+function ref_untyped_inc(int &$slot): void { $slot++; }
+function ref_untyped_append(string &$slot): void { $slot .= "x"; }
+$item = new RefUntypedScalar();
+$item->value = "42";
+ref_untyped_inc($item->value);
+echo "int=", $item->value, "\n";
+$item->value = "abc";
+try { ref_untyped_inc($item->value); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo "after=", $item->value, "\n";
+$item->value = 42;
+ref_untyped_append($item->value);
+echo "string=", $item->value, "\n";
+$initialized = new RefUntypedInitialized();
+ref_untyped_inc($initialized->value);
+echo "initialized=", $initialized->value, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int=43\nref_untyped_inc(): Argument #1 ($slot) must be of type int, string given\nafter=abc\nstring=42x\ninitialized=8\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a property by-reference `TypeError` is raised at the call boundary: every later
+/// argument still runs (and its output is visible) before the callee entry check fires.
+/// The property keeps its previous value in both the concrete-disjoint and untyped cases.
+#[test]
+fn test_property_reference_type_error_waits_for_later_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RefDeferredBox { public string $text = "old"; }
+class RefDeferredUntyped { public $value; }
+function ref_deferred_take(int &$slot, int $other): void { echo "body|"; }
+function ref_deferred_later(): int { echo "later|"; return 2; }
+$box = new RefDeferredBox();
+try { ref_deferred_take($box->text, ref_deferred_later()); } catch (TypeError $error) { echo $error->getMessage(), "|"; }
+echo $box->text, "\n";
+$untyped = new RefDeferredUntyped();
+$untyped->value = "abc";
+try { ref_deferred_take($untyped->value, ref_deferred_later()); } catch (TypeError $error) { echo $error->getMessage(), "|"; }
+echo $untyped->value, "\n";
+$untyped->value = "42";
+ref_deferred_take($untyped->value, ref_deferred_later());
+echo $untyped->value, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "later|ref_deferred_take(): Argument #1 ($slot) must be of type int, string given|old\nlater|ref_deferred_take(): Argument #1 ($slot) must be of type int, string given|abc\nlater|body|42\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// Verifies a typed by-reference property argument accepts the current value when the
+/// parameter is a union that contains it, and when a related class is involved in either
+/// direction. PHP checks the live value at the call boundary; a representation difference
+/// alone must not refuse the call.
+#[test]
+fn test_reference_property_related_and_union_parameters_use_the_current_value() {
+    let out = compile_and_run(
+        r#"<?php
+class RefRelatedBase { }
+class RefRelatedChild extends RefRelatedBase { }
+class RefRelatedHolder {
+    public int|string $union = 3;
+    public RefRelatedChild $child;
+    public RefRelatedBase $base;
+    function __construct() { $this->child = new RefRelatedChild; $this->base = new RefRelatedChild; }
+}
+function ref_related_union(int|string &$slot) { $slot = 9; }
+function ref_related_base(RefRelatedBase &$slot) { echo "base|"; }
+function ref_related_child(RefRelatedChild &$slot) { echo "child|"; }
+$holder = new RefRelatedHolder;
+ref_related_union($holder->union);
+echo $holder->union, "\n";
+ref_related_base($holder->child);
+ref_related_child($holder->base);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "9\nbase|child|\n");
+}
+
+/// Verifies a declared `mixed` or union property holding an int does not bind to `float &`:
+/// PHP disables the int-to-float widening for typed references, while an untyped slot still
+/// weakly coerces its current value.
+#[test]
+fn test_reference_float_parameter_rejects_int_in_typed_slots() {
+    let out = compile_and_run(
+        r#"<?php
+class RefFloatMixed { public mixed $value = 3; }
+class RefFloatUnion { public int|float $value = 3; }
+class RefFloatUntyped { public $value = 3; }
+function ref_float_take(float &$slot) { $slot = 3.5; }
+$mixed = new RefFloatMixed;
+try { ref_float_take($mixed->value); echo "ran|"; } catch (TypeError $error) { echo "typed|"; }
+var_dump($mixed->value);
+$union = new RefFloatUnion;
+try { ref_float_take($union->value); echo "ran|"; } catch (TypeError $error) { echo "typed|"; }
+var_dump($union->value);
+$untyped = new RefFloatUntyped;
+ref_float_take($untyped->value);
+var_dump($untyped->value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "typed|int(3)\ntyped|int(3)\nfloat(3.5)\n"
+    );
+}
+
+/// Verifies weak coercion of an untyped property into a `bool &` parameter uses PHP truthiness
+/// rather than the merge-temp integer cast: `"x"` is true and `"0.0"` is false.
+#[test]
+fn test_reference_bool_parameter_coerces_untyped_property_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBoolBox { public $value; }
+function ref_bool_take(bool &$slot) { var_dump($slot); }
+foreach (["x", "0.0", "a", " ", "", "0"] as $value) {
+    $box = new RefBoolBox;
+    $box->value = $value;
+    ref_bool_take($box->value);
+}
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\n");
+}
+
+/// Verifies the deferred check re-reads the property at the call boundary, so a later
+/// argument that rewrites the same property decides both the TypeError and the callee value.
+#[test]
+fn test_reference_property_guard_observes_later_argument_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class RefGuardBox { public $value; }
+function ref_guard_one(int &$slot, int $other) { echo $slot, ":", $other, "\n"; }
+function ref_guard_two(int &$slot, $other) { echo gettype($slot), ":"; var_dump($slot); }
+$first = new RefGuardBox;
+$first->value = "bad";
+try { ref_guard_one($first->value, $first->value = 5); } catch (TypeError $error) { echo "bad|"; }
+var_dump($first->value);
+$second = new RefGuardBox;
+$second->value = 5;
+try { ref_guard_two($second->value, $second->value = "bad"); } catch (TypeError $error) { echo "bad|"; }
+var_dump($second->value);
+"#,
+    );
+    assert_eq!(out, "5:5\nint(5)\nbad|string(3) \"bad\"\n");
+}
+
+/// Verifies a trait body's by-reference argument guard is resolved for each using class,
+/// even though the body's source spans are shared by every class that uses the trait.
+#[test]
+fn test_reference_trait_body_uses_each_using_class_property() {
+    let out = compile_and_run(
+        r#"<?php
+function ref_trait_take(int &$slot) { $slot++; }
+trait RefTraitBody { function run() { ref_trait_take($this->value); var_dump($this->value); } }
+class RefTraitInt { use RefTraitBody; public int $value = 1; }
+class RefTraitString { use RefTraitBody; public string $value = "s"; }
+class RefTraitMixed { use RefTraitBody; public mixed $value = 5; }
+(new RefTraitInt)->run();
+try { (new RefTraitString)->run(); } catch (TypeError $error) { echo "typed|"; }
+(new RefTraitMixed)->run();
+"#,
+    );
+    assert_eq!(out, "int(2)\ntyped|int(6)\n");
+}
+
+/// Verifies widening an untyped property for a by-reference argument covers subclasses that
+/// redeclare it, so inherited methods and later accesses see one consistent slot.
+#[test]
+fn test_reference_untyped_property_widening_covers_redeclaring_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+function ref_widen_take(int &$slot) { $slot++; }
+function ref_widen_mixed(mixed &$slot) { $slot .= "!"; }
+class RefWidenBase { public $value = "5"; function show() { var_dump($this->value); } function append() { $this->value .= "z"; } }
+class RefWidenChild extends RefWidenBase { public $value = "abcdefgh"; }
+$child = new RefWidenChild;
+$child->show();
+$child->append();
+var_dump($child->value);
+$base = new RefWidenBase;
+ref_widen_take($base->value);
+var_dump($base->value);
+ref_widen_mixed($base->value);
+var_dump($base->value);
+$child = new RefWidenChild;
+$child->value = "7";
+ref_widen_take($child->value);
+var_dump($child->value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(8) \"abcdefgh\"\nstring(9) \"abcdefghz\"\nint(6)\nstring(2) \"6!\"\nint(8)\n"
+    );
+}
+
+/// Verifies taking a nested property by reference when an intermediate hop is null raises
+/// PHP's modification Error before the callee, instead of warning and running the callee.
+#[test]
+fn test_reference_nested_null_receiver_raises_modify_error() {
+    let out = compile_and_run(
+        r#"<?php
+class RefNullNode { public ?RefNullNode $next = null; public int $value = 0; }
+function ref_null_take(&$slot) { echo "callee|"; }
+$node = new RefNullNode;
+try { ref_null_take($node->next->value); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Attempt to modify property \"value\" on null\n");
+}
+
+/// Verifies a rejected by-reference property argument raises the argument TypeError without
+/// converting the refreshed value first, so an array/object never emits a conversion warning
+/// or runs `__toString()` before the throw.
+#[test]
+fn test_reference_rejected_refreshed_value_is_not_converted() {
+    let out = compile_and_run(
+        r#"<?php
+class RefConvertBox { public mixed $value = "start"; }
+class RefConvertStringable { public function __toString(): string { echo "tostring|"; return "x"; } }
+function ref_convert_later(RefConvertBox $box): int { $box->value = new RefConvertStringable; return 1; }
+function ref_convert_take(string &$slot, int $ignored): void { echo "body|"; }
+$box = new RefConvertBox;
+try { ref_convert_take($box->value, ref_convert_later($box)); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ref_convert_take(): Argument #1 ($slot) must be of type string, RefConvertStringable given\n"
+    );
+}
+
+/// Verifies a later argument that reassigns the receiver variable does not retarget the
+/// by-reference binding, the call-boundary guard, or the write-back: PHP keeps the original
+/// object, even when the replacement holds a different current type.
+#[test]
+fn test_reference_property_binding_keeps_the_original_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class RefReceiverBox { public mixed $value; function __construct($value) { $this->value = $value; } }
+function ref_receiver_take(int &$slot, $other) { $slot = 7; }
+$box = new RefReceiverBox(1);
+$original = $box;
+$replacement = new RefReceiverBox("bad");
+ref_receiver_take($box->value, $box = $replacement);
+var_dump($original->value, $box->value);
+"#,
+    );
+    assert_eq!(out, "int(7)\nstring(3) \"bad\"\n");
+}
+
+/// Verifies a by-reference property argument that needs a runtime guard evaluates its
+/// receiver expression once, and uses that same object for both the guard and write-back.
+#[test]
+fn test_reference_property_guard_evaluates_the_receiver_once() {
+    let out = compile_and_run(
+        r#"<?php
+class RefOnceBox {
+    public static array $created = [];
+    public mixed $value;
+    public function __construct($value) { $this->value = $value; self::$created[] = $this; }
+}
+function ref_once_make(): RefOnceBox { echo "make|"; return new RefOnceBox(count(RefOnceBox::$created) + 1); }
+function ref_once_take(int &$slot, $other) { $slot = 7; }
+ref_once_take(ref_once_make()->value, ref_once_make());
+echo RefOnceBox::$created[0]->value, "|", RefOnceBox::$created[1]->value, "\n";
+"#,
+    );
+    assert_eq!(out, "make|make|7|2\n");
+}
+
 /// Verifies a named argument still receives the object-union runtime guard and unbox.
 #[test]
 fn test_named_object_union_argument_throws_and_unboxes() {
@@ -1006,212 +1598,126 @@ Cannot assign string to reference held by property F::$f of type float\n"
     );
 }
 
-/// A `mixed &$out` parameter can bind a typed scalar property: a compatible write updates
-/// it, while an incompatible write raises PHP's typed-reference `TypeError` and leaves the
-/// property unchanged.
+/// Verifies `settype()` on a typed by-reference parameter with the matching native payload is
+/// accepted: the cell already has the requested representation, so the write goes through it
+/// instead of failing as an unsupported retype.
 #[test]
-fn test_typed_property_by_ref_writeback_guard() {
+fn test_settype_matching_typed_reference_payload_writes_through() {
     let out = compile_and_run(
         r#"<?php
-class Box { public string $value = "unchanged"; }
-function replaceWithArray(mixed &$out): void { $out = ["a" => 1]; }
-function replaceWithString(mixed &$out): void { $out = "changed"; }
-$box = new Box();
-try {
-    replaceWithArray($box->value);
-    echo "unguarded|";
-} catch (TypeError $error) {
-    echo $error->getMessage(), "|";
-}
-echo $box->value, "|";
-replaceWithString($box->value);
-echo $box->value;
+function keep_int(int &$x): void { var_dump(settype($x, 'int')); var_dump($x); }
+function keep_float(float &$f): void { settype($f, 'float'); var_dump($f); }
+function keep_string(string &$s): void { settype($s, 'string'); var_dump($s); }
+function keep_bool(bool &$b): void { settype($b, 'bool'); var_dump($b); }
+$n = 7; keep_int($n); var_dump($n);
+$f = 1.5; keep_float($f); var_dump($f);
+$s = 'x'; keep_string($s); var_dump($s);
+$b = true; keep_bool($b); var_dump($b);
 "#,
     );
     assert_eq!(
         out,
-        "Cannot assign array to reference held by property Box::$value of type string|unchanged|changed"
+        "bool(true)\nint(7)\nint(7)\nfloat(1.5)\nfloat(1.5)\nstring(1) \"x\"\nstring(1) \"x\"\nbool(true)\nbool(true)\n"
     );
 }
 
-/// A `mixed &$out` parameter also binds a typed static property through the same
-/// hidden-temporary write-back, with the same typed-reference guard.
+/// Verifies `settype(..., "string")` through a `mixed` reference publishes persisted storage:
+/// scalar-to-string conversions may start in `_concat_buf`, which later string work reuses.
 #[test]
-fn test_typed_static_property_by_ref_writeback_guard() {
+fn test_settype_string_reference_persists_concat_scratch() {
     let out = compile_and_run(
         r#"<?php
-class StaticBox { public static string $value = "unchanged"; }
-function replaceStaticWithArray(mixed &$out): void { $out = ["a" => 1]; }
-function replaceStaticWithString(mixed &$out): void { $out = "changed"; }
-try {
-    replaceStaticWithArray(StaticBox::$value);
-    echo "unguarded|";
-} catch (TypeError $error) {
-    echo $error->getMessage(), "|";
-}
-echo StaticBox::$value, "|";
-replaceStaticWithString(StaticBox::$value);
-echo StaticBox::$value;
+function ref_string(mixed &$slot): void { var_dump(settype($slot, 'string')); }
+$int = 42;
+ref_string($int);
+for ($i = 0; $i < 4000; $i++) { $scratch = (string) $i; }
+var_dump($int);
+$float = 1.5;
+ref_string($float);
+$scratch = str_repeat("z", 100) . "tail";
+var_dump($float);
+$bool = true;
+ref_string($bool);
+$scratch = "a" . "b" . "c";
+var_dump($bool);
 "#,
     );
     assert_eq!(
         out,
-        "Cannot assign array to reference held by property StaticBox::$value of type string|unchanged|changed"
+        "bool(true)\nstring(2) \"42\"\nbool(true)\nstring(3) \"1.5\"\nbool(true)\nstring(1) \"1\"\n"
     );
 }
 
-/// A straight-line `unset($GLOBALS['x'])` detaches a `global $x` alias: the removed value
-/// stays readable locally, later writes stay local, and the global remains unset.
+/// Verifies a declared `mixed` property passed to a scalar union by reference keeps the
+/// call-boundary check: both sides use Mixed storage, but the union admits fewer values than
+/// the property. The array must raise before the callee runs and leave the property unchanged.
 #[test]
-fn test_global_alias_detaches_after_globals_unset() {
+fn test_mixed_property_to_scalar_union_reference_checks_before_the_call() {
     let out = compile_and_run(
         r#"<?php
-function detachAlias(): void {
-    global $z;
-    $z = "inner";
-    unset($GLOBALS["z"]);
-    var_dump(isset($z), $z, isset($GLOBALS["z"]));
-    $z = "after";
-    var_dump(isset($z), $z, isset($GLOBALS["z"]), $GLOBALS["z"] ?? "missing");
-}
-detachAlias();
+class RefUnionLiveBox { public mixed $value = []; }
+function ref_union_live(int|string &$slot): void { echo "entered|"; }
+$box = new RefUnionLiveBox();
+try { ref_union_live($box->value); } catch (TypeError $error) { echo "TypeError|"; }
+var_dump($box->value);
+$box->value = "ok";
+ref_union_live($box->value);
+var_dump($box->value);
 "#,
     );
     assert_eq!(
         out,
-        "bool(true)\nstring(5) \"inner\"\nbool(false)\nbool(true)\nstring(5) \"after\"\nbool(false)\nstring(7) \"missing\"\n"
+        "TypeError|array(0) {\n}\nentered|string(2) \"ok\"\n"
     );
 }
 
-/// A closure created after the unset captures the detached local, not the removed global.
+/// Verifies reference-property widening walks through a parent that only inherits the slot:
+/// `A` declares it, `B` inherits it, `C` redeclares it, and inherited methods in both `A` and
+/// `B` must read the widened `C` slot instead of a stale narrow representation.
 #[test]
-fn test_global_alias_detach_closure_capture() {
+fn test_reference_property_widening_passes_through_inheriting_parent() {
     let out = compile_and_run(
         r#"<?php
-function captureDetached(): void {
-    global $x;
-    $x = "inner";
-    unset($GLOBALS["x"]);
-    $read = function () use ($x): string { return $x; };
-    $x = "after";
-    echo $read(), "|", $x, "|", isset($GLOBALS["x"]) ? "set" : "unset";
+class WidenChainA {
+    public $value = "a";
+    public function showA(): void { var_dump($this->value); }
 }
-captureDetached();
+class WidenChainB extends WidenChainA {
+    public function showB(): void { var_dump($this->value); }
+}
+class WidenChainC extends WidenChainB { public $value = "c"; }
+function widen_chain_bump(int &$slot): void { $slot++; }
+$c = new WidenChainC();
+$c->value = "7";
+widen_chain_bump($c->value);
+$c->showA();
+$c->showB();
+$b = new WidenChainB();
+$b->value = "9";
+widen_chain_bump($b->value);
+$b->showA();
+$b->showB();
 "#,
     );
-    assert_eq!(out, "inner|after|unset");
-}
-/// A conditional `unset($GLOBALS['x'])` detaches a `global $x` alias on the path that ran it and
-/// leaves the alias bound to the global on the other path.
-///
-/// The removed value stays reachable through the local, later writes stay local, and the global
-/// keeps receiving assignments on the path where the unset did not run. Coverage also spans a
-/// detachment inside a loop, an indexed/append write, `isset`/`empty`, and a second unset on a
-/// later path; the expected output is php 8.5's for the same fixtures.
-#[test]
-fn test_global_alias_conditional_unset_detaches() {
-    let out = compile_and_run(
-        r#"<?php
-function detach(string $mode): void {
-    global $value;
-    $value = 'g';
-    if ($mode === 'yes') {
-        unset($GLOBALS['value']);
-    }
-    echo $mode, ':', $value, '|', isset($value) ? 'y' : 'n', '|', empty($value) ? 'e' : 'f', '|', $GLOBALS['value'] ?? 'missing', "\n";
-    $value = 'w';
-    echo $mode, ':', $value, '|', $GLOBALS['value'] ?? 'missing', "\n";
-}
-function bump(bool $detachIt): void {
-    global $count;
-    $count = 1;
-    for ($i = 0; $i < 3; $i++) {
-        if ($detachIt && $i === 1) {
-            unset($GLOBALS['count']);
-        }
-        $count++;
-    }
-    echo $detachIt ? 'bump-detached:' : 'bump:', $count, '|', $GLOBALS['count'] ?? 'missing', "\n";
-}
-function grow(bool $detachIt): void {
-    global $items;
-    $items = ['a'];
-    if ($detachIt) {
-        unset($GLOBALS['items']);
-    }
-    $items[] = 'b';
-    $items['k'] = 'c';
-    echo implode(',', $items), '|', isset($GLOBALS['items']) ? 'set' : 'unset', "\n";
-}
-function twice(bool $first, bool $second): void {
-    global $pair;
-    $pair = 'v';
-    if ($first) {
-        unset($GLOBALS['pair']);
-    }
-    if ($second) {
-        unset($GLOBALS['pair']);
-        $pair = 'after';
-    }
-    echo $pair, '|', $GLOBALS['pair'] ?? 'missing', "\n";
-}
-$value = 'init';
-detach('no');
-detach('yes');
-echo 'final:', $GLOBALS['value'] ?? 'missing', "\n";
-$count = 0;
-bump(false);
-bump(true);
-$items = [];
-grow(false);
-grow(true);
-echo 'items:', $GLOBALS['items'] ?? 'missing', "\n";
-$pair = 'P';
-twice(false, false);
-twice(true, false);
-twice(false, true);
-twice(true, true);
-"#,
-    );
-    assert_eq!(
-        out,
-        "no:g|y|f|g\nno:w|w\nyes:g|y|f|missing\nyes:w|missing\nfinal:missing\n\
-         bump:4|4\nbump-detached:4|missing\na,b,c|set\na,b,c|unset\nitems:missing\n\
-         v|v\nv|missing\nafter|missing\nafter|missing\n"
-    );
+    assert_eq!(out, "int(8)\nint(8)\nint(10)\nint(10)\n");
 }
 
-
-/// Container and property writes on a detached alias target the detached copy, so the unset
-/// global is never recreated and the local keeps its value. Expected output is php 8.5's.
+/// Verifies reference-property widening does not cross a private declaration: `A`'s private
+/// `$p` and `B`'s public `$p` are separate slots, so widening `B`'s slot leaves `A::show()`
+/// reading its own private string.
 #[test]
-fn test_global_alias_conditional_unset_splits_container_writes() {
+fn test_reference_property_widening_stops_at_private_declarations() {
     let out = compile_and_run(
         r#"<?php
-class DetachBox { public string $v = 'init'; public array $list = []; }
-function nested(bool $c): void {
-    global $tree;
-    $tree = ['a' => ['b' => 1]];
-    if ($c) { unset($GLOBALS['tree']); }
-    $tree['a']['b'] = 9;
-    echo "tree={$tree['a']['b']}|", isset($GLOBALS['tree']) ? 'set' : 'unset', "\n";
-}
-function props(bool $c): void {
-    global $box;
-    $box = new DetachBox();
-    if ($c) { unset($GLOBALS['box']); }
-    $box->v = 'set';
-    $box->list[] = 'a';
-    $box->list['k'] = 'b';
-    echo $box->v, '|', implode(',', $box->list), '|', isset($GLOBALS['box']) ? 'set' : 'unset', "\n";
-}
-$proto = new DetachBox();
-nested(false); nested(true);
-props(false); props(true);
+class WidenPrivateA { private $p = "old"; public function show(): void { var_dump($this->p); } }
+class WidenPrivateB extends WidenPrivateA { public $p = 1; }
+function widen_private_bump(int &$slot): void { $slot++; }
+$b = new WidenPrivateB();
+$b->p = "7";
+widen_private_bump($b->p);
+var_dump($b->p);
+$b->show();
 "#,
     );
-    assert_eq!(
-        out,
-        "tree=9|set\ntree=9|unset\nset|a,b|set\nset|a,b|unset\n"
-    );
+    assert_eq!(out, "int(8)\nstring(3) \"old\"\n");
 }

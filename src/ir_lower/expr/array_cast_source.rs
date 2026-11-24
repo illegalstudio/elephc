@@ -390,10 +390,10 @@ fn inc_dec_source_type(ctx: &LoweringContext<'_, '_>, name: &str, post: bool) ->
 
 /// Returns the type of a magic constant that survived until EIR lowering.
 ///
-/// `__LINE__` is not a `MagicConstant` variant. The remaining constants are strings, and the
-/// magic-constant pass normally rewrites them to literals before this point.
+/// The magic-constant pass normally rewrites these constants to literals before this point.
 fn magic_constant_source_type(constant: &MagicConstant) -> PhpType {
     match constant {
+        MagicConstant::Line => PhpType::Int,
         MagicConstant::Dir
         | MagicConstant::File
         | MagicConstant::Function

@@ -10,13 +10,13 @@
 //! - Names retain source spelling so exact instrumentation can attach measured calls.
 //! - Unlexable source yields no virtual frames rather than guessed declaration names.
 
-use elephc::lexer::{SpannedToken, Token};
+use crate::lexer::{SpannedToken, Token};
 
 use super::DeclRange;
 
 /// Extracts named function and method ranges without requiring a complete PHP AST.
 pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
-    let Ok(tokens) = elephc::lexer::tokenize(source) else { return Vec::new(); };
+    let Ok(tokens) = crate::lexer::tokenize(source) else { return Vec::new(); };
     let brace_ends = matching_brace_ends(&tokens);
     let mut ranges = Vec::new();
     let mut classes: Vec<(String, usize)> = Vec::new();
@@ -47,7 +47,7 @@ pub(crate) fn php_decl_ranges(source: &str) -> Vec<DeclRange> {
         }
         if matches!(tokens[pos].0, Token::Class | Token::Interface | Token::Trait | Token::Enum) {
             if let Some(name) = tokens.get(pos + 1).and_then(|(token, metadata)| {
-                elephc::parser::name_part_from_token(token, metadata)
+                crate::parser::name_part_from_token(token, metadata)
             }) {
                 if let Some((open, end)) = declaration_extent(&tokens, pos + 2, &brace_ends, false) {
                     classes.push((qualify_name(&namespace, &name), end));

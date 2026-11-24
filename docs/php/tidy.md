@@ -31,7 +31,7 @@ or `tidyNode` class, or `ob_start('ob_tidyhandler')` links the bridge and, with 
 the managed package:
 
 ```bash
-elephc clean.php
+elephc build clean.php
 ```
 
 Use `--with-tidy` when the surface is only reached at runtime, for example through
@@ -40,7 +40,7 @@ force-links the whole `elephc_tidy` archive and force-injects the prelude even w
 compiler sees no tidy usage:
 
 ```bash
-elephc --with-tidy clean.php
+elephc build --with-tidy clean.php
 ```
 
 Either way the project must declare `libtidy`: a compile that plans the bridge

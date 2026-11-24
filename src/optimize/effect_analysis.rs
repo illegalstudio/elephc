@@ -430,11 +430,18 @@ fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
 ///
 /// A literal `false` type and a class type both run a call-boundary guard: `false` checks the
 /// literal, and a class checks that a `Class|false` / `Class|null` union argument carries the
-/// object alternative. Keep the call observable even when the body itself is pure.
+/// object alternative, and any class-like type (`object`, `self`, `static` and nullable or
+/// union forms) checks a `mixed` argument at run time. Keep the call observable even when the
+/// body itself is pure.
 fn type_guard_may_throw(ty: Option<&TypeExpr>) -> bool {
     let Some(ty) = ty else { return false };
     match ty {
         TypeExpr::False | TypeExpr::Named(_) if !type_expr_is_builtin(ty) => true,
+        // `object` and the class-relative names check a `mixed` argument at run time.
+        TypeExpr::Named(name) if matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "object" | "self" | "static" | "parent"
+        ) => true,
         TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
         TypeExpr::Nullable(inner) => type_guard_may_throw(Some(inner)),
         TypeExpr::Union(members) => members.iter().any(|member| type_guard_may_throw(Some(member))),

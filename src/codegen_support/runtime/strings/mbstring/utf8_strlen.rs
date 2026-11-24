@@ -3,7 +3,7 @@
 //! explicit-encoding `mb_strlen($s, "UTF-8")` fast path.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::strings::mbstring::emit_mbstring()`.
+//! - `crate::codegen_support::runtime::strings::mbstring::emit_mb_strlen_utf8()`, for every program.
 //!
 //! Key details:
 //! - The helper returns the number of codepoints, or `-1` when the subject is not valid

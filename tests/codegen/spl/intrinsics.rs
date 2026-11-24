@@ -3,7 +3,7 @@
 //! Verifies direct method interception routes through the shared intrinsic registry.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - These tests inspect user assembly so the direct runtime-helper path stays visible.

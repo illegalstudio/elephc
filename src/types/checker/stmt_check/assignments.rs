@@ -13,6 +13,7 @@ mod locals;
 mod properties;
 mod properties_null_coalesce;
 mod static_properties;
+mod store_narrowing;
 
 pub(in crate::types::checker) use arrays::expr_is_string_offset_target;
 
@@ -153,7 +154,12 @@ impl Checker {
                 // The one statement-form local assignment: `stmt_form: true` makes an
                 // incompatible reassignment eligible for the permissive retype (warn and
                 // re-bind) instead of the hard `cannot reassign` error.
-                locals::check_assign(self, name, value, stmt.span, env, true)
+                let result = locals::check_assign(self, name, value, stmt.span, env, true);
+                if result.is_ok() {
+                    // A plain copy of a proven local holds the same proven value.
+                    self.record_copied_local_view(name, value, env);
+                }
+                result
             }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)

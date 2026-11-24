@@ -12,7 +12,7 @@
 //!         -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 //!         -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
 //!     ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-//!         cargo test --test codegen_tests -- --ignored mysqli_mysql
+//!         cargo test --test codegen_tests_ext -- --ignored mysqli_mysql
 //!
 //! Key details:
 //! - `my_program` parses the PDO-style `mysql:` DSN into `new mysqli(...)`
@@ -3306,7 +3306,7 @@ run($db);
 "#,
     );
     std::fs::write(dir.join("queries.php"), program).expect("failed to write the monitored fixture");
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args(["monitor", "queries.php", "--save", "queries.json"])
         .output()
         .expect("failed to run elephc monitor");

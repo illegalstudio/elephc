@@ -3,7 +3,7 @@
 //! optimization pipeline.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::dead_instruction_elimination`.
+//! - `cargo test --test codegen_tests_core optimizer::dead_instruction_elimination`.
 //!
 //! Key details:
 //! - Uses `--emit-ir` so the test can compare optimized and `--no-ir-opt` EIR
@@ -25,10 +25,10 @@ fn emit_ir(source: &str, ir_opt: bool) -> String {
     let output = command
         .arg(&php_path)
         .output()
-        .expect("failed to run elephc --emit-ir");
+        .expect("failed to run elephc build --emit-ir");
     assert!(
         output.status.success(),
-        "elephc --emit-ir failed: stderr={}",
+        "elephc build --emit-ir failed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).expect("EIR output should be UTF-8");

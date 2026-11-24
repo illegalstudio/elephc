@@ -125,6 +125,62 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_constant_fetch(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a constant read that may come from either a compiled `define()` or `eval()`.
+///
+/// A compiled `define()` sets its per-name flag when it runs. Only that flag proves native
+/// storage holds the value; the eval registry may instead be the only store, as when the
+/// compiled call sits in a function that was never invoked.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_constant_fetch_or_global(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let constant_name = ctx.global_name_data(expect_data(inst)?)?.to_string();
+    let native = expect_operand(inst, 0)?;
+    let native_label = ctx.next_label("eval_constant_native");
+    let done_label = ctx.next_label("eval_constant_done");
+    // The compiled `define()` may sit in a function the optimizer removed, so this read
+    // cannot rely on that lowering to declare the flag symbol.
+    let flag_symbol = ctx
+        .data
+        .add_comm(crate::names::define_seen_symbol(&constant_name), 8);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &flag_symbol, 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &native_label);
+    // -- eval registry: a runtime define() may be the only definer --
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    let (name_label, name_len) = ctx.data.add_string(constant_name.as_bytes());
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_constant_fetch");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, &done_label);
+    // -- native storage: the compiled define() ran and stored its value here --
+    ctx.emitter.label(&native_label);
+    ctx.load_value_to_result(native)?;
+    let box_ty = ctx.raw_value_php_type(native)?;
+    crate::codegen::lower_inst::globals_constants::box_loaded_value_as_mixed(
+        ctx, native, &box_ty,
+    );
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a post-eval dynamic class-like constant fetch to the eval bridge ABI.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_constant_fetch(
     ctx: &mut FunctionContext<'_>,

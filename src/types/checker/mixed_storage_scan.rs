@@ -1106,6 +1106,11 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
 /// reaches, and every other shape recurses into its children.
 fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                collect_expr(checker, value, depth + 1, facts);
+            }
+        },
         // An expression-form assignment yields the stored value to its enclosing expression, so
         // re-binding it to boxed storage has no single well-defined result to hand back.
         ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp: _ } => {

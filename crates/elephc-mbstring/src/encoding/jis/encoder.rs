@@ -10,7 +10,7 @@
 //! - Legacy ISO-2022-JP silently drops unmappable characters.
 //! - CP50220 and legacy mobile JIS retain one pending character for contextual conversion.
 
-use crate::encoding::{mapping::{lookup, word}, Substitute, BAD_INPUT};
+use crate::encoding::{mapping::{lookup, Dense}, Substitute, BAD_INPUT};
 use crate::unicode::kana::fullwidth_katakana;
 use super::{Jis, Mode, Variant};
 
@@ -68,8 +68,8 @@ impl Encoder {
     }
 
     /// Emits a captured scalar mapping without changing state if no mapping exists.
-    fn push(&mut self, code: u32, table: &[u8], output: &mut Vec<u8>) -> bool {
-        let mapped = if code <= 0xffff { word(table, code as usize * 4) }
+    fn push(&mut self, code: u32, table: Dense, output: &mut Vec<u8>) -> bool {
+        let mapped = if code <= 0xffff { table.word(code as usize) }
             else { lookup(self.codec.supplementary, code).unwrap_or(BAD_INPUT) };
         if mapped == BAD_INPUT { return false; }
         self.mapped(mapped, output);

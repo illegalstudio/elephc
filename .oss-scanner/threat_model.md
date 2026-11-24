@@ -50,19 +50,19 @@ Untrusted input reaches, in particular:
 
 ## How to exercise it
 
-- Compile and run a program: `./target/debug/elephc prog.php && ./prog` (the binary is written next to the source).
+- Compile and run a program: `./target/debug/elephc build prog.php && ./prog` (the binary is written next to the source).
   `--emit-asm` keeps the generated assembly, `--emit-ir` prints the intermediate representation.
 - Build any compiled program with `--heap-debug` to turn on the runtime's heap verification (double free, bad
   refcount, free-list corruption). The runtime uses its own heap inside a fixed region (`--heap-size`, 8 MB by
   default), so AddressSanitizer does not see the generated code; `--heap-debug`, gdb and the program's exit status
   are the tools. Rust bridges can be built and tested with the usual Rust tooling.
-- HTTP server: `./target/debug/elephc --web app.php && ./app --listen 127.0.0.1:8080` (see `docs/beyond-php/web.md`
+- HTTP server: `./target/debug/elephc build --web app.php && ./app --listen 127.0.0.1:8080` (see `docs/beyond-php/web.md`
   for the `--web-isolation` models).
 - Feature documentation lives in `docs/php/` (one page per area: strings, arrays, regex, xml, curl, eval, phar, image,
   sessions, streams) and `docs/beyond-php/`; runtime internals in `docs/internals/the-runtime.md`,
   `docs/internals/memory-model.md` and `docs/internals/eval-runtime.md`.
 - About 250 small programs in `examples/*/main.php` cover most features and are convenient starting drivers.
-- Tests: `cargo nextest run --test codegen_tests <filter>` runs end-to-end tests that compile PHP, run the binary and
+- Tests: `cargo nextest run --test codegen_tests_<domain> <filter>` (six binaries: core, data, oop, runtime, ext, eval) runs end-to-end tests that compile PHP, run the binary and
   check its output (`tests/codegen/`, ownership and GC cases in `tests/codegen/runtime_gc/`). Bridge crates have
   their own `cargo nextest run -p elephc-<name>` tests.
 - Everything is prebuilt offline: the compiler and bridge staticlibs in `target/debug/`, the managed native packages
@@ -73,7 +73,7 @@ Untrusted input reaches, in particular:
   the link fails with "requires managed native package". Copy both files from the example whose lock pins the package
   next to the new program: `examples/hello-preg` (PCRE2), `examples/date-json-regex` (PCRE2 and Oniguruma),
   `examples/curl-get` (curl, libssh2, nghttp2, OpenSSL, zlib) or `examples/xml` (libxml2). For example:
-  `mkdir /tmp/t && cp examples/xml/elephc.toml examples/xml/elephc.lock /tmp/t/ && ./target/debug/elephc /tmp/t/prog.php`.
+  `mkdir /tmp/t && cp examples/xml/elephc.toml examples/xml/elephc.lock /tmp/t/ && ./target/debug/elephc build /tmp/t/prog.php`.
 
 ## How you rate severity
 

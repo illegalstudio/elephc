@@ -4,7 +4,7 @@
 //! properties, with every handle stored as one raw word next to the pointer-word arms.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_buffer_array` through Rust's test harness.
+//! - `cargo test --test codegen_tests_runtime test_buffer_array` through Rust's test harness.
 //!
 //! Key details:
 //! - Buffer handles are not refcounted and are never null: a missing element or key and a pop of

@@ -1,11 +1,14 @@
 //! Purpose:
-//! Manages native-frame called-class overrides and the process-global eval class snapshot.
+//! Manages native-frame called-class overrides, the process-global eval class snapshot, and the
+//! live-context lookups compiled frames use to read eval-defined PHP state.
 //!
 //! Called from:
 //! - Native bridge entry points and per-context class-like synchronization.
 //!
 //! Key details:
 //! - Overrides are thread-local guards; global declarations are mutex-protected outside tests.
+//! - Eval-defined constants are global in PHP, so a fetch can resolve one from another live
+//!   activation when the caller's own context does not hold it.
 
 use super::*;
 
@@ -36,6 +39,28 @@ pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut El
         #[cfg(not(test))]
         owner.sync_global_eval_classes();
         if owner.resolve_class_like_name(name).is_some() { return Some(context); }
+    }
+    None
+}
+
+/// Finds a live context that defined `name`, so a compiled frame without that context can read
+/// the constant PHP treats as global.
+///
+/// `excluded` is the caller's own activation, which it already probed with an exclusive borrow;
+/// skipping it keeps this lookup from aliasing that borrow.
+///
+/// # Safety
+/// Context handles must be registered and removed on their owning thread before reclamation.
+pub(crate) unsafe fn live_native_context_constant(
+    excluded: *mut ElephcEvalContext,
+    name: &str,
+) -> Option<RuntimeCellHandle> {
+    let contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
+    for context in contexts {
+        if context == excluded { continue; }
+        let Some(owner) = (unsafe { context.as_ref() }) else { continue; };
+        if !owner.has_abi_owners() || owner.teardown_active() { continue; }
+        if let Some(value) = owner.constant(name) { return Some(value); }
     }
     None
 }

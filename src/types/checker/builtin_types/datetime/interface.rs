@@ -8,6 +8,7 @@
 //! - Interface and concrete method signatures remain synchronized, including microseconds.
 
 use super::*;
+use crate::synthetic_class::e_self_call;
 
 /// Builds the `timestamp` (int) and `timezone_name` (str, default "UTC") backing properties.
 pub(super) fn datetime_backing_properties() -> Vec<ClassProperty> {
@@ -101,7 +102,13 @@ pub(super) fn datetime_get_offset() -> ClassMethod {
             // $__saved = date_default_timezone_get();
             Stmt::assign("__saved", call("date_default_timezone_get", Vec::new())),
             // date_default_timezone_set($this->timezone_name);
-            expr_stmt(call("date_default_timezone_set", vec![this_property("timezone_name")])),
+            expr_stmt(call(
+                "date_default_timezone_set",
+                vec![e_self_call(
+                    "__elephc_display_timezone",
+                    vec![this_property("timezone_name")],
+                )],
+            )),
             // $__off = intval(date("Z", $this->timestamp));
             Stmt::assign(
                 "__off",

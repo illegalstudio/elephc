@@ -2,7 +2,7 @@
 //! Diagnostic test root wiring and shared helpers for compile-time error reporting suites.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness.
+//! - `cargo test --test integration error_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Helpers run frontend checks over inline or multi-file PHP fixtures and assert reported diagnostics.
@@ -98,7 +98,7 @@ fn check_source_on_compiler_stack(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used_with_web(ast, false, 134_217_728, false, &mut prelude_inventory);
     let ast = elephc::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
@@ -146,7 +146,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used_with_web(ast, false, 134_217_728, false, &mut prelude_inventory);
     let ast = elephc::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
@@ -349,6 +349,8 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/typed_object_arrays.rs"]
 mod typed_object_arrays;
+#[path = "error_tests/declared_map_loops.rs"]
+mod declared_map_loops;
 #[path = "error_tests/list_hash_param_binding.rs"]
 mod list_hash_param_binding;
 #[path = "error_tests/extensions.rs"]

@@ -2,7 +2,7 @@
 //! Checks cleanup of temporary C strings used to remove environment variables.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the runtime-GC suite.
+//! - `cargo test --test codegen_tests_runtime` through the runtime-GC suite.
 //!
 //! Key details:
 //! - Unsetting absent names avoids the persistent allocations retained by assignments.

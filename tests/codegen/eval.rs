@@ -5,7 +5,7 @@
 //! builtin dispatch through end-to-end codegen.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures exercise the native/EvalIR boundary rather than the frozen legacy
@@ -91,7 +91,7 @@ eval($code);
     );
     assert!(
         compile_stderr.contains("dynamic eval was compiled without optional regex support")
-            && compile_stderr.contains("elephc --with-regex <source-file>"),
+            && compile_stderr.contains("elephc build --with-regex <source-file>"),
         "compile output should contain the regex capability reminder:\n{compile_stderr}"
     );
     assert!(

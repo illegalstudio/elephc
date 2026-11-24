@@ -92,6 +92,7 @@ impl Drop for ApmFixture {
         CPU_AT_RESET_NS.store(0, Ordering::Relaxed);
         TXN_FAILED.store(false, Ordering::Relaxed);
         NESTED_DEPTH.store(0, Ordering::Relaxed);
+        crate::apm_rules::set_request_ignored(false);
         RUN_STARTED_NS.store(0, Ordering::Relaxed);
         for counter in &RUN_IO {
             counter.store(0, Ordering::Relaxed);
@@ -230,7 +231,8 @@ fn the_transaction_table_ends_the_region_without_overlap() {
     assert_eq!(inflight_last + 8, base + ROUTE_BUDGET_OFFSET, "the new-route budget follows it");
     assert_eq!(ROUTES_GENERATION_OFFSET, ROUTE_BUDGET_OFFSET + 8, "then the route-table generation");
     assert_eq!(ROUTES_RESET_TICKET_OFFSET, ROUTES_GENERATION_OFFSET + 8, "then the reset ticket");
-    assert_eq!(ROUTES_GATE_OFFSET + 8, REGION_BYTES, "and the table gate ends the region");
+    assert_eq!(ERROR_TABLE_OFFSET, ROUTES_GATE_OFFSET + 8, "then the table gate");
+    assert_eq!(ERROR_TABLE_OFFSET + crate::apm_errors::ERROR_TABLE_BYTES, REGION_BYTES, "and the error table ends the region");
 }
 
 /// Resetting the route table empties it — names, counters — starts a new run
@@ -355,8 +357,8 @@ fn row_names() -> Vec<String> {
 
 /// A scanner's paths cannot fill the route table under `--apm`: a request
 /// answered "not found" is counted under one `<not found>` row and interns
-/// nothing, and an endpoint first seen afterwards still gets its own row
-/// (review R3). A route is interned once its request is answered.
+/// nothing, and an endpoint first seen afterwards still gets its own row.
+/// A route is interned once its request is answered.
 #[test]
 fn not_found_traffic_does_not_spend_the_route_table() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -416,8 +418,8 @@ fn a_known_route_answering_not_found_keeps_its_row() {
 
 /// An isolated handler child runs a new route's request and its web worker
 /// records it by name: the child settles the work it held as pending on the
-/// row the worker counts the request under, not on the untagged row (review
-/// G1). A "not found" answer settles on `<not found>`, as its recording does.
+/// row the worker counts the request under, not on the untagged row.
+/// A "not found" answer settles on `<not found>`, as its recording does.
 #[test]
 fn an_isolated_handlers_pending_work_settles_on_its_requests_row() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -447,7 +449,7 @@ fn an_isolated_handlers_pending_work_settles_on_its_requests_row() {
 }
 
 /// Two endpoints whose labels share their first 63 bytes stay two rows: the
-/// stored name keeps a prefix and appends a hash of the whole label (R6).
+/// stored name keeps a prefix and appends a hash of the whole label.
 #[test]
 fn long_routes_that_share_a_prefix_stay_apart() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -476,7 +478,7 @@ fn long_routes_that_share_a_prefix_stay_apart() {
 }
 
 /// A request a worker was serving when it died is counted as a server error
-/// when the master reaps it; an answered one is not counted twice (review R1).
+/// when the master reaps it; an answered one is not counted twice.
 #[test]
 fn a_request_cut_short_by_its_worker_dying_counts_as_a_failure() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -644,7 +646,7 @@ fn a_dead_web_workers_requests_are_each_counted() {
 }
 
 /// In a combined build the exact profiler owns the event slots: a sampled
-/// window alone does not make the bridges time their calls; --apm does (R12).
+/// window alone does not make the bridges time their calls; --apm does.
 #[test]
 fn the_event_window_answers_for_the_runtime_that_receives_events() {
     let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -760,7 +762,14 @@ fn a_reset_waits_for_a_write_in_progress() {
     let writing = TableGate::enter(base).expect("the table is open");
     let started = std::time::Instant::now();
     let reset = std::thread::spawn(reset_routes);
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Checked as soon as the reset has raised its flag: a fixed sleep raced
+    // the bounded `GATE_WAIT` on loaded CI runners, where the sleeping
+    // thread woke after the reset had already given up waiting.
+    let gate = shared_word(base, ROUTES_GATE_OFFSET);
+    while gate.load(Ordering::Acquire) & GATE_RESETTING == 0 {
+        assert!(!reset.is_finished(), "the reset raises its flag before running");
+        std::thread::yield_now();
+    }
     assert!(!reset.is_finished(), "the reset waits for the write in progress");
     drop(writing);
     assert!(reset.join().unwrap().contains("route table reset"));
@@ -1155,6 +1164,39 @@ fn a_dead_workers_pending_work_is_charged_to_its_request() {
     PENDING_LEN.store(0, Ordering::Relaxed);
 }
 
+/// A request of a known route keeps its statements in its process and publishes them once,
+/// with the request: nothing reaches the shared row while it runs. A worker that dies
+/// serving one still has them charged to it, from its in-flight row.
+#[test]
+fn a_known_routes_work_is_published_once_with_its_request() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    TRACK_IN_FLIGHT.store(true, Ordering::Relaxed);
+    let route = "GET /orders/{id}";
+    let io = |name: &str| {
+        let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+        snapshot.routes.iter().find(|r| r.name == name).map_or([0; apm::IO_KINDS], |r| r.io)
+    };
+    unsafe {
+        serve(route, 200, 1_000);
+        elephc_probe_set_route(route.as_ptr(), route.len());
+        assert_eq!(PENDING_LEN.load(Ordering::Relaxed), 0, "the route is known");
+        for _ in 0..3 {
+            note_apm_io(apm::IO_DB_OPS, 1);
+            note_apm_io(apm::IO_DB_WAIT, 1_000);
+        }
+        assert_eq!(io(route)[apm::IO_DB_OPS], 0, "nothing shared while the request runs");
+        elephc_probe_note_transaction(std::ptr::null(), 0, 200, 5_000);
+        assert_eq!((io(route)[apm::IO_DB_OPS], io(route)[apm::IO_DB_WAIT]), (3, 3_000), "all of it, once");
+        // The next request dies serving: its statements still reach the row.
+        elephc_probe_set_route(route.as_ptr(), route.len());
+        note_apm_io(apm::IO_DB_OPS, 2);
+        elephc_probe_reap(libc::getpid());
+    }
+    assert_eq!(io(route)[apm::IO_DB_OPS], 5, "the dead request's statements are its own");
+    PENDING_IO.iter().for_each(|counter| counter.store(0, Ordering::Relaxed));
+}
+
 /// A worker killed after its pending work moved to the route, but before its
 /// request was marked as being counted, has that work counted once: the
 /// master's reap charged the row's copy again (review).
@@ -1175,4 +1217,224 @@ fn pending_work_moved_to_its_route_is_not_charged_again() {
     let row = snapshot.routes.iter().find(|r| r.name == route).expect("counted");
     assert_eq!(row.io[apm::IO_DB_OPS], 3, "the queries are counted once");
     PENDING_LEN.store(0, Ordering::Relaxed);
+}
+
+/// Micro-benchmark of the request path under contention (ignored; run by
+/// hand): N forked processes sharing the region each enter and leave the
+/// table gate and record a transaction on one route, as N `--web` workers
+/// serving the same route do. Prints nanoseconds per operation for N = 1, 4,
+/// 16, so a lever on the shared words can be compared on the same machine.
+#[test]
+#[ignore]
+fn bench_gate_and_counters_under_contention() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    let base = REGION.load(Ordering::Relaxed);
+    let iterations: u64 =
+        std::env::var("APM_BENCH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000);
+    for processes in [1usize, 4, 16] {
+        let started = std::time::Instant::now();
+        let mut children = Vec::new();
+        for _ in 0..processes {
+            let pid = unsafe { libc::fork() };
+            if pid == 0 {
+                for _ in 0..iterations {
+                    let _gate = TableGate::enter(base);
+                    record_transaction(base, 1, 200, 1_000);
+                }
+                unsafe { libc::_exit(0) };
+            }
+            children.push(pid);
+        }
+        for pid in children {
+            let mut status = 0;
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+        }
+        // Wall time over each process's own iterations: what one request pays.
+        let elapsed = started.elapsed().as_nanos() as f64;
+        println!("processes={processes:2} ns/op={:.1}", elapsed / iterations as f64);
+    }
+}
+
+/// What one SQL statement costs the probe while its request runs: the statement and its
+/// wait, two events, from 1, 4 and 16 processes serving the same route. Ignored: a
+/// measurement (`cargo test -p elephc-probe bench_statement_io -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn bench_statement_io_under_contention() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    TRACK_IN_FLIGHT.store(true, Ordering::Relaxed);
+    let route = "GET /bench";
+    unsafe { serve(route, 200, 1_000) };
+    let iterations: u64 =
+        std::env::var("APM_BENCH_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000);
+    for processes in [1usize, 4, 16] {
+        let started = std::time::Instant::now();
+        let mut children = Vec::new();
+        for _ in 0..processes {
+            let pid = unsafe { libc::fork() };
+            if pid == 0 {
+                unsafe { elephc_probe_set_route(route.as_ptr(), route.len()) };
+                for _ in 0..iterations {
+                    note_apm_io(apm::IO_DB_OPS, 1);
+                    note_apm_io(apm::IO_DB_WAIT, 1_000);
+                }
+                unsafe { libc::_exit(0) };
+            }
+            children.push(pid);
+        }
+        for pid in children {
+            let mut status = 0;
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+        }
+        let elapsed = started.elapsed().as_nanos() as f64;
+        println!("processes={processes:2} ns/statement={:.1}", elapsed / iterations as f64);
+    }
+    TRACK_IN_FLIGHT.store(false, Ordering::Relaxed);
+}
+
+/// What the project's `[apm]` rules exclude counts nothing: a stamped web request and its
+/// queries, a request an isolated worker records by name, a named transaction. What they
+/// let in is counted as before.
+#[test]
+fn excluded_transactions_count_nothing() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    crate::apm_rules::set_test_rules(Some("-GET /health\n-MSG App\\Message\\Ping\n"));
+    TRACK_IN_FLIGHT.store(true, Ordering::Relaxed);
+    unsafe {
+        let health = "GET /health";
+        elephc_probe_set_route(health.as_ptr(), health.len());
+        elephc_probe_apm_event(apm::IO_DB_OPS as u32, 1);
+        elephc_probe_note_transaction(std::ptr::null(), 0, 200, 1_000);
+        elephc_probe_set_route(std::ptr::null(), 0);
+        elephc_probe_note_transaction(health.as_ptr(), health.len(), 200, 1_000);
+        assert_eq!(elephc_probe_request_begin(health.as_ptr(), health.len()), 0, "never in flight");
+        assert_eq!(handle("MSG App\\Message\\Ping", 1, false), 0, "never opened");
+        serve("GET /products", 200, 1_000);
+        assert_ne!(handle("MSG App\\Message\\SendEmail", 0, false), 0);
+    }
+    crate::apm_rules::set_test_rules(None);
+    let names = row_names();
+    assert!(names.contains(&"GET /products".to_string()) && names.contains(&"MSG App\\Message\\SendEmail".to_string()));
+    assert!(!names.iter().any(|name| name.contains("health") || name.contains("Ping")), "{names:?}");
+    let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+    assert!(snapshot.routes.iter().all(|route| route.io[apm::IO_DB_OPS] == 0), "the excluded queries went nowhere");
+}
+
+/// An excluded boundary called inside another excluded one ends without counting the
+/// outer one's remaining work; and an excluded request an isolated handler settles
+/// publishes neither its queries nor its error (review).
+#[test]
+fn nested_exclusions_and_settled_excluded_requests_count_nothing() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    crate::apm_rules::set_test_rules(Some("-TXN outer\n-TXN inner\n-GET /health\n"));
+    unsafe {
+        let outer = elephc_probe_txn_begin(c"TXN outer".as_ptr());
+        let inner = elephc_probe_txn_begin(c"TXN inner".as_ptr());
+        assert_eq!((outer, inner), (0, 0));
+        elephc_probe_txn_end(inner, 0);
+        assert!(crate::apm_rules::request_ignored(), "the outer exclusion still runs");
+        elephc_probe_apm_event(apm::IO_DB_OPS as u32, 1);
+        elephc_probe_txn_end(outer, 0);
+        assert!(!crate::apm_rules::request_ignored(), "and ends with its end");
+        let health = "GET /health";
+        elephc_probe_set_route(health.as_ptr(), health.len());
+        elephc_probe_apm_event(apm::IO_DB_OPS as u32, 1);
+        elephc_probe_settle_request(500);
+        elephc_probe_set_route(std::ptr::null(), 0);
+    }
+    crate::apm_rules::set_test_rules(None);
+    let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+    assert!(snapshot.routes.iter().all(|route| route.io[apm::IO_DB_OPS] == 0 && route.mem[0] == 0), "{:?}", snapshot.routes);
+    assert!(snapshot.errors.is_empty(), "{:?}", snapshot.errors);
+}
+
+/// An isolated handler (`--web-isolation=pool|request`) that dies never settles: on a known
+/// route its queries reach the route's row as they run, so its death loses none (review).
+#[test]
+fn an_isolated_handler_writes_a_known_routes_queries_as_they_run() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    TRACK_IN_FLIGHT.store(false, Ordering::Relaxed);
+    unsafe {
+        serve("GET /orders", 200, 1_000);
+        let route = "GET /orders";
+        elephc_probe_set_route(route.as_ptr(), route.len());
+        elephc_probe_apm_event(apm::IO_DB_OPS as u32, 3);
+    }
+    // The handler dies here: no settle, no end of request.
+    let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+    let row = snapshot.routes.iter().find(|route| route.name == "GET /orders").expect("the route");
+    PENDING_LEN.store(0, Ordering::Relaxed);
+    for counter in &PENDING_IO {
+        counter.store(0, Ordering::Relaxed);
+    }
+    assert_eq!(row.io[apm::IO_DB_OPS], 3, "on the row already");
+}
+
+/// An exception noted inside a nested boundary and caught by its caller does not become
+/// the outer transaction's error: the one the outer transaction fails with is counted
+/// (review).
+#[test]
+fn a_handled_nested_error_does_not_hide_the_real_failure() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    unsafe {
+        let outer = elephc_probe_txn_begin(c"TXN import".as_ptr());
+        assert_ne!(outer, 0);
+        let inner = elephc_probe_txn_begin(c"TXN fetch".as_ptr());
+        assert_eq!(inner, 0, "nested");
+        crate::apm_errors::elephc_probe_note_error(c"App\\Timeout".as_ptr(), c"/app/fetch.php".as_ptr(), 7);
+        elephc_probe_txn_end(inner, 0);
+        crate::apm_errors::elephc_probe_note_error(c"App\\Broken".as_ptr(), c"/app/import.php".as_ptr(), 30);
+        elephc_probe_txn_fail(outer);
+        elephc_probe_txn_end(outer, 0);
+    }
+    let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+    let classes: Vec<&str> = snapshot.errors.iter().map(|error| error.class.as_str()).collect();
+    assert_eq!(classes, vec!["App\\Broken"], "{:?}", snapshot.errors);
+}
+
+/// With a profile asked for, an excluded request still carries a route, for the
+/// sampler only: a counted boundary inside it is opened and counted with its work,
+/// and the request gets its sampler route back after it (review).
+#[test]
+fn a_counted_boundary_inside_an_excluded_request_is_counted_while_sampling() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    crate::apm_rules::set_test_rules(Some("-GET /health\n"));
+    let was_asked = ASKED.swap(true, Ordering::Relaxed);
+    let sampler_route;
+    unsafe {
+        let health = "GET /health";
+        elephc_probe_set_route(health.as_ptr(), health.len());
+        sampler_route = CURRENT_ROUTE.load(Ordering::Relaxed);
+        assert_ne!(sampler_route, 0, "named for the sampler");
+        assert_ne!(handle("TXN warm_cache", 2, false), 0, "the boundary is opened, not nested");
+        assert_eq!(CURRENT_ROUTE.load(Ordering::Relaxed), sampler_route, "the sampler's route is back");
+        elephc_probe_set_route(std::ptr::null(), 0);
+    }
+    ASKED.store(was_asked, Ordering::Relaxed);
+    crate::apm_rules::set_test_rules(None);
+    let snapshot = apm::decode(&apm_snapshot_text()).expect("a snapshot");
+    let row = snapshot.routes.iter().find(|route| route.name == "TXN warm_cache").expect("counted");
+    assert_eq!((row.count, row.io[apm::IO_DB_OPS]), (1, 2));
+}
+
+/// An include counts only what it names; an exclude carves exceptions out of it.
+#[test]
+fn an_include_counts_only_what_it_names() {
+    let _guard = tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _fixture = ApmFixture::new();
+    crate::apm_rules::set_test_rules(Some("+GET /api/*\n-GET /api/ping\n"));
+    unsafe {
+        serve("GET /api/orders", 200, 1_000);
+        serve("GET /api/ping", 200, 1_000);
+        serve("GET /admin", 200, 1_000);
+    }
+    crate::apm_rules::set_test_rules(None);
+    assert_eq!(row_names(), vec!["GET /api/orders".to_string()]);
 }

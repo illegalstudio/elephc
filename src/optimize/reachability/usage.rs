@@ -35,6 +35,9 @@ pub struct Usage {
     pub(crate) instantiated_classes: HashSet<String>,
     pub(crate) instantiated_subclass_roots: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
+    /// Libraries whose bridge runtime a builtin call reaches; a subset of
+    /// `required_libraries` that excludes identity-only requirements.
+    pub(crate) runtime_bridge_libraries: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
@@ -71,6 +74,7 @@ impl Usage {
         self.instantiated_subclass_roots
             .extend(other.instantiated_subclass_roots);
         self.required_libraries.extend(other.required_libraries);
+        self.runtime_bridge_libraries.extend(other.runtime_bridge_libraries);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
         self.fragment_classes.extend(other.fragment_classes);

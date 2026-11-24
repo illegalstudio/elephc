@@ -27,6 +27,7 @@ mod enum_unpack_effect_review;
 mod enum_result_owner_review;
 mod enum_reference_selection_review;
 mod enum_omission_review;
+mod enum_case_constant_expressions;
 #[path = "types/enum_keyed_review.rs"]
 mod enum_keyed_review;
 #[path = "types/type_annotations.rs"]
@@ -39,6 +40,8 @@ mod nullable_array_merge;
 #[path = "types/narrowing.rs"]
 mod narrowing;
 mod nullable_fallback_flow;
+#[path = "types/assignment_narrowing.rs"]
+mod assignment_narrowing;
 #[path = "types/narrowed_object_arguments.rs"]
 mod narrowed_object_arguments;
 mod guarded_interface_receivers;
@@ -47,6 +50,7 @@ mod guarded_interface_mutations;
 mod param_coercion;
 #[path = "types/implicit_nullable_params.rs"]
 mod implicit_nullable_params;
+mod mixed_object_boundaries;
 #[path = "types/declare_groups.rs"]
 mod declare_groups;
 #[path = "types/strict_types.rs"]

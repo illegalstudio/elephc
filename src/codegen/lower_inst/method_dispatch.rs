@@ -270,6 +270,19 @@ pub(super) fn lower_mixed_method_candidate_call(
     if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
         return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
     }
+    // Intrinsic-only builtins (the DateTime family) keep empty native vtable slots.
+    // A mixed-receiver call must raise PHP's undefined-method Error instead of
+    // branching through a zero slot when the receiver came from unserialize()/eval.
+    if let Some(slot) = candidate.target.dynamic_slot {
+        guard_dynamic_method_slot(
+            ctx,
+            receiver_reg,
+            slot,
+            candidate.target.source_abi,
+            &candidate.class_name,
+            method_name,
+        );
+    }
     // Fiber's state predicates are runtime intrinsics with placeholder bodies. Only the
     // matched Fiber branch calls the runtime predicate: other classes declaring a method of
     // the same name (`isRunning()` on a user interface) keep their own branch.
@@ -313,6 +326,54 @@ pub(super) fn lower_mixed_method_candidate_call(
     // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, candidate.target.by_ref_return)
+}
+
+/// Throws PHP's undefined-method Error when the selected vtable slot is null.
+///
+/// `DateTime`, `DateTimeImmutable` and their siblings expose synthetic methods that the
+/// backend lowers as intrinsics for statically known receivers; their native vtable slots
+/// stay empty. A mixed receiver reaching one of those slots must fail like an undefined
+/// method instead of branching to address zero.
+fn guard_dynamic_method_slot(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    slot: usize,
+    source_abi: bool,
+    class_name: &str,
+    method_name: &str,
+) {
+    let arm = ctx.emitter.target.arch == Arch::AArch64;
+    let class_id_reg = abi::temp_int_reg(ctx.emitter.target);
+    let table_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let present = ctx.next_label("mixed_method_slot_present");
+    let table = if source_abi {
+        "_class_source_vtable_ptrs"
+    } else {
+        "_class_vtable_ptrs"
+    };
+    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    abi::emit_symbol_address(ctx.emitter, table_reg, table);
+    if arm {
+        ctx.emitter.instruction(&format!(                                        // load the receiving class's source vtable
+            "ldr {table_reg}, [{table_reg}, {class_id_reg}, lsl #3]"
+        ));
+    } else {
+        ctx.emitter.instruction(&format!(                                        // load the receiving class's source vtable
+            "mov {table_reg}, QWORD PTR [{table_reg} + {class_id_reg} * 8]"
+        ));
+    }
+    abi::emit_load_from_address(ctx.emitter, table_reg, table_reg, slot * 8);
+    if arm {
+        ctx.emitter.instruction(&format!("cbnz {table_reg}, {present}"));      // a populated slot keeps the normal dispatch
+    } else {
+        ctx.emitter.instruction(&format!("test {table_reg}, {table_reg}"));     // a populated slot keeps the normal dispatch
+        ctx.emitter.instruction(&format!("jnz {present}"));                     // a populated slot keeps the normal dispatch
+    }
+    super::exceptions::emit_error(
+        ctx,
+        &format!("Call to undefined method {class_name}::{method_name}()"),
+    );
+    ctx.emitter.label(&present);
 }
 
 /// Returns true when `class_name` is `ancestor` or reaches it through `parent`.

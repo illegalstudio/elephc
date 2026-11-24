@@ -10,6 +10,7 @@
 //! - Statement environments must merge conservatively across branches, loops, throws, returns, and unreachable paths.
 
 mod assignments;
+mod chain_join;
 mod control_flow;
 mod foreach_bindings;
 mod loop_entry;
@@ -97,8 +98,11 @@ impl Checker {
                 let entry = self.definitely_bound_locals.clone();
                 let entry_storage = self.guarded_union_types.clone();
                 let result = self.in_conditional_scope(env, |checker, env| {
-                    for stmt in body { checker.check_stmt(stmt, env)?; }
-                    Ok(())
+                    // A file already included skips the body, so its proofs stay inside it.
+                    let entry_proofs = checker.begin_proof_scope();
+                    let checked = body.iter().try_for_each(|stmt| checker.check_stmt(stmt, env));
+                    let _ = checker.end_proof_scope(entry_proofs);
+                    checked
                 });
                 self.definitely_bound_locals.retain(|name| entry.contains(name));
                 self.retain_raw_entry_proofs(&entry_storage);

@@ -9,6 +9,8 @@
 //! - `preg_match()` and `preg_match_all()` captures support raw locals and local
 //!   reference cells. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
 //!   `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
+//! - `preg_match()` with `$flags` / `$offset`, and `preg_match_all()` with `$offset`,
+//!   lower through `regex_match_window`.
 //! - `preg_match()` returns PHP `int|false`. The runtime uses `-1` for an invalid
 //!   pattern or the removed `/e` modifier; that path leaves `$matches` untouched.
 //! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
@@ -29,10 +31,13 @@ use super::super::callables;
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 = 1 | 2 | 256 | 512;
 
-/// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match(pattern, subject, &$matches?, flags?, offset?)` through the regex helpers.
 pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
+    super::ensure_arg_count_between(inst, "preg_match", 2, 5)?;
     super::regex_errors::emit_clear_error(ctx);
+    if inst.operands.len() > 3 {
+        return super::regex_match_window::lower_preg_match_extended(ctx, inst);
+    }
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let matches_slot = inst
@@ -56,12 +61,12 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_match_all(pattern, subject, &$matches?, flags?)` through the regex helpers.
+/// Lowers `preg_match_all(pattern, subject, &$matches?, flags?, offset?)` through the regex helpers.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match_all", 2, 4)?;
+    super::ensure_arg_count_between(inst, "preg_match_all", 2, 5)?;
     super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
@@ -73,18 +78,24 @@ pub(crate) fn lower_preg_match_all(
         .transpose()?
         .flatten();
     let flags = inst.operands.get(3).copied();
+    let offset = inst.operands.get(4).copied();
+    let casts = super::regex_match_window::precast_int_args(ctx, flags, offset)?;
     load_pattern_and_subject(ctx, pattern, subject)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
-        Arch::X86_64 => load_flags_arg(ctx, flags, "r8")?,
-    }
+    super::regex_match_window::load_flags(ctx, flags, &casts)?;
     emit_preg_match_all_flag_guard(ctx);
     if let Some(slot) = matches_slot {
+        super::regex_match_window::load_offset_arg(ctx, offset, &casts)?;
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
         super::regex_errors::emit_fold_exec_error_into_count(ctx);
         super::regex_errors::emit_push_last_error(ctx);
         store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Mixed)))?;
         super::regex_errors::emit_pop_last_error(ctx);
+    } else if offset.is_some() {
+        // The count-only helper has no start offset: count through the capture helper.
+        super::regex_match_window::load_offset_arg(ctx, offset, &casts)?;
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
+        super::regex_errors::emit_fold_exec_error_into_count(ctx);
+        super::regex_match_window::discard_matches_array(ctx);
     } else {
         lower_preg_match_all_count(ctx);
         super::regex_errors::emit_fold_exec_error_into_count(ctx);
@@ -555,7 +566,7 @@ pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Loads pattern and subject string operands into the regex runtime ABI registers.
-fn load_pattern_and_subject(
+pub(super) fn load_pattern_and_subject(
     ctx: &mut FunctionContext<'_>,
     pattern: ValueId,
     subject: ValueId,
@@ -577,7 +588,7 @@ fn load_pattern_and_subject(
 /// Named-argument lowering may materialize the default empty array when `$matches`
 /// was omitted. Only that empty allocation is count-only; unsupported global,
 /// static or other non-local storage must never silently discard capture output.
-fn optional_matches_local_slot(
+pub(super) fn optional_matches_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<Option<LocalSlotId>> {
@@ -645,10 +656,12 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 /// The runtime returns `-1` when compilation or flag validation fails, and when
 /// `preg_match()` sees the removed `/e` modifier; that records `PREG_INTERNAL_ERROR`.
 /// The call's own match error (backtrack limit, malformed UTF-8), folded into the count as
-/// `MATCH_ERROR_COUNT` before `$matches` was written, also yields `false`.
+/// `MATCH_ERROR_COUNT` before `$matches` was written, also yields `false`; so does the
+/// capture helper's out-of-range `$offset`, which returns that same `-2` after recording
+/// `PREG_INTERNAL_ERROR` itself.
 /// The EIR result is a union, so its representation is a Mixed cell and the raw
 /// count must be boxed before storage.
-pub(crate) fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(super) fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let invalid_label = ctx.next_label("preg_count_invalid");
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");
@@ -738,7 +751,7 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// PHP leaves a caller-supplied `$matches` variable untouched when pattern compilation fails
 /// or `preg_match()` sees the removed `/e` modifier. The runtime reports that path with a `-1`
 /// count and a fresh empty array, so the lowering drops the array instead of writing it.
-fn store_matches_array_on_success(
+pub(super) fn store_matches_array_on_success(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     raw_capture_type: &PhpType,
@@ -876,7 +889,7 @@ fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &s
 }
 
 /// Loads an optional preg flags integer, using PHP's default `0`.
-fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
+pub(super) fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
     let Some(flags) = flags else {
         abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
@@ -896,7 +909,7 @@ fn require_string(ty: PhpType, context: &str) -> Result<()> {
 }
 
 /// Verifies that a regex integer option is statically integer-like.
-fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
+pub(super) fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
     if matches!(ty, PhpType::Int | PhpType::Bool) {
         return Ok(());
     }

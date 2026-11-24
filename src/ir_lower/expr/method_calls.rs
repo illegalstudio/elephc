@@ -19,20 +19,20 @@ pub(super) fn recorded_method_access_message(
     if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall) {
         return None;
     }
-    ctx.throw_access_sites.get(&expr.span).and_then(|info| {
-        if let ThrowAccessKind::PrivateMethod {
+    ctx.throw_access_site(expr.span).and_then(|info| match &info.kind {
+        ThrowAccessKind::PrivateMethod {
             visibility,
             class_name,
             method,
-        } = &info.kind
-        {
-            Some(format!(
-                "Call to {} method {}::{}() from global scope",
-                visibility, class_name, method
-            ))
-        } else {
-            None
-        }
+        } => Some(format!(
+            "Call to {} method {}::{}() from global scope",
+            visibility, class_name, method
+        )),
+        ThrowAccessKind::UndefinedMethod { class_name, method } => Some(format!(
+            "Call to undefined method {}::{}()",
+            class_name, method
+        )),
+        _ => None,
     })
 }
 
@@ -227,7 +227,12 @@ pub(super) fn lower_method_call(
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     let call_description = receiver_class
         .map(|class_name| format!("{class_name}::{dispatch_method}"))
         .unwrap_or_else(|| dispatch_method.to_string());
@@ -290,6 +295,11 @@ pub(super) fn lower_method_call(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,

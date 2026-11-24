@@ -172,6 +172,14 @@ pub(in crate::codegen) fn referenced_static_method_class_names(module: &Module) 
             let Some((class_name, _)) = label.rsplit_once("::") else {
                 continue;
             };
+            // A same-signature late private dispatch also calls each arm's class.
+            if let Some((arms, _)) =
+                class_name.strip_prefix("@late@").and_then(|rest| rest.rsplit_once('@'))
+            {
+                names.extend(arms.split(';').filter_map(|arm| {
+                    arm.split_once('=').map(|(arm_class, _)| arm_class.to_string())
+                }));
+            }
             if let Some(class_name) =
                 resolve_static_method_metadata_class(module, function, class_name)
             {
@@ -189,6 +197,13 @@ pub(in crate::codegen) fn resolve_static_method_metadata_class(
     class_name: &str,
 ) -> Option<String> {
     let class_name = class_name.trim_start_matches('\\');
+    // A forwarded late-static call (or one forwarded to `$this`) names the class whose method
+    // it runs; a same-signature late private dispatch names `static` after its arms.
+    let class_name = class_name
+        .strip_prefix("@forward@")
+        .or_else(|| class_name.strip_prefix("@this@"))
+        .or_else(|| class_name.strip_prefix("@late@").and_then(|rest| rest.rsplit_once('@')).map(|(_, name)| name))
+        .unwrap_or(class_name);
     match class_name {
         "self" | "static" => current_function_class(function).map(str::to_string),
         "parent" => {

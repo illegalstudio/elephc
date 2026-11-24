@@ -70,6 +70,7 @@ fn test_cse_collapses_constant_operand_subexpression() {
 
     let count_iadds = |extra: &[&str]| -> usize {
         let mut cmd = Command::new(&elephc);
+        cmd.arg("build");
         cmd.arg("--emit-ir");
         cmd.args(extra);
         cmd.arg(&php_path);

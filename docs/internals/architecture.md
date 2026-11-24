@@ -12,14 +12,14 @@ Source (.php or .lfc)
     │
     ▼
 ┌─────────┐
-│  Lexer   │  src/lexer/
+│  Lexer   │  crates/elephc-chopper/src/syntax/lexer/
 │          │  scan.rs, literals.rs, cursor.rs, token.rs
 │          │  Source text -> Vec<SpannedToken> (Token + TokenMetadata)
 └────┬─────┘
      │
      ▼
 ┌─────────┐
-│  Parser  │  src/parser/
+│  Parser  │  crates/elephc-chopper/src/syntax/parser/
 │          │  expr/, stmt/, control.rs, ast/
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
@@ -65,6 +65,8 @@ Source (.php or .lfc)
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
+│              │  The per-function OPcache/INI and version preludes are probed
+│              │  by name (ini_get, ini_set, opcache_*, ini_restore, ...).
 └─────┬────────┘
       │
       ▼
@@ -304,6 +306,65 @@ object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
 deliberately keeps the object at that path for debuggers to follow), and
 `dsymutil` names its bundle after the binary it is given.
 
+The compiler re-exports its lexer, parser, AST, source profiles, spans, and names
+from `elephc_chopper::syntax`. The `elephc_chopper::scanner` module runs the
+same byte scanner for the compiler, the PHP tokenizer APIs, and Magician. The
+scanner keeps the token boundary rules for each source profile. The compiler
+projects recognized lexemes to syntax tokens, attaches source spans, and decodes
+literals with its existing diagnostics. The PHP tokenizer keeps trivia and the
+original byte ranges. The compiler's double-quote and heredoc decoders consume
+their literal bodies and return the offset where the shared scanner resumes.
+
+For dynamic eval fragments, the Chopper scanner starts in PHP code mode and
+preserves offsets in the original string. It starts in HTML mode for included
+files and scans across opening and closing tags in one pass. Magician decodes
+runtime literal values, lowers the Chopper AST to EvalIR, and derives
+caller-scope metadata from the token stream. The tagless parser entry point retains implicit array keys and
+reference elements, the strict-types directive, and declaration source ranges.
+Magician resolves namespace aliases during lowering and attaches anonymous class
+declarations to their construction expressions. The AST retains unary plus and
+the operands of computed member access and writes so Magician controls numeric
+coercion, call argument binding, nullsafe evaluation, and write semantics.
+Declaration lowering retains attributes and property hook metadata for reflection.
+The runtime parser entry point also accepts assembled script tokens and concrete
+generic declarations with their original namespace and strict-types mode.
+For generic declarations, Chopper records the header and the token positions
+bound to each type parameter. Magician uses those positions to build the
+specialization template alongside the EvalIR prototype. The file adapter
+validates UTF-8 in code and retains the original bytes of inline HTML.
+
+The tokenizer bridge and Magician share the Rust API in
+`elephc_chopper::syntax::php_tokenizer`. It uses the scanner for every call. With
+`TOKEN_PARSE`, supported native scanner tokens are projected directly into
+source-spanned compiler tokens by the token view, which then enters a scoped mode
+on the shared parser. Normalization-sensitive constructs still use the text
+parser view and its second scanner as the automatic fallback; the token view is
+never a second grammar. The scoped mode discards each parsed statement and
+collects PHP diagnostics and semi-reserved-word feedback. `ELEPHC_TOKEN_VIEW`
+accepts `text`, `off`, or `0` to force the legacy text view while rolling out or
+comparing the two paths. `scripts/bench/token_view.py` alternates both views on
+generated fixtures and reports median nanoseconds per validation.
+
+The full parser-enabled engine can be measured with
+`scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use
+`panic = "immediate-abort"` through `-Z build-std=std,panic_abort`, which removes
+the std panic/backtrace formatter from the executable. `size` uses opt-level z
+and `fast` uses opt-level 3.
+
+The macOS ARM64 results below are a historical baseline from the `66a5ad66d8`
+revision of [PR #2180](https://github.com/illegalstudio/elephc/pull/2180), before
+the move to Chopper. Its fast profile used separate optimization levels for
+the scanner and parser. Sizes are in bytes.
+
+| Profile | #2180 snapshot | Mago 1.51 |
+| --- | ---: | ---: |
+| `size` | 501,184 | 367,504 with matching immediate-abort profile, 634,352 with `size-z` |
+| `fast` | 533,856 | 498,736 with matching immediate-abort profile, 798,784 with `release-lto` |
+| Plain Cargo release, 16 codegen units, unwind, no LTO or stripping | 1,741,168 | |
+| Fat LTO, one codegen unit, stripped, abort | 1,014,000 | |
+| Fat LTO, one codegen unit, stripped, unwind | 1,113,344 | |
+| Fat LTO, one codegen unit, stripped, immediate-abort | 763,808 | |
+
 ## Target Model
 
 The compiler now distinguishes the operating-system side of a target from the instruction set:
@@ -322,8 +383,9 @@ iOS device and Simulator, and Linux.
 
 ```
 src/
-├── lib.rs                     Public module exports
-├── main.rs                    CLI binary entry point
+├── lib.rs                     Module tree: the compiler API, plus the crate-private CLI modules
+├── main.rs                    CLI binary entry point: calls `entry::run`, declares no modules
+├── entry.rs                   Top-level command dispatch (compile, repl, native, monitor, test)
 ├── cli.rs                     Command-line option parsing
 ├── repl/                      Interactive `elephc repl` session: parsing, cached native host, and history
 ├── pipeline.rs                Frontend/backend compilation pipeline
@@ -357,6 +419,8 @@ src/
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
+├── goto_lowering.rs           Per-file `goto`/label validation and rewrite into structured loops and `continue N`
+├── goto_lowering/             Jump analysis, dispatch-loop planning, rewriting, and unit tests
 ├── strict_php.rs              `--strict-php` mode state and audit entry point
 ├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
@@ -400,6 +464,12 @@ src/
 ├── var_export_prelude/        var_export prelude usage detection
 ├── xml_prelude.rs             Usage-gated XMLParser, XMLWriter, and SimpleXML declaration injection
 ├── xml_prelude/               XML usage detection and parser/writer prelude declarations
+├── tidy_prelude.rs            Usage-gated `tidy`/`tidyNode` and `tidy_*` declaration injection over the elephc_tidy bridge
+├── tidy_prelude/              Tidy usage detection, built class/function declarations, and fragments
+├── uri_prelude/               `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, and related declarations over the elephc_uri bridge
+├── locale_prelude.rs          libc-backed `setlocale()` and `nl_langinfo()` declarations when referenced
+├── pcre_prelude.rs            `preg_grep()` declaration over `preg_split()`/`preg_match()` when referenced
+├── apm_prelude.rs             Transaction boundaries for `--apm-transaction` and Symfony Messenger in transaction-monitoring builds
 ├── simplexml_prelude.rs       Cached synthetic AST declarations for the SimpleXML surface
 ├── simplexml_prelude/         Built SimpleXML classes, functions, and native bridge declarations
 ├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
@@ -554,8 +624,8 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (116 top-level Rust files + 69 nested Rust helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (236 top-level Rust files + 26 nested target/debug/test helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (117 top-level Rust files + 69 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (235 top-level Rust files + 26 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 top-level Rust files + 1 nested object-conversion helper)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (132 top-level Rust files + 2 nested response-metadata helpers)
@@ -566,7 +636,7 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (24 top-level Rust files + 3 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (52 top-level Rust files + 65 nested Rust files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (53 top-level Rust files + 65 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (5 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (22 files)
@@ -582,6 +652,7 @@ src/
 crates/
 ├── elephc-builtin-contract/   Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions and immutable `BcMath\Number` objects
+├── elephc-chopper/            PHP scanner, parser, AST, and tokenizer validation
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-fileinfo/           Binary-safe fileinfo bridge over the managed libmagic package
@@ -603,9 +674,9 @@ crates/
 ├── elephc-reference/          Dependency-neutral native property-reference metadata and validation
 ├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
-├── elephc-tokenizer-engine/   Shared byte-preserving PHP tokenizer and parse validation
-├── elephc-tokenizer/          Standalone tokenizer C bridge over the shared engine
+├── elephc-tokenizer/          Standalone C bridge for the PHP tokenizer APIs
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
+├── elephc-uri/                PHP 8.5 `ext/uri` bridge for RFC 3986 and WHATWG URL values
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
 ├── elephc-zend/               PHP extension ABI implementation for hosted PECL/PIE extensions
 └── elephc-xml/                XML, XMLWriter, and SimpleXML bridge over the catalog's static libxml2
@@ -667,7 +738,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
-`src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
+`crates/elephc-chopper/src/syntax/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
 
 - canonical declaration names
 - namespace qualification rules

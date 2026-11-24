@@ -189,7 +189,7 @@ fn web_apm_is_refused_without_monitoring() {
 /// slots and forwards each event — with nobody profiling. Under
 /// `--web-isolation=request` the PHP runs in a handler child and its web worker
 /// records the request: a new route's first queries, held until its answer,
-/// still land on its row (review G1).
+/// still land on its row.
 #[test]
 fn web_apm_counts_database_queries_per_route() {
     for isolation in [None, Some("--web-isolation=request")] {
@@ -281,7 +281,7 @@ fail_hard();
 /// A request whose PHP takes its worker down — an uncaught exception, `exit`
 /// — never reaches the request's end, and used to vanish from the counts:
 /// the error rate read healthy while requests died. The master counts it as a
-/// server error when it reaps the worker (review R1).
+/// server error when it reaps the worker.
 #[test]
 fn web_apm_counts_requests_that_kill_their_worker() {
     let fixture = make_test_dir("web_apm_crash");
@@ -434,6 +434,37 @@ echo "ok";
     drop(server);
 }
 
+/// The project's `elephc.toml` turns transaction monitoring on for the build, and its
+/// `[apm] exclude` keeps a health check out of the table: the route is served, and never
+/// counted, while the others are.
+#[test]
+fn web_apm_project_file_excludes_a_route() {
+    let fixture = make_test_dir("web_apm_project_exclude");
+    std::fs::write(
+        fixture.join("elephc.toml"),
+        "[apm]\nenabled = true\nexclude = [\"GET /health\"]\n",
+    )
+    .expect("write elephc.toml");
+    let source = r#"<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+echo $path === '/health' ? "up" : "page";
+"#;
+    // No --with-apm on the command line: the project file asks for it.
+    let binary = compile_web_with_flags(&fixture, source, "app", &[]);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    for _ in 0..3 {
+        assert!(http_get(&http, "/health").contains("up"), "the excluded route is still served");
+        assert!(http_get(&http, "/page").contains("page"));
+    }
+    let output = read_transactions(&binary, &probe);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert_eq!(row(&stdout, "GET /page")[0], "3", "{stdout}");
+    assert!(!stdout.contains("GET /health"), "the excluded route has no row: {stdout}");
+    drop(server);
+}
+
 /// `--reset-routes` empties a running service's route table: the counters
 /// start a new run, and the routes come back from the next requests only.
 #[test]
@@ -464,7 +495,7 @@ fn web_apm_reset_routes_empties_the_table() {
 
 /// The collector end to end: a slow request whose statements span several
 /// polls reaches the store with every statement, and browsing the store reads
-/// them back (review R2, R18). One-shot reads never exercised the poll loop.
+/// them back. One-shot reads never exercised the poll loop.
 #[test]
 fn web_apm_collector_stores_a_slow_routes_work_across_polls() {
     let fixture = make_test_dir("web_apm_collect");
@@ -490,11 +521,10 @@ echo "done";
         .spawn_group()
         .expect("failed to start the collector");
     std::thread::sleep(Duration::from_millis(1500));
-    // A first, fast request puts the route in the table, so the slow one's
-    // statements are counted on it as they run — across polls — rather than
-    // held until it answers, as a route's first request is. A poll falls
-    // between the two, so the slow one's first statements land in a window
-    // where the route completed nothing.
+    // A first, fast request puts the route in the table; the slow one then runs
+    // across several polls. Its statements stay in its worker until it answers
+    // and are published with it, so every one of them must reach the store
+    // however the polls fall.
     assert!(http_get(&http, "/slow?fast=1").starts_with("HTTP/1.1 200"));
     std::thread::sleep(Duration::from_millis(1500));
     assert!(http_get(&http, "/slow").starts_with("HTTP/1.1 200"));
@@ -514,13 +544,295 @@ echo "done";
     drop(server);
 }
 
+/// A request that fails with an uncaught exception has its error counted, grouped by class
+/// and the place it was thrown from: once per failed request, and never for a request
+/// that did not fail.
+#[test]
+fn web_apm_groups_the_errors_of_failed_requests() {
+    errors_are_grouped(&[]);
+}
+
+/// The same under request isolation: the handler child that ran the request counts its
+/// error, though its web worker records the request.
+#[test]
+fn web_apm_groups_the_errors_of_isolated_requests() {
+    errors_are_grouped(&["--web-isolation=request"]);
+}
+
+/// Serves failing and succeeding requests built with `flags` and checks their errors.
+fn errors_are_grouped(flags: &[&str]) {
+    let fixture = make_test_dir("web_apm_errors");
+    let source = r#"<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($path === '/pay') {
+    throw new RuntimeException('card declined');
+}
+if ($path === '/caught') {
+    try { throw new LogicException('handled'); } catch (LogicException $e) {}
+}
+echo "ok";
+"#;
+    let mut all = vec!["--with-monitoring"];
+    all.extend_from_slice(flags);
+    let binary = compile_web_with_flags(&fixture, source, "app", &all);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    for _ in 0..3 {
+        assert!(http_get(&http, "/pay").starts_with("HTTP/1.1 500"));
+        assert!(http_get(&http, "/caught").starts_with("HTTP/1.1 200"));
+    }
+    let output = read_transactions(&binary, &probe);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("errors of failed transactions — 3 in 1 group"), "{stdout}");
+    let line = stdout.lines().find(|line| line.contains("RuntimeException")).unwrap_or_else(|| panic!("{stdout}"));
+    assert!(line.trim_start().starts_with("3 ") && line.contains("app.php:4") && line.ends_with("(GET /pay)"), "{line}");
+    assert!(!stdout.contains("LogicException"), "a caught exception fails nothing: {stdout}");
+    drop(server);
+}
+
+/// A collector started with `--otlp` posts what it measured to an OTLP/HTTP endpoint as
+/// metrics: here a listener of the test's own, which keeps every request it is sent.
+#[test]
+fn web_apm_collector_exports_otlp_metrics() {
+    let fixture = make_test_dir("web_apm_otlp");
+    let binary = compile_web_with_flags(&fixture, APP, "app", &["--with-monitoring"]);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    let receiver = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the OTLP receiver");
+    let endpoint = format!("http://{}", receiver.local_addr().unwrap());
+    let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+    let kept = received.clone();
+    std::thread::spawn(move || {
+        for stream in receiver.incoming().flatten() {
+            let mut stream = stream;
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 65536];
+            // Read the head, then the body its Content-Length announces.
+            loop {
+                match std::io::Read::read(&mut stream, &mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&chunk[..n]),
+                }
+                let text = String::from_utf8_lossy(&request).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let _ = std::io::Write::write_all(&mut stream, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            kept.lock().unwrap().push(request);
+        }
+    });
+    let key = format!("{}.key", binary.display());
+    let collector = Command::new(elephc_bin())
+        .args(["monitor", &probe, "--apm", "--key", &key, "--resolution", "1", "--otlp", &endpoint])
+        .spawn_group()
+        .expect("failed to start the collector");
+    std::thread::sleep(Duration::from_millis(1200));
+    send_traffic(&http);
+    std::thread::sleep(Duration::from_millis(2500));
+    // SIGTERM: the collector posts what it holds before it exits.
+    drop(collector);
+    std::thread::sleep(Duration::from_millis(500));
+    let requests = received.lock().unwrap().clone();
+    let all: Vec<String> = requests.iter().map(|r| String::from_utf8_lossy(r).to_string()).collect();
+    assert!(all.iter().any(|r| r.starts_with("POST /v1/metrics ")), "{} posts: {all:?}", all.len());
+    let joined = all.join("\n");
+    for expected in ["application/x-protobuf", "elephc.transactions", "elephc.transaction.duration", "GET /users/{id}", "service.name"] {
+        assert!(joined.contains(expected), "{expected} was exported: {joined:?}");
+    }
+    drop(server);
+}
+
+/// A `--with-apm` service continues the trace a request's `traceparent` names, with a
+/// span of its own, and publishes the context the bridges send on (curl reads it
+/// through the same contract); a request without one starts a trace. The request's error
+/// keeps the trace id, so the collector's store points at the trace.
+#[test]
+fn web_apm_propagates_the_trace_context_and_keeps_it_with_errors() {
+    let fixture = make_test_dir("web_apm_trace");
+    let source = r#"<?php
+$context = (string) getenv('ELEPHC_TRACEPARENT');
+if (parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) === '/pay') {
+    throw new RuntimeException('declined under ' . $context);
+}
+echo $context;
+"#;
+    let binary = compile_web_with_flags(&fixture, source, "app", &["--with-apm"]);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    let key = format!("{}.key", binary.display());
+    let store = fixture.join("store");
+    let collector = Command::new(elephc_bin())
+        .args(["monitor", &probe, "--apm", "--key", &key, "--resolution", "1", "--store"])
+        .arg(&store)
+        .spawn_group()
+        .expect("failed to start the collector");
+    std::thread::sleep(Duration::from_millis(1200));
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let inbound = format!("00-{trace}-00f067aa0ba902b7-01");
+    let continued = raw_response_body(&http_request(&http, "GET", "/", &[("traceparent", &inbound)], "")).to_string();
+    assert!(continued.starts_with(&format!("00-{trace}-")) && continued.ends_with("-01"), "{continued}");
+    assert!(!continued.contains("00f067aa0ba902b7"), "a span of the service's own: {continued}");
+    let started = raw_response_body(&http_request(&http, "GET", "/", &[], "")).to_string();
+    assert!(started.len() == 55 && !started.contains(trace), "a new trace: {started}");
+    let answer = http_request(&http, "GET", "/pay", &[("traceparent", &inbound)], "");
+    assert!(answer.starts_with("HTTP/1.1 500"), "{answer}");
+    std::thread::sleep(Duration::from_millis(2000));
+    drop(collector);
+    let stored: String = std::fs::read_dir(&store)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-"))
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .collect();
+    assert!(stored.contains(&format!("\"trace\":\"{trace}\"")), "the error keeps the trace id: {stored}");
+    drop(server);
+}
+
+/// Each request's peak memory is counted on its route: a route that builds a few
+/// megabytes reads in megabytes, a route that builds nothing reads in kilobytes.
+#[test]
+fn web_apm_counts_the_memory_of_each_request() {
+    memory_is_counted(&[]);
+}
+
+/// The same under request isolation: the handler child that ran the request measures it.
+#[test]
+fn web_apm_counts_the_memory_of_isolated_requests() {
+    memory_is_counted(&["--web-isolation=request"]);
+}
+
+/// Serves a heavy and a light route built with `flags` and checks their memory column.
+fn memory_is_counted(flags: &[&str]) {
+    let fixture = make_test_dir("web_apm_memory");
+    let source = r#"<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($path === '/heavy') {
+    $rows = [];
+    for ($i = 0; $i < 20000; $i++) { $rows[] = str_repeat('x', 200) . $i; }
+    echo count($rows);
+} else {
+    echo "light";
+}
+"#;
+    let mut all = vec!["--with-monitoring"];
+    all.extend_from_slice(flags);
+    let binary = compile_web_with_flags(&fixture, source, "app", &all);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    for _ in 0..3 {
+        assert!(http_get(&http, "/heavy").contains("20000"));
+        assert!(http_get(&http, "/light").contains("light"));
+    }
+    let output = read_transactions(&binary, &probe);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("mem/req"), "{stdout}");
+    let heavy = row(&stdout, "GET /heavy").join(" ");
+    let light = row(&stdout, "GET /light").join(" ");
+    assert!(heavy.contains(" MB "), "a few megabytes per heavy request: {stdout}");
+    assert!(light.contains(" KB "), "kilobytes per light request: {stdout}");
+    drop(server);
+}
+
+/// Symfony answers a request's exception itself, through `HttpKernel::handleThrowable`
+/// (reduced here to what the hook relies on): the error of a request answered 500 is
+/// counted, and a "not found" exception answered 404 is not.
+#[test]
+fn web_apm_counts_the_errors_symfony_answers_with_a_5xx() {
+    let fixture = make_test_dir("web_apm_symfony_errors");
+    let source = r#"<?php
+namespace Symfony\Component\HttpKernel {
+    class NotFound extends \RuntimeException {}
+    class HttpKernel {
+        public function handle(string $path): string {
+            try {
+                if ($path === '/missing') { throw new NotFound('no route'); }
+                if ($path === '/fail') { throw new \DomainException('stock out'); }
+                return "ok";
+            } catch (\Throwable $e) {
+                return $this->handleThrowable($e);
+            }
+        }
+        private function handleThrowable(\Throwable $e): string {
+            http_response_code($e instanceof NotFound ? 404 : 500);
+            return "error page";
+        }
+    }
+}
+namespace {
+    echo (new Symfony\Component\HttpKernel\HttpKernel())->handle((string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
+}
+"#;
+    let binary = compile_web_with_flags(&fixture, source, "app", &["--with-monitoring"]);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    for _ in 0..2 {
+        assert!(http_get(&http, "/fail").starts_with("HTTP/1.1 500"));
+    }
+    assert!(http_get(&http, "/missing").starts_with("HTTP/1.1 404"));
+    let output = read_transactions(&binary, &probe);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("errors of failed transactions — 2 in 1 group"), "{stdout}");
+    let line = stdout.lines().find(|line| line.contains("DomainException")).unwrap_or_else(|| panic!("{stdout}"));
+    assert!(line.contains("app.php:8") && line.ends_with("(GET /fail)"), "{line}");
+    assert!(!stdout.contains("NotFound "), "a 404 is no error of the service: {stdout}");
+    drop(server);
+}
+
+/// A probe build carries its identity in its snapshots, and a collector with a store notes
+/// the first time the service serves it as a deploy — once: a collector started again on
+/// the same build marks nothing new.
+#[test]
+fn web_apm_collector_marks_a_new_build_once() {
+    let fixture = make_test_dir("web_apm_deploy");
+    let binary = compile_web_with_flags(&fixture, APP, "app", &["--with-monitoring"]);
+    let http = format!("127.0.0.1:{}", free_port());
+    let probe = format!("127.0.0.1:{}", free_port());
+    let server = spawn_apm_server(&binary, &http, &probe, true);
+    let key = format!("{}.key", binary.display());
+    let store = fixture.join("store");
+    let deploys = || std::fs::read_to_string(store.join("deploys.jsonl")).unwrap_or_default();
+    for _ in 0..2 {
+        let collector = Command::new(elephc_bin())
+            .args(["monitor", &probe, "--apm", "--key", &key, "--resolution", "1", "--store"])
+            .arg(&store)
+            .spawn_group()
+            .expect("failed to start the collector");
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(http_get(&http, "/users/7").starts_with("HTTP/1.1 200"));
+        std::thread::sleep(Duration::from_millis(1500));
+        drop(collector);
+    }
+    let text = deploys();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "one deploy, however many collectors saw the build: {text}");
+    let deploy: serde_json::Value = serde_json::from_str(lines[0]).expect("a deploy line");
+    assert_eq!(deploy["service"], probe.as_str(), "{text}");
+    let build = deploy["build"].as_str().unwrap_or_default();
+    let seconds: u64 = build.split(' ').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    assert!(seconds > 1_700_000_000, "the build's time leads its identity: {text}");
+    drop(server);
+}
+
 /// A consumer outside HTTP: Messenger's worker, as the framework writes it
 /// (reduced to what the hook relies on), and a job function named with
 /// `--apm-transaction`. Nothing in it knows it is monitored.
 const CONSUMER: &str = r#"<?php
 namespace Symfony\Component\Messenger\Event {
     class WorkerMessageFailedEvent {
-        public function __construct(public string $reason) {}
+        public function __construct(public object $envelope, public string $receiverName, public \Throwable $error) {}
     }
 }
 namespace Symfony\Component\Messenger {
@@ -538,7 +850,7 @@ namespace Symfony\Component\Messenger {
             try {
                 $envelope->getMessage()->handle();
             } catch (\Throwable $e) {
-                new Event\WorkerMessageFailedEvent($e->getMessage());
+                new Event\WorkerMessageFailedEvent($envelope, $transportName, $e);
             }
         }
     }
@@ -588,7 +900,7 @@ fn apm_messages_and_boundaries_reach_a_listening_collector() {
     build
         .env("XDG_CACHE_HOME", fixture.join("cache-root"))
         .current_dir(&fixture)
-        .args(["--with-apm", "--apm-collector", &address, "--apm-transaction", "import_batch"])
+        .args(["build", "--with-apm", "--apm-collector", &address, "--apm-transaction", "import_batch"])
         .arg(&source);
     let built = output_with_timeout(build, Duration::from_secs(600));
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
@@ -608,7 +920,24 @@ fn apm_messages_and_boundaries_reach_a_listening_collector() {
     let run = output_with_timeout(Command::new(&binary), Duration::from_secs(60));
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     assert_eq!(String::from_utf8_lossy(&run.stdout), "done\n");
-    std::thread::sleep(Duration::from_millis(1500));
+    // The program's last counters arrive as it exits, and the collector stores them a
+    // resolution later: wait for them rather than for a fixed time, which a loaded machine
+    // outran (the collector was stopped before the push was in).
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let stored = || {
+        std::fs::read_dir(&store)
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry.file_name().to_string_lossy().starts_with("apm-")
+                        // The run is counted at exit: its row comes with the last push.
+                        && std::fs::read_to_string(entry.path()).is_ok_and(|text| text.contains("CLI consumer"))
+                })
+            })
+            .unwrap_or(false)
+    };
+    while !stored() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
     // SIGTERM: the collector writes what it holds before it exits.
     drop(collector);
 
@@ -631,4 +960,16 @@ fn apm_messages_and_boundaries_reach_a_listening_collector() {
     let batches = row(&table, "TXN import_batch");
     assert_eq!(batches[0], "3", "{table}");
     assert_eq!(batches[batches.len() - 4], "33.3%", "one batch in three threw: {table}");
+    // Each failure's error, from the store: the handler's exception the worker reported,
+    // and the one that left the boundary.
+    assert!(table.contains("errors of failed transactions — 2 in 2 groups"), "{table}");
+    let error = |transaction: &str| {
+        table
+            .lines()
+            .find(|line| line.ends_with(&format!("({transaction})")))
+            .unwrap_or_else(|| panic!("no error of {transaction}: {table}"))
+            .to_string()
+    };
+    assert!(error("MSG App\\Message\\Charge").contains("RuntimeException  at ") && error("MSG App\\Message\\Charge").contains("consumer.php:35"), "{table}");
+    assert!(error("TXN import_batch").contains("consumer.php:41"), "{table}");
 }

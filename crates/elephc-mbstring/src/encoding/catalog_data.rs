@@ -8,8 +8,10 @@
 //! - Regenerate with `python3 scripts/mbstring/generate_encodings.py`.
 //! - Canonical spelling, order, and aliases come from PHP's reflection fixture.
 //! - One immutable static prevents codec-table copies at each catalog use site.
+//! - Sorted codec indexes use `index_table!`, which embeds the compact copy built by build.rs.
+//! - Large dense word tables use `dense_table!`, which reads pages shared through build.rs.
 
-use super::{catalog::{Codec, EncodingInfo, Slicing}, doublebyte::DoubleByte, euctw::EucTw, gb18030::Gb18030, hz::Hz, iso2022kr::Iso2022Kr, jis::{Jis, Variant}, jis2004::Jis2004, mobile_utf8::MobileUtf8, mobile_sjis::MobileSjis, singlebyte::SingleByte, transfer::Transfer, utf7::Utf7, UnicodeEncoding};
+use super::{catalog::{Codec, EncodingInfo, Slicing}, doublebyte::DoubleByte, euctw::EucTw, gb18030::Gb18030, hz::Hz, iso2022kr::Iso2022Kr, jis::{Jis, Variant}, jis2004::Jis2004, mapping::{dense_table, index_table}, mobile_utf8::MobileUtf8, mobile_sjis::MobileSjis, singlebyte::SingleByte, transfer::Transfer, utf7::Utf7, UnicodeEncoding};
 
 /// Complete encoding list in PHP's public enumeration order.
 pub(super) static ENCODINGS: &[EncodingInfo] = &[
@@ -217,7 +219,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("EUC-JP"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/euc-jp-boundaries.bin")),
     },
     EncodingInfo {
@@ -226,7 +228,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-single.bin"), pairs: include_bytes!("data/sjis-pairs.bin"), triples: include_bytes!("data/sjis-triples.bin"), points: include_bytes!("data/sjis-points.bin"), encode: include_bytes!("data/sjis-encode.bin"), bytes: include_bytes!("data/sjis-bytes.bin"), composites: include_bytes!("data/sjis-composites.bin"), escapes: include_bytes!("data/sjis-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-single.bin"), pairs: index_table!("sjis-pairs.bin"), triples: index_table!("sjis-triples.bin"), points: include_bytes!("data/sjis-points.bin"), encode: index_table!("sjis-encode.bin"), bytes: include_bytes!("data/sjis-bytes.bin"), composites: include_bytes!("data/sjis-composites.bin"), escapes: include_bytes!("data/sjis-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-boundaries.bin")),
     },
     EncodingInfo {
@@ -235,7 +237,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("EUC-JP"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/eucjp-win-single.bin"), pairs: include_bytes!("data/eucjp-win-pairs.bin"), triples: include_bytes!("data/eucjp-win-triples.bin"), points: include_bytes!("data/eucjp-win-points.bin"), encode: include_bytes!("data/eucjp-win-encode.bin"), bytes: include_bytes!("data/eucjp-win-bytes.bin"), composites: include_bytes!("data/eucjp-win-composites.bin"), escapes: include_bytes!("data/eucjp-win-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/eucjp-win-single.bin"), pairs: index_table!("eucjp-win-pairs.bin"), triples: index_table!("eucjp-win-triples.bin"), points: include_bytes!("data/eucjp-win-points.bin"), encode: index_table!("eucjp-win-encode.bin"), bytes: include_bytes!("data/eucjp-win-bytes.bin"), composites: include_bytes!("data/eucjp-win-composites.bin"), escapes: include_bytes!("data/eucjp-win-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/eucjp-win-boundaries.bin")),
     },
     EncodingInfo {
@@ -244,7 +246,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("EUC-JP"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-jp-2004-single.bin"), pairs: include_bytes!("data/euc-jp-2004-pairs.bin"), triples: include_bytes!("data/euc-jp-2004-triples.bin"), points: include_bytes!("data/euc-jp-2004-points.bin"), encode: include_bytes!("data/euc-jp-2004-encode.bin"), bytes: include_bytes!("data/euc-jp-2004-bytes.bin"), composites: include_bytes!("data/euc-jp-2004-composites.bin"), escapes: include_bytes!("data/euc-jp-2004-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-jp-2004-single.bin"), pairs: index_table!("euc-jp-2004-pairs.bin"), triples: index_table!("euc-jp-2004-triples.bin"), points: include_bytes!("data/euc-jp-2004-points.bin"), encode: index_table!("euc-jp-2004-encode.bin"), bytes: include_bytes!("data/euc-jp-2004-bytes.bin"), composites: include_bytes!("data/euc-jp-2004-composites.bin"), escapes: include_bytes!("data/euc-jp-2004-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/euc-jp-2004-boundaries.bin")),
     },
     EncodingInfo {
@@ -253,7 +255,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-docomo-single.bin"), pairs: include_bytes!("data/sjis-mobile-docomo-pairs.bin"), triples: include_bytes!("data/sjis-mobile-docomo-triples.bin"), points: include_bytes!("data/sjis-mobile-docomo-points.bin"), encode: include_bytes!("data/sjis-mobile-docomo-encode.bin"), bytes: include_bytes!("data/sjis-mobile-docomo-bytes.bin"), composites: include_bytes!("data/sjis-mobile-docomo-composites.bin"), escapes: include_bytes!("data/sjis-mobile-docomo-escapes.bin") }, flags: false }),
+        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-docomo-single.bin"), pairs: index_table!("sjis-mobile-docomo-pairs.bin"), triples: index_table!("sjis-mobile-docomo-triples.bin"), points: include_bytes!("data/sjis-mobile-docomo-points.bin"), encode: index_table!("sjis-mobile-docomo-encode.bin"), bytes: include_bytes!("data/sjis-mobile-docomo-bytes.bin"), composites: include_bytes!("data/sjis-mobile-docomo-composites.bin"), escapes: include_bytes!("data/sjis-mobile-docomo-escapes.bin") }, flags: false }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-mobile-docomo-boundaries.bin")),
     },
     EncodingInfo {
@@ -262,7 +264,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-kddi-single.bin"), pairs: include_bytes!("data/sjis-mobile-kddi-pairs.bin"), triples: include_bytes!("data/sjis-mobile-kddi-triples.bin"), points: include_bytes!("data/sjis-mobile-kddi-points.bin"), encode: include_bytes!("data/sjis-mobile-kddi-encode.bin"), bytes: include_bytes!("data/sjis-mobile-kddi-bytes.bin"), composites: include_bytes!("data/sjis-mobile-kddi-composites.bin"), escapes: include_bytes!("data/sjis-mobile-kddi-escapes.bin") }, flags: true }),
+        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-kddi-single.bin"), pairs: index_table!("sjis-mobile-kddi-pairs.bin"), triples: index_table!("sjis-mobile-kddi-triples.bin"), points: include_bytes!("data/sjis-mobile-kddi-points.bin"), encode: index_table!("sjis-mobile-kddi-encode.bin"), bytes: include_bytes!("data/sjis-mobile-kddi-bytes.bin"), composites: include_bytes!("data/sjis-mobile-kddi-composites.bin"), escapes: include_bytes!("data/sjis-mobile-kddi-escapes.bin") }, flags: true }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-mobile-kddi-boundaries.bin")),
     },
     EncodingInfo {
@@ -271,7 +273,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-softbank-single.bin"), pairs: include_bytes!("data/sjis-mobile-softbank-pairs.bin"), triples: include_bytes!("data/sjis-mobile-softbank-triples.bin"), points: include_bytes!("data/sjis-mobile-softbank-points.bin"), encode: include_bytes!("data/sjis-mobile-softbank-encode.bin"), bytes: include_bytes!("data/sjis-mobile-softbank-bytes.bin"), composites: include_bytes!("data/sjis-mobile-softbank-composites.bin"), escapes: include_bytes!("data/sjis-mobile-softbank-escapes.bin") }, flags: true }),
+        codec: Codec::MobileSjis(MobileSjis { base: DoubleByte { single: include_bytes!("data/sjis-mobile-softbank-single.bin"), pairs: index_table!("sjis-mobile-softbank-pairs.bin"), triples: index_table!("sjis-mobile-softbank-triples.bin"), points: include_bytes!("data/sjis-mobile-softbank-points.bin"), encode: index_table!("sjis-mobile-softbank-encode.bin"), bytes: include_bytes!("data/sjis-mobile-softbank-bytes.bin"), composites: include_bytes!("data/sjis-mobile-softbank-composites.bin"), escapes: include_bytes!("data/sjis-mobile-softbank-escapes.bin") }, flags: true }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-mobile-softbank-boundaries.bin")),
     },
     EncodingInfo {
@@ -280,7 +282,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-mac-single.bin"), pairs: include_bytes!("data/sjis-mac-pairs.bin"), triples: include_bytes!("data/sjis-mac-triples.bin"), points: include_bytes!("data/sjis-mac-points.bin"), encode: include_bytes!("data/sjis-mac-encode.bin"), bytes: include_bytes!("data/sjis-mac-bytes.bin"), composites: include_bytes!("data/sjis-mac-composites.bin"), escapes: include_bytes!("data/sjis-mac-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-mac-single.bin"), pairs: index_table!("sjis-mac-pairs.bin"), triples: index_table!("sjis-mac-triples.bin"), points: include_bytes!("data/sjis-mac-points.bin"), encode: index_table!("sjis-mac-encode.bin"), bytes: include_bytes!("data/sjis-mac-bytes.bin"), composites: include_bytes!("data/sjis-mac-composites.bin"), escapes: include_bytes!("data/sjis-mac-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-mac-boundaries.bin")),
     },
     EncodingInfo {
@@ -289,7 +291,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-2004-single.bin"), pairs: include_bytes!("data/sjis-2004-pairs.bin"), triples: include_bytes!("data/sjis-2004-triples.bin"), points: include_bytes!("data/sjis-2004-points.bin"), encode: include_bytes!("data/sjis-2004-encode.bin"), bytes: include_bytes!("data/sjis-2004-bytes.bin"), composites: include_bytes!("data/sjis-2004-composites.bin"), escapes: include_bytes!("data/sjis-2004-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-2004-single.bin"), pairs: index_table!("sjis-2004-pairs.bin"), triples: index_table!("sjis-2004-triples.bin"), points: include_bytes!("data/sjis-2004-points.bin"), encode: index_table!("sjis-2004-encode.bin"), bytes: include_bytes!("data/sjis-2004-bytes.bin"), composites: include_bytes!("data/sjis-2004-composites.bin"), escapes: include_bytes!("data/sjis-2004-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-2004-boundaries.bin")),
     },
     EncodingInfo {
@@ -298,7 +300,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("UTF-8"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileUtf8(MobileUtf8 { decode: include_bytes!("data/utf8-mobile-docomo-decode.bin"), points: include_bytes!("data/utf8-mobile-docomo-points.bin"), encode: include_bytes!("data/utf8-mobile-docomo-encode.bin"), bytes: include_bytes!("data/utf8-mobile-docomo-bytes.bin"), composites: include_bytes!("data/utf8-mobile-docomo-composites.bin") }),
+        codec: Codec::MobileUtf8(MobileUtf8 { decode: index_table!("utf8-mobile-docomo-decode.bin"), points: include_bytes!("data/utf8-mobile-docomo-points.bin"), encode: index_table!("utf8-mobile-docomo-encode.bin"), bytes: include_bytes!("data/utf8-mobile-docomo-bytes.bin"), composites: include_bytes!("data/utf8-mobile-docomo-composites.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/utf-8-mobile-docomo-boundaries.bin")),
     },
     EncodingInfo {
@@ -307,7 +309,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("UTF-8"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileUtf8(MobileUtf8 { decode: include_bytes!("data/utf8-mobile-kddi-a-decode.bin"), points: include_bytes!("data/utf8-mobile-kddi-a-points.bin"), encode: include_bytes!("data/utf8-mobile-kddi-a-encode.bin"), bytes: include_bytes!("data/utf8-mobile-kddi-a-bytes.bin"), composites: include_bytes!("data/utf8-mobile-kddi-a-composites.bin") }),
+        codec: Codec::MobileUtf8(MobileUtf8 { decode: index_table!("utf8-mobile-kddi-a-decode.bin"), points: include_bytes!("data/utf8-mobile-kddi-a-points.bin"), encode: index_table!("utf8-mobile-kddi-a-encode.bin"), bytes: include_bytes!("data/utf8-mobile-kddi-a-bytes.bin"), composites: include_bytes!("data/utf8-mobile-kddi-a-composites.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/utf-8-mobile-kddi-a-boundaries.bin")),
     },
     EncodingInfo {
@@ -316,7 +318,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("UTF-8"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileUtf8(MobileUtf8 { decode: include_bytes!("data/utf8-mobile-kddi-b-decode.bin"), points: include_bytes!("data/utf8-mobile-kddi-b-points.bin"), encode: include_bytes!("data/utf8-mobile-kddi-b-encode.bin"), bytes: include_bytes!("data/utf8-mobile-kddi-b-bytes.bin"), composites: include_bytes!("data/utf8-mobile-kddi-b-composites.bin") }),
+        codec: Codec::MobileUtf8(MobileUtf8 { decode: index_table!("utf8-mobile-kddi-b-decode.bin"), points: include_bytes!("data/utf8-mobile-kddi-b-points.bin"), encode: index_table!("utf8-mobile-kddi-b-encode.bin"), bytes: include_bytes!("data/utf8-mobile-kddi-b-bytes.bin"), composites: include_bytes!("data/utf8-mobile-kddi-b-composites.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/utf-8-mobile-kddi-b-boundaries.bin")),
     },
     EncodingInfo {
@@ -325,7 +327,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("UTF-8"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::MobileUtf8(MobileUtf8 { decode: include_bytes!("data/utf8-mobile-softbank-decode.bin"), points: include_bytes!("data/utf8-mobile-softbank-points.bin"), encode: include_bytes!("data/utf8-mobile-softbank-encode.bin"), bytes: include_bytes!("data/utf8-mobile-softbank-bytes.bin"), composites: include_bytes!("data/utf8-mobile-softbank-composites.bin") }),
+        codec: Codec::MobileUtf8(MobileUtf8 { decode: index_table!("utf8-mobile-softbank-decode.bin"), points: include_bytes!("data/utf8-mobile-softbank-points.bin"), encode: index_table!("utf8-mobile-softbank-encode.bin"), bytes: include_bytes!("data/utf8-mobile-softbank-bytes.bin"), composites: include_bytes!("data/utf8-mobile-softbank-composites.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/utf-8-mobile-softbank-boundaries.bin")),
     },
     EncodingInfo {
@@ -334,7 +336,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp932-single.bin"), pairs: include_bytes!("data/cp932-pairs.bin"), triples: include_bytes!("data/cp932-triples.bin"), points: include_bytes!("data/cp932-points.bin"), encode: include_bytes!("data/cp932-encode.bin"), bytes: include_bytes!("data/cp932-bytes.bin"), composites: include_bytes!("data/cp932-composites.bin"), escapes: include_bytes!("data/cp932-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp932-single.bin"), pairs: index_table!("cp932-pairs.bin"), triples: index_table!("cp932-triples.bin"), points: include_bytes!("data/cp932-points.bin"), encode: index_table!("cp932-encode.bin"), bytes: include_bytes!("data/cp932-bytes.bin"), composites: include_bytes!("data/cp932-composites.bin"), escapes: include_bytes!("data/cp932-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/cp932-boundaries.bin")),
     },
     EncodingInfo {
@@ -343,7 +345,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("Shift_JIS"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-win-single.bin"), pairs: include_bytes!("data/sjis-win-pairs.bin"), triples: include_bytes!("data/sjis-win-triples.bin"), points: include_bytes!("data/sjis-win-points.bin"), encode: include_bytes!("data/sjis-win-encode.bin"), bytes: include_bytes!("data/sjis-win-bytes.bin"), composites: include_bytes!("data/sjis-win-composites.bin"), escapes: include_bytes!("data/sjis-win-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/sjis-win-single.bin"), pairs: index_table!("sjis-win-pairs.bin"), triples: index_table!("sjis-win-triples.bin"), points: include_bytes!("data/sjis-win-points.bin"), encode: index_table!("sjis-win-encode.bin"), bytes: include_bytes!("data/sjis-win-bytes.bin"), composites: include_bytes!("data/sjis-win-composites.bin"), escapes: include_bytes!("data/sjis-win-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/sjis-win-boundaries.bin")),
     },
     EncodingInfo {
@@ -352,7 +354,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("CP51932"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp51932-single.bin"), pairs: include_bytes!("data/cp51932-pairs.bin"), triples: include_bytes!("data/cp51932-triples.bin"), points: include_bytes!("data/cp51932-points.bin"), encode: include_bytes!("data/cp51932-encode.bin"), bytes: include_bytes!("data/cp51932-bytes.bin"), composites: include_bytes!("data/cp51932-composites.bin"), escapes: include_bytes!("data/cp51932-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp51932-single.bin"), pairs: index_table!("cp51932-pairs.bin"), triples: index_table!("cp51932-triples.bin"), points: include_bytes!("data/cp51932-points.bin"), encode: index_table!("cp51932-encode.bin"), bytes: include_bytes!("data/cp51932-bytes.bin"), composites: include_bytes!("data/cp51932-composites.bin"), escapes: include_bytes!("data/cp51932-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/cp51932-boundaries.bin")),
     },
     EncodingInfo {
@@ -361,7 +363,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/jis-encode.bin"), error_encode: include_bytes!("data/iso-2022-jp-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Jis }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("jis-encode.bin"), error_encode: dense_table!("iso-2022-jp-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Jis }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -370,7 +372,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/iso-2022-jp-encode.bin"), error_encode: include_bytes!("data/iso-2022-jp-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Iso2022 }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("iso-2022-jp-encode.bin"), error_encode: dense_table!("iso-2022-jp-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Iso2022 }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -379,7 +381,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/cp51932-single.bin"), pairs: include_bytes!("data/cp51932-pairs.bin"), triples: include_bytes!("data/cp51932-triples.bin"), points: include_bytes!("data/cp51932-points.bin"), encode: include_bytes!("data/cp51932-encode.bin"), bytes: include_bytes!("data/cp51932-bytes.bin"), composites: include_bytes!("data/cp51932-composites.bin"), escapes: include_bytes!("data/cp51932-escapes.bin") }, encode: include_bytes!("data/iso-2022-jp-ms-encode.bin"), error_encode: include_bytes!("data/iso-2022-jp-ms-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Microsoft }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/cp51932-single.bin"), pairs: index_table!("cp51932-pairs.bin"), triples: index_table!("cp51932-triples.bin"), points: include_bytes!("data/cp51932-points.bin"), encode: index_table!("cp51932-encode.bin"), bytes: include_bytes!("data/cp51932-bytes.bin"), composites: include_bytes!("data/cp51932-composites.bin"), escapes: include_bytes!("data/cp51932-escapes.bin") }, encode: dense_table!("iso-2022-jp-ms-encode.bin"), error_encode: dense_table!("iso-2022-jp-ms-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Microsoft }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -388,7 +390,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("GB18030"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::Gb18030(Gb18030 { pairs: include_bytes!("data/gb18030-pairs.bin"), bmp: include_bytes!("data/gb18030-bmp.bin"), encode: include_bytes!("data/gb18030-encode.bin") }),
+        codec: Codec::Gb18030(Gb18030 { pairs: dense_table!("gb18030-pairs.bin"), bmp: dense_table!("gb18030-bmp.bin"), encode: dense_table!("gb18030-encode.bin") }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -397,7 +399,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("GB18030-2022"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::Gb18030(Gb18030 { pairs: include_bytes!("data/gb18030-2022-pairs.bin"), bmp: include_bytes!("data/gb18030-2022-bmp.bin"), encode: include_bytes!("data/gb18030-2022-encode.bin") }),
+        codec: Codec::Gb18030(Gb18030 { pairs: dense_table!("gb18030-2022-pairs.bin"), bmp: dense_table!("gb18030-2022-bmp.bin"), encode: dense_table!("gb18030-2022-encode.bin") }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -550,7 +552,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("CN-GB"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-cn-single.bin"), pairs: include_bytes!("data/euc-cn-pairs.bin"), triples: include_bytes!("data/euc-cn-triples.bin"), points: include_bytes!("data/euc-cn-points.bin"), encode: include_bytes!("data/euc-cn-encode.bin"), bytes: include_bytes!("data/euc-cn-bytes.bin"), composites: include_bytes!("data/euc-cn-composites.bin"), escapes: include_bytes!("data/euc-cn-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-cn-single.bin"), pairs: index_table!("euc-cn-pairs.bin"), triples: index_table!("euc-cn-triples.bin"), points: include_bytes!("data/euc-cn-points.bin"), encode: index_table!("euc-cn-encode.bin"), bytes: include_bytes!("data/euc-cn-bytes.bin"), composites: include_bytes!("data/euc-cn-composites.bin"), escapes: include_bytes!("data/euc-cn-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/euc-cn-boundaries.bin")),
     },
     EncodingInfo {
@@ -559,7 +561,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("CP936"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp936-single.bin"), pairs: include_bytes!("data/cp936-pairs.bin"), triples: include_bytes!("data/cp936-triples.bin"), points: include_bytes!("data/cp936-points.bin"), encode: include_bytes!("data/cp936-encode.bin"), bytes: include_bytes!("data/cp936-bytes.bin"), composites: include_bytes!("data/cp936-composites.bin"), escapes: include_bytes!("data/cp936-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp936-single.bin"), pairs: index_table!("cp936-pairs.bin"), triples: index_table!("cp936-triples.bin"), points: include_bytes!("data/cp936-points.bin"), encode: index_table!("cp936-encode.bin"), bytes: include_bytes!("data/cp936-bytes.bin"), composites: include_bytes!("data/cp936-composites.bin"), escapes: include_bytes!("data/cp936-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/cp936-boundaries.bin")),
     },
     EncodingInfo {
@@ -568,7 +570,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("HZ-GB-2312"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::Hz(Hz(DoubleByte { single: include_bytes!("data/euc-cn-single.bin"), pairs: include_bytes!("data/euc-cn-pairs.bin"), triples: include_bytes!("data/euc-cn-triples.bin"), points: include_bytes!("data/euc-cn-points.bin"), encode: include_bytes!("data/euc-cn-encode.bin"), bytes: include_bytes!("data/euc-cn-bytes.bin"), composites: include_bytes!("data/euc-cn-composites.bin"), escapes: include_bytes!("data/euc-cn-escapes.bin") })),
+        codec: Codec::Hz(Hz(DoubleByte { single: include_bytes!("data/euc-cn-single.bin"), pairs: index_table!("euc-cn-pairs.bin"), triples: index_table!("euc-cn-triples.bin"), points: include_bytes!("data/euc-cn-points.bin"), encode: index_table!("euc-cn-encode.bin"), bytes: include_bytes!("data/euc-cn-bytes.bin"), composites: include_bytes!("data/euc-cn-composites.bin"), escapes: include_bytes!("data/euc-cn-escapes.bin") })),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -577,7 +579,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("EUC-TW"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::EucTw(EucTw { planes: include_bytes!("data/euc-tw-planes.bin"), encode: include_bytes!("data/euc-tw-encode.bin") }),
+        codec: Codec::EucTw(EucTw { planes: dense_table!("euc-tw-planes.bin"), encode: dense_table!("euc-tw-encode.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/euc-tw-boundaries.bin")),
     },
     EncodingInfo {
@@ -586,7 +588,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("BIG5"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/big-5-single.bin"), pairs: include_bytes!("data/big-5-pairs.bin"), triples: include_bytes!("data/big-5-triples.bin"), points: include_bytes!("data/big-5-points.bin"), encode: include_bytes!("data/big-5-encode.bin"), bytes: include_bytes!("data/big-5-bytes.bin"), composites: include_bytes!("data/big-5-composites.bin"), escapes: include_bytes!("data/big-5-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/big-5-single.bin"), pairs: index_table!("big-5-pairs.bin"), triples: index_table!("big-5-triples.bin"), points: include_bytes!("data/big-5-points.bin"), encode: index_table!("big-5-encode.bin"), bytes: include_bytes!("data/big-5-bytes.bin"), composites: include_bytes!("data/big-5-composites.bin"), escapes: include_bytes!("data/big-5-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/big-5-boundaries.bin")),
     },
     EncodingInfo {
@@ -595,7 +597,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("BIG5"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp950-single.bin"), pairs: include_bytes!("data/cp950-pairs.bin"), triples: include_bytes!("data/cp950-triples.bin"), points: include_bytes!("data/cp950-points.bin"), encode: include_bytes!("data/cp950-encode.bin"), bytes: include_bytes!("data/cp950-bytes.bin"), composites: include_bytes!("data/cp950-composites.bin"), escapes: include_bytes!("data/cp950-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/cp950-single.bin"), pairs: index_table!("cp950-pairs.bin"), triples: index_table!("cp950-triples.bin"), points: include_bytes!("data/cp950-points.bin"), encode: index_table!("cp950-encode.bin"), bytes: include_bytes!("data/cp950-bytes.bin"), composites: include_bytes!("data/cp950-composites.bin"), escapes: include_bytes!("data/cp950-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/cp950-boundaries.bin")),
     },
     EncodingInfo {
@@ -604,7 +606,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("EUC-KR"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-kr-single.bin"), pairs: include_bytes!("data/euc-kr-pairs.bin"), triples: include_bytes!("data/euc-kr-triples.bin"), points: include_bytes!("data/euc-kr-points.bin"), encode: include_bytes!("data/euc-kr-encode.bin"), bytes: include_bytes!("data/euc-kr-bytes.bin"), composites: include_bytes!("data/euc-kr-composites.bin"), escapes: include_bytes!("data/euc-kr-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/euc-kr-single.bin"), pairs: index_table!("euc-kr-pairs.bin"), triples: index_table!("euc-kr-triples.bin"), points: include_bytes!("data/euc-kr-points.bin"), encode: index_table!("euc-kr-encode.bin"), bytes: include_bytes!("data/euc-kr-bytes.bin"), composites: include_bytes!("data/euc-kr-composites.bin"), escapes: include_bytes!("data/euc-kr-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/euc-kr-boundaries.bin")),
     },
     EncodingInfo {
@@ -613,7 +615,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("UHC"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/uhc-single.bin"), pairs: include_bytes!("data/uhc-pairs.bin"), triples: include_bytes!("data/uhc-triples.bin"), points: include_bytes!("data/uhc-points.bin"), encode: include_bytes!("data/uhc-encode.bin"), bytes: include_bytes!("data/uhc-bytes.bin"), composites: include_bytes!("data/uhc-composites.bin"), escapes: include_bytes!("data/uhc-escapes.bin") }),
+        codec: Codec::DoubleByte(DoubleByte { single: include_bytes!("data/uhc-single.bin"), pairs: index_table!("uhc-pairs.bin"), triples: index_table!("uhc-triples.bin"), points: include_bytes!("data/uhc-points.bin"), encode: index_table!("uhc-encode.bin"), bytes: include_bytes!("data/uhc-bytes.bin"), composites: include_bytes!("data/uhc-composites.bin"), escapes: include_bytes!("data/uhc-escapes.bin") }),
         slicing: Slicing::LeadingByte(include_bytes!("data/uhc-boundaries.bin")),
     },
     EncodingInfo {
@@ -622,7 +624,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-KR"),
         supports_ord_chr: true,
         supports_detection: true,
-        codec: Codec::Iso2022Kr(Iso2022Kr(DoubleByte { single: include_bytes!("data/uhc-single.bin"), pairs: include_bytes!("data/uhc-pairs.bin"), triples: include_bytes!("data/uhc-triples.bin"), points: include_bytes!("data/uhc-points.bin"), encode: include_bytes!("data/uhc-encode.bin"), bytes: include_bytes!("data/uhc-bytes.bin"), composites: include_bytes!("data/uhc-composites.bin"), escapes: include_bytes!("data/uhc-escapes.bin") })),
+        codec: Codec::Iso2022Kr(Iso2022Kr(DoubleByte { single: include_bytes!("data/uhc-single.bin"), pairs: index_table!("uhc-pairs.bin"), triples: index_table!("uhc-triples.bin"), points: include_bytes!("data/uhc-points.bin"), encode: index_table!("uhc-encode.bin"), bytes: include_bytes!("data/uhc-bytes.bin"), composites: include_bytes!("data/uhc-composites.bin"), escapes: include_bytes!("data/uhc-escapes.bin") })),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -685,7 +687,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP-2004"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis2004(Jis2004 { classic: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, extended: DoubleByte { single: include_bytes!("data/euc-jp-2004-single.bin"), pairs: include_bytes!("data/euc-jp-2004-pairs.bin"), triples: include_bytes!("data/euc-jp-2004-triples.bin"), points: include_bytes!("data/euc-jp-2004-points.bin"), encode: include_bytes!("data/euc-jp-2004-encode.bin"), bytes: include_bytes!("data/euc-jp-2004-bytes.bin"), composites: include_bytes!("data/euc-jp-2004-composites.bin"), escapes: include_bytes!("data/euc-jp-2004-escapes.bin") } }),
+        codec: Codec::Jis2004(Jis2004 { classic: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, extended: DoubleByte { single: include_bytes!("data/euc-jp-2004-single.bin"), pairs: index_table!("euc-jp-2004-pairs.bin"), triples: index_table!("euc-jp-2004-triples.bin"), points: include_bytes!("data/euc-jp-2004-points.bin"), encode: index_table!("euc-jp-2004-encode.bin"), bytes: include_bytes!("data/euc-jp-2004-bytes.bin"), composites: include_bytes!("data/euc-jp-2004-composites.bin"), escapes: include_bytes!("data/euc-jp-2004-escapes.bin") } }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -694,7 +696,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/iso-2022-jp-mobile#kddi-encode.bin"), error_encode: include_bytes!("data/iso-2022-jp-mobile#kddi-encode.bin"), supplementary: include_bytes!("data/jis-kddi-supplementary.bin"), composites: include_bytes!("data/jis-kddi-composites.bin"), variant: Variant::Kddi }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("iso-2022-jp-mobile#kddi-encode.bin"), error_encode: dense_table!("iso-2022-jp-mobile#kddi-encode.bin"), supplementary: include_bytes!("data/jis-kddi-supplementary.bin"), composites: include_bytes!("data/jis-kddi-composites.bin"), variant: Variant::Kddi }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -703,7 +705,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/cp50221-encode.bin"), error_encode: include_bytes!("data/cp50221-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50220 }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("cp50221-encode.bin"), error_encode: dense_table!("cp50221-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50220 }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -712,7 +714,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/cp50221-encode.bin"), error_encode: include_bytes!("data/cp50221-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50221 }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("cp50221-encode.bin"), error_encode: dense_table!("cp50221-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50221 }),
         slicing: Slicing::Converted,
     },
     EncodingInfo {
@@ -721,7 +723,7 @@ pub(super) static ENCODINGS: &[EncodingInfo] = &[
         mime: Some("ISO-2022-JP"),
         supports_ord_chr: false,
         supports_detection: true,
-        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: include_bytes!("data/euc-jp-pairs.bin"), triples: include_bytes!("data/euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: include_bytes!("data/euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: include_bytes!("data/cp50222-encode.bin"), error_encode: include_bytes!("data/cp50222-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50222 }),
+        codec: Codec::Jis(Jis { base: DoubleByte { single: include_bytes!("data/euc-jp-single.bin"), pairs: index_table!("euc-jp-pairs.bin"), triples: index_table!("euc-jp-triples.bin"), points: include_bytes!("data/euc-jp-points.bin"), encode: index_table!("euc-jp-encode.bin"), bytes: include_bytes!("data/euc-jp-bytes.bin"), composites: include_bytes!("data/euc-jp-composites.bin"), escapes: include_bytes!("data/euc-jp-escapes.bin") }, encode: dense_table!("cp50222-encode.bin"), error_encode: dense_table!("cp50222-encode.bin"), supplementary: &[], composites: &[], variant: Variant::Cp50222 }),
         slicing: Slicing::Converted,
     },
 ];

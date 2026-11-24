@@ -261,7 +261,12 @@ fn lower_method_call_with_binding(
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
         .and_then(|(class, _)| ctx.enums.contains_key(class).then(|| class.to_string()))
         .and_then(|class| sig.as_ref().and_then(|signature|
@@ -319,6 +324,11 @@ fn lower_method_call_with_binding(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,

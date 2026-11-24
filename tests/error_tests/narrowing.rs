@@ -345,3 +345,157 @@ final class Copy extends Holder { public function __clone() {} }",
         expect_error(&format!("{READONLY_PLUGIN_CLASSES}{classes}"), "Undefined method: Plugin::count");
     }
 }
+
+/// A store narrows a union binding only to what it stored: a wrong member is still rejected.
+#[test]
+fn test_union_store_narrowing_rejects_the_wrong_member() {
+    for (body, got) in [
+        ("$tz = 'UTC'; return $tz;", "got string"),
+        ("if (\\is_string($tz)) { $tz = 'UTC'; } return $tz;", "got DateTimeZone|string"),
+        ("if ($flag) { $tz = new \\DateTimeZone('UTC'); } return $tz;", "got DateTimeZone|string"),
+        ("$tz = new \\DateTimeZone('UTC'); if ($flag) { $tz = 'UTC'; } return $tz;", "got DateTimeZone|string"),
+    ] {
+        let source = format!("<?php function z(\\DateTimeZone|string $tz, bool $flag): \\DateTimeZone {{ {body} }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains(&format!("return type expects DateTimeZone, {got}")), "{body}: {error}");
+    }
+}
+
+/// A store outside the union still fails, and a by-reference parameter keeps its declared union.
+#[test]
+fn test_union_store_narrowing_keeps_storage_and_reference_contracts() {
+    expect_error(
+        "<?php function z(\\DateTimeZone|string $tz): \\DateTimeZone { $tz = 5; return $tz; }",
+        "return type expects DateTimeZone, got int",
+    );
+    expect_error(
+        "<?php function z(\\DateTimeZone|string &$tz): \\DateTimeZone { $tz = new \\DateTimeZone('UTC'); return $tz; }",
+        "return type expects DateTimeZone, got DateTimeZone|string",
+    );
+}
+
+/// A nested chain narrows the outer join only when every arm that falls through stores a string.
+#[test]
+fn test_nested_store_narrowing_rejects_a_path_that_keeps_null() {
+    for body in [
+        "if (null === $path) { $m = 'x'; } else { }",
+        "if (null === $path) { $m = 'x'; }",
+        "if (null === $path) { $m = 'x'; } elseif ($path === '') { $m = 'y'; }",
+        "if (null === $path) { $m = 'x'; } else { $m = null; }",
+    ] {
+        let source = format!("<?php function takes(string $m): string {{ return $m; }}
+function f(?string $m, ?string $path): string {{ if (null === $m) {{ {body} }} return takes($m); }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("parameter $m expects string, got string|null"), "{body}: {error}");
+    }
+}
+
+/// The last arm's narrowed store must not stand for the whole `if`/`else` join.
+#[test]
+fn test_if_else_join_does_not_keep_the_last_arm_store() {
+    for (body, returns) in [
+        ("if ($flag) { $tz = new \\DateTimeZone('UTC'); } else { $tz = 'x'; } return $tz;", "string"),
+        ("if ($flag) { $tz = 'x'; } else { $tz = new \\DateTimeZone('UTC'); } return $tz;", "\\DateTimeZone"),
+        ("if ($flag) { $tz = 'x'; } elseif ($tz === 'y') { $tz = 'z'; } else { $tz = new \\DateTimeZone('UTC'); } return $tz;",
+            "\\DateTimeZone"),
+    ] {
+        let source = format!("<?php function z(\\DateTimeZone|string $tz, bool $flag): {returns} {{ {body} }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects") && error.contains("DateTimeZone")
+            && error.contains("got ") && error.contains('|'), "{body}: {error}");
+    }
+}
+
+/// A store narrows only on a non-null proof: a missing array element reads null, which php
+/// rejects at the `string` return, so the read keeps the binding's declared union.
+#[test]
+fn test_union_store_narrowing_needs_a_non_null_proof() {
+    for body in ["$x = $a[99];", "$x = \\is_int($x) ? $a[99] : $x;"] {
+        let source = format!("<?php function f(int|string $x): string {{ $a = ['ok']; {body} return $x; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects string, got int|string"), "{body}: {error}");
+    }
+}
+
+/// An `elseif` chain without `else` narrows only when every exit that reaches the code after
+/// it, the fall-through included, holds the narrower type (issue #2320).
+#[test]
+fn test_elseif_chain_join_rejects_an_exit_that_keeps_a_wider_member() {
+    for (params, body) in [
+        // The fall-through still holds `string`: no guard excluded it.
+        ("int|string|array $v", "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_float($v)) { $v = [$v]; }"),
+        // A clause that skips its store on one path leaves `string` there.
+        ("int|string|array $v, bool $flag",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { if ($flag) { $v = [$v]; } }"),
+        // A clause that stores another wide member.
+        ("int|string|array $v", "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = 5; }"),
+        // Guards on another variable say nothing about this one's fall-through.
+        ("int|string|array $v, int|string $w",
+            "if (\\is_int($w)) { $v = [1]; } elseif (\\is_string($w)) { $v = [2]; }"),
+        // A condition that is not a type guard leaves the complement of the first guard only.
+        ("int|string|array $v, bool $flag",
+            "if (\\is_int($v)) { $v = [$v]; } elseif ($flag) { $v = [1]; }"),
+        // A condition that rebinds the local replaces the value the earlier guard tested.
+        ("int|string|array $v, int|string $w",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v = $w)) { echo 1; }"),
+        // A write through a reference after the store.
+        ("int|string|array $v",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; $r = &$v; $r = 5; }"),
+        // A wider store after the chain.
+        ("int|string|array $v",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; } $v = 'x';"),
+    ] {
+        let source = format!("<?php function f({params}): array {{ {body} return $v; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects array, got "), "{body}: {error}");
+    }
+    // A by-reference parameter keeps its declared union: the caller can write it.
+    expect_error(
+        "<?php function f(int|string|array &$v): array { if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; } return $v; }",
+        "return type expects array, got ",
+    );
+}
+
+/// Only the exact `Traversable` test leaves the array half of an `iterable` union member: a
+/// failed `instanceof` of a narrower class still admits every other `Traversable` object.
+#[test]
+fn test_elseif_chain_join_keeps_the_traversable_half_of_iterable() {
+    for body in [
+        "if ($v instanceof \\ArrayIterator) { $v = iterator_to_array($v, false); } elseif (\\is_string($v)) { $v = [$v]; }",
+        "if (\\is_string($v)) { $v = [$v]; } elseif ($v instanceof \\ArrayIterator) { $v = iterator_to_array($v, false); }",
+    ] {
+        let source = format!("<?php function f(string|iterable $v): array {{ {body} return $v; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects array, got "), "{body}: {error}");
+    }
+}
+
+/// A lazily initialized nullable local stays nullable through an `elseif` chain when any exit
+/// that reaches the code after it can still carry null.
+#[test]
+fn test_nullable_lazy_local_elseif_join_rejects_nullable_exits() {
+    for branch in [
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service = null; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { if ($other) { $service = null; } }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service->poke(); } elseif ($other) { $service = null; }",
+        "if ($service === null) { $service = new Service(); } elseif (($service = $replacement) === null) { echo 1; }",
+        "if ($service === null) { $service = new Service(); } elseif (($service = $replacement) !== null && $flag) { echo 1; }",
+        "if ($service === null) { if ($other) { $service = new Service(); } } elseif ($flag) { echo 1; }",
+        "if ($service === null) { } elseif ($flag) { $service->poke(); }",
+        // The null guard sits on a later clause: the first clause's exit keeps null.
+        "if ($flag) { echo 1; } elseif ($service === null) { $service = new Service(); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $r = &$service; $r = null; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { wipe($service); }",
+        "if ($service === null) { $service = new Service(); } elseif (wipe($service) === null) { echo 1; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { unset($service); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $f = function () use (&$service) { $service = null; }; $f(); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service->poke(); } $service = null;",
+    ] {
+        let source = format!("<?php class Service {{ public function poke(): void {{}} }}
+function wipe(?Service &$x): void {{ $x = null; }}
+function get(?Service $service, ?Service $replacement, bool $flag, bool $other): Service {{ {branch} return $service; }}");
+        let error = check_source(&source).expect_err(branch);
+        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+    }
+}

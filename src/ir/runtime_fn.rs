@@ -212,8 +212,10 @@ pub enum RuntimeFnId {
     ElephcPharSetMetadata,
     ElephcPharSetStub,
     ElephcPharSetZipPassword,
+    ElephcPharArchiveValid,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcUnserializeStoreProperty,
     Basename,
     Chdir,
     Chgrp,
@@ -466,6 +468,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtSwap,
     ElephcReflectionClassBuild,
     ElephcEvalReflectionClassBuild,
+    ElephcSetMemoryLimit,
     ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
@@ -935,6 +938,12 @@ pub enum RuntimeFnId {
     PregLastErrorMsg,
     PregMatch,
     PregMatchAll,
+    /// Internal `__elephc_preg_compile`: resets the error state and compiles a pattern handle.
+    PregCompile,
+    /// Internal `__elephc_preg_match_compiled`: matches a subject against a pattern handle.
+    PregMatchCompiled,
+    /// Internal `__elephc_preg_free`: releases a pattern handle.
+    PregFree,
     PregReplace,
     PregSplit,
     Putenv,
@@ -1712,6 +1721,12 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+            // The live `memory_limit` ceiling is process-wide heap state: every later
+            // allocation observes the new value, so this neither folds nor hoists, and it
+            // reads the reserved arena capacity to clamp an unlimited request.
+            RuntimeFnId::ElephcSetMemoryLimit => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
             // Also a WRITE: it latches a restart on the process-wide cache. Its result is
             // the once-then-false answer `opcache_reset()` reports, so a second call must
             // not be folded into the first.
@@ -1918,12 +1933,16 @@ impl RuntimeFnId {
                     | crate::ir::Effects::BLOCKING_IO.bits()
                     | crate::ir::Effects::NETWORK_IO.bits(),
             ),
-            // Every regex call records its outcome for `preg_last_error()`.
+            // Every regex call records its outcome for `preg_last_error()`, and the compiled
+            // pattern handles of the `preg_grep()` prelude own native PCRE2 memory.
             RuntimeFnId::PregMatch
             | RuntimeFnId::PregMatchAll
             | RuntimeFnId::PregReplace
             | RuntimeFnId::PregReplaceCallback
-            | RuntimeFnId::PregSplit => crate::ir::Effects::from_bits_retain(
+            | RuntimeFnId::PregSplit
+            | RuntimeFnId::PregCompile
+            | RuntimeFnId::PregMatchCompiled
+            | RuntimeFnId::PregFree => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
@@ -2122,6 +2141,7 @@ impl RuntimeFnId {
             | RuntimeFnId::BcScale
             | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
             | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub
+            | RuntimeFnId::ElephcPharArchiveValid
             | RuntimeFnId::ElephcPharBzip2Archive
             | RuntimeFnId::ElephcPharDecompressArchive
             | RuntimeFnId::ElephcPharGetFileMetadata
@@ -2313,6 +2333,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcPharArchiveValid => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             // Every curl operation needs the `elephc_curl` bridge, which in turn makes
@@ -2644,6 +2665,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregReplaceCallback
                 | RuntimeFnId::PregSplit
+                | RuntimeFnId::PregCompile
+                | RuntimeFnId::PregMatchCompiled
+                | RuntimeFnId::PregFree
         )
     }
 
@@ -2696,7 +2720,8 @@ impl RuntimeFnId {
     pub const fn publishes_phar_symbols(self) -> bool {
         matches!(
             self,
-            RuntimeFnId::ElephcPharListEntries
+            RuntimeFnId::ElephcPharArchiveValid
+                | RuntimeFnId::ElephcPharListEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -2812,6 +2837,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
+                // A compiled pattern handle and a match status are machine integers that
+                // never borrow the pattern or the subject string.
+                | RuntimeFnId::PregCompile
+                | RuntimeFnId::PregMatchCompiled
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -3425,8 +3454,10 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",
             RuntimeFnId::ElephcPharSetStub => "__elephc_phar_set_stub",
             RuntimeFnId::ElephcPharSetZipPassword => "__elephc_phar_set_zip_password",
+            RuntimeFnId::ElephcPharArchiveValid => "__elephc_phar_archive_valid",
             RuntimeFnId::ElephcPharSignHash => "__elephc_phar_sign_hash",
             RuntimeFnId::ElephcPharSignOpenssl => "__elephc_phar_sign_openssl",
+            RuntimeFnId::ElephcUnserializeStoreProperty => "__elephc_unserialize_store_property",
             RuntimeFnId::Basename => "basename",
             RuntimeFnId::Chdir => "chdir",
             RuntimeFnId::Chgrp => "chgrp",
@@ -3674,6 +3705,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcReflectionClassBuild => "__elephc_reflection_class_build",
             RuntimeFnId::ElephcEvalReflectionClassBuild => "__elephc_eval_reflection_class_build",
+            RuntimeFnId::ElephcSetMemoryLimit => "__elephc_set_memory_limit",
             RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
@@ -4020,6 +4052,9 @@ impl RuntimeFnId {
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",
             RuntimeFnId::PregSplit => "preg_split",
+            RuntimeFnId::PregCompile => "__elephc_preg_compile",
+            RuntimeFnId::PregMatchCompiled => "__elephc_preg_match_compiled",
+            RuntimeFnId::PregFree => "__elephc_preg_free",
             RuntimeFnId::Putenv => "putenv",
             RuntimeFnId::Serialize => "serialize",
             RuntimeFnId::ShellExec => "shell_exec",

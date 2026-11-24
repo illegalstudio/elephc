@@ -3,7 +3,7 @@
 //! Covers instance/static calls, namespace resolution, bounds, and trait methods.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests generics_docblock_enums`.
+//! - `cargo test --test codegen_tests_oop generics_docblock_enums`.
 //!
 //! Key details:
 //! - Enum cases retain their singleton identity while their methods specialize.

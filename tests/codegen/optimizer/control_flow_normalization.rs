@@ -5,7 +5,7 @@
 //! negated two-way `if` branches.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::control_flow_normalization`.
+//! - `cargo test --test codegen_tests_core optimizer::control_flow_normalization`.
 //!
 //! Key details:
 //! - Every fixture keeps its decisions runtime-unknown through `$argc` (1 when run without

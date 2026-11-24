@@ -21,7 +21,7 @@
 //!   `session_set_save_handler()`.
 //! - Process-environment copying is omitted when source access and introspection cannot observe it.
 
-use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
     e_binop, e_call, e_const, e_int, e_static_prop, s_assign, s_expr, s_if, s_try,
 };
@@ -154,7 +154,7 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
             vec![s_assign("__elephc_wrap", e_int(0))],
             vec![(
                 vec!["\\Throwable"],
-                Some("__elephc_exc"),
+                Some(crate::apm_prelude::WEB_CATCH_VAR),
                 vec![s_expr(e_call(
                     "elephc_web_handle_uncaught_exception",
                     vec![],
@@ -357,10 +357,10 @@ fn inject_if_web_on_compiler_stack(
     // The catch-all try wrap below reorders the top level (declarations hoisted
     // out, executables wrapped). That reordering is unsafe across namespace
     // boundaries: a `namespace X;` / `namespace X { … }` would be separated from
-    // the declarations it scopes, leaving them in the wrong namespace. For
-    // namespaced programs (e.g. a framework with `App\…` classes) skip the wrap
-    // entirely — such programs do their own error handling — and keep B1's
-    // uncaught-exception → 500 net only for flat, non-namespaced programs.
+    // the declarations it scopes, leaving them in the wrong namespace. A namespaced
+    // program — a framework's `App\…` classes, or the PDO prelude's `Pdo\…` ones —
+    // is wrapped once the name resolver has flattened its namespaces instead
+    // (`wrap_resolved_catch_all`).
     if combined.iter().any(|s| {
         matches!(
             s.kind,
@@ -369,28 +369,61 @@ fn inject_if_web_on_compiler_stack(
     }) {
         return combined;
     }
+    wrap_in_catch_all(combined, web_wrap_stmt())
+}
 
-    // Partition the top level: hoistable declarations (functions, classes, externs)
-    // stay outside the try so they resolve normally — externs in particular are NOT
-    // resolved when nested in a try. Everything executable goes inside a catch-all
-    // try so an uncaught exception becomes a 500 instead of crashing the worker.
+/// Partitions the top level: hoistable declarations (functions, classes, externs) stay
+/// outside the try so they resolve normally — externs in particular are NOT resolved when
+/// nested in a try. Everything executable goes inside the catch-all `wrapper`, so an
+/// uncaught exception becomes a 500 instead of crashing the worker.
+fn wrap_in_catch_all(program: Program, mut wrapper: Stmt) -> Program {
     let mut decls: Program = Vec::new();
     let mut exec: Program = Vec::new();
-    for stmt in combined {
+    for stmt in program {
         if is_hoistable_decl(&stmt.kind) {
             decls.push(stmt);
         } else {
             exec.push(stmt);
         }
     }
-
-    let mut wrapper = web_wrap_stmt();
     let StmtKind::Try { try_body, .. } = &mut wrapper.kind else {
         unreachable!("the catch-all wrapper is built as a Try");
     };
     *try_body = exec;
     decls.push(wrapper);
     decls
+}
+
+/// The runtime entry a catch-all calls to answer an uncaught exception.
+const UNCAUGHT_HANDLER: &str = "elephc_web_handle_uncaught_exception";
+
+/// Whether a catch body is a `--web` catch-all's: it answers the exception as uncaught.
+pub(crate) fn answers_uncaught(body: &[Stmt]) -> bool {
+    body.iter().any(|stmt| {
+        matches!(&stmt.kind, StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { name, .. }, .. })
+            if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case(UNCAUGHT_HANDLER))
+    })
+}
+
+/// Whether a resolved program's top level already runs inside a catch-all.
+fn has_catch_all(program: &[Stmt]) -> bool {
+    program.iter().any(|stmt| {
+        matches!(&stmt.kind, StmtKind::Try { catches, .. } if catches.iter().any(|clause| answers_uncaught(&clause.body)))
+    })
+}
+
+/// Wraps a `--web` program the injection left unwrapped — a namespaced one — in the
+/// catch-all, once the name resolver has flattened its namespaces and declarations no
+/// longer depend on where they sit. Without it, an exception nothing caught ended the
+/// worker (exit 255, the report lost in the response buffer) where PHP answers a 500.
+pub fn wrap_resolved_catch_all(program: Program) -> Program {
+    if has_catch_all(&program) {
+        return program;
+    }
+    let wrapper = crate::name_resolver::resolve(vec![web_wrap_stmt()])
+        .expect("the --web catch-all resolves")
+        .remove(0);
+    wrap_in_catch_all(program, wrapper)
 }
 
 /// Returns true for the heavy legacy callable-handler declarations that ordinary
@@ -415,6 +448,10 @@ fn is_hoistable_decl(kind: &StmtKind) -> bool {
     matches!(
         kind,
         StmtKind::FunctionDecl { .. }
+            // The dispatcher between the variants of a function an included file declares:
+            // a declaration like the others. The mark choosing a variant stays where its
+            // include runs.
+            | StmtKind::FunctionVariantGroup { .. }
             | StmtKind::ClassDecl { .. }
             | StmtKind::EnumDecl { .. }
             | StmtKind::PackedClassDecl { .. }
@@ -438,7 +475,7 @@ mod tests {
     //! - Bootstrap session support remains while optional APIs and callable handlers are pruned.
 
     use super::*;
-    use crate::parser::ast::{Expr, ExprKind};
+
 
 
     /// Parses a PHP fixture before web-prelude injection.

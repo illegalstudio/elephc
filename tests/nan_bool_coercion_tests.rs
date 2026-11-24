@@ -9,7 +9,7 @@
 //! profile.
 //!
 //! Called from:
-//! - `cargo test --test nan_bool_coercion_tests` through Rust's test harness.
+//! - `cargo test --test integration nan_bool_coercion_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI
@@ -108,7 +108,9 @@ fn compile(dir: &Path, source: &str, stem: &str, php_version: Option<&str>) -> P
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     if let Some(version) = php_version {
         cmd.args(["--php-version", version]);

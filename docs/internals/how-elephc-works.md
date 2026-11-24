@@ -21,7 +21,7 @@ Let's follow this through every phase.
 
 ## Phase 1: Lexing
 
-**File:** `src/lexer/` — See [The Lexer](the-lexer.md) for details.
+**File:** `crates/elephc-chopper/src/syntax/lexer/` — See [The Lexer](the-lexer.md) for details.
 
 The lexer reads the source character by character and produces a sequence of tokens:
 
@@ -49,7 +49,7 @@ Each token also carries a **Span** — its line and column number — for error 
 
 ## Phase 2: Parsing
 
-**File:** `src/parser/` — See [The Parser](the-parser.md) for details.
+**File:** `crates/elephc-chopper/src/syntax/parser/` — See [The Parser](the-parser.md) for details.
 
 The parser reads the token stream and builds an **Abstract Syntax Tree** (AST):
 
@@ -160,7 +160,10 @@ that occur only in autoloaded class files. The real pipeline then injects those
 preludes before resolving names. The probe restores thread-local source IDs and
 anonymous-class numbering while keeping process-global synthetic spans and
 include temporaries monotonic. This work has the `autoload-prelude-probe`
-timing label; it does not replace the later real autoload expansion.
+timing label; it does not replace the later real autoload expansion. The
+OPcache/INI and version preludes decide per function, so the probe also reports
+each of their names (`ini_get`, `ini_set`, `opcache_get_status`, `ini_restore`,
+...) that an autoloaded file references.
 
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 

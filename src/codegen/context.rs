@@ -80,6 +80,12 @@ pub(crate) struct FunctionContext<'a> {
     /// Runtime names a declared-`callable` conversion may resolve when provenance is open
     /// (see `lower_elephc_normalize_callable`); `None` outside such a conversion.
     pub(super) declared_callable_candidates: Option<Vec<String>>,
+    /// The effective runtime-name candidates a shared callable selector was requested with.
+    /// Its helper has no EIR provenance of its own, so the requesting site's set is replayed here.
+    pub(super) shared_selector_candidates: Option<Vec<String>>,
+    /// Set while emitting a shared callable selector body (or the argument normalizer), whose
+    /// boxed-callable conversions must expand inline instead of calling a shared selector.
+    pub(super) inline_callable_selectors: bool,
     /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
     raw_reference_call_results: HashSet<ValueId>,
     current_inst: Option<InstId>,
@@ -219,6 +225,8 @@ impl<'a> FunctionContext<'a> {
             local_analysis: layout.local_analysis,
             callable_reachability,
             declared_callable_candidates: None,
+            shared_selector_candidates: None,
+            inline_callable_selectors: false,
             raw_reference_call_results: function.instructions.iter()
                 .filter(|inst| inst.op == Op::AdoptRefCellPtr)
                 .filter_map(|inst| inst.operands.first().copied()).collect(),
@@ -413,8 +421,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the finite runtime callable names proven for one EIR value.
     pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
-        self.callable_reachability
-            .candidates(value)
+        self.shared_selector_candidates
+            .clone()
+            .or_else(|| self.callable_reachability.candidates(value))
             .or_else(|| self.declared_callable_candidates.clone())
     }
 

@@ -107,7 +107,7 @@ Compile a small program regardless of which installation method you used:
 
 ```bash
 echo '<?php echo "ok\n";' > check.php
-elephc check.php && ./check
+elephc build check.php && ./check
 ```
 
 This prints `ok` and confirms `elephc` can produce and run a native binary.

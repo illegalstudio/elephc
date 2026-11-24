@@ -2,7 +2,7 @@
 //! End-to-end version-surface and live SQL Server tests for optional PDO_SQLSRV.
 //!
 //! Called from:
-//! - `cargo test --features pdo-sqlsrv --test codegen_tests`.
+//! - `cargo test --features pdo-sqlsrv --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - PDO_SQLSRV 5.13.1 supports PHP 8.3-8.5 and declares constants on `PDO` only.

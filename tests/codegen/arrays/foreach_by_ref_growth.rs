@@ -3,7 +3,7 @@
 //! array grows, is copied, is overwritten through the referenced key, or is iterated twice.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` harness via `crate::support`.
+//! - `cargo test` through the `codegen_tests_data` harness via `crate::support`.
 //!
 //! Key details:
 //! - A hash entry that joins a PHP reference set carries runtime value tag 11 and a managed
@@ -394,7 +394,7 @@ fn emit_assembly_for_target(target: &str, source: &str) -> String {
     let output = command
         .arg(&php_path)
         .output()
-        .expect("run elephc --emit-asm");
+        .expect("run elephc build --emit-asm");
     assert!(
         output.status.success(),
         "{target}: emitting assembly failed:\n{}",

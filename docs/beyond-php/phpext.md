@@ -20,7 +20,7 @@ function add(int $left, int $right): int
 ```
 
 ```sh
-elephc --emit phpext --heap-size=1048576 math.php
+elephc build --emit phpext --heap-size=1048576 math.php
 php -n -d extension=./math.so -r 'echo add(right: 22, left: 20), "\n";'
 ```
 
@@ -82,7 +82,7 @@ final class Pippo
 ```
 
 ```sh
-elephc --emit phpext --heap-size=1048576 --export-constant='Demo\VERSION' pippo.php
+elephc build --emit phpext --heap-size=1048576 --export-constant='Demo\VERSION' pippo.php
 php -n -d extension=./pippo.so -r '$p = new Demo\Pippo("PHP"); echo $p->greet(), "\n"; var_dump($p->same() === $p, Demo\VERSION);'
 ```
 

@@ -19,7 +19,7 @@ use crate::types::FunctionSig;
 use super::super::super::Checker;
 use super::super::validation::{
     build_method_sig, declaration_is_source, matches_global_builtin_attribute,
-    validate_override_signature, visibility_rank,
+    method_parameter_widening, validate_override_signature, visibility_rank, ParameterWidening,
 };
 use super::state::ClassBuildState;
 use super::trait_requirements::validate_inherited_implementation;
@@ -309,7 +309,7 @@ fn apply_instance_method(
             }
         }
     }
-    if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+    if let Some(parent_sig) = state.method_sigs.get(&method_key).cloned() {
         if !internal_exception_override {
             let parent_owner = state.method_declaring_classes.get(&method_key);
             let parent_is_source =
@@ -322,7 +322,7 @@ fn apply_instance_method(
                 checker,
                 class,
                 method,
-                parent_sig,
+                &parent_sig,
                 state
                     .late_static_method_returns
                     .get(&method_key)
@@ -330,6 +330,9 @@ fn apply_instance_method(
                 false,
                 parent_is_source,
             )?;
+            if method_parameter_widening(&method_key, false) == ParameterWidening::TrailingOptional {
+                state.retire_narrower_vtable_slot(&method_key, &parent_sig, &sig);
+            }
         }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)

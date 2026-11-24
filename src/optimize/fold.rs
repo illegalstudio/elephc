@@ -20,4 +20,5 @@ mod scalar;
 pub(super) use compare::loose_eq_values;
 pub(super) use expr::{fold_enum_case, fold_expr, fold_method, fold_params, fold_property};
 pub(super) use ops::try_fold_array_access;
+pub(crate) use array_key::float_key_is_silent;
 pub(super) use scalar::{assigned_array_fact, assigned_scalar_value, scalar_value, ScalarValue};

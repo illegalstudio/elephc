@@ -3,7 +3,7 @@
 //! readily as an object, and answering `false` for the name form is a silent wrong answer.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests class_relation_names` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop class_relation_names` through Rust's test harness.
 //!
 //! Key details:
 //! - `static_relation_holds` opened by requiring `PhpType::Object`, so a string first operand

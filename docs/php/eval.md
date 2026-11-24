@@ -81,7 +81,7 @@ echo $value . "|" . $result . "\n"; // 5|10
 Compile and run it like any other program:
 
 ```bash
-elephc example.php
+elephc build example.php
 ./example
 ```
 
@@ -114,7 +114,7 @@ enable the capability:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex example.php
+elephc build --with-regex example.php
 ```
 
 The compiler prints a post-compilation reminder when a binary contains dynamic
@@ -244,7 +244,7 @@ runtime include-execution history.
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, dynamic static receivers (`$class::method()`, `$class::$method()`, and `($expr)::method()`), variable static method names on named receivers (`ClassName::$method()`), braced dynamic static method names (`ClassName::{$method}()` / `$class::{$method}()` / `($expr)::{$method}()`), and by-reference parameters for direct variable, array-element, object-property including dynamic property names, object-property array-element, static-property, and static-property array-element arguments including dynamic receivers and dynamic property names. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails, registered by-reference lvalue validation and writeback target preservation, plus representable scalar/string constant expressions, resolved global/named class-like constants, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private parameters when the current eval class scope satisfies PHP visibility; scalar, nullable, callable, Mixed, array, iterable, object, union, and intersection-object return values are checked and boxed back to eval. Generated AOT method bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, object, and supported union/intersection object shapes, with by-reference parameters limited to the staged scalar/nullable scalar/Mixed/array/iterable/object slice. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty top-level eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, eval-declared-function `__FUNCTION__` / `__METHOD__`, eval-declared-method `__FUNCTION__` / `__METHOD__` / `__CLASS__` / `__TRAIT__`, eval class-like constant/property initializers for `__CLASS__` / `__TRAIT__`, and reflected parameter defaults using the declaring callable scope, including trait-origin names for imported trait members. |
-| Constants | Predefined eval-visible constants, AOT user-declared `const` / `define()` constants seeded under PHP's `user` category including recursively nested array values, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
+| Constants | Predefined eval-visible constants, AOT user-declared `const` / `define()` constants seeded under PHP's `user` category including recursively nested array values, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. Dynamic constants defined by `eval()` remain visible to generated code that runs after the eval call, including class property initializers evaluated by a later `new`. |
 | Ternaries | Full ternary and short ternary (`?:`). |
 | Match | Strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default`. A miss without `default` is reported as an eval runtime fatal. |
 

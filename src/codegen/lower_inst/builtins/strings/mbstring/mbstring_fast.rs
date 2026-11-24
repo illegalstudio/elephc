@@ -243,10 +243,8 @@ fn try_lower_check_encoding(
     inst: &Instruction,
     _operation: RuntimeBuiltinId,
 ) -> Result<bool> {
-    if inst.operands.len() != 2
-        || !super::explicit_utf8_encoding(ctx, inst.operands[1])?
-        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
-    {
+    // The same rule decided whether this program links the bridge at all.
+    if !crate::ir::native_mbstring::check_encoding_is_native_utf8(ctx.module, ctx.function, inst) {
         return Ok(false);
     }
     let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));

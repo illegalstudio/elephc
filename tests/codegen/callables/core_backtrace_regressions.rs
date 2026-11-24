@@ -2,7 +2,7 @@
 //! Pins complete native/eval backtrace boundaries, limits, and argument ownership.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_backtrace_regression_`.
+//! - `cargo test --test codegen_tests_core test_core_backtrace_regression_`.
 //!
 //! Key details:
 //! - Eval fragments depend on a runtime value so Magician executes the frame reader.

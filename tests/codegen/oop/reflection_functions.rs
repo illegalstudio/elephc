@@ -481,6 +481,33 @@ echo (new ReflectionProperty('AbstractRefBox', 'items'))->getHook(PropertyHookTy
     assert_eq!(out, "ynnnyy");
 }
 
+/// Verifies property-hook attributes survive into hook ReflectionMethod metadata.
+#[test]
+fn test_property_hook_reflection_keeps_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class Marker {}
+#[Attribute]
+class Setter {}
+class Hooked {
+    public int $value = 0 {
+        #[Marker]
+        get => $this->value;
+        #[Setter]
+        set => $value;
+    }
+}
+$get = (new ReflectionProperty('Hooked', 'value'))->getHook(PropertyHookType::Get);
+$set = (new ReflectionProperty('Hooked', 'value'))->getHook(PropertyHookType::Set);
+foreach ($get->getAttributes() as $attribute) { echo $attribute->getName(), '|'; }
+foreach ($set->getAttributes() as $attribute) { echo $attribute->getName(), '|'; }
+"#,
+    );
+
+    assert_eq!(out, "Marker|Setter|");
+}
+
 /// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
 ///
 /// `ReflectionParameter::getDeclaringFunction()` hands back a `ReflectionFunction` that codegen

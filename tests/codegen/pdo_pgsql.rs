@@ -11,7 +11,7 @@
 //!     docker run -d --name pg -e POSTGRES_PASSWORD=test -e POSTGRES_USER=test \
 //!         -e POSTGRES_DB=testdb -p 55432:5432 postgres:16-alpine
 //!     ELEPHC_PG_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test' \
-//!         cargo test --test codegen_tests -- --ignored pgsql
+//!         cargo test --test codegen_tests_ext -- --ignored pgsql
 //!   The focused GSSAPI fixtures provision their own KDC and server through
 //!   `scripts/test-pdo-gss.sh` and require the `libpq-gss` bridge profile.
 //!
@@ -741,7 +741,7 @@ echo $content . ":" . $seek . ":" . $written . ":" . $stored . ":" . $missing;
 ///       -e POSTGRES_DB=testdb -p 55433:5432 -v "$PWD/certs":/certs postgres:16-alpine \
 ///       -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
 ///   ELEPHC_PG_TLS_DSN='pgsql:host=localhost;port=55433;dbname=testdb;user=test;password=test;sslmode=require' \
-///       cargo test --test codegen_tests -- --ignored pgsql_tls_round_trip
+///       cargo test --test codegen_tests_ext -- --ignored pgsql_tls_round_trip
 #[test]
 #[ignore]
 fn pgsql_tls_round_trip() {

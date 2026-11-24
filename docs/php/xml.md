@@ -34,7 +34,7 @@ Elephc program from inline Rust source; the test process never parses a
 `python3 scripts/gen_php_src_simplexml_cases.py`, then run:
 
 ```bash
-ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests php_src_simplexml
+ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests_ext php_src_simplexml
 ```
 
 At the PHP 8.5.8 snapshot the migrated suite reports **154 passing, 0 failing, 2
@@ -130,7 +130,7 @@ After that, an ordinary compile is enough — using any function or class of the
 surface links the bridge and, with it, the managed package:
 
 ```bash
-elephc feed.php
+elephc build feed.php
 ```
 
 Use `--with-xml` when the surface is only reached at runtime, for example
@@ -139,7 +139,7 @@ and force-injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleX
 sees no xml usage:
 
 ```bash
-elephc --with-xml feed.php
+elephc build --with-xml feed.php
 ```
 
 Either way the project must declare `libxml2`: a compile that plans the bridge

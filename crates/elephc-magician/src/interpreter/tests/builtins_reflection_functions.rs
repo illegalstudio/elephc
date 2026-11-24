@@ -271,6 +271,29 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Keeps closure parameter attributes aligned with plain and variadic parameters.
+#[test]
+fn execute_program_reflection_preserves_eval_closure_parameter_attributes() {
+    let program = parse_fragment(
+        br#"$fn = function($plain, #[Marker('normal')] $marked, #[Marker('tail')] #[Extra] ...$rest) {};
+$params = (new ReflectionFunction($fn))->getParameters();
+echo count($params[0]->getAttributes()); echo ":";
+$marked = $params[1]->getAttributes();
+echo $marked[0]->getName(); echo ":";
+echo $marked[0]->getArguments()[0]; echo ":";
+$rest = $params[2]->getAttributes();
+echo $rest[0]->getArguments()[0]; echo ":";
+echo $rest[1]->getName();"#,
+    )
+    .expect("parse eval closure with parameter attributes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("reflect eval closure parameter attributes");
+
+    assert_eq!(values.output, "0:Marker:normal:tail:Extra");
+}
+
 /// Verifies ReflectionFunction reports eval source file and line metadata.
 #[test]
 fn execute_program_reflection_function_reports_source_location() {

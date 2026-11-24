@@ -12,6 +12,8 @@
 //!   string-result owner contract. Every invoker binds the same container layout, so two
 //!   wrappers agreeing on those three can safely share one emitted body.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
+//! - Boxed-callable selectors are queued by conversion policy and emitted after the bodies,
+//!   so equivalent sites call one selector instead of each expanding every candidate.
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
 //!   trailing id keeps two functions with similar names from emitting the same label.
@@ -74,6 +76,9 @@ pub(crate) struct SharedCodegenState {
     /// `--apm-collector`: the collector's address is embedded at
     /// `frame::APM_COLLECTOR_SYMBOL` for the APM init to read.
     pub(crate) apm_collector: bool,
+    /// The probe's start-up text (`[apm]` rules, build identity) is embedded at
+    /// `apm_init::APM_RULES_SYMBOL` for the prologue to publish to the probe.
+    pub(crate) apm_rules: bool,
     /// Counted functions as `(display name, counter symbol)`, in emission order. Main's
     /// epilogue renders the exit dump from this list — main is emitted last, so the
     /// registry is complete by then.
@@ -82,12 +87,24 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Where each instrumented function is declared, `path:line`, in id order (empty
+    /// when unknown). The profile names the function a query came from by it.
+    instr_locations: Vec<String>,
     /// Classes whose module-level complete `ReflectionClass` builder was requested, as
     /// `(php symbol key, class name, label)` in request order. Builders are emitted after the
     /// module's bodies, and emitting one can request more (its members' declaring classes).
     reflection_class_builders: Vec<(String, String, String)>,
     /// How many of `reflection_class_builders` have been emitted.
     reflection_class_builders_emitted: usize,
+    /// Boxed-callable selectors shared by every conversion site with the same policy, as
+    /// `(key, label)` in request order. Emitted after the module's bodies; emitting one can
+    /// request more (a builtin wrapper it reaches may convert its own callback).
+    callable_selectors: Vec<(
+        crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
+        String,
+    )>,
+    /// How many of `callable_selectors` have been emitted.
+    callable_selectors_emitted: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -165,6 +182,29 @@ impl SharedCodegenState {
         Some((class_name, label))
     }
 
+    /// Returns the global label of the shared selector for `key`, queuing its body the first
+    /// time a conversion site asks for that policy.
+    pub(super) fn request_callable_selector(
+        &mut self,
+        key: &crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
+    ) -> String {
+        if let Some((_, label)) = self.callable_selectors.iter().find(|(existing, _)| existing == key) {
+            return label.clone();
+        }
+        let label = format!("_eir_callable_selector_{}", self.callable_selectors.len());
+        self.callable_selectors.push((key.clone(), label.clone()));
+        label
+    }
+
+    /// Takes the next requested shared callable selector that has not been emitted yet.
+    pub(super) fn next_pending_callable_selector(
+        &mut self,
+    ) -> Option<(crate::codegen::lower_inst::callables::SharedCallableSelectorKey, String)> {
+        let pending = self.callable_selectors.get(self.callable_selectors_emitted)?.clone();
+        self.callable_selectors_emitted += 1;
+        Some(pending)
+    }
+
     /// Records dependencies introduced by a synthetic wrapper that was not present during the
     /// module's original EIR feature scan.
     pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {
@@ -202,6 +242,12 @@ impl SharedCodegenState {
                 _ => {}
             }
         }
+    }
+
+    /// Reserves the runtime families the shared mixed-string ladder uses on its throw path.
+    pub(super) fn require_mixed_string_runtime(&mut self) {
+        self.generated_runtime_features.handler_state = true;
+        self.generated_runtime_features.object_clone = true;
     }
 
     /// Returns optional runtime families introduced after the module-level EIR scan.
@@ -257,7 +303,22 @@ impl SharedCodegenState {
         }
         let id = self.instr_registry.len();
         self.instr_registry.push(display_name);
+        self.instr_locations.push(String::new());
         id
+    }
+
+    /// Notes where function `id` is declared, unless a variant already did.
+    pub(super) fn note_instr_location(&mut self, id: usize, location: String) {
+        if let Some(slot) = self.instr_locations.get_mut(id) {
+            if slot.is_empty() {
+                *slot = location;
+            }
+        }
+    }
+
+    /// Returns the declaration locations in id order, parallel to `instr_registry`.
+    pub(super) fn instr_locations(&self) -> &[String] {
+        &self.instr_locations
     }
 
     /// Returns the instrumented function names in id order.

@@ -5,6 +5,7 @@
 //!
 //! Called from:
 //! - `crate::optimize::fold::ops`
+//! - `crate::types::deferred_defaults` (float key check before a literal array decides a branch)
 //!
 //! Key details:
 //! - The integer-string rule is shared with the type checker through
@@ -42,6 +43,11 @@ pub(super) fn php_array_key(value: &ScalarValue) -> Option<PhpArrayKey> {
             PhpArrayKey::Str(value.clone())
         }),
     }
+}
+
+/// Whether PHP converts float array key `value` to an int without any diagnostic.
+pub(crate) fn float_key_is_silent(value: f64) -> bool {
+    float_array_key(value).is_some()
 }
 
 /// Normalizes a float array key, declining every value PHP 8.1+ deprecates.

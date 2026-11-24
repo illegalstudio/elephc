@@ -55,6 +55,7 @@ pub(in crate::codegen) fn resolve_array_const_default(
     let mut reads = Vec::new();
     for entry in entries {
         match entry {
+            ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => return None,
             ArrayEntry::Keyed(key, value) => {
                 let key = resolve_array_const_default_key(&key, context, depth + 1, &mut reads)?;
                 let value = resolve_const_default_at(&value, context, depth + 1)?;

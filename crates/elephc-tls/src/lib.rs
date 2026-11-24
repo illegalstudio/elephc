@@ -725,6 +725,20 @@ mod tests {
         accept.join().expect("join isolated TLS connect probe");
     }
 
+    /// IP literals parse as `IpAddress`, so DNS wildcard SANs never verify them; a
+    /// single-label host stays a `DnsName` and cannot match the bare `*` wildcard form.
+    #[test]
+    fn server_names_separate_ip_and_dns_matching() {
+        assert!(matches!(
+            ServerName::try_from("127.0.0.1").unwrap(),
+            ServerName::IpAddress(_)
+        ));
+        assert!(matches!(
+            ServerName::try_from("localhost").unwrap(),
+            ServerName::DnsName(_)
+        ));
+    }
+
     /// Verifies that the exported TLS ABI version remains at v1.
     #[test]
     fn version_is_v1() {

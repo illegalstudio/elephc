@@ -593,6 +593,11 @@ impl<'a> ConversionScan<'a> {
             return;
         }
         match &expr.kind {
+            ExprKind::Runtime(runtime) => {
+                for value in runtime.exprs() {
+                    self.expr(value);
+                }
+            },
             ExprKind::Variable(name) => self.name(name),
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)
@@ -725,6 +730,7 @@ impl<'a> ConversionScan<'a> {
                 variadic_by_ref: _,
                 captures,
                 capture_refs,
+                ..
             } => {
                 // The body is lowered as its own function against its own locals; only the capture
                 // list touches ours, and a by-reference capture makes the local ref-bound (never a

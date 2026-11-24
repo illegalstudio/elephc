@@ -58,6 +58,8 @@ pub(crate) struct History {
     pub alert_windows_held: usize,
     /// Budgets checked after every poll (`--alert`).
     pub alerts: alerts::Alerts,
+    /// The deploys seen, and the builds each service served (`deploys`).
+    pub deploys: deploys::Deploys,
 }
 
 impl History {
@@ -65,7 +67,11 @@ impl History {
     /// not hold; `live` when a collector feeds it, rather than a page replaying a
     /// store.
     pub(crate) fn new(target: &str, store: Option<Store>, live: bool) -> Self {
+        // The builds the store saw served: a collector restarted on the same build marks no deploy.
+        let deploys = deploys::Deploys::from_list(store.as_ref().map(|store| deploys::read(store.dir())).unwrap_or_default());
+        let store_kept = store.is_some();
         Self {
+            deploys,
             target: target.to_string(),
             windows: VecDeque::with_capacity(MEMORY_WINDOWS),
             latest: None,
@@ -76,7 +82,7 @@ impl History {
             live,
             profiles: VecDeque::new(),
             capture: None,
-            traces: traces::TraceBook::default(),
+            traces: traces::TraceBook::stored(store_kept),
             capture_every: 0,
             alert_ledger: std::collections::BTreeMap::new(),
             alert_windows_held: 0,
@@ -168,6 +174,16 @@ impl History {
         self.plan(from_ms, to_ms).load()
     }
 
+    /// Which stored windows and captures belong on this collector's page: its own service's,
+    /// its programs' when it listens, or every one when the page replays a store.
+    pub(crate) fn source_filter(&self) -> SourceFilter {
+        match (self.live, self.pushed) {
+            (false, _) => SourceFilter::Any,
+            (true, true) => SourceFilter::Pushed,
+            (true, false) => SourceFilter::Service(self.target.clone()),
+        }
+    }
+
     /// What `windows_in` needs, taken without reading the disk, so a caller
     /// holding the history's lock can release it before the store is read.
     pub(crate) fn plan(&self, from_ms: u64, to_ms: u64) -> RangePlan {
@@ -182,11 +198,7 @@ impl History {
             // service's windows in a shared store would add its traffic. A
             // listening collector's are its programs', each under its own
             // source name (review).
-            own: match (self.live, self.pushed) {
-                (false, _) => SourceFilter::Any,
-                (true, true) => SourceFilter::Pushed,
-                (true, false) => SourceFilter::Service(self.target.clone()),
-            },
+            own: self.source_filter(),
             memory: self
                 .windows
                 .iter()
@@ -248,12 +260,12 @@ impl RangePlan {
     /// A stored service window that began before memory does is read whole,
     /// even when it ends after: its earlier requests have left memory. Stored
     /// windows are coarser than memory's one-second ones, so the oldest memory
-    /// window usually starts inside one, and cutting at the end time dropped it
-    /// (review G4). Memory then joins only after the last stored SERVICE window.
+    /// window usually starts inside one, and cutting at the end time dropped it.
+    /// Memory then joins only after the last stored SERVICE window.
     ///
     /// Script runs never set that cut: memory holds only the collector's own
     /// windows, so a long run ending inside it would have hidden every memory
-    /// window before its end (review G10). They come from the store over the
+    /// window before its end. They come from the store over the
     /// whole range instead, which also shows a run that ended in the last hour.
     pub(crate) fn load(self) -> Vec<Window> {
         let mut out = Vec::new();

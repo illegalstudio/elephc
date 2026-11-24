@@ -14,14 +14,14 @@ mod cut;
 mod microsoft;
 mod mobile;
 
-use super::{doublebyte::DoubleByte, mapping::word, Decoded, Substitute, BAD_INPUT};
+use super::{doublebyte::DoubleByte, mapping::{word, Dense}, Decoded, Substitute, BAD_INPUT};
 
 /// Shared Japanese planes plus each public encoding's canonical scalar output mapping.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Jis {
     pub base: DoubleByte,
-    pub encode: &'static [u8],
-    pub error_encode: &'static [u8],
+    pub encode: Dense,
+    pub error_encode: Dense,
     pub supplementary: &'static [u8],
     pub composites: &'static [u8],
     pub variant: Variant,

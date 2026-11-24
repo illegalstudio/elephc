@@ -3,7 +3,7 @@
 //! builtin contract catalog.
 //!
 //! Called from:
-//! - `cargo test --test builtin_parity_tests` through Rust's test harness.
+//! - `cargo test --test integration builtin_parity_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Backend coverage and signature profiles come from `elephc-builtin-contract`.

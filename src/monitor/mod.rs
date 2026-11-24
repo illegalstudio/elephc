@@ -4,7 +4,7 @@
 //! runtime view, plus a per-function cause table on stdout.
 //!
 //! Called from:
-//! - `crate::main()` when the first argument is exactly `monitor`.
+//! - `crate::entry::run()` when the first argument is exactly `monitor`.
 //!
 //! Key details:
 //! - A launched program defaults to exact capture on macOS and Linux. A running
@@ -67,6 +67,7 @@ mod decl_ranges;
 pub(crate) use decl_ranges::php_decl_ranges;
 pub(crate) use render::*;
 mod exports;
+mod timeline;
 pub(crate) use exports::*;
 mod stitch;
 pub(crate) use stitch::*;
@@ -484,10 +485,26 @@ pub(crate) fn load_assert_file(
 ) -> Result<Option<(Vec<(String, Option<String>)>, String)>, String> {
     let path = match explicit {
         Some(path) => PathBuf::from(path),
-        None => match find_project_file(target) {
-            Some(found) => found,
-            None => return Ok(None),
-        },
+        None => {
+            // The project's `elephc.toml` `[budgets]` first: one manifest for the whole
+            // project. The `.elephc` file it replaces is still read, with a note.
+            if let Some(found) = crate::project_monitoring::discover(Path::new(target))? {
+                if let Some(budgets) = found.settings.budgets {
+                    return Ok(Some((budgets, found.manifest.display().to_string())));
+                }
+            }
+            match find_project_file(target) {
+                Some(found) => {
+                    eprintln!(
+                        "  note: {}: budgets now belong in elephc.toml, as `[budgets] rules = [...]`; \
+                         this file is still read",
+                        found.display()
+                    );
+                    found
+                }
+                None => return Ok(None),
+            }
+        }
     };
     let text = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;

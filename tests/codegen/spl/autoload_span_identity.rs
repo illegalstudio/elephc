@@ -4,7 +4,7 @@
 //! a diagnostic raised inside an autoloaded file must name that file.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests autoload_span_identity` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop autoload_span_identity` through Rust's test harness.
 //!
 //! Key details:
 //! - Autoloaded files used to be lexed with the entry file's source identity, so span-keyed
@@ -56,7 +56,7 @@ fn compile_project_with_cli_and_run(
     stdout
 }
 
-/// Runs `elephc --check` on `entry` of a written project and returns the stderr of the failure.
+/// Runs `elephc build --check` on `entry` of a written project and returns the stderr of the failure.
 fn check_project_with_cli_expect_failure(
     prefix: &str,
     files: &[(&str, &str)],

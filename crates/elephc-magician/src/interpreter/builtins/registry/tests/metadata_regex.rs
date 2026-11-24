@@ -13,7 +13,7 @@ use super::*;
 #[test]
 fn declared_builtin_registry_derives_regex_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("preg_match"),
-            Some(["pattern", "subject", "matches", "flags"].as_slice())
+            Some(["pattern", "subject", "matches", "flags", "offset"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("preg_match", 2),

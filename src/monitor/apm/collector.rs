@@ -125,6 +125,9 @@ impl<'a> Collector<'a> {
         if let Some(store) = &shared.0.lock().unwrap_or_else(|e| e.into_inner()).store {
             println!("storing history in {} ({} day retention)", store.dir().display(), store.retention_days());
         }
+        if let Some(endpoint) = &cmd.otlp {
+            super::otlp_export::start(endpoint, name);
+        }
         Some(Self {
             cmd,
             shared,
@@ -149,11 +152,13 @@ impl<'a> Collector<'a> {
         if history.pushed {
             history.latest_by_source.insert(window.source.clone(), snapshot.clone());
         }
+        let deploy = snapshot.build.as_deref().and_then(|build| history.deploys.note(&window.source, build, window.t));
         history.latest = Some(snapshot);
         let source = window.source.clone();
         history.push(window);
         check_alerts(&mut history, self.cmd, store::now_ms(), false);
         let store = history.store.clone();
+        let captures = due_captures(&mut history, store::now_ms());
         signal.notify_all();
         // The store is written after the history's lock is let go: the page,
         // `/metrics` and the event streams read that lock, and a slow disk
@@ -162,6 +167,15 @@ impl<'a> Collector<'a> {
         if full {
             if let Some(windows) = self.pending.remove(&source) {
                 write_record(store.as_ref(), &windows);
+            }
+        }
+        let unsaved = write_captures(store.as_ref(), &captures);
+        if !unsaved.is_empty() {
+            self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).traces.unsaved(&unsaved);
+        }
+        if let (Some(store), Some(deploy)) = (store.as_ref(), deploy) {
+            if let Err(error) = deploys::append(store.dir(), &deploy) {
+                eprintln!("elephc monitor: {error}");
             }
         }
     }
@@ -247,17 +261,59 @@ impl<'a> Collector<'a> {
 
     /// Writes what has not reached the store yet: a stop is not a crash.
     fn finish(self) -> i32 {
-        let history = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut history = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
         for windows in self.pending.values() {
             write_record(history.store.as_ref(), windows);
         }
+        // The current hour's captures too: the collector stops before it ends.
+        let captures = due_captures(&mut history, u64::MAX);
+        write_captures(history.store.as_ref(), &captures);
+        drop(history);
+        super::otlp_export::flush();
         0
     }
 }
 
-/// Writes one source's pending windows to the store as one record.
+/// The captures of the hours that are over and not stored yet, copied so the store is
+/// written after the history's lock is let go. None without a store: memory keeps them.
+fn due_captures(
+    history: &mut History,
+    now_ms: u64,
+) -> Vec<(super::captures::CaptureRecord, crate::call_graph::CallGraph)> {
+    if history.store.is_none() {
+        return Vec::new();
+    }
+    let source = history.target.clone();
+    history.traces.unwritten_hours(now_ms).into_iter().map(|trace| (trace.record(&source), trace.graph.clone())).collect()
+}
+
+/// Writes captures to the store, reporting a failure without stopping the collector, and
+/// returns the ids it could not save, for the next poll to retry.
+fn write_captures(
+    store: Option<&Store>,
+    captures: &[(super::captures::CaptureRecord, crate::call_graph::CallGraph)],
+) -> Vec<u64> {
+    let Some(store) = store else {
+        return Vec::new();
+    };
+    let mut failed = Vec::new();
+    for (record, graph) in captures {
+        if let Err(error) = store.append_capture(record, graph) {
+            eprintln!("elephc monitor: {error}");
+            failed.push(record.id);
+        }
+    }
+    failed
+}
+
+/// Writes one source's pending windows to the store as one record, and hands the record
+/// to the OTLP export when there is one.
 fn write_record(store: Option<&Store>, windows: &[Window]) {
-    if let (Some(store), Some(record)) = (store, coalesce(windows)) {
+    let Some(record) = coalesce(windows) else {
+        return;
+    };
+    super::otlp_export::send(&record);
+    if let Some(store) = store {
         if let Err(error) = store.append_collected(&record) {
             eprintln!("elephc monitor: {error}");
         }
@@ -508,9 +564,12 @@ fn receive_source(mut stream: std::net::TcpStream, key: [u8; 32], sender: std::s
 /// What a pushing program's windows are labelled with: its name, where it
 /// sent from, its pid and its instance number — the same across its
 /// reconnections, apart from any other process's, two containers running the
-/// same build as pid 1 behind one address included (review).
+/// same build as pid 1 behind one address included. The label keeps 32 bits of
+/// the instance, both halves folded together: a probe that could not draw
+/// randomness numbers itself from its start time, whose high half two
+/// processes started in the same few seconds share (#2499).
 pub(super) fn source_name(program: &str, peer: &str, pid: u32, instance: u64) -> String {
-    format!("{program}@{peer}{PUSHED_PID} {pid} #{:08x}", instance >> 32)
+    format!("{program}@{peer}{PUSHED_PID} {pid} #{:08x}", ((instance >> 32) ^ instance) as u32)
 }
 
 /// What a pushing program's source name carries before its pid.
@@ -560,12 +619,14 @@ pub(super) fn check_alerts(history: &mut History, cmd: &MonitorCommand, now_ms: 
     let gap = unreachable.then(|| {
         let from = history.newest_ms().unwrap_or(since).max(since);
         Window {
+            build: String::new(),
             t: now_ms,
             span_ms: now_ms.saturating_sub(from),
             epoch: history.latest.as_ref().map_or(1, |snapshot| snapshot.epoch.max(1)),
             source: cmd.target.clone(),
             routes: Vec::new(),
             res: None,
+            errors: Vec::new(),
         }
     });
     measured.extend(gap.iter());
@@ -621,6 +682,13 @@ fn spawn_capture_loop(target: &str, key: [u8; 32], every: u64, shared: Shared) {
                 ) else {
                     continue;
                 };
+                // A slice of a transaction the project's `[apm]` rules exclude is not kept, and
+                // the next request is tried soon: a health check polled every second must not
+                // take the captures (review).
+                if text.lines().any(|line| line == elephc_probe::endpoint::EXCLUDED_MARK) {
+                    next = Instant::now() + Duration::from_secs(1);
+                    continue;
+                }
                 let Some((route, status, duration_ns, graph)) = traces::TraceBook::trace_from_slice(&text) else {
                     continue;
                 };
@@ -665,14 +733,16 @@ mod tests {
         let mut collector = Collector::start(&cmd, "listen", None, Some(store.clone())).expect("a collector");
         let now = store::now_ms();
         let run = Window {
+            build: String::new(),
             res: None,
+            errors: Vec::new(),
             t: now - 2 * collector.resolution_ms,
             span_ms: 5,
             epoch: 1,
             source: "job@127.0.0.1 pid 7 #00000007".into(),
             routes: Vec::new(),
         };
-        let snapshot = Snapshot { epoch: 1, time_ms: run.t, routes: Vec::new(), resources: None };
+        let snapshot = Snapshot { epoch: 1, time_ms: run.t, routes: Vec::new(), resources: None, build: None, errors: Vec::new(), exits: Vec::new() };
         collector.absorb(run.clone(), snapshot);
         assert!(store.load(0, now + 1).is_empty(), "five milliseconds fill no resolution");
         collector.write_due(run.t + collector.resolution_ms - 1);

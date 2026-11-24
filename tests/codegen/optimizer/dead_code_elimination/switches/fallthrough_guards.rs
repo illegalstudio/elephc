@@ -2,7 +2,7 @@
 //! End-to-end regressions for switch case guards across fall-through entries.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests dead_code_elimination::switches`.
+//! - `cargo test --test codegen_tests_core dead_code_elimination::switches`.
 //!
 //! Key details:
 //! - Fall-through bodies retain live structural/range alternatives, while

@@ -472,6 +472,11 @@ pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
 }
 
+/// `clone value`.
+pub fn e_clone(value: Expr) -> Expr {
+    Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -810,7 +815,7 @@ impl ClosureBuilder {
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
-                param_attributes,
+                param_attributes: Vec::new(),
                 variadic: None,
                 variadic_by_ref: false,
                 variadic_type: None,
@@ -901,8 +906,8 @@ pub fn s_static_prop_array_assign(
 
 /// `self::$prop[<index>] = <value>;` in statement position.
 ///
-/// The `self::` receiver keeps the assignment inside the declaring class instead of binding a
-/// same-named subclass property; `s_static_prop_array_assign` names a concrete class.
+/// The `self::` receiver is what keeps the assignment inside the declaring class instead of
+/// binding a same-named subclass property; `s_static_prop_array_assign` names a concrete class.
 pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr) -> Stmt {
     Stmt::new(
         StmtKind::StaticPropertyArrayAssign {

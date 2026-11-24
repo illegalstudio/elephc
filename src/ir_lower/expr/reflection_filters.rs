@@ -112,7 +112,9 @@ pub(super) fn reflection_class_property_names_for_filter(
             .chain(class_info.static_properties.iter())
             .map(|(name, _)| name)
             .filter(|name| {
-                contract.is_none_or(|class| !class.property_is_hidden(name))
+                (!name.starts_with("__elephc_")
+                    || !crate::uri_prelude::is_internal_uri_class(class_name))
+                    && contract.is_none_or(|class| !class.property_is_hidden(name))
                     && reflection_property_matches_filter(class_info, name, filter)
             })
             .cloned()
@@ -176,6 +178,15 @@ pub(super) fn reflection_class_method_names_for_filter(
             .keys()
             .chain(class_info.static_methods.keys()),
     ) {
+        // Compiler-owned helpers are not part of the PHP surface, and php-src's internal URI
+        // classes hide their native destructor and clone handler from reflection.
+        let uri_internal = crate::uri_prelude::is_internal_uri_class(class_name);
+        if uri_internal
+            && (name.starts_with("__elephc_")
+                || matches!(php_symbol_key(name).as_str(), "__destruct" | "__clone"))
+        {
+            continue;
+        }
         // Builtin implementation methods a subclass inherits stay hidden (mysqli's `__destruct`).
         let declaring = class_info
             .method_declaring_classes

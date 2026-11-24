@@ -28,9 +28,9 @@ mod callables;
 pub(crate) mod clone_override_storage;
 pub(crate) mod scope_dynamic_storage;
 mod driver;
+mod element_values;
 mod extern_decl;
 mod functions;
-pub(crate) use functions::validate_unresolved_call_argument_order;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;
@@ -345,6 +345,10 @@ pub(crate) struct Checker {
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
     pub required_libraries: Vec<String>,
+    /// Subset of `required_libraries` whose bridge runtime a call site may reach.
+    pub runtime_bridge_libraries: Vec<String>,
+    /// Libraries a builtin named as a callable value requires (see `CheckResult`).
+    pub callable_builtin_libraries: Vec<String>,
     /// Best-known top-level variable types visible to `global` statements in the
     /// current file scope.
     pub top_level_env: TypeEnv,
@@ -376,6 +380,27 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// Locals whose checked type is a proof of what their cell holds, with that type.
+    ///
+    /// An ordinary assigned local is not one: `$t = null; if ($c) { $t = "s"; }` reads `string`
+    /// afterwards while the cell can still hold the `null`. Two bindings are recorded here:
+    /// the key and by-value value variables of an array `foreach` being checked, which hold an
+    /// element of the source, and a local whose guard exits on every other path
+    /// (`if (!is_bool($v)) { throw … }`), whose runtime tag the guard tested. An entry ends at
+    /// the first store to the name, and a loop binding also at the end of its loop;
+    /// `element_values` reads it to decide whether a boxed read may be projected.
+    pub proven_local_views: HashMap<String, PhpType>,
+    /// Names whose proof ended inside each conditional body being checked, innermost last.
+    ///
+    /// A body that may not run is a proof scope (`Checker::begin_proof_scope`): a proof it
+    /// adds must not reach its sibling bodies or the code after it, while a proof it ends is
+    /// gone for every enclosing scope as well.
+    pub proof_scope_invalidations: Vec<HashSet<String>>,
+    /// The proofs the body checked last held where it ended, `None` when it cannot fall through.
+    ///
+    /// The statement that owns the body takes it right after the check to join the bodies that
+    /// reach the code after it (`Checker::record_joined_body_proofs`).
+    pub body_exit_proofs: Option<HashMap<String, PhpType>>,
     /// The counter of the innermost `for` loop whose writes stay on packed storage, with the
     /// `local_conditional_depth` its body runs at.
     ///
@@ -476,6 +501,13 @@ pub(crate) struct Checker {
     /// Physical instance slots refined during the current method fixed-point pass.
     /// A first constructor integer initialization may replay a placeholder from an older pass.
     pub method_property_refinements: Option<HashSet<(String, usize)>>,
+    /// Untyped properties that a by-reference call argument needs in boxed `Mixed` storage.
+    ///
+    /// PHP treats an untyped property as `mixed`; elephc infers a narrow storage type from its
+    /// default. Passing it to an untyped by-reference parameter would otherwise write a boxed
+    /// temporary back into that narrow slot. Recorded while checking and applied to `classes`
+    /// before lowering by `apply_reference_property_promotions`.
+    pub reference_property_storage_widenings: HashSet<(String, String)>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -497,6 +529,11 @@ pub(crate) struct Checker {
     /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
     /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
+    /// Exact `(class, property)` names an ordinary PHP 8.5 write creates on a class without
+    /// `#[\AllowDynamicProperties]`. A later read of that name must type-check because the
+    /// per-instance hash holds it, even though no declared slot exists. Entries keep the
+    /// receiver class the site named; the read query accepts its ancestors and descendants.
+    pub dynamic_property_creations: std::collections::BTreeSet<(String, String)>,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///
@@ -504,7 +541,7 @@ pub(crate) struct Checker {
     /// one: lowering looks entries up by the span of the node it is lowering, so a key shared
     /// by many nodes makes all of them throw. See that method for why the preludes make this
     /// reachable rather than theoretical.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
@@ -516,6 +553,9 @@ pub(crate) struct Checker {
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Exact element proofs at declared-array appends; conflicting visits retain no proof.
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Scalar views of values written as container elements, agreed by every authoritative
+    /// visit to one scoped expression; see `element_values`.
+    pub element_value_views: crate::types::ElementValueViews,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Named-function contexts and body scopes queried without their local branch guards.
@@ -729,6 +769,12 @@ pub(crate) struct Checker {
     /// Whether any checked body contains eval. Runtime fragments can write missing names on AOT
     /// objects even when no equivalent property mutation is visible in the source AST.
     pub program_contains_eval: bool,
+    /// Literal `define("NAME", …)` names found while normalizing property defaults, including
+    /// calls inside functions the checker does not evaluate.
+    ///
+    /// A compiled `define()` writes native global storage, so EIR lowering must keep that lookup
+    /// for these names even when an unrelated `eval()` makes the program eval-aware.
+    pub native_defined_constants: HashSet<String>,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///
@@ -1197,8 +1243,10 @@ impl Checker {
     /// here on the environment entry is the region's own fact and an assignment measures itself
     /// against it in the ordinary way.
     ///
-    /// A no-op for a name no guard has narrowed, which is every name most of the time.
+    /// The store also ends any proof recorded for the name in `proven_local_views`. Otherwise
+    /// a no-op for a name no guard has narrowed, which is every name most of the time.
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
+        self.end_local_proof(name);
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             self.next_guard_binding_revision += 1;
             entry.binding_revision = self.next_guard_binding_revision;
@@ -1255,6 +1303,7 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+        self.end_local_proof(name);
     }
 
     /// Ends a retained local read view before a store or rebinding chooses its new contract.
@@ -1502,7 +1551,8 @@ pub(crate) fn is_unset_call(name: &str) -> bool {
 /// Takes the map rather than the `Checker` so a caller already holding a borrow of another field
 /// — `self.classes`, at both current call sites — can still record.
 pub(crate) fn record_throw_access_site(
-    sites: &mut HashMap<Span, ThrowAccessInfo>,
+    sites: &mut HashMap<(String, Span), ThrowAccessInfo>,
+    scope: &str,
     span: Span,
     info: ThrowAccessInfo,
 ) {
@@ -1515,7 +1565,7 @@ pub(crate) fn record_throw_access_site(
     if span.line == 0 {
         return;
     }
-    sites.insert(span, info);
+    sites.insert((scope.to_string(), span), info);
 }
 
 #[derive(Clone)]
@@ -1549,6 +1599,11 @@ pub(crate) struct FnDecl {
     /// Attribute groups attached to the original `function` declaration.
     /// Currently consulted only for `#[\Deprecated]` detection.
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
+    /// Whether this declaration came from compiler-injected `SourceMode::Internal` code.
+    ///
+    /// Such functions model PHP internals, so a matching `PreludeProvided` contract keeps the
+    /// internal maximum arity instead of PHP's user-function surplus-argument tolerance.
+    pub internal_prelude: bool,
 }
 
 /// Runs the type checker on `program` for the given `target` with default
@@ -1664,6 +1719,8 @@ fn check_types_on_compiler_stack(
         requested_method_instantiations: checker.requested_method_instantiations,
         generic_method_sites: checker.generic_method_sites,
         generic_new_sites: checker.generic_new_sites,
+        program_contains_eval: checker.program_contains_eval,
+        native_defined_constants: checker.native_defined_constants,
         global_env,
         functions: checker.functions,
         function_attribute_names,
@@ -1681,6 +1738,8 @@ fn check_types_on_compiler_stack(
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
+        runtime_bridge_libraries: checker.runtime_bridge_libraries,
+        callable_builtin_libraries: checker.callable_builtin_libraries,
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
@@ -1689,6 +1748,7 @@ fn check_types_on_compiler_stack(
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         array_append_element_types: checker.array_append_element_types,
+        element_value_views: checker.element_value_views,
         local_value_read_types: checker.local_value_read_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
@@ -1778,6 +1838,90 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
         }).collect::<Vec<_>>();
         checker.reference_property_promotions.extend(candidates);
     }
+    let widenings = std::mem::take(&mut checker.reference_property_storage_widenings);
+    for (access_class, prop) in widenings {
+        let mut declaring = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+            .unwrap_or_else(|| access_class.clone());
+        // A subclass may redeclare the untyped property (with its own default). PHP keeps
+        // one property for the whole hierarchy, so widening only the class the access names
+        // desynchronises every redeclaration below it: an inherited method would read a
+        // slot whose representation no longer matches the method's lowering. Start from the
+        // topmost declaration and widen every untyped slot in that subtree.
+        // A PRIVATE declaration is a property of its own: a child that redeclares the same
+        // name gets a separate slot, so widening one must not cross into the other.
+        let declares_private = |name: &str| {
+            checker
+                .classes
+                .get(name)
+                .and_then(|info| info.property_visibilities.get(&prop))
+                .is_some_and(|visibility| *visibility == crate::parser::ast::Visibility::Private)
+        };
+        if !declares_private(&declaring) {
+            while let Some(parent) = checker
+                .classes
+                .get(&declaring)
+                .and_then(|info| info.parent.clone())
+            {
+                // A parent that only INHERITS the property still shares the slot: jump through
+                // it to the ancestor that declares it instead of stopping the walk at the
+                // immediate parent.
+                let Some(owner) = checker
+                    .classes
+                    .get(&parent)
+                    .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+                else {
+                    break;
+                };
+                if owner == declaring || declares_private(&owner) {
+                    break;
+                }
+                declaring = owner;
+            }
+        }
+        let hierarchy: HashSet<String> = checker
+            .classes
+            .keys()
+            .filter(|name| {
+                let mut current = Some(name.as_str());
+                let mut seen = HashSet::new();
+                while let Some(name) = current {
+                    if name == declaring {
+                        return true;
+                    }
+                    if !seen.insert(name) {
+                        break;
+                    }
+                    current = checker
+                        .classes
+                        .get(name)
+                        .and_then(|info| info.parent.as_deref());
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        for (name, info) in checker.classes.iter_mut() {
+            if !hierarchy.contains(name) {
+                continue;
+            }
+            let Some(slot) = info.visible_property_index(&prop) else {
+                continue;
+            };
+            if info.property_slot_is_declared(slot, &prop)
+                || info.property_slot_is_reference(slot, &prop)
+                || !info
+                    .property_declaring_classes
+                    .get(&prop)
+                    .is_some_and(|decl| hierarchy.contains(decl))
+            {
+                continue;
+            }
+            info.properties[slot].1 = PhpType::Mixed;
+        }
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker
@@ -1842,9 +1986,9 @@ mod throw_access_site_tests {
     fn a_located_violation_is_recorded() {
         let mut sites = HashMap::new();
         let span = Span::new(7, 3);
-        record_throw_access_site(&mut sites, span, readonly_violation(span));
+        record_throw_access_site(&mut sites, "Base::run", span, readonly_violation(span));
         assert_eq!(sites.len(), 1);
-        assert!(sites.contains_key(&span));
+        assert!(sites.contains_key(&("Base::run".to_string(), span)));
     }
 
     /// A violation the checker CANNOT locate never becomes a key.
@@ -1856,7 +2000,12 @@ mod throw_access_site_tests {
     #[test]
     fn an_unlocatable_violation_never_becomes_a_key() {
         let mut sites = HashMap::new();
-        record_throw_access_site(&mut sites, Span::dummy(), readonly_violation(Span::dummy()));
+        record_throw_access_site(
+            &mut sites,
+            "Base::run",
+            Span::dummy(),
+            readonly_violation(Span::dummy()),
+        );
         assert!(sites.is_empty());
     }
 }

@@ -27,6 +27,25 @@ return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
+/// Count-only calls honour `$offset` without building capture arrays.
+#[test]
+fn execute_program_preg_count_only_calls_skip_capture_arrays() {
+    let program = parse_fragment(br#"
+echo preg_match_all('/(a)(b)?/', 'aaba'), '|', preg_match_all('/(a)/', 'aaa', offset: 1), '|';
+echo preg_match_all('/a/', 'aaa', flags: PREG_SET_ORDER, offset: -1), '|';
+echo preg_match_all('/a/', 'aa', offset: 5) === false ? 'false' : 'int', '|';
+echo preg_match('/(a)/', 'ba', offset: 1), '|', preg_match('/^a/', 'ba', offset: 1), '|';
+echo call_user_func('preg_match', '/(x)/', 'x'), '|', call_user_func('preg_match_all', '/(x)/', 'xx'), '|';
+return preg_match('/a/', 'a', offset: 3);
+"#).expect("parse count-only fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute count-only calls");
+    assert_eq!(values.output, "3|2|1|false|1|0|1|2|");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+    assert_eq!(values.array_set_calls, 0, "count-only regex calls built capture arrays");
+}
+
 /// Unsupported flags raise a catchable `ValueError` before aliased captures are touched.
 #[test]
 fn execute_program_preg_third_review_extra_flag_bits() {
@@ -892,6 +911,11 @@ fn install_german_latin1_locale() -> Option<LocaleGuard> {
 fn eval_ctype_byte_matches_follow_the_active_libc_locale() {
     let _lock = LOCALE_LOCK.lock().unwrap();
     let Some(_guard) = install_german_latin1_locale() else {
+        // CI provides the locale and sets this variable, so a missing one fails there.
+        assert!(
+            std::env::var_os("ELEPHC_REQUIRE_TEST_LOCALES").is_none_or(|value| value != "1"),
+            "ELEPHC_REQUIRE_TEST_LOCALES is set but no German Latin-1 locale is installed"
+        );
         return;
     };
     assert!(eval_ctype_byte_matches("ctype_lower", 0xe4).unwrap());

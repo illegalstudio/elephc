@@ -120,6 +120,39 @@ only at run time is not linked; pass its name as a string literal or as a first-
     );
 }
 
+/// Verifies `Closure::fromCallable()` of a declared `callable` resolves runtime names exactly as
+/// invoking the value does: literal builtins and runtime-selected user functions convert, and a
+/// builtin named only at run time raises the same named `Error` from a function and from a
+/// class scope.
+///
+/// Like the invocation, this is a documented elephc limit, not PHP output (PHP converts
+/// `strtoupper`). The conversion used to accept every builtin, so a single `fromCallable()` of a
+/// declared `callable` linked a wrapper for each one.
+#[test]
+fn test_declared_callable_closure_factory_matches_invocation_names() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function shout(string $s): string { return strtoupper($s) . "!"; }
+function make(callable $f): Closure { return Closure::fromCallable($f); }
+class Holder {
+    private Closure $f;
+    public function __construct(callable $f) { $this->f = Closure::fromCallable($f); }
+    public function run(string $s): string { return ($this->f)($s); }
+}
+$builtin = strrev("reppuotrts");
+echo make("strrev")("abc"), " ", make(strrev("tuohs"))("a"), " ", (new Holder("strrev"))->run("xy"), "\n";
+try { make($builtin); echo "bad\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { new Holder($builtin); echo "bad\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    let message = "Error: Cannot call strtoupper() through a declared callable: a builtin named only \
+at run time is not linked; pass its name as a string literal or as a first-class callable\n";
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("cba A! yx\n{message}{message}after\n"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the restricted builtin set applies only to a value typed exactly `callable`: a
 /// `?callable` union and a declared `callable` handed to `array_map()` or `call_user_func()` go
 /// through the generic dynamic call and call a runtime-selected builtin as PHP does.

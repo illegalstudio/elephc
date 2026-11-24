@@ -492,6 +492,13 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
+                // An array source binds each name to one of its own keys or elements, which is
+                // what lets a boxed read of the binding be projected (`element_values`). The
+                // proof ends with the loop: afterwards the name holds whatever it held before a
+                // source that turned out to be empty.
+                let bound_views = self.bind_foreach_views(
+                    &arr_ty, key_var.as_deref(), value_var, *value_by_ref, env,
+                );
                 if *value_by_ref && (matches!(arr_ty, PhpType::Object(_))
                     || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
                     return Err(CompileError::new(
@@ -503,6 +510,7 @@ impl Checker {
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
                 let errors = self.check_break_continue_target_body(stmt, body, env);
+                self.end_foreach_views(bound_views);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -583,6 +591,9 @@ impl Checker {
                 let storage_entry = self.guarded_union_types.clone();
                 let mut flow = self.snapshot_conditional_flow(env);
                 self.exclude_conditional_binding_entry(&mut flow);
+                if else_body.is_some() {
+                    self.exclude_conditional_read_entry(&mut flow);
+                }
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.
@@ -616,9 +627,19 @@ impl Checker {
                 // branch diverged, or a call inside it purged the narrowing).
                 let mut join_key: Option<String> = None;
                 let mut then_exit_ty: Option<PhpType> = None;
+                // The union a joined local keeps as storage while its read view narrows.
+                let mut join_storage: Option<PhpType> = None;
                 let single_clause = clauses.len() == 1;
+                // An `elseif` chain without `else` joins its union-typed locals over the clause
+                // exits and the guards' complement, which is what its fall-through holds.
+                let mut chain_join = super::chain_join::ChainJoin::begin(
+                    self, !single_clause && else_body.is_none(),
+                    clauses.iter().map(|(cond, _)| *cond), env,
+                );
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
+                // The proofs each arm that falls through ended with, joined after an `else`.
+                let mut arm_exit_proofs = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
@@ -643,7 +664,9 @@ impl Checker {
                         ));
                         env.insert(guard.var.clone(), guard.then_ty.clone());
                     }
+                    chain_join.enter_clause(env);
                     errors.extend(self.check_body(body, env));
+                    arm_exit_proofs.extend(self.body_exit_proofs.take());
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
                     ) {
@@ -651,6 +674,7 @@ impl Checker {
                             self.observe_terminal_flow_storage(&mut flow, env);
                         } else {
                             self.observe_conditional_flow_exit(&mut flow, env);
+                            chain_join.exit_clause(env);
                         }
                     }
                     // Preserve lazy-property joins and nullable locals initialized on their null arm.
@@ -668,12 +692,23 @@ impl Checker {
                                             matches!((member, ty), (PhpType::Int, PhpType::Int)
                                                 | (PhpType::Object(_), PhpType::Object(_)))
                                                 && self.type_contains_values(member, ty)))));
-                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local)
+                        // `if (is_string($tz)) { $tz = new DateTimeZone($tz); }` stores a member
+                        // of the union the guard narrowed: the exit joins with the complement.
+                        let union_storage = saved.iter().find(|(name, _)| name == &guard.var)
+                            .and_then(|(_, original)| original.clone())
+                            .filter(|original| matches!(original, PhpType::Union(_))
+                                && !Self::narrowed_place_key_is_property(&guard.var)
+                                && self.local_flow_read_is_stable(&guard.var)
+                                && branch_exit.is_some_and(|ty| !self.type_contains_values(ty, original)
+                                    && self.merged_assignment_type(original, ty).as_ref() == Some(original)));
+                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local
+                            || union_storage.is_some())
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
+                            join_storage = union_storage;
                         }
                     }
                     if !self.body_cannot_fall_through(body) {
@@ -705,6 +740,7 @@ impl Checker {
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
                     errors.extend(self.check_body(body, env));
+                    arm_exit_proofs.extend(self.body_exit_proofs.take());
                     else_falls_through = !self.body_cannot_fall_through(body);
                     if !crate::termination::block_guarantees_function_exit_with_divergence(
                         body, &|expr| self.expr_is_declared_never_call(expr),
@@ -765,9 +801,23 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
+                // Only a strictly narrower join is a fact worth keeping over the union storage.
+                let union_join = joined.as_ref().zip(join_storage.as_ref())
+                    .filter(|((_, ty), storage)| self.union_join_is_narrower(ty, storage))
+                    .map(|((key, ty), storage)| super::chain_join::NarrowedUnionJoin {
+                        name: key.clone(), read: ty.clone(), storage: storage.clone(),
+                    });
+                // The same fact for a chain: every exit that reaches the code after it, the
+                // fall-through complement included. A chain whose clauses all diverge keeps
+                // the complement itself below.
+                let chain_joins = if keep_complement_after_if {
+                    Vec::new()
+                } else {
+                    chain_join.finish(self, &saved_vars, env)
+                };
                 let joined_local_key = joined.as_ref().filter(|(key, ty)|
                     !Self::narrowed_place_key_is_property(key)
-                        && matches!(ty, PhpType::Int | PhpType::Object(_)))
+                        && (matches!(ty, PhpType::Int | PhpType::Object(_)) || union_join.is_some()))
                     .map(|(key, _)| key.clone());
                 if !keep_complement_after_if {
                     self.restore_guarded_storage_provenance(&storage_entry);
@@ -776,6 +826,9 @@ impl Checker {
                     }
                     if let Some((key, joined)) = joined {
                         env.insert(key, joined);
+                    }
+                    for join in &chain_joins {
+                        env.insert(join.name.clone(), join.read.clone());
                     }
                 } else {
                     for (var, original) in &saved_vars {
@@ -796,13 +849,34 @@ impl Checker {
                 for saved_origin in saved_origins.into_iter().rev() {
                     self.exit_flow_narrowing(saved_origin);
                 }
+                let kept_guard_names: Vec<String> = if keep_complement_after_if {
+                    saved_vars.iter().map(|(name, _)| name.clone()).collect()
+                } else {
+                    Vec::new()
+                };
                 if keep_complement_after_if {
                     self.keep_conditional_views(&mut flow, env, saved_vars.into_iter().map(|(name, _)| name));
                 }
                 if let Some(key) = joined_local_key {
                     self.keep_conditional_views(&mut flow, env, std::iter::once(key));
                 }
+                self.keep_conditional_views(&mut flow, env,
+                    chain_joins.iter().map(|join| join.name.clone()));
                 self.finish_statement_conditional_flow(flow, env);
+                // The joined view reads narrower than the slot, which keeps the union contract.
+                for join in union_join.into_iter().chain(chain_joins) {
+                    self.publish_narrowed_union_join(join, env);
+                }
+                // Every other path left the construct, so the kept complement is what the guard
+                // tested at run time: a proof a boxed read may be projected to. Recorded after
+                // the join, which ends the proofs of every local the construct touched.
+                self.record_kept_guard_views(kept_guard_names.iter().map(String::as_str), env);
+                // One arm of a chain with an `else` always runs, so what every arm that falls
+                // through proved holds after it. Without an `else` the skipped path proves
+                // nothing new, and the entry proofs the arms kept are still recorded.
+                if else_body.is_some() {
+                    self.record_joined_body_proofs(arm_exit_proofs);
+                }
 
                 if errors.is_empty() {
                     Ok(())
@@ -984,6 +1058,10 @@ impl Checker {
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 let (try_errors, try_falls_through) = self.check_body_flow(try_body, env);
                 errors.extend(try_errors);
+                // The proofs of each body that completes normally: the code after the statement
+                // is reached through one of them, never through a body an exception left.
+                let mut normal_exit_proofs = Vec::new();
+                normal_exit_proofs.extend(self.body_exit_proofs.take());
                 let try_tail = self.snapshot_flow_exit(env);
                 let mut normal_exits = Vec::new();
                 if try_falls_through {
@@ -1008,6 +1086,10 @@ impl Checker {
                     let catch_loop_counts = self.pending_loop_exit_counts();
                     let (catch_errors, catch_falls_through) = self.check_body_flow(&catch_clause.body, env);
                     errors.extend(catch_errors);
+                    let catch_exit_proofs = self.body_exit_proofs.take();
+                    if reachable {
+                        normal_exit_proofs.extend(catch_exit_proofs);
+                    }
                     if reachable && catch_falls_through {
                         normal_exits.push(self.snapshot_flow_exit(env));
                     } else if !reachable {
@@ -1020,6 +1102,8 @@ impl Checker {
                     self.restore_flow_snapshot(&joined, env);
                 } else { self.restore_flow_snapshot(&try_entry, env); }
                 let function_exits = self.end_finally_region();
+                // The `finally` block runs between those bodies and the next statement.
+                self.begin_proof_carry();
                 if let Some(body) = finally_body {
                     let continuation = falls_through.then(|| self.snapshot_flow_exit(env));
                     self.join_pending_finally_inputs(&pending_exits, &function_exits, falls_through, &try_entry, env);
@@ -1054,6 +1138,7 @@ impl Checker {
                         }
                     }
                 }
+                self.end_proof_carry(normal_exit_proofs);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -1216,7 +1301,11 @@ impl Checker {
         let backedge = self.loop_backedge_env();
         let mut tail_env = backedge.clone().unwrap_or_else(|| env.clone());
         if let Some(update) = update {
-            if let Err(error) = self.check_stmt(update, &mut tail_env) {
+            // The update runs only after an iteration, so a proof it records stays inside it.
+            let entry_proofs = self.begin_proof_scope();
+            let checked = self.check_stmt(update, &mut tail_env);
+            let _ = self.end_proof_scope(entry_proofs);
+            if let Err(error) = checked {
                 errors.extend(error.flatten());
             }
         }
@@ -1417,6 +1506,8 @@ impl Checker {
     fn check_body_flow(&mut self, body: &[Stmt], env: &mut TypeEnv) -> (Vec<CompileError>, bool) {
         let mut errors = Vec::new();
         let mut reachable = true;
+        // Every body checked here may be skipped, so the proofs it records stay inside it.
+        let entry_proofs = self.begin_proof_scope();
         for stmt in body {
             let selected_body = self.statement_selected_body_at_entry(stmt, env);
             let pending = self.pending_loop_exit_counts();
@@ -1432,6 +1523,8 @@ impl Checker {
             let terminal_body = selected_body.unwrap_or_else(|| std::slice::from_ref(stmt));
             reachable &= !self.body_cannot_fall_through(terminal_body);
         }
+        let exit_proofs = self.end_proof_scope(entry_proofs);
+        self.body_exit_proofs = reachable.then_some(exit_proofs);
         (errors, reachable)
     }
 

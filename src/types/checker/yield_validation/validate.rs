@@ -247,6 +247,11 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
 /// incremented for that closure's body, preserving the outer value on exit.
 fn visit_expr(expr: &Expr, st: &mut State) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                visit_expr(value, st);
+            }
+        },
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

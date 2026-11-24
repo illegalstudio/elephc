@@ -36,6 +36,8 @@ pub(in crate::codegen) fn emit_callable_argument_normalizer(
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );
+    // This body IS the shared resolver: it owns an eval context slot a selector cannot reach.
+    ctx.inline_callable_selectors = true;
     ctx.emitter.blank();
     ctx.emitter.comment("shared callable argument normalization");
     ctx.emitter.label_global(CALLABLE_ARGUMENT_NORMALIZER);

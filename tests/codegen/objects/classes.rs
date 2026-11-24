@@ -1642,3 +1642,68 @@ echo NativeEvalChild::value(), "\n";
     );
     assert_eq!(out, "base\nbase\nchild\n");
 }
+
+/// Verifies `ReflectionClass::newInstanceWithoutConstructor()` used as a VALUE lowers past
+/// its fatal branch and yields the constructorless object, instead of ending the block with a
+/// throw and panicking when the surrounding expression continues.
+#[test]
+fn test_new_instance_without_constructor_as_value_keeps_lowering() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionValueBox { public int $value = 3; function __construct() { $this->value = 9; } }
+$object = (new ReflectionClass(ReflectionValueBox::class))->newInstanceWithoutConstructor();
+var_dump($object instanceof ReflectionValueBox, $object->value);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nint(3)\n");
+}
+
+/// Verifies `$value::class` on a null receiver raises PHP's own TypeError wording instead of
+/// delegating to `get_class(null)`.
+#[test]
+fn test_object_class_name_on_null_uses_the_php_message() {
+    let out = compile_and_run(
+        r#"<?php
+class RefClassNameBox { }
+function ref_class_name(?RefClassNameBox $value) {
+    return $value::class;
+}
+try { ref_class_name(null); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo ref_class_name(new RefClassNameBox), "\n";
+"#,
+    );
+    assert_eq!(out, "Cannot use \"::class\" on null\nRefClassNameBox\n");
+}
+
+/// Verifies a runtime-named write to a readonly class names the actual property in PHP's
+/// dynamic-creation Error.
+#[test]
+fn test_readonly_runtime_dynamic_write_names_the_property() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class ReadonlyNamedBox { }
+$box = new ReadonlyNamedBox;
+$name = "field";
+try { $box->$name = 1; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Cannot create dynamic property ReadonlyNamedBox::$field\n");
+}
+
+/// Verifies `empty()` and `??` are silent on a readonly class that can never hold the name,
+/// while still evaluating the receiver expression exactly once, as PHP does.
+#[test]
+fn test_readonly_missing_property_probes_are_silent_and_evaluate_the_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class ReadonlyProbeBox { }
+function readonly_probe_make(): ReadonlyProbeBox { echo "receiver|"; return new ReadonlyProbeBox; }
+var_dump(empty(readonly_probe_make()->missing));
+var_dump(readonly_probe_make()->missing ?? "default");
+"#,
+    );
+    assert_eq!(
+        out,
+        "receiver|bool(true)\nreceiver|string(7) \"default\"\n"
+    );
+}

@@ -99,6 +99,20 @@ fn test_nullsafe_dynamic_instance_method_brace_form_is_lazy() {
     assert_eq!(out, "none|name:method:ok");
 }
 
+/// `$object::class(...)` calls a static method named `class` on the receiver's class.
+#[test]
+fn test_object_class_name_call_uses_dynamic_dispatch() {
+    let out = compile_and_run(
+        "<?php
+        class A { public static function class(string $s): string { return 'M:' . $s; } }
+        $o = new A;
+        $cls = 'A';
+        echo $o::class('AB'), '|', (new A)::class('CD'), '|', $cls::class('EF'), '|', 'A'::class('GH');
+        ",
+    );
+    assert_eq!(out, "M:AB|M:CD|M:EF|M:GH");
+}
+
 /// Verifies that `$cls::method()` dispatches to a static method on the named class.
 #[test]
 fn test_dynamic_static_call_literal_method() {
@@ -112,6 +126,18 @@ fn test_dynamic_static_call_literal_method() {
         ",
     );
     assert_eq!(out, "built");
+}
+
+/// `A::class(...)` calls a static method literally named `class`, not the class-name string.
+#[test]
+fn test_static_method_named_class() {
+    let out = compile_and_run(
+        "<?php
+        class A { public static function class(string $s): string { return 'M:' . $s; } }
+        echo A::class('AB');
+        ",
+    );
+    assert_eq!(out, "M:AB");
 }
 
 /// Verifies that `$cls::$method(args)` (both dynamic) dispatches a static method with arguments.

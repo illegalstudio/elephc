@@ -128,14 +128,71 @@ pub(super) fn lower_object_class_name(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
-    emit_builtin_call_value(
+    let ty = ctx.builder.value_php_type(object.value).codegen_repr();
+    // A nullable/mixed receiver can be null at run time. PHP raises its own TypeError
+    // (`Cannot use "::class" on null`) instead of delegating to `get_class(null)`, whose
+    // message names the builtin argument. A concrete object skips the branch entirely.
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Void) {
+        return emit_builtin_call_value(
+            ctx,
+            "get_class",
+            vec![object.value],
+            PhpType::Str,
+            expr.span,
+            None,
+        );
+    }
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let null_block = ctx
+        .builder
+        .create_named_block("object_class_name.null", Vec::new());
+    let present = ctx
+        .builder
+        .create_named_block("object_class_name.present", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("object_class_name.merge", vec![(IrType::Str, PhpType::Str)]);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: present,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(null_block);
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    crate::ir_lower::stmt::lower_throw_access_exception(
+        ctx,
+        "TypeError",
+        "Cannot use \"::class\" on null",
+        expr.span,
+    );
+    ctx.builder.position_at_end(present);
+    let class = emit_builtin_call_value(
         ctx,
         "get_class",
         vec![object.value],
         PhpType::Str,
         expr.span,
         None,
-    )
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    ctx.builder.terminate(Terminator::Br {
+        target: merge,
+        args: vec![class.value],
+    });
+    ctx.builder.position_at_end(merge);
+    LoweredValue {
+        value: ctx.builder.block_param(merge, 0),
+        ir_type: IrType::Str,
+    }
 }
 
 /// Lowers a scoped constant read.

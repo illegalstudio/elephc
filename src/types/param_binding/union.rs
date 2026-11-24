@@ -107,6 +107,21 @@ fn numeric_value(value: &Expr) -> Expr {
     }, value.span)
 }
 
+/// Strict acceptance for a by-reference property whose slot cannot be coerced.
+///
+/// PHP's by-value strict binding widens `int` to `float`, but a typed reference checks the
+/// CURRENT value exactly: a declared `mixed`/union property holding an int does not bind to
+/// `float &$x`, while an untyped property uses the coercive path instead.
+pub(crate) fn runtime_reference_param_acceptance(expected: &PhpType, value: &Expr) -> Option<Expr> {
+    match expected {
+        PhpType::Float => Some(call("is_float", value)),
+        PhpType::Union(members) => members.iter()
+            .map(|member| runtime_reference_param_acceptance(member, value))
+            .collect::<Option<Vec<_>>>()?.into_iter().reduce(|a, b| either(a, b, value.span)),
+        _ => exact_member(expected, value),
+    }
+}
+
 /// Strict calls admit exact members, plus PHP's sole int-to-float widening exception.
 pub(crate) fn runtime_strict_param_acceptance(expected: &PhpType, value: &Expr) -> Option<Expr> {
     match expected {

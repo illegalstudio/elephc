@@ -8,7 +8,7 @@
 //! disabled (nothing happens — not even path validation).
 //!
 //! Called from:
-//! - `cargo test --test opcache_preload_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_preload_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP 8.5.6 (Homebrew, `Zend OPcache`
@@ -100,7 +100,9 @@ fn try_compile(dir: &Path, stem: &str, ini: &[String]) -> (bool, String, String,
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     for assignment in ini {
@@ -181,7 +183,9 @@ fn compile_source(dir: &Path, stem: &str, source: &str, ini: &[String]) -> PathB
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     for assignment in ini {

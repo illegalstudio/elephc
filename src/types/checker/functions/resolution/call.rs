@@ -166,6 +166,12 @@ impl Checker {
             return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
+        if let Some(decl) = self.fn_decls.get(name) {
+            if decl.internal_prelude {
+                check_prelude_function_arity(name, args, decl.variadic.is_some(), span)?;
+            }
+        }
+
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
                 let message = if reason.is_empty() {
@@ -178,8 +184,17 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
+            // Before planning: the plan rewrites a literal unpack into spread-element
+            // projections that the resolved binding loop leaves to runtime.
+            self.require_strict_types_static_spread_bindings(
+                validation_sig,
+                args,
+                span,
+                caller_env,
+                &format!("Function '{}'", name),
+            )?;
             let plan = self.plan_named_call_args(
                 validation_sig,
                 args,
@@ -228,8 +243,8 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
-            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
-            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
+            let strict_validation = self.prelude_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = strict_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,
@@ -492,13 +507,39 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
                     let property_place = match declared_ty.as_ref() {
                         Some(expected_ty) => {
-                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                expected_ty,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
-                        None => false,
+                        // An undeclared by-reference parameter is PHP `mixed`: a property place
+                        // must bind its live cell, which `property_ref_argument_supported`
+                        // records (and widens) for an untyped slot.
+                        None => {
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                &crate::types::PhpType::Mixed,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(
+                                    arg,
+                                    &crate::types::PhpType::Mixed,
+                                    caller_env,
+                                )?
+                        }
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -563,6 +604,7 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, decl.params[arg_idx].as_str())),
                             supplied_reference,
+                            arg_idx + 1,
                         )?;
                     }
                     // A written by-reference array type is a storage contract, not a hint.
@@ -1004,4 +1046,77 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
         _ => false,
     }
+}
+
+/// Returns the statically known positional argument count.
+///
+/// Returns `None` when a spread's length is not knowable at compile time. String-keyed
+/// arrays map to named arguments and are left to the call planner.
+fn static_positional_arg_count(args: &[crate::parser::ast::Expr]) -> Option<usize> {
+    if args.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::NamedArg { .. })) {
+        return None;
+    }
+    if !args.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::Spread(_))) {
+        return Some(args.len());
+    }
+    // Reuse the shared literal-array/nested-unpack rules instead of maintaining a second copy
+    // in the checker. The helper declines dynamic spreads and nested unpacks.
+    crate::types::call_args::expand_planned_positional_spreads(args).map(|expanded| expanded.len())
+}
+
+/// Enforces the PHP-internal maximum arity for a compiler-injected prelude function.
+///
+/// PHP user functions tolerate surplus positional arguments, but the internal functions a
+/// prelude models (`token_get_all`, `token_name`, …) do not. The neutral contract owns the
+/// boundary, so this uses the same minimum/maximum fields as the registry-backed builtins.
+fn check_prelude_function_arity(
+    name: &str,
+    args: &[crate::parser::ast::Expr],
+    declared_variadic: bool,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    let Some(contract) = elephc_builtin_contract::lookup(name) else {
+        return Ok(());
+    };
+    if contract.kind != elephc_builtin_contract::BuiltinKind::PreludeProvided {
+        return Ok(());
+    }
+    // A named argument needs the call planner, and a dynamic spread length is only known
+    // at run time. A statically sized array spread is different: its positional count is
+    // final here, and PHP internals reject surplus elements before the call runs.
+    if args.iter().any(|arg| matches!(
+        arg.kind,
+        crate::parser::ast::ExprKind::NamedArg { .. }
+    )) {
+        return Ok(());
+    }
+    let Some(arg_count) = static_positional_arg_count(args) else {
+        return Ok(());
+    };
+    let required = contract.min_args.unwrap_or_else(|| {
+        contract.params.iter().take_while(|param| param.default.is_none()).count()
+    });
+    let maximum = contract.max_args.or_else(|| {
+        (contract.variadic.is_none()).then_some(contract.params.len())
+    });
+    // Too-few arguments already have a canonical message on the ordinary user-function path;
+    // this check exists only because PHP internals reject surplus arguments that a user
+    // function would accept.
+    // A variadic prelude declaration deliberately accepts extra positional arguments so its
+    // body can raise PHP's exact runtime ArgumentCountError.
+    let Some(maximum) = maximum.filter(|_| !declared_variadic) else {
+        return Ok(());
+    };
+    if arg_count <= maximum {
+        return Ok(());
+    }
+    let expected = if required == maximum {
+        format!("{maximum}")
+    } else {
+        format!("{required} to {maximum}")
+    };
+    Err(CompileError::new(
+        span,
+        &format!("Function '{}' expects {} arguments, got {}", name, expected, arg_count),
+    ))
 }

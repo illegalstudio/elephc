@@ -14,6 +14,10 @@
 //!   "Undefined variable" error.
 //! - `check` validates that args[2] (when present) is a `Variable` expression; passing
 //!   a non-variable to the by-ref `$matches` param is a compile error.
+//! - A call that passes `$flags` or `$offset` (see `uses_extended_capture()`) fills
+//!   `$matches` with boxed Mixed cells, because `PREG_OFFSET_CAPTURE` and
+//!   `PREG_UNMATCHED_AS_NULL` produce arrays and nulls. Checker, EIR lowering and the
+//!   backend all key the output representation on that one predicate.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -42,13 +46,48 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     check_capture_output_storage(cx)?;
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if cx.args.len() == 3 && !matches!(cx.args[2].kind, ExprKind::Variable(_)) {
+    if cx.args.len() >= 3
+        && !cx.argument_was_omitted(2)
+        && !matches!(cx.args[2].kind, ExprKind::Variable(_))
+    {
         return Err(CompileError::new(
             cx.args[2].span,
             "preg_match() parameter $matches must be passed a variable",
         ));
     }
+    for index in 3..cx.args.len().min(5) {
+        cx.checker.infer_type(&cx.args[index], cx.env)?;
+    }
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
+}
+
+/// Returns true when a source-order `preg_match()` argument list passes `$flags` or `$offset`.
+///
+/// Such calls run through the boxed-Mixed capture helper, so `$matches` becomes
+/// `array<mixed>` instead of the `array<string>` of the three-argument form.
+pub(crate) fn uses_extended_capture(args: &[crate::parser::ast::Expr]) -> bool {
+    passes_parameter_from(args, &["flags", "offset"], 3)
+}
+
+/// Returns true when a source-order argument list may pass a parameter at or after
+/// `first_index`, positionally or through one of the `named` parameters.
+///
+/// Literal indexed spreads are flattened and static string-keyed spreads count as the
+/// named arguments they expand to; any other spread conservatively counts as passing.
+pub(crate) fn passes_parameter_from(
+    args: &[crate::parser::ast::Expr],
+    named: &[&str],
+    first_index: usize,
+) -> bool {
+    let positional = crate::types::call_args::expand_planned_positional_spreads(args);
+    let args = crate::types::call_args::expand_static_assoc_spread_args(
+        positional.as_deref().unwrap_or(args),
+    );
+    args.iter().enumerate().any(|(index, arg)| match &arg.kind {
+        ExprKind::NamedArg { name, .. } => named.contains(&name.as_str()),
+        ExprKind::Spread(_) => true,
+        _ => index >= first_index,
+    })
 }
 
 /// Rejects capture writes that would replace a frozen scalar reference with an array pointer.

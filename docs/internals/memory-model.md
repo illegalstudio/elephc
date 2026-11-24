@@ -1512,12 +1512,66 @@ partial result: those remain that helper's responsibility.
 The default heap is 128 MB (134217728 bytes, PHP's default `memory_limit`). For programs that need more (or less), use:
 
 ```bash
-elephc --heap-size=16777216 heavy.php    # 16MB heap
-elephc --gc-stats heavy.php              # print alloc/free counters to stderr
-elephc --heap-debug heavy.php            # enable runtime heap verification
+elephc build --heap-size=16777216 heavy.php    # 16MB heap
+elephc build --gc-stats heavy.php              # print alloc/free counters to stderr
+elephc build --heap-debug heavy.php            # enable runtime heap verification
 ```
 
-The minimum is 64KB.
+The minimum is 64KB. `--heap-size` sets the reserved capacity (`_heap_max`). A separate
+runtime ceiling, `_heap_limit`, defaults to that capacity and is lowered by
+`--ini memory_limit=8M`; allocations stop at the ceiling while the reserved region stays
+available for reuse. An explicit `--heap-size` smaller than the requested `memory_limit` is a
+compile-time error; without an explicit `--heap-size`, a larger `memory_limit` sizes the
+reservation. Heap exhaustion prints php-src's
+`Fatal error: Allowed memory size of N bytes exhausted (tried to allocate M bytes) …` and exits
+with status 255. The runtime cache key includes the limit so a cached object never serves two
+different ceilings.
+The fixed data section keeps the startup ceiling in `_heap_limit_startup` (the `--web`
+request boundary copies it back into `_heap_limit`, so one request's `ini_set()` cannot cap
+the next), and the exhaustion path stores the failed request size in `_heap_fail_request`
+while it writes the `_heap_fatal_prefix`, `_heap_fatal_middle` and `_heap_fatal_suffix`
+message pieces around the two decimal values.
+
+`memory_limit` is also a runtime directive. `ini_get('memory_limit')` returns the configured
+string exactly as `--ini` (or PHP's `128M` default) spelled it, including suffixes and
+whitespace; it is not normalized to a byte count. `ini_set('memory_limit', $value)`:
+
+- parses the value with the unsigned `zend_ini_parse_uquantity_warn` mirror php-src uses for
+  `memory_limit`, so `-1` means unlimited and `K`/`M`/`G` use 1024-based multipliers;
+- emits php-src's `Invalid "memory_limit" setting` quantity diagnostics for missing leading
+  digits, a missing base-prefix digit, unknown multipliers, and trailing data;
+- refuses a finite value below the current real heap usage (live bytes rounded up to php-src's
+  2 MiB allocator chunk, with a 2 MiB floor), emitting php-src's
+  `Warning: Failed to set memory limit to N bytes (Current memory usage is M bytes)` and
+  returning `false` with the previous ceiling intact;
+- refuses a finite value above the reserved arena (`_heap_max`) with
+  `Warning: Failed to set memory limit to N bytes (the runtime heap arena cannot grow;
+  rebuild with a larger --heap-size)` and returns `false` with both the previous raw string
+  and the previous ceiling intact. PHP raises `memory_limit` up to available system memory;
+  this runtime cannot grow its fixed reservation, so it reports the refusal instead of
+  accepting a directive the allocator would not honor;
+- installs an in-arena ceiling in `_heap_limit` and returns the previous raw string.
+
+`ini_restore('memory_limit')` reinstalls the startup raw string and ceiling. A startup value
+above the reserved `_heap_max` cannot be installed, so restore falls back to the arena's actual
+startup ceiling (`-1`, the whole reservation) and updates the reported raw string only after a
+successful installation. `ini_get_all()` reports the dynamic row (`global_value` = startup,
+`local_value` = current, `access` = 7) for the null/Core filters.
+
+The unsigned quantity parser reproduces php-src's `u64` result and its `value is out of range`
+diagnostic: every value up to `u64::MAX` is accepted, `-1` is the only unlimited spelling, values
+above `u64::MAX` warn and use the overflow result, and every other negative magnitude keeps its
+magnitude and warns. A limit at or above `2^63` stays observable through `ini_get()` even though
+a PHP `int` cannot represent it. A runtime raise above the reserved arena is refused rather
+than clamped, because the arena is a fixed reservation and `ini_get()` must not report a
+ceiling the allocator will not honor; `-1` still selects the whole reservation.
+Without an explicit `--ini memory_limit`, `ini_get()` reports PHP's `128M` default; `--heap-size`
+is a separate reservation knob, so a smaller arena caps allocations without changing the
+reported directive.
+
+Allocations performed inside Rust bridge crates are not charged directly against
+`_heap_limit`. The URI prelude compensates for its own bridge by charging the retained path
+footprint in hidden PHP arrays (see `docs/php/uri.md`); other bridges do not yet do so.
 
 ## Array layout
 

@@ -29,6 +29,10 @@ const DAY_MS: u64 = 86_400_000;
 pub(crate) struct Store {
     dir: PathBuf,
     retention_days: u32,
+    /// Days kept at the resolution they were written at; older ones are rolled up.
+    full_days: u32,
+    /// Days kept at least by the minute; older ones are rolled up by the hour.
+    minute_days: u32,
     /// What has been read of each day file, shared by the clones of one opened
     /// store.
     reads: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u64, DayRead>>>,
@@ -91,6 +95,79 @@ struct MinuteKey {
     minute: u64,
 }
 
+/// A day rolled up by the minute, in the store's rollup record.
+const ROLLUP_MINUTE: u8 = 1;
+/// A day rolled up by the hour.
+const ROLLUP_HOUR: u8 = 2;
+/// The store file recording which days were rolled up, and how far.
+const ROLLUPS_FILE: &str = "rollups.json";
+
+/// The days rolled up so far, by day number, with their level.
+fn read_rollups(dir: &Path) -> std::collections::BTreeMap<u64, u8> {
+    std::fs::read_to_string(dir.join(ROLLUPS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Records the days rolled up, written aside and renamed.
+fn write_rollups(dir: &Path, rollups: &std::collections::BTreeMap<u64, u8>) {
+    let Ok(text) = serde_json::to_string(rollups) else {
+        return;
+    };
+    let partial = dir.join(format!("{ROLLUPS_FILE}.partial"));
+    if std::fs::write(&partial, text).is_ok() {
+        let _ = std::fs::rename(&partial, dir.join(ROLLUPS_FILE));
+    }
+}
+
+/// Windows folded by `step_ms`: one per source, run of the service, script run's
+/// transaction and step, ending at the latest of the windows it holds.
+fn roll_up(windows: Vec<Window>, step_ms: u64) -> Vec<Window> {
+    let mut index: std::collections::HashMap<MinuteKey, usize> = std::collections::HashMap::new();
+    let mut rolled: Vec<Window> = Vec::new();
+    for window in windows {
+        let key = MinuteKey {
+            source: window.source.clone(),
+            epoch: window.epoch,
+            route: if super::is_run(&window) {
+                window.routes.first().map(|route| route.route.clone()).unwrap_or_default()
+            } else {
+                String::new()
+            },
+            minute: window.t / step_ms.max(1),
+        };
+        match index.get(&key) {
+            Some(&at) => rolled[at] = super::merge_pair(&rolled[at], &window),
+            None => {
+                index.insert(key, rolled.len());
+                rolled.push(window);
+            }
+        }
+    }
+    rolled.sort_by_key(|window| window.t);
+    rolled
+}
+
+/// Rewrites a day file with its windows rolled up by `step_ms`: written aside and renamed,
+/// so a reader sees the old file or the new one; its read cache notices the new file.
+fn roll_up_day(path: &Path, step_ms: u64) -> Result<(), String> {
+    let text = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let windows: Vec<Window> = text
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<Window>(line).ok())
+        .collect();
+    let mut out = String::new();
+    for window in roll_up(windows, step_ms) {
+        let line = serde_json::to_string(&window).map_err(|error| error.to_string())?;
+        out.push_str(&line);
+        out.push('\n');
+    }
+    let partial = path.with_extension("jsonl.partial");
+    std::fs::write(&partial, out).map_err(|error| format!("{}: {error}", partial.display()))?;
+    std::fs::rename(&partial, path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 /// Milliseconds a cached stored window covers at most.
 const CACHE_MINUTE_MS: u64 = 60_000;
 
@@ -107,7 +184,23 @@ impl Store {
         if !dir.is_dir() {
             return Err(format!("the apm store {} is not a directory", dir.display()));
         }
-        Ok(Self { dir, retention_days: retention_days.max(1), reads: Default::default() })
+        let retention_days = retention_days.max(1);
+        Ok(Self {
+            dir,
+            retention_days,
+            full_days: retention_days,
+            minute_days: retention_days,
+            reads: Default::default(),
+        })
+    }
+
+    /// Rolls up the days a collector's pruning reaches: past `full_days` by the minute,
+    /// past `minute_days` by the hour (`--retention-full`, `--retention-minute`). A store
+    /// only opened keeps every day as it was written.
+    pub(crate) fn with_tiers(mut self, full_days: u32, minute_days: u32) -> Self {
+        self.full_days = full_days.min(self.retention_days);
+        self.minute_days = minute_days.clamp(self.full_days, self.retention_days);
+        self
     }
 
     /// The directory holding the history.
@@ -144,10 +237,12 @@ impl Store {
         })?;
         // The claim says how long this collector keeps its history, so a
         // collector of another service sharing the store prunes no day this
-        // one still keeps (`live_retention_days`).
+        // one still keeps (`live_claims`).
         use std::io::Write as _;
         let _ = file.set_len(0);
-        let _ = writeln!(&file, "{}", self.retention_days);
+        // And how long it keeps each resolution, so another collector's roll-ups fold no day
+        // this one keeps finer (review): `<retention> <full days> <minute days>`.
+        let _ = writeln!(&file, "{} {} {}", self.retention_days, self.full_days, self.minute_days);
         Ok(file)
     }
 
@@ -230,7 +325,7 @@ impl Store {
     /// Each day file is read once and then only for what was appended since:
     /// the monitor page asks on every refresh and event-stream heartbeat, under
     /// the history's lock, and parsing a full day of windows each time held
-    /// every other request up behind it (review G6). The latest `t` is kept,
+    /// every other request up behind it. The latest `t` is kept,
     /// not the last line's: several collectors and script runs append to one
     /// file, so its lines are not strictly ordered.
     pub(crate) fn newest_ms(&self) -> Option<u64> {
@@ -285,24 +380,92 @@ impl Store {
     /// default deleted the days another collector of the store was told to
     /// keep (review).
     pub(crate) fn prune(&self, now: u64) {
+        // One collector at a time rewrites the shared files: two roll-ups wrote the same
+        // `.partial` path, and one could rename the other's half-written file (review).
+        // Busy, this one leaves it to the collector already at it.
+        let Some(_maintenance) = self.maintenance_lock() else {
+            return;
+        };
         let today = day_of(now);
-        let retention = self.retention_days.max(self.live_retention_days());
+        let claims = self.live_claims();
+        let retention = self.retention_days.max(claims.0);
         let keep_from = today.saturating_sub(u64::from(retention) - 1);
         for day in self.days() {
             if day < keep_from {
                 let _ = std::fs::remove_file(self.dir.join(file_name(day)));
             }
         }
+        // A day's captures leave with its windows, and so do its deploys, but each
+        // service's latest: the build it serves stays known.
+        self.prune_captures(keep_from);
+        super::deploys::prune(&self.dir, keep_from.saturating_mul(DAY_MS));
+        self.roll_up_days(today, claims);
     }
 
-    /// The longest retention a live collector's claim on this store states;
-    /// 0 when no claim is held. A claim file whose lock can be taken belongs
-    /// to a collector that is gone, and states nothing.
-    fn live_retention_days(&self) -> u32 {
+    /// The maintenance lock, for a test standing in for another collector at it.
+    #[cfg(test)]
+    pub(crate) fn maintenance_lock_for_test(&self) -> Option<std::fs::File> {
+        self.maintenance_lock()
+    }
+
+    /// The store's maintenance lock, held while it prunes and rolls up; `None` while another
+    /// collector holds it.
+    fn maintenance_lock(&self) -> Option<std::fs::File> {
+        use fs2::FileExt as _;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(".maintenance.lock"))
+            .ok()?;
+        file.try_lock_exclusive().ok()?;
+        Some(file)
+    }
+
+    /// Rolls up the days old enough for a coarser resolution, each once: by the minute
+    /// past `full_days`, by the hour past `minute_days`. Today and yesterday never are: a
+    /// collector may still be writing yesterday's last windows.
+    /// The finest any live collector keeps wins: one keeping thirty days at full resolution
+    /// is not folded by a default one sharing the store (review).
+    fn roll_up_days(&self, today: u64, claims: (u32, u32, u32)) {
+        let full_days = self.full_days.max(claims.1);
+        let minute_days = self.minute_days.max(claims.2);
+        let mut done = read_rollups(&self.dir);
+        let before = done.clone();
+        for day in self.days() {
+            let age = today.saturating_sub(day);
+            let level = if age >= u64::from(minute_days).max(2) {
+                ROLLUP_HOUR
+            } else if age >= u64::from(full_days).max(2) {
+                ROLLUP_MINUTE
+            } else {
+                continue;
+            };
+            if done.get(&day).copied().unwrap_or(0) >= level {
+                continue;
+            }
+            let step_ms = if level == ROLLUP_HOUR { 3_600_000 } else { 60_000 };
+            if roll_up_day(&self.dir.join(file_name(day)), step_ms).is_ok() {
+                done.insert(day, level);
+            }
+        }
+        // Days retention deleted leave the record too.
+        let days = self.days();
+        done.retain(|day, _| days.contains(day));
+        if done != before {
+            write_rollups(&self.dir, &done);
+        }
+    }
+
+    /// The longest retention, full-resolution and minute periods the live collectors' claims
+    /// on this store state, each on its own; zeros when no claim is held. A claim file whose
+    /// lock can be taken belongs to a collector that is gone, and states nothing. A claim
+    /// written before the tiers were stated keeps its whole retention at full resolution.
+    fn live_claims(&self) -> (u32, u32, u32) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
-            return 0;
+            return (0, 0, 0);
         };
-        let mut longest = 0;
+        let mut longest = (0, 0, 0);
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !(name.starts_with(".collector-") && name.ends_with(".lock")) {
@@ -315,11 +478,12 @@ impl Store {
                 let _ = file.unlock();
                 continue;
             }
-            let days = std::fs::read_to_string(entry.path())
-                .ok()
-                .and_then(|text| text.trim().parse::<u32>().ok())
-                .unwrap_or(0);
-            longest = longest.max(days);
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            let fields: Vec<u32> = text.split_whitespace().filter_map(|field| field.parse().ok()).collect();
+            let retention = fields.first().copied().unwrap_or(0);
+            let full = fields.get(1).copied().unwrap_or(retention);
+            let minute = fields.get(2).copied().unwrap_or(retention);
+            longest = (longest.0.max(retention), longest.1.max(full), longest.2.max(minute));
         }
         longest
     }
@@ -341,11 +505,15 @@ thread_local! {
     /// Bytes `read_day` read on this thread, for the tests that prove a call
     /// reads only what was appended.
     pub(crate) static DAY_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The time `now_ms` answers on this thread instead of the wall clock, for
+    /// the tests whose windows must all fall on one day whenever they run
+    /// (#2513: in the first minute after UTC midnight, "recent" windows
+    /// landed on the previous day).
+    pub(crate) static PINNED_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 /// Drops what was read of the days whose file is gone — retention deleted it —
-/// so a page left open for weeks does not keep every day's runs it ever read
-/// (review G14).
+/// so a page left open for weeks does not keep every day's runs it ever read.
 fn forget_deleted_days(reads: &mut std::collections::HashMap<u64, DayRead>, days: &[u64]) {
     reads.retain(|day, _| days.contains(day));
 }
@@ -498,8 +666,12 @@ fn starts_with(file: &mut std::fs::File, head: &[u8]) -> bool {
     file.seek(SeekFrom::Start(0)).is_ok() && file.read_exact(&mut start).is_ok() && start == head
 }
 
-/// Unix milliseconds now.
+/// Unix milliseconds now (in a test, the time `PINNED_NOW_MS` pins).
 pub(crate) fn now_ms() -> u64 {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_NOW_MS.with(|now| now.get()) {
+        return pinned;
+    }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -507,7 +679,7 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// The UTC day (days since 1970-01-01) a timestamp falls in.
-fn day_of(ms: u64) -> u64 {
+pub(crate) fn day_of(ms: u64) -> u64 {
     ms / DAY_MS
 }
 
@@ -566,7 +738,7 @@ fn days_from_civil(year: i64, month: u32, date: u32) -> i64 {
 #[cfg(test)]
 mod fold_tests {
     use super::*;
-    use crate::monitor::apm::{Io, RouteWindow};
+    use crate::monitor::apm::{Io, Mem, RouteWindow};
 
     /// Today's past hours fold by the minute once the cache is large, the
     /// last hour keeping its resolution and every request its count; at any
@@ -575,7 +747,9 @@ mod fold_tests {
     fn past_hours_fold_by_the_minute_and_keep_the_last_hour_fine() {
         let ten_o_clock = 1_000 * DAY_MS + 10 * 3_600_000;
         let window = |t: u64| Window {
+            build: String::new(),
             res: None,
+            errors: Vec::new(),
             t,
             span_ms: 1_000,
             epoch: 1,
@@ -587,6 +761,8 @@ mod fold_tests {
                 sum_ns: 1_000,
                 hist: vec![(3, 1)],
                 io: Io::default(),
+                mem: Mem::default(),
+                exits: Vec::new(),
             }],
         };
         let mut read = DayRead::default();
@@ -605,5 +781,64 @@ mod fold_tests {
         let folded = read.windows.len();
         fold_past_hours(&mut read, ten_o_clock - TODAY_FINE_MS);
         assert_eq!(read.windows.len(), folded, "a small cache is left as it is");
+    }
+
+    /// A collector's pruning keeps yesterday as written, rolls a day past `--retention-full`
+    /// up by the minute and one past `--retention-minute` by the hour, each once, with
+    /// every request kept.
+    #[test]
+    fn old_days_are_rolled_up_by_the_minute_then_the_hour() {
+        let dir = std::env::temp_dir().join(format!("elephc-rollup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir.to_str().unwrap(), 30).unwrap().with_tiers(2, 7);
+        let today = 20_000u64;
+        let window = |t: u64| Window {
+            build: String::new(),
+            res: None,
+            errors: Vec::new(),
+            t,
+            span_ms: 1_000,
+            epoch: 1,
+            source: "svc".into(),
+            routes: vec![RouteWindow {
+                route: "GET /".into(),
+                n: 1,
+                status: [0, 1, 0, 0, 0],
+                sum_ns: 1_000,
+                hist: vec![(3, 1)],
+                io: Io::default(),
+                mem: Mem::default(),
+                exits: Vec::new(),
+            }],
+        };
+        // Three minutes of one-second windows, at ten o'clock, on each day.
+        for age in [1u64, 3, 10] {
+            let ten = (today - age) * DAY_MS + 10 * 3_600_000;
+            for second in 0..180 {
+                store.append(&window(ten + second * 1_000)).unwrap();
+            }
+        }
+        store.prune(today * DAY_MS + 1);
+        let lines = |age: u64| -> Vec<Window> {
+            std::fs::read_to_string(dir.join(file_name(today - age)))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        };
+        let requests = |windows: &[Window]| -> u64 { windows.iter().flat_map(|w| &w.routes).map(|r| r.n).sum() };
+        assert_eq!(lines(1).len(), 180, "yesterday is kept as written");
+        assert_eq!(lines(3).len(), 3, "by the minute past two days");
+        assert_eq!(lines(10).len(), 1, "by the hour past seven days");
+        for age in [1, 3, 10] {
+            assert_eq!(requests(&lines(age)), 180, "every request kept, {age} days ago");
+        }
+        let recorded = read_rollups(&dir);
+        assert_eq!(recorded.get(&(today - 3)), Some(&ROLLUP_MINUTE));
+        assert_eq!(recorded.get(&(today - 10)), Some(&ROLLUP_HOUR));
+        // Read back by the store, the rolled-up days hold the same history.
+        let loaded = store.load((today - 10) * DAY_MS, today * DAY_MS);
+        assert_eq!(requests(&loaded), 540);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

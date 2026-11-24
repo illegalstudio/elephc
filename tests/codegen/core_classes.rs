@@ -2,7 +2,7 @@
 //! Exercises the completed Core class surface through native code and opaque eval.
 //!
 //! Called from:
-//! - The codegen_tests integration harness.
+//! - The codegen_tests_oop integration harness.
 //!
 //! Key details:
 //! - Weak ownership, serialization wire compatibility, attributes, and enum interfaces have runtime checks.

@@ -1,8 +1,8 @@
 <?php
-// Minimal end-to-end demo for `elephc --emit cdylib`.
+// Minimal end-to-end demo for `elephc build --emit cdylib`.
 //
 // Build:
-//   elephc --emit cdylib examples/cdylib/auth.php
+//   elephc build --emit cdylib examples/cdylib/auth.php
 //   # produces examples/cdylib/libauth.so (Linux) or libauth.dylib (macOS)
 //
 // Then build the C harness and run it (see host.c).

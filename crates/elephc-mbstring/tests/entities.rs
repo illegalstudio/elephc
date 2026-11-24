@@ -2,7 +2,7 @@
 //! Compares complete numeric-entity operations with the pinned PHP oracle.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test entities`.
+//! - `cargo test -p elephc-mbstring --test engine entities::`.
 //!
 //! Key details:
 //! - Maps cover unsigned casts, range order, masks, and malformed lengths.

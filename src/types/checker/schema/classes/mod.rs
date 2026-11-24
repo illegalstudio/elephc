@@ -19,6 +19,7 @@ mod constants;
 mod enum_interfaces;
 mod interfaces;
 mod methods;
+mod narrowed_slots;
 mod properties;
 mod property_defaults;
 mod state;
@@ -30,6 +31,7 @@ pub(crate) use trait_requirements::{collect_trait_method_requirements, TraitMeth
 pub(crate) use constants::validate_compile_time_default_in_scope;
 pub(crate) use constants::normalize_lexical_default_in_scope;
 pub(crate) use constants::normalize_free_function_default_in_scope;
+pub(crate) use constants::deferred_default_error;
 
 use super::super::Checker;
 use super::validation::build_constructor_param_map;

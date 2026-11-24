@@ -1,12 +1,14 @@
 //! Purpose:
 //! Owns exact top-level command dispatch plus compiler-option parsing and target selection.
-//! Keeps `elephc native` isolated while preserving every legacy compile invocation.
+//! Routes `elephc build` and `elephc check` to the compiler and requires an explicit command.
 //!
 //! Called from:
-//! - `crate::main()` before invoking `crate::pipeline::compile()`.
+//! - `crate::entry::run()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
+//! - Only an exact `args[1]` of `build`, `check`, `native`, `extension`, `repl`, `monitor`,
+//!   or `test` selects a command; anything else besides the global information flags is
+//!   rejected, with the rewritten `elephc build` command for a legacy compile invocation.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -25,7 +27,7 @@ use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativePa
 /// a mistyped capability would advertise the two names this whole flag exists to
 /// retire. Naming them once here keeps the flag and its exclusion from drifting
 /// apart.
-const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
+pub(crate) const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
 
 /// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
 /// a bridge of its own: it force-injects the mysqli prelude, which links the
@@ -34,7 +36,7 @@ const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex", "mysqli"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
-pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+pub(crate) const USAGE: &str = "Usage: elephc build|check [OPTIONS] <source-file>";
 
 /// Compiler package version embedded into the binary by Cargo.
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -87,7 +89,7 @@ pub(crate) fn print_mascotte() {
 
 /// Returns true if `-h` or `--help` appears anywhere in the argument list, so
 /// help always wins regardless of position or what else was passed alongside
-/// it (e.g. `elephc --check --help app.php` still shows help).
+/// it (e.g. `elephc build --check --help app.php` still shows help).
 fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
@@ -110,15 +112,17 @@ fn wants_capabilities(args: &[String]) -> bool {
 /// it never gained `iconv`, so `--help` advertised a smaller compiler than the
 /// one the user had, while the typo error beside it — derived from the table —
 /// listed it correctly. Print this const directly and that comes back.
-pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc <COMMAND> [OPTIONS]
+       elephc build [OPTIONS] <source-file>
+       elephc check [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
 Version: ", env!("CARGO_PKG_VERSION"), "
 
-Arguments:
-  <source-file>           Tagged .php or tagless .lfc source file to compile
-
-Subcommands:
+Commands:
+  build <source-file>     Compile a tagged .php or tagless .lfc source file (native
+                          executable by default) with the options below
+  check <source-file>     Analyze a source file only, no codegen (same as `build --check`)
   native <COMMAND>        Native dependency management (see `elephc native --help`)
   repl                    Interactive PHP through eval (see `elephc repl --help`)
   test [PATH]             Compile and run the test suite under PATH, default `tests`
@@ -136,7 +140,8 @@ Modes:
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
-  --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
+  --check                 Type-check only, no codegen; `elephc check` is the same
+                          (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
@@ -178,8 +183,8 @@ Codegen:
                           Count each call of a method as a transaction of its own,
                           named after it (repeatable; FUNCTION for a function)
   --heap-debug            Enable heap debug instrumentation
-  --define SYMBOL        Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
+  --define SYMBOL         Define a symbol for `ifdef` conditional compilation
+  --ini KEY=VALUE         Bake an INI directive override (memory_limit, OPcache, mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
@@ -210,6 +215,9 @@ Other:
 pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
+    /// Whether `--heap-size` was supplied explicitly, so a later project `[ini]`
+    /// `memory_limit` may grow the arena but must not silently exceed an explicit cap.
+    pub(crate) heap_size_explicit: bool,
     pub(crate) gc_stats: bool,
     /// Embed per-function call counters and print exact counts to stderr at exit.
     pub(crate) counters: bool,
@@ -273,6 +281,10 @@ pub(crate) struct CliConfig {
     pub(crate) apm_collector: Option<String>,
     /// Methods and functions counted as transactions (`--apm-transaction`).
     pub(crate) apm_transactions: Vec<String>,
+    /// Route and command patterns counted, and only them (`[apm] include` in `elephc.toml`).
+    pub(crate) apm_include: Vec<String>,
+    /// Route and command patterns never counted (`[apm] exclude` in `elephc.toml`).
+    pub(crate) apm_exclude: Vec<String>,
     /// Suppresses live/completed progress and bridge-library "Linking" event lines,
     /// forcing plain output regardless of whether stderr is a terminal.
     /// Errors, warnings, and the final success line are unaffected.
@@ -285,12 +297,12 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed compiler, REPL, monitoring, or native package invocation.
+/// A fully parsed build, REPL, test, monitoring, extension, or native package invocation.
 pub(crate) enum Command {
     /// One interactive eval session, or its isolated host build subprocess.
     Repl(crate::repl::ReplCommand),
-    /// The existing PHP compilation command and all of its normalized options.
-    Compile(CliConfig),
+    /// A source build selected by `elephc build`, or analysis only through `elephc check`.
+    Build(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
     /// One validated `elephc extension` hosted-extension command.
@@ -301,7 +313,7 @@ pub(crate) enum Command {
     Test(crate::test_command::TestCommand),
 }
 
-/// Dispatches exact top-level subcommand selectors before falling back to compilation.
+/// Dispatches exact top-level command names and global information flags.
 pub(crate) fn parse_args(args: &[String]) -> Command {
     if args.get(1).map(String::as_str) == Some("repl") {
         return match crate::repl::parse_args(&args[2..]) {
@@ -320,6 +332,16 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             }
         };
+    }
+    if let Some(command @ ("build" | "check")) = args.get(1).map(String::as_str) {
+        let mut build_args = Vec::with_capacity(args.len());
+        build_args.push(args[0].clone());
+        // `check` is `build` in analysis-only mode, so both share one parser and its validation.
+        if command == "check" {
+            build_args.push("--check".to_string());
+        }
+        build_args.extend_from_slice(&args[2..]);
+        return Command::Build(parse_compile_args(&build_args));
     }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
@@ -345,7 +367,23 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
         };
     }
     if args.get(1).map(String::as_str) != Some("native") {
-        return Command::Compile(parse_compile_args(args));
+        // Information flags win in any position, as they do after `build`.
+        if wants_help(args) {
+            println!("{}", help_text());
+            process::exit(0);
+        }
+        if wants_version(args) {
+            println!("elephc {VERSION}");
+            process::exit(0);
+        }
+        if wants_capabilities(args) {
+            print!("{}", capability_report());
+            process::exit(0);
+        }
+        match args.get(1) {
+            Some(_) => fail(&unknown_command_message(args)),
+            None => fail("no command given"),
+        }
     }
 
     match parse_native_args(&args[2..]) {
@@ -361,7 +399,9 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
     }
 }
 
-/// Parses legacy compilation arguments into a normalized configuration.
+/// Parses compilation arguments (`args[0]` program name, options and source after it)
+/// into a normalized configuration. `elephc build` strips its command word first;
+/// `repl` and `test` build the same layout for their host compilations.
 pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
@@ -380,6 +420,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     }
 
     let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
+    let mut heap_size_explicit = false;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -440,6 +481,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
+            heap_size_explicit = true;
         } else if arg == "--target" {
             i += 1;
             target = parse_required_target(args, i);
@@ -543,7 +585,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
-            // Already handled in main() before parse_args ran (so the banner
+            // Already handled in entry::run() before parse_args ran (so the banner
             // prints before --help/errors/compilation); recognized here only
             // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
@@ -737,9 +779,10 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         }
     }
 
-    CliConfig {
+    let mut config = CliConfig {
         filename,
         heap_size,
+        heap_size_explicit,
         gc_stats,
         counters,
         instrument,
@@ -773,14 +816,92 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         with_crates,
         apm_collector,
         apm_transactions,
+        apm_include: Vec::new(),
+        apm_exclude: Vec::new(),
         quiet,
         ini_overrides,
+    };
+    apply_startup_memory_limit(&mut config, false);
+    config
+}
+
+/// Applies the startup `memory_limit` floor and arena sizing to the merged INI list.
+///
+/// Called once after CLI parsing and again after the project manifest's `[ini]` entries are
+/// prepended, because those entries can add a `memory_limit` that the CLI-only heap-sizing
+/// pass never saw. The explicit `--heap-size` cap is carried through, so a project limit above
+/// it fails instead of being silently clamped.
+pub(crate) fn apply_startup_memory_limit(config: &mut CliConfig, warn: bool) {
+    refuse_startup_memory_limit_below_floor(&mut config.ini_overrides);
+    let Some((_, value)) = config
+        .ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("memory_limit"))
+    else {
+        return;
+    };
+    // The final pipeline call owns php-src's one startup quantity diagnostic; earlier sizing
+    // passes (CLI parse, project merge, direct callers) stay silent.
+    let limit = if warn {
+        crate::codegen_support::parse_startup_memory_limit_bytes(value)
+            .ok()
+            .flatten()
+    } else {
+        crate::codegen_support::startup_memory_limit_value(value)
+    };
+    if let Some(limit) = limit {
+        if config.heap_size_explicit && limit > config.heap_size {
+            fail(&format!(
+                "--ini memory_limit={value} exceeds --heap-size={}",
+                config.heap_size
+            ));
+        }
+        if !config.heap_size_explicit && limit > config.heap_size {
+            // The runtime layout cannot address more than `MAX_HEAP_SIZE` of arena on
+            // AArch64. Keep PHP's reported limit but reserve the largest supported arena,
+            // so `--ini memory_limit=2G` links instead of failing in the linker.
+            config.heap_size = limit.min(MAX_HEAP_SIZE);
+        }
+    }
+}
+
+/// Drops every startup `memory_limit` below PHP's 2 MiB startup floor.
+///
+/// php-src refuses each setting with `Failed to set memory limit …` and keeps the value that
+/// was already installed, so an invalid attempt must not become the reported value or the
+/// emitted `_heap_limit`. Later valid overrides still win in list order, and a manifest value
+/// that is shadowed by a CLI value still follows PHP's attempt-then-replace order.
+pub(crate) fn refuse_startup_memory_limit_below_floor(overrides: &mut Vec<(String, String)>) {
+    const STARTUP_MEMORY_FLOOR: usize = 2_097_152;
+    let mut index = overrides.len();
+    while index > 0 {
+        index -= 1;
+        if !overrides[index].0.eq_ignore_ascii_case("memory_limit") {
+            continue;
+        }
+        let value = overrides[index].1.clone();
+        // Sizing runs again after the project manifest merges and at compilation start, so it
+        // uses the silent parser; the CLI's one warning pass owns the diagnostic text.
+        let limit = crate::codegen_support::startup_memory_limit_value(&value);
+        if let Some(limit) = limit {
+            if limit < STARTUP_MEMORY_FLOOR {
+                // A malformed spelling can parse below the floor ("oops" -> 0). PHP still
+                // reports its quantity diagnostic before the failed-set warning, and removing
+                // the override here means the later one-warning pass can no longer see it.
+                let _ = crate::codegen_support::parse_startup_memory_limit_bytes(&value);
+                eprintln!(
+                    "Warning: Failed to set memory limit to {limit} bytes (Current memory usage is {STARTUP_MEMORY_FLOOR} bytes)"
+                );
+                overrides.remove(index);
+            }
+        }
     }
 }
 
 /// Checks a `--apm-collector` address: `host:port`, with a port a program
 /// can connect to. Resolution is the program's, at run time.
-fn check_collector_address(address: &str) -> Result<(), String> {
+pub(crate) fn check_collector_address(address: &str) -> Result<(), String> {
     let Some((host, port)) = address.rsplit_once(':') else {
         return Err("expected HOST:PORT".to_string());
     };
@@ -977,10 +1098,23 @@ fn parse_emit(value: &str) -> Emit {
     }
 }
 
+/// Largest heap arena the emitted data layout can address on every supported target.
+///
+/// The runtime reserves the heap, the concat scratch arena and the object-handle side
+/// tables as one common block, and compiled code reaches every one of those symbols with
+/// a single AArch64 `ADRP` (±4 GiB). A larger arena pushes later symbols out of that
+/// window and the linker fails with a raw `ADRP out of range` fixup, so the ceiling is
+/// enforced here instead.
+pub(crate) const MAX_HEAP_SIZE: usize = 1 << 30;
+
 /// Parse a heap size value, returning a value >= 65536 or exit with an error.
 fn parse_heap_size(value: &str) -> usize {
     match value.parse::<usize>() {
-        Ok(n) if n >= 65536 => n,
+        Ok(n) if (65_536..=MAX_HEAP_SIZE).contains(&n) => n,
+        Ok(n) if n > MAX_HEAP_SIZE => fail(&format!(
+            "Invalid --heap-size: {} exceeds the maximum supported heap of {} bytes",
+            n, MAX_HEAP_SIZE
+        )),
         _ => fail("Invalid --heap-size: must be a number >= 65536"),
     }
 }
@@ -1104,6 +1238,30 @@ fn format_fail_message(message: &str) -> String {
     )
 }
 
+/// Explains an unrecognized first argument. A legacy compile invocation (an option or a
+/// `.php`/`.lfc` source in first position) gets the full rewritten `elephc build` command.
+fn unknown_command_message(args: &[String]) -> String {
+    let command = &args[1];
+    let legacy = command.starts_with('-') || command.ends_with(".php") || command.ends_with(".lfc");
+    if !legacy {
+        return format!("Unknown command: {command}. Build a source file with `elephc build <source-file>`");
+    }
+    let rewritten: Vec<String> = args[1..].iter().map(|arg| shell_quote(arg)).collect();
+    format!(
+        "Unknown command: {command}. Source compilation now requires the `build` command; \
+         did you mean `elephc build {}`?",
+        rewritten.join(" ")
+    )
+}
+
+/// Quotes one argument for display in a POSIX shell command line when it needs it.
+fn shell_quote(arg: &str) -> String {
+    let plain = !arg.is_empty() && arg.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '=' | ',' | ':' | '@' | '+' | '%')
+    });
+    if plain { arg.to_string() } else { format!("'{}'", arg.replace('\'', "'\\''")) }
+}
+
 /// Prints a formatted parameter-error message to stderr and exits the
 /// process with code 1. Never returns.
 fn fail(message: &str) -> ! {
@@ -1156,10 +1314,12 @@ mod tests {
         assert_eq!(config.emit, Emit::Phpext);
     }
 
-    /// Extracts the compile configuration returned for a legacy invocation.
+    /// Extracts the compile configuration returned for an explicit build.
     fn compile_config(args: &[String]) -> CliConfig {
-        let Command::Compile(config) = parse_args(args) else {
-            panic!("expected compile command");
+        let mut build_args = vec![args[0].clone(), "build".into()];
+        build_args.extend_from_slice(&args[1..]);
+        let Command::Build(config) = parse_args(&build_args) else {
+            panic!("expected build command");
         };
         config
     }
@@ -1452,6 +1612,28 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.with_crates.contains("mysqli"));
         assert!(!config.web);
+    }
+
+    /// Verifies a project `[ini]` memory_limit added after CLI parsing still grows the
+    /// default arena, and that a hexadecimal startup quantity is accepted by the same pass.
+    #[test]
+    fn merged_project_memory_limit_sizes_the_arena() {
+        let args = ["elephc", "app.php"].map(str::to_string);
+        let mut config = compile_config(&args);
+        config.ini_overrides = vec![("memory_limit".into(), "256M".into())];
+        config.heap_size = 134_217_728;
+        config.heap_size_explicit = false;
+        super::apply_startup_memory_limit(&mut config, false);
+        assert_eq!(config.heap_size, 256 * 1024 * 1024);
+
+        config.ini_overrides = vec![("memory_limit".into(), "0x800000".into())];
+        config.heap_size = 134_217_728;
+        super::apply_startup_memory_limit(&mut config, false);
+        assert_eq!(config.heap_size, 134_217_728);
+        assert_eq!(
+            crate::codegen_support::startup_memory_limit_value("0x800000"),
+            Some(8 * 1024 * 1024)
+        );
     }
 
     /// Verifies multiple `--with-<name>` flags accumulate into the forced set.
@@ -1810,10 +1992,70 @@ mod tests {
             Command::Native(NativeCommand::List { .. })
         ));
 
-        let explicit_source = vec!["elephc".into(), "./native".into()];
-        let Command::Compile(config) = parse_args(&explicit_source) else {
+        let explicit_source = vec!["elephc".into(), "build".into(), "./native".into()];
+        let Command::Build(config) = parse_args(&explicit_source) else {
             panic!("explicit source path must remain a compile command");
         };
         assert_eq!(config.filename, "./native");
+    }
+
+    /// `build` uses the normal compilation pipeline and accepts its options.
+    #[test]
+    fn build_command_parses_source_and_options() {
+        let args = vec![
+            "elephc".into(),
+            "build".into(),
+            "--quiet".into(),
+            "app.php".into(),
+        ];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected explicit build command");
+        };
+        assert_eq!(config.filename, "app.php");
+        assert!(config.quiet);
+        assert!(!config.check_only);
+        assert_eq!(config.emit, Emit::Executable);
+    }
+
+    /// Explicit relative paths preserve access to source files named `build`.
+    #[test]
+    fn explicit_build_path_remains_a_source_file() {
+        let args = vec!["elephc".into(), "build".into(), "./build".into()];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected a source file");
+        };
+        assert_eq!(config.filename, "./build");
+    }
+
+    /// Verifies that help lists the explicit build command.
+    #[test]
+    fn help_documents_build_command() {
+        assert!(help_text().contains("build <source-file>"));
+        assert!(help_text().contains("check <source-file>"));
+        assert!(help_text().starts_with("Usage: elephc <COMMAND> [OPTIONS]"));
+    }
+
+    /// `check` reuses the build parser with analysis-only mode enabled.
+    #[test]
+    fn check_command_enables_check_only() {
+        let args = vec!["elephc".into(), "check".into(), "--quiet".into(), "app.php".into()];
+        let Command::Build(config) = parse_args(&args) else {
+            panic!("expected a check build");
+        };
+        assert_eq!(config.filename, "app.php");
+        assert!(config.check_only);
+        assert!(config.quiet);
+    }
+
+    /// A legacy compile invocation is answered with the full rewritten `build` command.
+    #[test]
+    fn legacy_invocation_suggests_the_build_command() {
+        let args: Vec<String> = ["elephc", "--check", "my app.php"].map(str::to_string).to_vec();
+        assert!(unknown_command_message(&args)
+            .contains("did you mean `elephc build --check 'my app.php'`?"));
+        let source: Vec<String> = ["elephc", "main.lfc", "--web"].map(str::to_string).to_vec();
+        assert!(unknown_command_message(&source).contains("`elephc build main.lfc --web`"));
+        let typo: Vec<String> = ["elephc", "buidl", "app.php"].map(str::to_string).to_vec();
+        assert!(!unknown_command_message(&typo).contains("did you mean"));
     }
 }

@@ -1,8 +1,10 @@
 //! Purpose:
 //! Builds and caches the reusable runtime object that is linked beside generated user code.
-//! Keys cache entries by compiler version, target, heap size, and runtime feature shape — by the
-//! inputs that produce the assembly, not by a hash of the assembly itself, so a cache hit never
-//! builds it.
+//! A request is keyed by compiler version, target, heap size, runtime feature shape and the
+//! source-derived build identity — the inputs that produce the assembly — so a warm hit never
+//! builds it. Objects themselves are named by the hash of their assembly, and an alias file maps
+//! each request key to one: a new build identity whose runtime assembly did not change finds the
+//! object already assembled and repays only the generation, not the assembler run.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before user assembly is linked into the final binary.
@@ -28,12 +30,15 @@ mod storage;
 mod tests;
 
 use identity::{
-    harden_runtime_cache_dir, runtime_cache_file_name, runtime_object_is_intact,
-    write_runtime_object_integrity,
+    harden_runtime_cache_dir, runtime_cache_alias_name, runtime_cache_file_name,
+    runtime_content_key, runtime_object_is_intact, write_runtime_object_integrity,
 };
 #[cfg(test)]
 use identity::runtime_cache_key_with_build_identity;
-use storage::{lease_runtime_object, prune_runtime_cache_objects, RuntimeObjectLease};
+use storage::{
+    lease_runtime_object, prune_runtime_cache_objects, read_runtime_cache_alias,
+    write_runtime_cache_alias, RuntimeObjectLease,
+};
 
 /// Runtime cache hit/miss status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,37 +116,56 @@ fn prepare_runtime_object_with_mode(
     pic: bool,
     library_boundary: bool,
 ) -> Result<PreparedRuntimeObject, String> {
-    let cache_dir = runtime_cache_dir();
-    fs::create_dir_all(&cache_dir)
-        .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
-    harden_runtime_cache_dir(&cache_dir)?;
-
     // Worktrees commonly share a package version and cache directory while their
     // runtime emitters differ. Cargo supplies a source-derived emitter identity
     // at build time, letting a warm cache hit avoid regenerating the full runtime
     // assembly while still rejecting an object from a different source revision.
-    let cache_key = identity::runtime_cache_key_with_build_identity_and_boundary(
+    prepare_runtime_object_with_identity(
+        heap_size,
+        target,
+        features,
+        pic,
+        library_boundary,
+        env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
+    )
+}
+
+/// Prepares the runtime object for one request under an explicit build identity.
+///
+/// The request key resolves through its alias to a content-named object. When the alias is
+/// missing or stale, the runtime assembly is generated and hashed; an intact object for that
+/// assembly is reused without running the assembler, and only a new assembly is assembled.
+fn prepare_runtime_object_with_identity(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+    pic: bool,
+    library_boundary: bool,
+    build_identity: &[u8],
+) -> Result<PreparedRuntimeObject, String> {
+    let cache_dir = usable_runtime_object_cache_dir()?;
+
+    let request_key = identity::runtime_cache_key_with_build_identity_and_boundary(
         heap_size,
         target,
         crate::codegen::compile_php_version().version_id(),
         features,
         pic,
         library_boundary,
-        env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
+        build_identity,
     );
-    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, cache_key));
-    let integrity_path = cache_dir.join(format!(
-        "{}.integrity",
-        cache_path.file_name().and_then(|name| name.to_str()).unwrap_or("runtime.o")
-    ));
-    if cache_path.exists() && runtime_object_is_intact(&cache_path, &integrity_path) {
-        if let Some(prepared) = lease_runtime_object(
-            &cache_path,
-            &integrity_path,
-            RuntimeCacheStatus::Hit,
-        )? {
-            prune_runtime_cache_objects(&cache_dir, &cache_path);
-            return Ok(prepared);
+    let alias_path = cache_dir.join(runtime_cache_alias_name(heap_size, target, request_key));
+    if let Some(cache_path) = read_runtime_cache_alias(&alias_path) {
+        let integrity_path = runtime_integrity_path(&cache_path);
+        if cache_path.exists() && runtime_object_is_intact(&cache_path, &integrity_path) {
+            if let Some(prepared) = lease_runtime_object(
+                &cache_path,
+                &integrity_path,
+                RuntimeCacheStatus::Hit,
+            )? {
+                prune_runtime_cache_objects(&cache_dir, &cache_path);
+                return Ok(prepared);
+            }
         }
     }
 
@@ -152,7 +176,42 @@ fn prepare_runtime_object_with_mode(
         pic,
         library_boundary,
     );
+    let content_key = runtime_content_key(target, &runtime_asm);
+    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, content_key));
+    let integrity_path = runtime_integrity_path(&cache_path);
+    let status = if cache_path.exists() && runtime_object_is_intact(&cache_path, &integrity_path) {
+        RuntimeCacheStatus::Hit
+    } else {
+        assemble_runtime_object(&cache_dir, &cache_path, &integrity_path, target, runtime_asm)?
+    };
+    // The alias only spares the next request the generation; failing to record it costs
+    // speed, never correctness, so it does not fail the compile.
+    let _ = write_runtime_cache_alias(&alias_path, &cache_path);
 
+    let Some(prepared) = lease_runtime_object(&cache_path, &integrity_path, status)? else {
+        return prepare_runtime_object_with_identity(
+            heap_size,
+            target,
+            features,
+            pic,
+            library_boundary,
+            build_identity,
+        );
+    };
+    prune_runtime_cache_objects(&cache_dir, &cache_path);
+    Ok(prepared)
+}
+
+/// Assembles runtime assembly into a content-named cache object and publishes its sidecar.
+///
+/// Returns `Hit` when a concurrent compiler published the same object first.
+fn assemble_runtime_object(
+    cache_dir: &std::path::Path,
+    cache_path: &std::path::Path,
+    integrity_path: &std::path::Path,
+    target: Target,
+    runtime_asm: String,
+) -> Result<RuntimeCacheStatus, String> {
     let unique = format!(
         "{}_{}",
         std::process::id(),
@@ -196,38 +255,115 @@ fn prepare_runtime_object_with_mode(
         ));
     }
 
-    let status = match fs::rename(&temp_obj_path, &cache_path) {
+    match fs::rename(&temp_obj_path, cache_path) {
         Ok(()) => {
-            write_runtime_object_integrity(&cache_path, &integrity_path)?;
-            RuntimeCacheStatus::Miss
+            write_runtime_object_integrity(cache_path, integrity_path)?;
+            Ok(RuntimeCacheStatus::Miss)
         }
-        Err(_err) if cache_path.exists() && runtime_object_is_intact(&cache_path, &integrity_path) => {
+        Err(_err) if cache_path.exists() && runtime_object_is_intact(cache_path, integrity_path) => {
             let _ = fs::remove_file(&temp_obj_path);
-            RuntimeCacheStatus::Hit
+            Ok(RuntimeCacheStatus::Hit)
         }
         Err(err) => {
             let _ = fs::remove_file(&temp_obj_path);
-            return Err(format!(
+            Err(format!(
                 "failed to store runtime cache '{}': {}",
                 cache_path.display(),
                 err
-            ));
+            ))
         }
-    };
-    let Some(prepared) = lease_runtime_object(&cache_path, &integrity_path, status)? else {
-        return prepare_runtime_object_with_mode(
-            heap_size,
-            target,
-            features,
-            pic,
-            library_boundary,
-        );
-    };
-    prune_runtime_cache_objects(&cache_dir, &cache_path);
-    Ok(prepared)
+    }
 }
 
-/// Returns the platform-specific cache directory path for runtime objects.
+/// Returns the integrity sidecar path published beside one cache object.
+fn runtime_integrity_path(cache_path: &std::path::Path) -> PathBuf {
+    cache_path.with_file_name(format!(
+        "{}.integrity",
+        cache_path.file_name().and_then(|name| name.to_str()).unwrap_or("runtime.o")
+    ))
+}
+
+/// Returns the directory holding prepared runtime objects: `ELEPHC_RUNTIME_CACHE_DIR` when it
+/// is set and non-empty, else [`runtime_cache_dir`].
+///
+/// The override moves only the runtime objects, which are keyed by everything that shapes them
+/// and safe to share between concurrent compilers; REPL hosts and `elephc test` outputs stay
+/// under the cache root. Test suites that isolate `XDG_CACHE_HOME` per test use it to share
+/// one runtime object per shape instead of regenerating it on every compile.
+fn runtime_object_cache_dir() -> PathBuf {
+    match env::var_os("ELEPHC_RUNTIME_CACHE_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => runtime_cache_dir(),
+    }
+}
+
+/// Returns a runtime-object cache directory this process may write, or a temporary one.
+///
+/// A cache the process cannot create, or one it does not own, must never stop a compile: a
+/// read-only checkout, or a target tree restored from another user's CI artifact, is otherwise
+/// indistinguishable from a broken install. The runtime is then assembled into the OS temporary
+/// directory, which keeps the per-user ownership the hardening requires without silently
+/// trusting the rejected directory.
+fn usable_runtime_object_cache_dir() -> Result<PathBuf, String> {
+    let requested = runtime_object_cache_dir();
+    if directory_accepts_files(&requested) && harden_runtime_cache_dir(&requested).is_ok() {
+        return Ok(requested);
+    }
+    let fallback = env::temp_dir().join(temporary_runtime_cache_dir_name());
+    if !directory_accepts_files(&fallback) {
+        return Err(format!(
+            "failed to create runtime cache '{}': the directory does not accept files",
+            fallback.display()
+        ));
+    }
+    harden_runtime_cache_dir(&fallback)?;
+    Ok(fallback)
+}
+
+/// Returns whether `dir` exists and accepts a new file.
+///
+/// `create_dir_all` succeeds for a directory that already exists, and the ownership hardening
+/// only inspects the group and other bits, so a cache this user owns with mode `0500` would be
+/// selected and then fail while writing the assembly or a lease. A real file probe also covers
+/// ACLs and read-only mounts, which the mode bits cannot describe.
+fn directory_accepts_files(dir: &std::path::Path) -> bool {
+    if fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(
+        ".write-probe.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    match fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Returns the per-user directory name of the runtime cache under the OS temporary directory.
+///
+/// `/tmp` serves every user on a Linux machine and the cache directory is hardened to
+/// owner-only, so one fixed name would let the first user's directory reject every other user's
+/// compile once it exists. The effective user id keeps each user's fallback theirs; the
+/// ownership check still refuses a directory this user does not own. The integration-test helper
+/// `tests/integration.rs::shared_runtime_cache_dir` derives the same name.
+fn temporary_runtime_cache_dir_name() -> String {
+    #[cfg(unix)]
+    let owner = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let owner = 0;
+    format!("elephc-runtime-cache-{owner}")
+}
+
+/// Returns the platform-specific cache root for runtime objects, REPL hosts and test outputs.
 pub(crate) fn runtime_cache_dir() -> PathBuf {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path).join("elephc")

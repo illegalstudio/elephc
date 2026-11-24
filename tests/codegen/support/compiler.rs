@@ -453,9 +453,12 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::uri_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
-    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, false, &mut prelude_inventory);
-    let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(
+        resolved,
+        false,
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -488,7 +491,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     );
     let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
     let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
-    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::tokenizer_prelude::inject_if_used_with_web(resolved, false, heap_size, false, &mut prelude_inventory);
     let resolved = elephc::pcre_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -517,6 +520,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             elephc::types::check_with_target_and_bounds(program, target(), bounds)
         })
         .expect("type check failed");
+    // Mirrors `pipeline::compile`: the URI prelude keeps a wider internal `mixed` contract
+    // for nullable/runtime-checked parameters, while reflection reports php-src's declared
+    // `?Uri\...` types.
+    elephc::uri_prelude::apply_reflection_signatures(&mut check_result);
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
@@ -896,7 +903,51 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
 // capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 /// Provides the Compile and run capture helper used by the compiler module.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, false)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, false)
+}
+
+/// Compiles and captures a fixture with an explicit heap capacity.
+///
+/// Used by the PHPT matrix for `--INI-- memory_limit` fixtures: the heap capacity is the
+/// compile-time limit the fixture asks for, and the capture keeps the fatal on stderr.
+pub(crate) fn compile_and_run_capture_with_heap_size(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    compile_and_run_capture_with_optional_regex(source, heap_size, false)
+}
+
+/// Compiles and runs a fixture with extra environment variables for the program.
+///
+/// The compiler process keeps its own environment: only the produced binary sees
+/// these overrides, so runtime policy switches do not leak between parallel tests.
+pub(crate) fn compile_and_run_capture_with_env(
+    source: &str,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        env,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 /// Compiles and runs a fixture with stderr merged onto stdout, preserving write order.
@@ -968,26 +1019,28 @@ pub(crate) fn compile_and_run_capture_with_heap_size(
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
 pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, true)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, true)
 }
 
 /// Compiles and runs a heap-debug fixture with `--with-regex`, so eval'd code reaches the
 /// regex provider while the leak summary still covers its allocations.
 pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_regex_options(source, true, true)
+    compile_and_run_capture_with_regex_options(source, 8_388_608, true, true)
 }
 
 /// Compiles and captures one fixture while optionally enabling managed regex support.
 fn compile_and_run_capture_with_optional_regex(
     source: &str,
+    heap_size: usize,
     with_regex: bool,
 ) -> ProgramOutput {
-    compile_and_run_capture_with_regex_options(source, with_regex, false)
+    compile_and_run_capture_with_regex_options(source, heap_size, with_regex, false)
 }
 
-/// Compiles and captures one fixture with the given regex and heap-debug options.
+/// Compiles and captures one fixture with the given heap capacity, regex and heap-debug options.
 fn compile_and_run_capture_with_regex_options(
     source: &str,
+    heap_size: usize,
     with_regex: bool,
     heap_debug: bool,
 ) -> ProgramOutput {
@@ -999,7 +1052,7 @@ fn compile_and_run_capture_with_regex_options(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, heap_debug, with_regex,
+            source, &dir, heap_size, false, false, heap_debug, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(

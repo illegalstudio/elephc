@@ -164,6 +164,8 @@ fn check_assign_value_type(
     // disagree with the lowering (it routes on the index's runtime IR type) and
     // produce a spurious `AssocArray -> Array(Mixed)` backend error.
     checker.foreach_key_locals.remove(name);
+    // The same store ends any proof of the old value (`Checker::proven_local_views`).
+    checker.end_local_proof(name);
 
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The parser
@@ -353,6 +355,10 @@ fn check_assign_value_type(
                     checker.guarded_union_types.remove(name);
                 }
             }
+            // A plain store proves the stored member the way a coalescing one does below.
+            super::store_narrowing::narrow_local_to_stored_value(
+                checker, name, value, &ty, stored_non_null, env,
+            );
         }
         // The assignment merge protects the slot's contract. A coalescing store also proves
         // the current value's narrower type, without changing boxed parameter storage.

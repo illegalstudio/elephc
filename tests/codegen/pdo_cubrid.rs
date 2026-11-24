@@ -2,7 +2,7 @@
 //! End-to-end version-surface and live CCI tests for the optional PDO_CUBRID backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-cubrid --test codegen_tests`.
+//! - `cargo test --features pdo-cubrid --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests never require CCI or a running server.

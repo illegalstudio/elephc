@@ -103,16 +103,16 @@ RUN set -e; \
     exit "$status"
 
 # Compile and run a few programs so the log shows the image works, without letting a failure abort the build.
-RUN (./target/debug/elephc examples/fizzbuzz/main.php && ./examples/fizzbuzz/main | tail -n 3 \
-        && ./target/debug/elephc examples/hello-preg/main.php && ./examples/hello-preg/main \
-        && ./target/debug/elephc examples/xml/main.php && ./examples/xml/main | tail -n 3) \
+RUN (./target/debug/elephc build examples/fizzbuzz/main.php && ./examples/fizzbuzz/main | tail -n 3 \
+        && ./target/debug/elephc build examples/hello-preg/main.php && ./examples/hello-preg/main \
+        && ./target/debug/elephc build examples/xml/main.php && ./examples/xml/main | tail -n 3) \
     || echo "WARNING: an example failed to compile or run"
 
 # The cheap tests: the lexer, parser and error-reporting suites and the bridge crates' unit tests. The compiler's
-# own unit tests (thousands, each lowering for every target) and the end-to-end codegen suites (codegen_tests and the
+# own unit tests (thousands, each lowering for every target) and the end-to-end codegen suites (the codegen_tests_* binaries and the
 # other compile-and-run binaries) take hours on one machine, so they are left to the agent.
 RUN timeout 1800 cargo nextest run --locked --workspace --no-fail-fast \
-        -E '(kind(lib) & not package(elephc)) | binary(lexer_tests) | binary(parser_tests) | binary(error_tests)' \
+        -E '(kind(lib) & not package(elephc)) | (binary_id(elephc::integration) & test(/^(lexer_tests|parser_tests|error_tests)::/))' \
     || echo "WARNING: cargo nextest reported failures"
 
 # Everything is fetched. From here on cargo must not try to reach a registry.

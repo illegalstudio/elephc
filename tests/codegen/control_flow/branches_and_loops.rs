@@ -559,3 +559,18 @@ echo s_string("0"), "|", s_nonempty_array([1]), "|", s_float(0.5), "\n";
     );
     assert_eq!(out, "anull|null|nullone|nullone|nullone|nulltwo\nother|other|other\n");
 }
+
+/// `do` accepts a single unbraced statement as its body, like PHP.
+#[test]
+fn test_do_while_accepts_an_unbraced_body() {
+    let out = compile_and_run(r#"<?php
+$i = 0;
+do $i++;
+while ($i < 3);
+echo $i, ":";
+do echo "x";
+while (false);
+echo "\n";
+"#);
+    assert_eq!(out, "3:x\n");
+}

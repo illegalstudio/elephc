@@ -115,6 +115,14 @@ echo ($stop - $start), "\n", json_last_error(), "\n", $sum, "\n";
 """
 
 
+def compile_prefix(compiler: Path) -> list[str]:
+    """Return `elephc build` for compilers that require it, the bare binary for older ones."""
+    result = subprocess.run([str(compiler), "--help"], text=True, capture_output=True)
+    if "build <source-file>" in result.stdout:
+        return [str(compiler), "build"]
+    return [str(compiler)]
+
+
 def compile_driver(compiler: Path, source: Path, binary: Path, extra: list[str]) -> None:
     """Compile the shared driver with the requested elephc binary.
 
@@ -125,7 +133,7 @@ def compile_driver(compiler: Path, source: Path, binary: Path, extra: list[str])
     if produced.exists():
         produced.unlink()
     command = [
-        str(compiler),
+        *compile_prefix(compiler),
         f"--heap-size={HEAP}",
         *extra,
         str(source),

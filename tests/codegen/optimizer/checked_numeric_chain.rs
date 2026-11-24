@@ -2,7 +2,7 @@
 //! End-to-end coverage for allocation-free checked numeric chain specialization.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::checked_numeric_chain`.
+//! - `cargo test --test codegen_tests_core optimizer::checked_numeric_chain`.
 //!
 //! Key details:
 //! - Tests pin optimized EIR, both target architecture lowerings, overflow precision at the
@@ -17,7 +17,7 @@ pub(super) fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
     fs::write(&php_path, source).expect("write checked numeric chain EIR fixture");
     let mut command = elephc_cli_command(&dir);
     command.arg("--emit-ir").args(extra_args).arg(&php_path);
-    let output = command.output().expect("run elephc --emit-ir");
+    let output = command.output().expect("run elephc build --emit-ir");
     assert!(
         output.status.success(),
         "emit-ir failed: {}",
@@ -50,7 +50,7 @@ pub(super) fn emit_target_assembly(source: &str, target: &str) -> String {
         .arg("--target")
         .arg(target)
         .arg(&php_path);
-    let output = command.output().expect("run elephc --emit-asm");
+    let output = command.output().expect("run elephc build --emit-asm");
     assert!(
         output.status.success(),
         "emit-asm for {target} failed: {}",

@@ -5,7 +5,7 @@
 //! `use (&$v)` capture).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::into_struct` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::into_struct` through Rust's test harness.
 //!
 //! Key details:
 //! - `$values` / `$index` are never predeclared, exactly like real PHP code.

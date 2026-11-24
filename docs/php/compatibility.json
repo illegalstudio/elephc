@@ -179,11 +179,11 @@
   ],
   "coverage": {
     "classes": {
-      "have": 203,
+      "have": 202,
       "total": 329
     },
     "constants": {
-      "have": 1614,
+      "have": 1617,
       "total": 3181
     },
     "functions": {
@@ -1495,8 +1495,8 @@
         "total": 6
       },
       "constants": {
-        "eval": 150,
-        "have": 171,
+        "eval": 153,
+        "have": 174,
         "total": 400
       },
       "docs": null,

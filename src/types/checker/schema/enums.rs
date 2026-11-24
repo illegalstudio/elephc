@@ -20,6 +20,8 @@ use super::classes::{
     collect_attribute_args, collect_attribute_names, resolve_lexical_class_value,
     validate_method_shape,
 };
+use super::const_expr_forms::validate_constant_expression;
+use super::enum_backing::{fold_backing_value, FoldedBacking};
 use super::validation::build_method_sig;
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
@@ -112,6 +114,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
 /// - `attributes`: the declaration's own attribute groups, recorded for reflection
+/// - `global_constants`: source `const` declarations, used to fold constant-expression case values
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -136,6 +139,7 @@ pub(crate) fn build_enum_info(
     attributes: &[crate::parser::ast::AttributeGroup],
     span: crate::span::Span,
     is_internal: bool,
+    global_constants: &HashMap<String, crate::parser::ast::Expr>,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -237,6 +241,9 @@ pub(crate) fn build_enum_info(
         }
 
         let mut deprecated_mt_rand_php = false;
+        if let (Some(_), Some(expr)) = (&resolved_backing, &case.value) {
+            validate_constant_expression(expr)?;
+        }
         let value = match (&resolved_backing, &case.value) {
             (None, None) => None,
             (None, Some(_)) => {
@@ -251,29 +258,32 @@ pub(crate) fn build_enum_info(
                     "Backed enum cases must declare a value",
                 ))
             }
-            (Some(PhpType::Int), Some(expr)) => match &expr.kind {
-                ExprKind::ConstRef(reference)
-                    if reference.as_str().trim_start_matches('\\') == "MT_RAND_PHP" =>
-                {
-                    // php-src accepts the deprecated constant as an int backing value and
-                    // raises `E_DEPRECATED` when the case is first fetched.
-                    if !seen_int_values.insert(1) {
-                        return Err(CompileError::new(
-                            case.span,
-                            &format!("Duplicate enum backing value in {}: 1", name),
-                        ));
-                    }
-                    deprecated_mt_rand_php = true;
-                    Some(EnumCaseValue::Int(1))
+            (Some(PhpType::Int), Some(expr))
+                if matches!(&expr.kind, ExprKind::ConstRef(reference)
+                    if reference.as_str().trim_start_matches('\\') == "MT_RAND_PHP") =>
+            {
+                // php-src accepts the deprecated constant as an int backing value and
+                // raises `E_DEPRECATED` when the case is first fetched.
+                if !seen_int_values.insert(1) {
+                    return Err(CompileError::new(
+                        case.span,
+                        &format!("Duplicate enum backing value in {}: 1", name),
+                    ));
                 }
-                ExprKind::IntLiteral(value) => {
-                    if !seen_int_values.insert(*value) {
+                deprecated_mt_rand_php = true;
+                Some(EnumCaseValue::Int(1))
+            }
+            (Some(PhpType::Int), Some(expr)) => match fold_backing_value(
+                checker, global_constants, name, expr,
+            ) {
+                Some(FoldedBacking::Int(value)) => {
+                    if !seen_int_values.insert(value) {
                         return Err(CompileError::new(
                             case.span,
                             &format!("Duplicate enum backing value in {}: {}", name, value),
                         ));
                     }
-                    Some(EnumCaseValue::Int(*value))
+                    Some(EnumCaseValue::Int(value))
                 }
                 _ => {
                     return Err(CompileError::new(
@@ -282,15 +292,17 @@ pub(crate) fn build_enum_info(
                     ))
                 }
             },
-            (Some(PhpType::Str), Some(expr)) => match &expr.kind {
-                ExprKind::StringLiteral(value) => {
+            (Some(PhpType::Str), Some(expr)) => match fold_backing_value(
+                checker, global_constants, name, expr,
+            ) {
+                Some(FoldedBacking::Str(value)) => {
                     if !seen_string_values.insert(value.clone()) {
                         return Err(CompileError::new(
                             case.span,
                             &format!("Duplicate enum backing value in {}: {:?}", name, value),
                         ));
                     }
-                    Some(EnumCaseValue::Str(value.clone()))
+                    Some(EnumCaseValue::Str(value))
                 }
                 _ => {
                     return Err(CompileError::new(
@@ -701,6 +713,7 @@ pub(crate) fn insert_enum_metadata(
             abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
+            narrowed_vtable_slots: HashMap::new(),
             static_method_visibilities,
             final_static_methods,
             static_method_declaring_classes,

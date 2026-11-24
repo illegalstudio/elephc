@@ -260,26 +260,41 @@ pub(super) fn static_array_callable_is_callable(
     let ExprKind::StringLiteral(method) = &method_expr.kind else {
         return None;
     };
-    Some(static_method_callback_is_callable(ctx, &class_name, method))
+    static_method_callback_is_callable(ctx, &class_name, method)
 }
 
-/// Returns true when a compile-time class/method pair names a public static method.
+/// Returns whether a compile-time class/method pair names a callable static method.
+///
+/// A public method is callable everywhere and a missing one nowhere. A non-public method is
+/// never callable outside a class, and inside one only as the calling scope allows, which the
+/// runtime `is_callable()` lowering decides, so that case is not folded (`None`).
 pub(super) fn static_method_callback_is_callable(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     method: &str,
-) -> bool {
+) -> Option<bool> {
     let Some(class_name) = lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\')) else {
-        return false;
+        return Some(false);
     };
     let Some(class_info) = ctx.classes.get(&class_name) else {
-        return false;
+        return Some(false);
     };
     let method_key = php_symbol_key(method);
     if !class_info.static_methods.contains_key(&method_key) {
-        return false;
+        // A subclass does not list the calling class's private static methods, but the calling
+        // scope still reaches them through the subclass name (`is_callable(['Child', 'p'])`
+        // inside the parent), so that case is left to the runtime lookup too.
+        let scope_declares = ctx
+            .current_class
+            .as_ref()
+            .and_then(|scope| ctx.classes.get(scope))
+            .is_some_and(|scope| scope.static_methods.contains_key(&method_key));
+        return (!scope_declares).then_some(false);
     }
-    class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
+    if class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public) {
+        return Some(true);
+    }
+    ctx.current_class.is_none().then_some(false)
 }
 
 /// Converts a static `call_user_func_array()` argument array into call arguments.

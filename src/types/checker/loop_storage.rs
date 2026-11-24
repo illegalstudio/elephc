@@ -78,7 +78,7 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter,
-        tagged_integer_locals, &Default::default(), infer_value,
+        tagged_integer_locals, &Default::default(), &Default::default(), infer_value,
         ObjectRelations { is_a: &|_, _| false, common: &|_, _| None }).contracts
 }
 
@@ -97,6 +97,24 @@ pub(super) struct LoopWrites<'a> {
     pub shared_bindings: HashSet<&'a str>,
     /// Avoids extra exception inference for the common case of a loop without handlers.
     pub has_catches: bool,
+}
+
+/// Facts about element writes that the body check applies and the fixed point must share.
+#[derive(Default)]
+pub(super) struct ElementStorageFacts {
+    /// Locals declared `array<K, V>` with a concrete `V`.
+    ///
+    /// A keyed write cannot widen their value payload: `check_array_assign` rejects a value the
+    /// declaration does not admit, and this pass runs before the body's guards are known, so a
+    /// value it can only type `mixed` here (`if (!is_bool($v)) { throw … } $map[$k] = $v;`) is
+    /// either the declared type when the write is checked or a compile error. Widening the
+    /// contract up front instead silently replaced the declared storage for the whole loop.
+    pub declared_hash_values: HashSet<String>,
+    /// Locals whose value lives in a boxed cell other code can replace (a global, a
+    /// by-reference capture). Written as an element they contribute `mixed`, as
+    /// `Checker::element_storage_type` decides for the body, so the loop's contract already
+    /// holds the boxed payload the write stores.
+    pub boxed_volatile_locals: HashSet<String>,
 }
 
 /// Stable physical contracts and the evidence used to reason about iteration entry reads.
@@ -127,6 +145,7 @@ pub(super) fn analyze_loop_storage<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
     entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
+    element_storage: &ElementStorageFacts,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     objects: ObjectRelations<'_>,
 ) -> LoopStorageAnalysis {
@@ -163,6 +182,7 @@ pub(super) fn analyze_loop_storage<'a>(
             &foreach_keys,
             &foreach_values,
             promotable_candidates,
+            element_storage,
             infer_value,
             objects,
         );
@@ -267,6 +287,10 @@ fn join_tagged_numeric_flow_type(left: &PhpType, right: &PhpType) -> Option<PhpT
 }
 
 /// Applies indexed-array growth and element-write evidence to one fixed-point iteration.
+///
+/// `element_storage` carries the two facts about element writes the body check applies and this
+/// pass cannot derive from types alone (see [`ElementStorageFacts`]).
+#[allow(clippy::too_many_arguments)]
 fn apply_array_write_evidence(
     writes: &[ArrayWrite<'_>],
     env: &mut TypeEnv,
@@ -274,6 +298,7 @@ fn apply_array_write_evidence(
     foreach_keys: &HashSet<&str>,
     foreach_values: &HashSet<&str>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
+    element_storage: &ElementStorageFacts,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     objects: ObjectRelations<'_>,
 ) {
@@ -281,6 +306,13 @@ fn apply_array_write_evidence(
         let incoming = infer_storage_value_type(write.value, env, infer_value, objects)
             .or_else(|| precise_scalar_expr_type(write.value))
             .unwrap_or(PhpType::Mixed);
+        // The same payloads `Checker::element_storage_type` stores as `mixed` in the body.
+        let boxed_volatile = matches!(&write.value.kind,
+            ExprKind::Variable(name) if element_storage.boxed_volatile_locals.contains(name))
+            && matches!(incoming,
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+                    | PhpType::Array(_) | PhpType::AssocArray { .. });
+        let incoming = if boxed_volatile { PhpType::Mixed } else { incoming };
         let Some(current) = env.get(write.name).cloned() else {
             continue;
         };
@@ -361,7 +393,13 @@ fn apply_array_write_evidence(
                     *key,
                     key_type.unwrap_or(PhpType::Int),
                 )),
-                value: Box::new(join_array_payload_type(*value, incoming)),
+                value: if write.index.is_some()
+                    && element_storage.declared_hash_values.contains(write.name)
+                {
+                    value
+                } else {
+                    Box::new(join_array_payload_type(*value, incoming))
+                },
             },
             other => other,
         };
@@ -1802,7 +1840,8 @@ mod tests {
         };
         let objects = ObjectRelations { is_a: &object_is_a, common: &|_, _| None };
         super::analyze_loop_storage(&body, None, None, &entry, None,
-            &std::collections::HashSet::new(), &Default::default(), &mut infer, objects)
+            &std::collections::HashSet::new(), &Default::default(), &Default::default(),
+            &mut infer, objects)
             .contracts
     }
 

@@ -321,6 +321,27 @@ $ages["bob"] = "not an int";
 A `mixed` element or value type absorbs every write, so `array<mixed>` and
 `array<string, mixed>` impose no contract and stay freely writable.
 
+A keyed write into a declared `array<K, V>` map follows the same rule inside a loop: the map
+keeps its declared value storage, so a value the compiler can only type `mixed` there is
+rejected instead of quietly turning the map into `array<K, mixed>` for the whole loop. A value
+proven by a guard is the declared type and is stored as it:
+
+```php
+<?php
+function preferences(mixed $data): array<string, bool> {
+    array<string, bool> $values = [];
+    foreach ($data as $name => $value) {
+        if (!is_string($name) || !is_bool($value)) {
+            throw new UnexpectedValueException('Expected boolean preferences');
+        }
+        $values[$name] = $value;   // bool, stored as a raw bool
+    }
+    return $values;
+}
+// without the guard:
+// error: cannot store mixed into $values declared as array<string, bool>
+```
+
 A class or interface element type holds instances of that class, of its subclasses, and of
 classes implementing that interface. Every object element is one object pointer, so writing
 a subclass instance with `$items[] = ...`, `$items[$i] = ...` or `array_push()` keeps the

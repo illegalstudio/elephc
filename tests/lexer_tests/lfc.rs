@@ -57,3 +57,26 @@ fn lfc_allows_tag_text_inside_comments_and_strings() {
         matches!(token, Token::StringLiteral(value) if value == "<?php ?>")
     }));
 }
+
+/// Preserves compiler comment boundaries and character columns when scanning byte ranges.
+#[test]
+fn lfc_shared_lexemes_preserve_comment_boundaries_and_spans() {
+    let tokens = tokenize_with_mode(
+        "// café ?>\r still in the comment\n/*é*/ $名 >>= 0xA_B;",
+        SourceMode::Lfc,
+    )
+    .expect("tag text remains inside the LFC comment");
+
+    let kinds: Vec<_> = tokens.iter().map(|(token, _)| token.clone()).collect();
+    assert_eq!(kinds, [
+        Token::OpenTag,
+        Token::Variable("名".into()),
+        Token::GreaterGreaterAssign,
+        Token::IntLiteral(171),
+        Token::Semicolon,
+        Token::Eof,
+    ]);
+    let span = tokens[1].1.span;
+    assert_eq!((span.line, span.col, span.end_column()), (2, 7, 9));
+    assert_eq!(tokens[2].1.span.col, 10);
+}

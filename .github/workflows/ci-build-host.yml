@@ -45,7 +45,6 @@ env:
     -p elephc-gmp
     -p elephc-random
     -p elephc-uri
-    -p elephc-pack
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -85,7 +84,12 @@ jobs:
     outputs:
       artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
     runs-on: macos-15
-    timeout-minutes: 60
+    # The archive compiles the whole test graph at the dev profile's `opt-level = 1`, and the
+    # macOS runner is the slowest of the three: this job measured ~42 minutes green before the
+    # profile change and crossed the old 60-minute cap twice after it, while `cargo nextest
+    # archive` was still running at the 30-minute mark. The Linux archives stay far below their
+    # own budget (7 and 8 minutes), so the headroom belongs to this platform alone.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -229,7 +233,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
@@ -550,7 +556,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
@@ -866,7 +874,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 

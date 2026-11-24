@@ -5,6 +5,37 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.9] - 2026-11-20
+
+- Added PHP 8.5's `uri` extension: `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, `Uri\UriComparisonMode`, `Uri\WhatWg\UrlValidationError` and their exceptions, linked automatically when a program uses `Uri\` (or forced with `--with-uri`) on PHP 8.5 profiles and checked against 332 cases ported from php-src's `ext/uri` tests.
+- Added `memory_limit` enforcement: `--ini memory_limit`, `ini_get()`, `ini_set()`, `ini_restore()` and `ini_get_all()` follow php-src's quantity parsing, and allocations past the limit, including string growth, stop with PHP's `Allowed memory size ... exhausted` fatal error and exit status 255.
+- Added `goto` statements and labels in compiled code and `eval()`; compiled code reports PHP's diagnostics for undefined and duplicate labels and for jumps into loops, `switch` or `finally`, and explicitly refuses jumps into a `catch`, across `switch` cases or across namespaces, while `eval()` reports invalid jumps as a parse error.
+- Added `ext/tidy` through a managed libtidy 5.8.0 bridge: the `tidy` and `tidyNode` classes, all 24 `tidy_*` functions, 161 `TIDY_*` constants and `ob_tidyhandler`, in compiled and `eval()` code.
+- Added transaction monitoring with `elephc monitor --apm`: per-route request counts, latency percentiles, error shares, database and network work for `--web` services, script runs, library calls and Symfony Messenger messages, with a live view, daily on-disk history, a Transactions page, alert budgets, `--with-apm` builds, `--apm-collector` push collection and `--apm-transaction` named transactions.
+- Added an edge deployment profile for `--web`: Unix domain sockets with `--listen unix:<path>`, `--trusted-proxy` with right-to-left `X-Forwarded-For` and `Forwarded` resolution, and ready-made Caddy, nginx, HAProxy, Traefik, Apache and Ferron configurations.
+- Improved `--web` throughput with `TCP_NODELAY`, fewer per-request allocations and on-demand `$_ENV` and `$_REQUEST` construction, plus a macOS acceptor that spreads accepted connections fairly across prefork workers.
+- Completed `ext/ctype`: all 11 predicates classify bytes under the active `LC_CTYPE` locale, including PHP's deprecated integer fallback; added libc-backed `setlocale()` (with array and fallback candidates) and `nl_langinfo(CODESET)`, and PCRE no longer forces a `C.UTF-8` locale.
+- Added `preg_grep()`, `preg_last_error()`, `preg_last_error_msg()`, `PREG_GREP_INVERT`, the `PREG_*_ERROR` codes and the `PCRE_VERSION` constants in compiled code and `eval()`; a match error now makes `preg_*` calls return `false` or `null` like PHP instead of reporting no match.
+- Added the 14 `DATE_*` constants and `E_DEPRECATED` reports, enabled per target PHP version, for reads of deprecated builtin constants such as `DATE_RFC7231`, `DateTimeInterface::RFC7231`, `MT_RAND_PHP` and `E_STRICT`, including inside constant expressions, defaults, enum cases and attribute arguments, which follow php-src's timing and line apart from the exceptions listed in the DateTime guide.
+- Added dynamic first-class callable syntax such as `$method(...)` on variables, grouped expressions and array elements, honoring the creation scope for private and protected methods.
+- Changed `eval()` fragments and interpreted includes to bind top-level functions and simple classes, interfaces and traits before their first statement, as PHP does.
+- Improved runtime `is_callable()` string lookups by binary-searching the builtin name table on AArch64 and x86_64; user function names now match case-insensitively, and builtin and user names accept a leading `\`.
+- Fixed declared `callable` parameters and return values turning the caller's value into a Closure: they keep the original string, array, object or Closure, accept runtime-selected names and callable arrays, and raise PHP's catchable `TypeError` when the value is not callable; a builtin selected only at run time must also be named literally elsewhere to be invoked through `callable`.
+- Fixed `Closure::fromCallable()` with literal `"Class::method"` strings, `===` between closures, and repeated conversions of the same name returning one shared closure.
+- Fixed parameters declared `T $p = null` not becoming implicitly nullable: they now receive `null`, and the compiler reports PHP 8.4's implicit-nullable deprecation under 8.4 and later profiles; by-reference, intersection-typed and `#[Export]` parameters keep their declared type.
+- Fixed PHPDoc generics rejecting or miscompiling templated interface methods, templated overrides, broken `@template-covariant` markers and type arguments on built-in interfaces, and made `instanceof` hold for every instantiation of a template.
+- Fixed abstract trait methods being treated as definitions: they are now requirements that a concrete method, an inherited (including `final`) method or another trait's method with an identical signature satisfies, and their implementations accept `#[\Override]`.
+- Fixed valid syntax being rejected: trailing commas in closure `use` lists and `match` arm conditions, semi-reserved keywords as method names in trait adaptations, and bare `exit;` and `die;`; an empty `use ()` is now rejected as in PHP.
+- Fixed covariant return checks rejecting overrides that return a class whose name sorts after the overriding class, or any enum, including enums narrowing `UnitEnum` and `BackedEnum` returns.
+- Fixed enum case `->value` and `->name` reads in instance property, promoted-constructor and method parameter defaults being rejected, and a mistyped promoted default compiling instead of reporting an error.
+- Fixed `DateTime` and `DateTimeImmutable` fluent methods returning the base class instead of `static`; immutable variants clone the receiver and keep subclass properties, and `parent::` calls to them link.
+- Fixed indexed array literals mixing instances of related classes being stored as boxed values, which corrupted reads through `array<Base>` locals and parameters, skipped element destructors and failed to compile when stored into `array<Base>` properties.
+- Fixed Composer-autoloaded classes losing the `WeakMap` and `WeakReference` declarations when the entry program never names them.
+- Fixed `Mt19937` seeds to follow PHP's weak integer coercion (rejecting non-integer seeds only under `strict_types`), `array_rand()` through string and runtime-selected callables, legacy `MT_RAND_PHP` range scaling, and the call-site location reported by prelude deprecations.
+- Fixed typed properties accepting incompatible values written through a by-reference parameter, `declare(strict_types=...)` being ignored in `eval()` fragments for user function, method and closure arguments and return values and for GMP calls, assignments on binary-operator right operands failing to parse in `eval()`, and missing GMP constants in `eval()`.
+- Fixed `implode()` and `join()` reporting the wrong overload or operand type, and invalid array operands in `eval()` aborting instead of throwing a catchable `TypeError`.
+- Fixed NaN values coerced to string missing the `unexpected NAN value was coerced to string` warning under the PHP 8.5 profile.
+
 ## [0.27.8] - 2026-11-13
 
 - Added SimpleXML in compiled and `eval()` code, including live document views, XPath, namespaces, subclass hooks and DOM interoperability through the managed libxml2 package.
@@ -990,7 +1021,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.8...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.9...HEAD
+[0.27.9]: https://github.com/illegalstudio/elephc/compare/v0.27.8...v0.27.9
 [0.27.8]: https://github.com/illegalstudio/elephc/compare/v0.27.7...v0.27.8
 [0.27.7]: https://github.com/illegalstudio/elephc/compare/v0.27.6...v0.27.7
 [0.27.6]: https://github.com/illegalstudio/elephc/compare/v0.27.5...v0.27.6

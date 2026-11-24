@@ -100,6 +100,35 @@ pub(crate) unsafe fn txn_word<'a>(base: usize, route_id: usize, word: usize) -> 
     &*((base + offset) as *const AtomicU64)
 }
 
+/// Address of the runtime's live-heap watermark (`_gc_peak`), published by main's prologue
+/// in a probe build; 0 otherwise. A `--web` request starts it over, so it holds the peak
+/// memory of the request this process just ran.
+#[no_mangle]
+pub static mut elephc_probe_heap_peak: usize = 0;
+
+/// The peak memory of the request this process just ran, bytes, when the build said where.
+fn request_peak_bytes() -> Option<u64> {
+    let address = unsafe { std::ptr::addr_of!(elephc_probe_heap_peak).read_volatile() };
+    (address != 0).then(|| unsafe { (*(address as *const AtomicU64)).load(Ordering::Relaxed) })
+}
+
+/// Adds the peak memory of the request this process just ran to `route_id`'s row. Only from
+/// the process whose PHP ran it: a web worker recording an isolated handler's request by
+/// name never ran it.
+pub(crate) fn record_memory(base: usize, route_id: usize) {
+    if route_id >= EVENT_BUCKETS {
+        return;
+    }
+    let Some(bytes) = request_peak_bytes() else {
+        return;
+    };
+    unsafe {
+        txn_word(base, route_id, apm::WORD_MEM_HIST0 + apm::mem_bucket_of(bytes)).fetch_add(1, Ordering::Relaxed);
+        txn_word(base, route_id, apm::WORD_MEM_SUM).fetch_add(bytes, Ordering::Relaxed);
+        txn_word(base, route_id, apm::WORD_MEM_N).fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Adds one completed request to `route_id`'s row.
 ///
 /// Four relaxed increments and no allocation. The count goes LAST and with
@@ -107,6 +136,8 @@ pub(crate) unsafe fn txn_word<'a>(base: usize, route_id: usize, word: usize) -> 
 /// the route's published name and the request's other counters, so a snapshot
 /// never shows a request it cannot also place.
 pub(crate) fn record_transaction(base: usize, route_id: usize, status: u32, duration_ns: u64) {
+    // The error the transaction noted is counted with it when it failed, and forgotten either way.
+    crate::apm_errors::commit(base, route_id, route_id < EVENT_BUCKETS && status >= 500);
     if route_id >= EVENT_BUCKETS {
         return;
     }
@@ -144,6 +175,19 @@ pub unsafe extern "C" fn elephc_probe_note_transaction(
     if base == 0 {
         return;
     }
+    // A request the project's `[apm]` rules exclude counts nothing: the stamped
+    // one (`elephc_probe_set_route` decided), or one recorded by name.
+    if route.is_null() || len == 0 {
+        if crate::apm_rules::request_ignored() {
+            return;
+        }
+    } else if len <= 4096 {
+        if let Ok(text) = std::str::from_utf8(std::slice::from_raw_parts(route, len)) {
+            if !crate::apm_rules::counts(text) {
+                return;
+            }
+        }
+    }
     let _gate = TableGate::enter(base);
     // A "not found" answer goes to `<not found>` only for a route the table
     // has not seen: a known endpoint answering 404 for a missing record keeps
@@ -170,6 +214,10 @@ pub unsafe extern "C" fn elephc_probe_note_transaction(
     // The request is being counted: a death from here on must not count it
     // again as a 500 (see `answering_in_flight`).
     answering_in_flight(base);
+    // Its memory, when its PHP ran here: the stamped route is this process's request.
+    if route.is_null() || len == 0 {
+        record_memory(base, route_id);
+    }
     record_transaction(base, route_id, status, duration_ns);
     end_in_flight(base);
 }
@@ -273,15 +321,34 @@ pub unsafe extern "C" fn elephc_probe_settle_request(status: u32) {
         return;
     }
     let _gate = TableGate::enter(base);
-    if let Some(route_id) = pending_route_id(status) {
-        flush_pending_io(base, route_id);
+    // An excluded request settles nothing: its work, its error and its memory are dropped,
+    // not charged to `<untagged>` as a request the recorder never counts (review).
+    if crate::apm_rules::request_ignored() && TXN_STARTED_NS.load(Ordering::Relaxed) == 0 {
+        PENDING_LEN.store(0, Ordering::Relaxed);
+        for counter in &PENDING_IO {
+            counter.store(0, Ordering::Relaxed);
+        }
+        crate::apm_errors::clear();
+        end_in_flight(base);
+        return;
     }
+    rebase_after_reset(base);
+    let pending = pending_route_id(status);
+    // Its work, its error and its memory are counted here, where the PHP ran: the recorder
+    // is another process, which never saw them.
+    let route_id = pending.unwrap_or_else(|| CURRENT_ROUTE.load(Ordering::Relaxed));
+    flush_pending_io(base, route_id);
+    crate::apm_errors::commit(base, route_id, route_id < EVENT_BUCKETS && status >= 500);
+    // And its memory, which only this process measured.
+    record_memory(base, route_id);
     end_in_flight(base);
 }
 
-/// Moves the pending request's counters onto the row it was counted under.
+/// Moves the work of the request or transaction this process is recording onto the row it
+/// was counted under, whether its route was known or pending.
 pub(crate) fn flush_pending_io(base: usize, route_id: usize) {
-    if PENDING_LEN.swap(0, Ordering::Relaxed) == 0 {
+    PENDING_LEN.store(0, Ordering::Relaxed);
+    if PENDING_IO.iter().all(|counter| counter.load(Ordering::Relaxed) == 0) {
         return;
     }
     // The shared copy goes first: the work is the row's until here and the
@@ -516,6 +583,10 @@ pub unsafe extern "C" fn elephc_probe_request_begin(route: *const u8, len: usize
     let Ok(text) = std::str::from_utf8(std::slice::from_raw_parts(route, len)) else {
         return 0;
     };
+    // An excluded route is never counted, so it is never in flight either.
+    if !crate::apm_rules::counts(text) {
+        return 0;
+    }
     let pid = libc::getpid();
     // Spread the claims so concurrent requests do not race for one row.
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -716,6 +787,18 @@ pub unsafe extern "C" fn elephc_probe_txn_begin(name: *const libc::c_char) -> u6
     if text.is_empty() {
         return 0;
     }
+    // Excluded by the project's `[apm]` rules: not opened, and its own work goes
+    // nowhere, not on an untagged row. A counted transaction opened inside it is
+    // still counted, with its work.
+    if !crate::apm_rules::counts(text) {
+        // The state before the outermost exclusion is what its end restores: one ending
+        // inside another must not count the outer one's remaining work (review).
+        if EXCLUDED_DEPTH.fetch_add(1, Ordering::Relaxed) == 0 {
+            EXCLUDED_BEFORE.store(crate::apm_rules::request_ignored(), Ordering::Relaxed);
+        }
+        crate::apm_rules::set_request_ignored(true);
+        return 0;
+    }
     rebase_after_reset(base);
     remember_route(text);
     PENDING_LEN.store(0, Ordering::Relaxed);
@@ -726,8 +809,12 @@ pub unsafe extern "C" fn elephc_probe_txn_begin(name: *const libc::c_char) -> u6
             0
         }
     };
+    // The route it replaces: an excluded request's, named for the sampler, which it
+    // gets back when this transaction ends.
+    TXN_PRIOR_ROUTE.store(CURRENT_ROUTE.load(Ordering::Relaxed), Ordering::Relaxed);
     CURRENT_ROUTE.store(id, Ordering::Relaxed);
     TXN_FAILED.store(false, Ordering::Relaxed);
+    crate::apm_errors::clear();
     TXN_STARTED_NS.store(monotonic_ns().max(1), Ordering::Relaxed);
     1
 }
@@ -735,6 +822,13 @@ pub unsafe extern "C" fn elephc_probe_txn_begin(name: *const libc::c_char) -> u6
 /// How many nested transactions are open inside the current one: their
 /// tokens are 0, and a failure reported from inside them is theirs.
 pub(crate) static NESTED_DEPTH: AtomicU64 = AtomicU64::new(0);
+/// The route a transaction this API opened replaced, given back at its end: the
+/// sampler's name of an excluded request it ran inside, else 0.
+pub(crate) static TXN_PRIOR_ROUTE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// How many excluded transactions are open, one inside another.
+pub(crate) static EXCLUDED_DEPTH: AtomicU64 = AtomicU64::new(0);
+/// Whether the request was already excluded when the outermost of them opened.
+pub(crate) static EXCLUDED_BEFORE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Marks the transaction `token` names failed: an exception left it, or the
 /// code that ran it reported a failure. It is counted with the 5xx. A zero
@@ -769,7 +863,13 @@ pub extern "C" fn elephc_probe_txn_fail_current() {
 pub extern "C" fn elephc_probe_txn_end(token: u64, failed: u32) {
     // A zero token is a nested transaction's: the outer one stays open.
     if token == 0 {
-        let _ = NESTED_DEPTH.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| depth.checked_sub(1));
+        // Not a nested one: an excluded one (or one never opened), which ends here. The
+        // outermost exclusion's end restores what was before it.
+        if NESTED_DEPTH.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| depth.checked_sub(1)).is_err()
+            && EXCLUDED_DEPTH.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| depth.checked_sub(1)) == Ok(1)
+        {
+            crate::apm_rules::set_request_ignored(EXCLUDED_BEFORE.load(Ordering::Relaxed));
+        }
         return;
     }
     NESTED_DEPTH.store(0, Ordering::Relaxed);
@@ -788,7 +888,7 @@ pub extern "C" fn elephc_probe_txn_end(token: u64, failed: u32) {
     let route_id = unsafe { pending_route_id(status) }.unwrap_or_else(|| CURRENT_ROUTE.load(Ordering::Relaxed));
     flush_pending_io(base, route_id);
     record_transaction(base, route_id, status, monotonic_ns().saturating_sub(started));
-    CURRENT_ROUTE.store(0, Ordering::Relaxed);
+    CURRENT_ROUTE.store(TXN_PRIOR_ROUTE.swap(0, Ordering::Relaxed), Ordering::Relaxed);
     CURRENT_LABEL_LEN.store(0, Ordering::Relaxed);
 }
 
@@ -796,6 +896,9 @@ pub extern "C" fn elephc_probe_txn_end(token: u64, failed: u32) {
 /// is not counted: a script built with `--apm-collector` counts its whole run
 /// as `CLI <script> [<command>]`, like a run `monitor` launched (review).
 pub(crate) static RUN_STARTED_NS: AtomicU64 = AtomicU64::new(0);
+/// The runs this process ended, with the exact code each exited with, sent in every
+/// later snapshot: a program pushing to a collector reports its run in its last send.
+pub(crate) static RUN_EXITS: std::sync::Mutex<Vec<(String, i32)>> = std::sync::Mutex::new(Vec::new());
 /// Database and network work of the run outside its transactions, by
 /// `apm::IO_*` index: charged to the run's row once the run is counted.
 pub(crate) static RUN_IO: [AtomicU64; apm::IO_KINDS] = [const { AtomicU64::new(0) }; apm::IO_KINDS];
@@ -807,6 +910,7 @@ pub(crate) static RUN_IO: [AtomicU64; apm::IO_KINDS] = [const { AtomicU64::new(0
 pub extern "C" fn elephc_probe_run_begin() {
     if APM_ON.load(Ordering::Relaxed) {
         RUN_STARTED_NS.store(monotonic_ns().max(1), Ordering::Relaxed);
+        crate::apm_errors::clear();
     }
 }
 
@@ -829,6 +933,13 @@ pub(crate) fn close_at_exit(exit_code: i32) {
         return;
     };
     let name = apm::cli_run_name(script, rest);
+    // A run the project's `[apm]` rules exclude is not counted, nor its work.
+    if !crate::apm_rules::counts(&name) {
+        for counter in &RUN_IO {
+            counter.store(0, Ordering::Relaxed);
+        }
+        return;
+    }
     let _gate = TableGate::enter(base);
     let route_id = unsafe { intern_new_route(base, &name) };
     if route_id < EVENT_BUCKETS {
@@ -841,14 +952,17 @@ pub(crate) fn close_at_exit(exit_code: i32) {
     }
     let status = if exit_code == 0 { 200 } else { 500 };
     record_transaction(base, route_id, status, monotonic_ns().saturating_sub(started));
+    RUN_EXITS.lock().unwrap_or_else(|e| e.into_inner()).push((name, exit_code));
 }
 
-/// Whether this process is inside a transaction already: one this API
-/// opened, or a web request (its route stamped, known or pending).
+/// Whether this process is inside a counted transaction already: one this API
+/// opened, or a web request (its route stamped, known or pending). An excluded
+/// request is none: the route it carries names it for the sampler only, and a
+/// counted boundary inside it opens a transaction of its own (review).
 fn in_transaction() -> bool {
     TXN_STARTED_NS.load(Ordering::Relaxed) != 0
-        || CURRENT_ROUTE.load(Ordering::Relaxed) != 0
-        || PENDING_LEN.load(Ordering::Relaxed) != 0
+        || (!crate::apm_rules::request_ignored()
+            && (CURRENT_ROUTE.load(Ordering::Relaxed) != 0 || PENDING_LEN.load(Ordering::Relaxed) != 0))
 }
 
 /// Adds `amount` to one of the current route's `--apm` I/O counters.
@@ -860,27 +974,53 @@ pub(crate) fn note_apm_io(kind: usize, amount: u64) {
     if !APM_ON.load(Ordering::Relaxed) || kind >= apm::IO_KINDS {
         return;
     }
+    // An excluded request's or transaction's own work is not counted anywhere, not on
+    // an untagged row either; a counted transaction open inside it keeps its own.
+    // Not even when the sampler named the request: it would wait to be published with a
+    // request that is never recorded, and be charged to the next one.
+    if crate::apm_rules::request_ignored() && TXN_STARTED_NS.load(Ordering::Relaxed) == 0 {
+        return;
+    }
     let base = REGION.load(Ordering::Relaxed);
     if base == 0 {
         return;
     }
-    let _gate = TableGate::enter(base);
-    rebase_after_reset(base);
-    if PENDING_LEN.load(Ordering::Relaxed) != 0 {
+    // A request's or transaction's work stays in this process until it is recorded
+    // (`flush_pending_io`), published once with it: a statement costs no pass through the
+    // table gate and no write to a counter every worker of the route shares. It is mirrored
+    // in this process's own in-flight row, so the master still charges it to the request
+    // should the process die serving it.
+    //
+    // Not in an isolated handler (`--web-isolation=pool|request`): nothing tracks it in
+    // flight, and a handler that dies never settles, so a request on a known route writes
+    // its work to the route's row as each statement runs, as before (review). A route
+    // still pending keeps its work here, as it always did.
+    let route = CURRENT_ROUTE.load(Ordering::Relaxed);
+    if !TRACK_IN_FLIGHT.load(Ordering::Relaxed) && TXN_STARTED_NS.load(Ordering::Relaxed) == 0 && route != 0 {
+        let _gate = TableGate::enter(base);
+        rebase_after_reset(base);
+        // A reset under the request made its route pending: its work then waits below.
+        let route = CURRENT_ROUTE.load(Ordering::Relaxed);
+        if route != 0 && route < EVENT_BUCKETS {
+            unsafe { txn_word(base, route, apm::WORD_IO0 + kind) }.fetch_add(amount, Ordering::Relaxed);
+            return;
+        }
+    }
+    // should the process die serving it.
+    if in_transaction() {
         PENDING_IO[kind].fetch_add(amount, Ordering::Relaxed);
         note_in_flight_io(base, kind, amount);
         return;
     }
-    let route_id = CURRENT_ROUTE.load(Ordering::Relaxed);
     // Work outside every transaction of a script counting its run is the
     // run's: kept here until its row is known, at exit (review).
-    if route_id == 0 && RUN_STARTED_NS.load(Ordering::Relaxed) != 0 {
+    if RUN_STARTED_NS.load(Ordering::Relaxed) != 0 {
         RUN_IO[kind].fetch_add(amount, Ordering::Relaxed);
         return;
     }
-    if route_id < EVENT_BUCKETS {
-        unsafe { txn_word(base, route_id, apm::WORD_IO0 + kind) }.fetch_add(amount, Ordering::Relaxed);
-    }
+    // Work outside any transaction: the untagged row, shared.
+    let _gate = TableGate::enter(base);
+    unsafe { txn_word(base, 0, apm::WORD_IO0 + kind) }.fetch_add(amount, Ordering::Relaxed);
 }
 
 /// The label of this process's current request, whatever its route's state:
@@ -995,6 +1135,8 @@ pub(crate) fn reset_routes_exclusive(base: usize, cpu_now: u64) -> String {
         }
     }
     reset_event_counters(base);
+    // The errors name routes by id, which the emptied table gives to others.
+    crate::apm_errors::reset(base);
     unsafe { (*((base + RING_BYTES) as *const AtomicU64)).store(0, Ordering::Release) };
     shared_word(base, ROUTE_BUDGET_OFFSET).store(0, Ordering::Relaxed);
     shared_word(base, ROUTES_GENERATION_OFFSET).fetch_add(1, Ordering::AcqRel);
@@ -1137,14 +1279,43 @@ fn read_snapshot(base: usize) -> (apm::Snapshot, u64) {
             *slot = unsafe { txn_word(base, route_id, apm::HEADER_WORDS + bucket) }
                 .load(Ordering::Relaxed);
         }
+        for (word, slot) in row.mem.iter_mut().enumerate() {
+            *slot = unsafe { txn_word(base, route_id, apm::WORD_MEM_N + word) }.load(Ordering::Relaxed);
+        }
         match routes.iter_mut().find(|existing| existing.name == row.name) {
             Some(existing) => existing.absorb(&row),
             None => routes.push(row),
+        }
+    }
+    let mut errors: Vec<apm::ErrorStats> = Vec::new();
+    for (route_id, class, location, count, trace) in crate::apm_errors::read(base) {
+        let route = match route_id {
+            0 => "<untagged>".to_string(),
+            id if id < EVENT_BUCKETS => unsafe { read_route_slot(base, id - 1) },
+            _ => continue,
+        };
+        let row = apm::ErrorStats { route, class, location, count, trace };
+        // Two ids of one name (a route interned twice across a reset race) are one row.
+        match errors.iter_mut().find(|e| e.route == row.route && e.class == row.class && e.location == row.location) {
+            Some(existing) => existing.count += row.count,
+            None => errors.push(row),
         }
     }
     let time_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0);
-    (apm::Snapshot { resources: None, epoch, time_ms, routes }, cpu_at_reset)
+    let build = crate::apm_rules::build().map(str::to_string);
+    (
+        apm::Snapshot {
+            resources: None,
+            build,
+            errors,
+            exits: RUN_EXITS.lock().map(|exits| exits.clone()).unwrap_or_default(),
+            epoch,
+            time_ms,
+            routes,
+        },
+        cpu_at_reset,
+    )
 }

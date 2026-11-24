@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with the optional FreeTDS profile:
-// cargo run --features pdo-dblib -- examples/pdo-dblib/main.php
+// cargo run --features pdo-dblib -- build examples/pdo-dblib/main.php
 // ELEPHC_DBLIB_DSN='dblib:host=127.0.0.1;port=1433;dbname=app;user=sa;password=secret' ./examples/pdo-dblib/main
 $dsn = (string) getenv("ELEPHC_DBLIB_DSN");
 try {

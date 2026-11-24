@@ -2,7 +2,7 @@
 //! End-to-end surface and live-server tests for the optional PDO_ODBC backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-odbc --test codegen_tests`.
+//! - `cargo test --features pdo-odbc --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests require unixODBC at link time but no configured database driver.

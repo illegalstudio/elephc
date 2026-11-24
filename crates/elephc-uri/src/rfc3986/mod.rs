@@ -15,7 +15,7 @@
 
 mod mutate;
 mod normalize;
-pub(crate) mod parse;
+mod parse;
 
 pub use mutate::{with_component, with_port};
 pub use parse::parse;
@@ -132,35 +132,6 @@ impl RfcUri {
         }
     }
 
-    /// Returns the `Uri\Rfc3986\UriType` case ordinal, matching the enum's declaration order.
-    pub fn uri_type(&self) -> i64 {
-        if self.scheme.is_some() {
-            3
-        } else if self.authority.is_some() {
-            2
-        } else if self.path.starts_with('/') {
-            0
-        } else {
-            1
-        }
-    }
-
-    /// Returns the `Uri\Rfc3986\UriHostType` case ordinal, or `None` without a host.
-    pub fn host_type(&self) -> Option<i64> {
-        let host = &self.authority.as_ref()?.host;
-        Some(match host.kind {
-            HostKind::Ipv6 => 1,
-            HostKind::IpvFuture => 2,
-            HostKind::RegName => {
-                if is_ipv4_address(&host.text) {
-                    0
-                } else {
-                    3
-                }
-            }
-        })
-    }
-
     /// Returns the number of path segments PHP's uriparser retains for this URI.
     ///
     /// PHP materializes one parser node per segment, so this count converts to the PHP-side
@@ -170,8 +141,24 @@ impl RfcUri {
         let non_empty = self.path.split('/').filter(|part| !part.is_empty()).count() as i64;
         // One parser node is 32 bytes plus its copied segment text; the empty segments of a
         // slash-only path share the node overhead without a text copy. Each array cell is
-        // eight bytes, so four cells cover the node and two cover a non-empty segment.
-        4 * segments + 2 * non_empty
+        // eight bytes, so four cells cover the node and two cover a non-empty segment. The
+        // retained path string is charged by its real byte length as well, so one megabyte-long
+        // segment cannot hide behind the per-segment node count.
+        let path_units = 4 * segments + 2 * non_empty
+            + crate::charge::string_charge_units(&self.path);
+        let scheme = crate::charge::optional_string_charge_units(self.scheme.as_deref());
+        let authority = self.authority.as_ref().map_or(0, |authority| {
+            crate::charge::optional_string_charge_units(authority.userinfo.as_deref())
+                + crate::charge::string_charge_units(&authority.host.text)
+                + crate::charge::optional_string_charge_units(authority.port.as_deref())
+        });
+        let query = crate::charge::optional_string_charge_units(self.query.as_deref());
+        let fragment = crate::charge::optional_string_charge_units(self.fragment.as_deref());
+        path_units
+            .saturating_add(scheme)
+            .saturating_add(authority)
+            .saturating_add(query)
+            .saturating_add(fragment)
     }
 
     /// Returns the port as a PHP integer, or `None` for an absent or empty port.
@@ -207,7 +194,19 @@ impl RfcUri {
     }
 
     /// Recomposes the URI in the requested mode, optionally dropping the fragment.
-    pub fn to_string(&self, normalized: bool, exclude_fragment: bool) -> String {
+    ///
+    /// Returns `None` when the result would reach PHP's `int`-sized string
+    /// ceiling, matching `ext/uri`'s "Cannot recompose ... to a string" error
+    /// (GHSA-mg3p-mxj9-g2mm).
+    pub fn try_to_string(&self, normalized: bool, exclude_fragment: bool) -> Option<String> {
+        // Raw output length is known before allocating, so the cheap guard is exact.
+        // Normalization may decode percent escapes (`%41` -> `A`) and shorten the
+        // result below the ceiling; reject only after rebuilding in that mode.
+        if !normalized
+            && !crate::charge::within_php_uri_len(self.recomposed_raw_len(exclude_fragment))
+        {
+            return None;
+        }
         let mut out = String::new();
         if let Some(scheme) = &self.scheme {
             if normalized {
@@ -267,12 +266,61 @@ impl RfcUri {
                 out.push_str(&normalize::normalize_component(fragment, normalized));
             }
         }
-        out
+        crate::charge::within_php_uri_len(out.len()).then_some(out)
+    }
+
+    /// Returns the exact raw recomposed length before allocating it.
+    ///
+    /// This is used only for the raw mode. Raw output reproduces every stored
+    /// component verbatim except an IPv6 host, which goes through
+    /// [`normalize::serialize_ipv6`] in both the estimate and the rebuild (the
+    /// eight-group form can be shorter or longer than the input text). Normalized
+    /// output may shrink when a percent-encoded unreserved byte is decoded, so it
+    /// cannot use this length as a rejection bound and relies on the final check.
+    fn recomposed_raw_len(&self, exclude_fragment: bool) -> usize {
+        let mut len = 0usize;
+        if let Some(scheme) = &self.scheme {
+            len = len.saturating_add(scheme.len()).saturating_add(1);
+        }
+        if let Some(authority) = &self.authority {
+            len = len.saturating_add(2);
+            if let Some(userinfo) = &authority.userinfo {
+                len = len.saturating_add(userinfo.len()).saturating_add(1);
+            }
+            len = match authority.host.kind {
+                HostKind::Ipv6 => len
+                    .saturating_add(normalize::serialize_ipv6(&authority.host.text).len())
+                    .saturating_add(2),
+                HostKind::IpvFuture => len
+                    .saturating_add(authority.host.text.len())
+                    .saturating_add(2),
+                HostKind::RegName => len.saturating_add(authority.host.text.len()),
+            };
+            if let Some(port) = &authority.port {
+                len = len.saturating_add(1).saturating_add(port.len());
+            }
+        }
+        len = len.saturating_add(self.path.len());
+        if let Some(query) = &self.query {
+            len = len.saturating_add(1).saturating_add(query.len());
+        }
+        if !exclude_fragment {
+            if let Some(fragment) = &self.fragment {
+                len = len.saturating_add(1).saturating_add(fragment.len());
+            }
+        }
+        len
     }
 
     /// Returns whether two references are equivalent under normalized comparison.
     pub fn equals(&self, other: &RfcUri, include_fragment: bool) -> bool {
-        self.to_string(true, !include_fragment) == other.to_string(true, !include_fragment)
+        match (
+            self.try_to_string(true, !include_fragment),
+            other.try_to_string(true, !include_fragment),
+        ) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
     }
 
     /// Resolves `reference` against this URI as the base, per RFC 3986 section 5.2.
@@ -281,7 +329,11 @@ impl RfcUri {
             return Err("The specified base URI must be absolute".to_string());
         }
         if reference.scheme.is_some() {
-            return Ok(reference.clone());
+            // A reference with its own scheme is already absolute, but RFC 3986 5.2.2 still
+            // runs remove_dot_segments on its path.
+            let mut target = reference.clone();
+            target.path = resolve_path(&reference.path, target.authority.is_some());
+            return Ok(target);
         }
 
         let mut target = RfcUri {
@@ -323,11 +375,6 @@ impl RfcUri {
     }
 }
 
-/// Parses a host supplied by a builder or `withHost`, accepting bracketed literals.
-pub(crate) fn parse_host_text(value: &str) -> Result<Host, String> {
-    super::rfc3986::mutate::parse_host_value(value)
-}
-
 /// Applies RFC 3986 dot-segment removal to a resolved absolute path.
 fn resolve_path(path: &str, has_host: bool) -> String {
     normalize::remove_dot_segments(path, path.starts_with('/') && !has_host, false, has_host)
@@ -349,21 +396,33 @@ fn split_password(userinfo: &str) -> &str {
     }
 }
 
-/// Returns whether `text` is a dotted-quad IPv4 address as uriparser accepts it.
-fn is_ipv4_address(text: &str) -> bool {
-    let mut parts = text.split('.');
-    let mut count = 0usize;
-    for part in parts.by_ref() {
-        count += 1;
-        if count > 4 || part.is_empty() || part.len() > 3 {
-            return false;
-        }
-        if !part.bytes().all(|byte| byte.is_ascii_digit()) {
-            return false;
-        }
-        if part.parse::<u16>().map_or(true, |value| value > 255) {
-            return false;
-        }
+#[cfg(test)]
+mod tests {
+    //! Focused bridge-level coverage for RFC 3986 resolution and IPvFuture validation.
+
+    use super::*;
+
+    /// Verifies an absolute reference still receives dot-segment removal.
+    #[test]
+    fn resolve_removes_dot_segments_from_an_absolute_reference() {
+        let base = parse::parse(b"http://example.com/base").expect("base parses");
+        let reference = parse::parse(b"x:a/../b").expect("reference parses");
+        let resolved = base.resolve(&reference).expect("reference resolves");
+        assert_eq!(resolved.try_to_string(true, true).as_deref(), Some("x:b"));
     }
-    count == 4
+
+    /// Normalized output can decode percent escapes and become shorter than the raw text,
+    /// so the raw-length pre-allocation guard must not apply to normalized serialization.
+    #[test]
+    fn normalized_recomposition_can_shrink_percent_escapes() {
+        let uri = parse::parse(b"http://example.com/%41%42%43").expect("uri parses");
+        assert_eq!(
+            uri.try_to_string(false, false).as_deref(),
+            Some("http://example.com/%41%42%43")
+        );
+        assert_eq!(
+            uri.try_to_string(true, false).as_deref(),
+            Some("http://example.com/ABC")
+        );
+    }
 }

@@ -150,6 +150,8 @@ pub fn lower_core_builtin(
         CoreBuiltinOp::SetExceptionHandler => lower_handler_operands(ctx, call, false)?,
         CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call, 1_024)?,
         CoreBuiltinOp::BuiltinWarning => lower_trigger_operands(ctx, call, 2)?,
+        CoreBuiltinOp::BuiltinWarningAt => lower_trigger_operands_at_line(ctx, call, 2)?,
+        CoreBuiltinOp::BuiltinDeprecatedAt => lower_trigger_operands_at_line(ctx, call, 8_192)?,
         CoreBuiltinOp::BuiltinDeprecated => lower_trigger_operands(ctx, call, 8_192)?,
         CoreBuiltinOp::GetDefinedConstants => {
             vec![operand_or_const_bool(ctx, call, 0, false)]
@@ -303,7 +305,41 @@ fn lower_handler_operands(
     Ok(operands)
 }
 
-/// Appends the source file and line supplied to a PHP user error callback.
+/// Builds the operands of a warning reported at the caller-supplied source line.
+///
+/// Used by the tokenizer prelude, whose diagnostics name the line inside the scanned source
+/// rather than the line of the `token_get_all()` call.
+fn lower_trigger_operands_at_line(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+    level: i64,
+) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
+    // Zend reports token_get_all() diagnostics through php_error_docref(NULL, ...), which
+    // leaves the file field empty even when the tokenized source comes from a real file.
+    let file_data = ctx.intern_string("");
+    let file = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(file_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(call.span),
+    );
+    let level = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(level)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(call.span),
+    );
+    Ok(vec![call.operand(0)?, level.value, file.value, call.operand(1)?])
+}
+
+/// Builds the `[message, level, file, line]` operands of one engine diagnostic.
+///
+/// `default_level` fills in the level when the call omits it, and a prelude call reports at the
+/// caller frame's published line instead of the synthetic prelude span.
 fn lower_trigger_operands(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,

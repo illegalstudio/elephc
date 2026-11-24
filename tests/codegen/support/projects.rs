@@ -91,14 +91,19 @@ pub(crate) fn elephc_cli_bin() -> String {
     })
 }
 
-// Constructs a `Command` preconfigured to run the `elephc` CLI in a given directory.
-// Sets `XDG_CACHE_HOME` to an isolated cache subdirectory and sets the working directory.
-// Used by CLI tests that invoke `elephc` as a subprocess.
-/// Provides the Elephc cli command helper used by the projects module.
-pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
+/// Provides an `elephc` command for top-level dispatch tests, with an isolated
+/// `XDG_CACHE_HOME` and `dir` as working directory; callers pass the command word.
+pub(crate) fn elephc_root_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_cli_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
+    cmd
+}
+
+/// Provides a command for compiling a source with the explicit `build` selector.
+pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
+    let mut cmd = elephc_root_command(dir);
+    cmd.arg("build");
     cmd
 }
 
@@ -196,6 +201,33 @@ pub(crate) fn compile_cli_file_with_flags_expect_failure(source: &str, flags: &[
 
     let _ = fs::remove_dir_all(&dir);
     String::from_utf8(compile_out.stderr).unwrap()
+}
+
+/// Compiles a CLI fixture, asserts the program fails at runtime, and returns both output streams.
+///
+/// Unlike the library-level failure helpers, this runs the real `elephc` binary through the
+/// prelude-injection pipeline, so a fixture may depend on Core INI or another prelude function.
+pub(crate) fn compile_cli_file_expect_runtime_failure(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_cli_test_runtime_fail");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let compile_out = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let output = run_binary(&dir.join("main"), &dir);
+    assert!(!output.status.success(), "CLI-compiled binary unexpectedly succeeded");
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    let _ = fs::remove_dir_all(&dir);
+    combined
 }
 
 /// Compiles a CLI fixture with flags, asserts it SUCCEEDS, and returns the compiler's stderr.
@@ -359,9 +391,16 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(
+        resolved,
+        false,
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
+    let resolved = elephc::tokenizer_prelude::inject_if_used_with_web(resolved, false, 8_388_608, false, &mut prelude_inventory);
     let resolved = elephc::pcre_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tidy_prelude::inject_if_used(
@@ -849,7 +888,12 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(
+        resolved,
+        false,
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");

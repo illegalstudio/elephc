@@ -13,14 +13,15 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility,
+    ClassConst, ClassProperty, TraitAdaptation, TraitUse, Visibility,
 };
 use crate::span::Span;
 
-use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
+use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
 use super::merge::{
-    check_trait_requirement, merge_constants, merge_imported_constant_set,
+    check_abstract_redeclaration, is_same_trait_method, merge_constants, merge_imported_constant_set,
     merge_imported_method_set, merge_methods, merge_properties, merge_property_into,
+    trait_method_collision,
 };
 use super::validation::validate_direct_members;
 
@@ -80,6 +81,7 @@ fn expand_trait(
     let mut methods = merge_methods(
         imported_methods,
         &trait_info.methods,
+        trait_name,
         trait_info.span,
         &format!("trait {}", trait_name),
     )?;
@@ -119,9 +121,9 @@ pub(super) fn resolve_trait_uses(
     stack: &mut Vec<String>,
     owner_label: &str,
     owner_span: Span,
-) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
+) -> Result<(Vec<ClassProperty>, Vec<TraitMethod>, Vec<ClassConst>), CompileError> {
     let mut all_properties = Vec::new();
-    let mut all_methods = Vec::new();
+    let mut all_methods: Vec<ImportedMethod> = Vec::new();
     let mut all_constants = Vec::new();
 
     for trait_use in trait_uses {
@@ -160,7 +162,7 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for method in methods {
+            for TraitMethod { origin, decl: method } in methods {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -170,6 +172,7 @@ pub(super) fn resolve_trait_uses(
                     .or_default()
                     .push(ImportedMethod {
                         source_trait: trait_name.to_string(),
+                        origin,
                         decl: method,
                     });
             }
@@ -262,6 +265,7 @@ pub(super) fn resolve_trait_uses(
                         }
                         alias_methods.push(ImportedMethod {
                             source_trait: selected_trait,
+                            origin: imported.origin.clone(),
                             decl: alias_decl,
                         });
                     } else if let Some(visibility) = visibility {
@@ -298,6 +302,10 @@ pub(super) fn resolve_trait_uses(
         )?;
     }
 
+    let all_methods = all_methods
+        .into_iter()
+        .map(|imported| TraitMethod { origin: imported.origin, decl: imported.decl })
+        .collect();
     Ok((all_properties, all_methods, all_constants))
 }
 
@@ -305,8 +313,9 @@ pub(super) fn resolve_trait_uses(
 /// overrides from `visibility_overrides`, appends aliased methods from
 /// `alias_methods`, and returns the final selected method list.
 ///
-/// Ambiguity (multiple non-suppressed candidates for the same method key) is
-/// a fatal error; the caller must have already emitted insteadof to disambiguate.
+/// Two concrete candidates for the same method key are a fatal collision (the caller must use
+/// insteadof to choose), unless they are the same trait method reached along two `use` paths
+/// (`is_same_trait_method`): PHP keeps that one silently.
 fn select_methods(
     mut candidates: HashMap<String, Vec<ImportedMethod>>,
     method_order: Vec<String>,
@@ -315,7 +324,7 @@ fn select_methods(
     alias_methods: Vec<ImportedMethod>,
     span: Span,
     owner_label: &str,
-) -> Result<Vec<ClassMethod>, CompileError> {
+) -> Result<Vec<ImportedMethod>, CompileError> {
     let mut selected_methods = Vec::new();
     for method_name in method_order {
         let imports = candidates.remove(&method_name).unwrap_or_default();
@@ -326,36 +335,38 @@ fn select_methods(
                     .get(&method_name)
                     .is_some_and(|set| set.contains(&candidate.source_trait))
             })
+            .map(|mut candidate| {
+                // Zend applies `as <visibility>` to the trait's copy before it compares two
+                // copies, so `use A, B { A::foo as protected; }` collides even when A and B
+                // share the method.
+                if let Some(visibility) = visibility_overrides
+                    .get(&(candidate.source_trait.clone(), method_name.clone()))
+                {
+                    candidate.decl.visibility = visibility.clone();
+                }
+                candidate
+            })
             .partition(|candidate| candidate.decl.is_abstract);
-        let requirements = unsatisfied_requirements(requirements, &remaining, span, owner_label)?;
-        if remaining.len() > 1 {
-            let trait_list = remaining
+        let mut concrete: Vec<ImportedMethod> = Vec::new();
+        for candidate in remaining {
+            if !concrete
                 .iter()
-                .map(|candidate| candidate.source_trait.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{} has ambiguous trait method '{}'; resolve with insteadof (candidates: {})",
-                    owner_label, method_name, trait_list
-                ),
-            ));
-        }
-        for mut selected in remaining.into_iter().chain(requirements) {
-            if let Some(visibility) = visibility_overrides.get(&(
-                selected.source_trait.clone(),
-                method_name.clone(),
-            )) {
-                selected.decl.visibility = visibility.clone();
+                .any(|kept| is_same_trait_method(
+                    (&kept.origin, &kept.decl),
+                    (&candidate.origin, &candidate.decl),
+                ))
+            {
+                concrete.push(candidate);
             }
-            selected_methods.push(selected.decl);
         }
+        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
+        if let [applied, rejected, ..] = concrete.as_slice() {
+            return Err(trait_method_collision(span, owner_label, applied, rejected));
+        }
+        selected_methods.extend(concrete.into_iter().chain(requirements));
     }
 
-    for alias_method in alias_methods {
-        selected_methods.push(alias_method.decl);
-    }
+    selected_methods.extend(alias_methods);
 
     Ok(selected_methods)
 }
@@ -364,8 +375,8 @@ fn select_methods(
 ///
 /// An abstract trait method is a requirement, not a definition, so it is never one of the
 /// candidates `insteadof` has to choose between: a concrete candidate of the same kind (static or
-/// instance) satisfies it, and several abstract ones of one kind are one requirement, each once
-/// `check_trait_requirement` accepts the pair. A requirement of the other kind is kept, so the
+/// instance) satisfies it, and several abstract ones of one kind are one requirement once
+/// `check_abstract_redeclaration` accepts them. A requirement of the other kind is kept, so the
 /// class schema reports the static/instance mismatch as it does for separate `use` statements.
 fn unsatisfied_requirements(
     requirements: Vec<ImportedMethod>,
@@ -380,7 +391,11 @@ fn unsatisfied_requirements(
             .chain(kept.iter())
             .find(|other| other.decl.is_static == requirement.decl.is_static);
         match same_kind {
-            Some(other) => check_trait_requirement(&requirement.decl, &other.decl, span, owner_label)?,
+            // A concrete implementation is checked once the class schema is known.
+            Some(other) if other.decl.is_abstract => {
+                check_abstract_redeclaration(&other.decl, &requirement.decl, span, owner_label)?
+            }
+            Some(_) => {}
             None => kept.push(requirement),
         }
     }

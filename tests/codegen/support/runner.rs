@@ -320,10 +320,17 @@ fn disk_cached_runtime_obj(runtime_asm: &str) -> std::path::PathBuf {
 /// through the shared on-disk cache, and keeps the path for the rest of the process.
 pub(crate) fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
+        // The shared test runtime is a superset: fixtures that inline the mixed-string
+        // ladder (notably the tokenizer prelude's PhpToken) need the handler-pop and
+        // shallow-clone families even without a source-level handler or clone.
         let runtime_asm = elephc::codegen::generate_runtime_with_features(
             8_388_608,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            elephc::codegen::RuntimeFeatures {
+                handler_state: true,
+                object_clone: true,
+                ..elephc::codegen::RuntimeFeatures::none()
+            },
         );
         disk_cached_runtime_obj(&runtime_asm)
     })
@@ -364,7 +371,11 @@ pub(crate) fn assemble_custom_runtime(heap_size: usize) -> std::path::PathBuf {
     let runtime_asm = elephc::codegen::generate_runtime_with_features(
         heap_size,
         target(),
-        elephc::codegen::RuntimeFeatures::none(),
+        elephc::codegen::RuntimeFeatures {
+            handler_state: true,
+            object_clone: true,
+            ..elephc::codegen::RuntimeFeatures::none()
+        },
     );
     disk_cached_runtime_obj(&runtime_asm)
 }
@@ -377,15 +388,20 @@ mod runtime_cache_tests {
     /// assembly gets a different one, and every returned object is a non-empty file.
     #[test]
     fn runtime_objects_are_shared_on_disk_by_assembly_hash() {
+        let base_features = elephc::codegen::RuntimeFeatures {
+            handler_state: true,
+            object_clone: true,
+            ..elephc::codegen::RuntimeFeatures::none()
+        };
         let base = elephc::codegen::generate_runtime_with_features(
             8_388_608,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            base_features,
         );
         let bigger = elephc::codegen::generate_runtime_with_features(
             16_777_216,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            base_features,
         );
         let first = disk_cached_runtime_obj(&base);
         let second = disk_cached_runtime_obj(&base);
@@ -1143,7 +1159,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             None,
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1158,7 +1174,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             Some(std::ffi::OsStr::new("/shared/target")),
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1172,7 +1188,7 @@ mod bridge_staticlib_dir_tests {
     fn local_tests_use_workspace_target_debug_directory() {
         let resolved = bridge_staticlib_dir_for(
             None,
-            Some(Path::new("/workspace/target/debug/deps/codegen_tests-hash")),
+            Some(Path::new("/workspace/target/debug/deps/codegen_tests_core-hash")),
             Path::new("/workspace/elephc"),
             false,
         );
@@ -2075,6 +2091,46 @@ pub(crate) fn assemble_and_run_capture(
     );
 
     let output = run_binary(&bin_path, dir);
+
+    if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
+        super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);
+    }
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        success: output.status.success(),
+        status: output.status,
+    }
+}
+
+/// Assembles and runs one fixture with extra environment variables.
+///
+/// Used by tests that exercise a runtime policy switch (for example
+/// `ELEPHC_PHAR_REQUIRE_HASH`) without changing the policy of the test process.
+pub(crate) fn assemble_and_run_capture_with_env(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    env: &[(&str, &std::ffi::OsStr)],
+) -> ProgramOutput {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary_with_env(&bin_path, dir, env);
 
     if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
         super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);

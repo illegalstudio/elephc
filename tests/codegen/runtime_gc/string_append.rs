@@ -2,7 +2,7 @@
 //! PHP, snapshot and ownership coverage for consuming geometric string append.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests consuming_string_append`.
+//! - `cargo test --test codegen_tests_runtime consuming_string_append`.
 //!
 //! Key details:
 //! - Each fixture runs in both optimizer modes with heap diagnostics and an optional PHP oracle.

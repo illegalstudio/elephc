@@ -9,7 +9,7 @@ and exercises recoverable scalar calls plus the binary-safe owned-string ABI.
 Linux:
 
 ```bash
-cargo run -- --emit cdylib examples/cdylib/auth.php
+cargo run -- build --emit cdylib examples/cdylib/auth.php
 cc -o examples/cdylib/host examples/cdylib/host.c -ldl
 ./examples/cdylib/host examples/cdylib/libauth.so
 ```
@@ -17,7 +17,7 @@ cc -o examples/cdylib/host examples/cdylib/host.c -ldl
 macOS:
 
 ```bash
-cargo run -- --emit cdylib examples/cdylib/auth.php
+cargo run -- build --emit cdylib examples/cdylib/auth.php
 cc -o examples/cdylib/host examples/cdylib/host.c
 ./examples/cdylib/host examples/cdylib/libauth.dylib
 ```

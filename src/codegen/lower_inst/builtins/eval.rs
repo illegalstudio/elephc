@@ -374,6 +374,6 @@ pub(in crate::codegen::lower_inst) use introspection::lower_callable_parameter_i
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,
-    lower_eval_constant_exists, lower_eval_constant_fetch, lower_eval_function_exists,
-    lower_eval_static_property_get, lower_eval_static_property_set,
+    lower_eval_constant_exists, lower_eval_constant_fetch, lower_eval_constant_fetch_or_global,
+    lower_eval_function_exists, lower_eval_static_property_get, lower_eval_static_property_set,
 };

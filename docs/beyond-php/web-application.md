@@ -11,7 +11,7 @@ The default `--web-lifecycle=request` retains the existing behavior in every
 isolation mode: execute the top level and reset PHP state for each request.
 
 ```bash
-elephc --web --web-isolation=worker --web-lifecycle=application bootstrap.php
+elephc build --web --web-isolation=worker --web-lifecycle=application bootstrap.php
 ./bootstrap --listen 127.0.0.1:8080 --workers 4
 ```
 
@@ -70,7 +70,7 @@ application; `main.php` contains its native bootstrap.
 From a source checkout:
 
 ```bash
-target/debug/elephc --web --web-lifecycle=application examples/web-application/main.php
+target/debug/elephc build --web --web-lifecycle=application examples/web-application/main.php
 examples/web-application/main --listen 127.0.0.1:8080 --workers 1
 ```
 

@@ -1,0 +1,244 @@
+//! Purpose:
+//! Provides expression parser entry points and shared argument parsing.
+//! Coordinates Pratt parsing, assignment-value parsing, and call argument list parsing.
+//!
+//! Called from:
+//! - `crate::syntax::parser::stmt`, `crate::syntax::parser::control`, and nested expression parsers.
+//!
+//! Key details:
+//! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
+
+mod assignment_targets;
+mod append_writes;
+mod arrow_preludes;
+mod calls;
+mod prefix;
+mod prefix_complex;
+mod pratt;
+mod runtime_members;
+
+pub use assignment_targets::plain_assignment_expression;
+pub(crate) use assignment_targets::{compound_assignment_expression, desugar_scoped_lvalue_incdec};
+pub(crate) use pratt::is_increment_target;
+pub(crate) use prefix_complex::parse_statement_unset_call;
+
+use crate::syntax::errors::CompileError;
+use crate::syntax::lexer::{has_glued_name_suffix, SpannedToken, Token, TokenMetadata};
+use crate::syntax::parser::ast::{Expr, ExprKind};
+use crate::syntax::parser::validation_only;
+use crate::syntax::span::Span;
+
+/// Parses a discarded computed property update with statement-owned capture names.
+pub(crate) fn parse_scoped_write_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {
+    pratt::parse_scoped_write_expr(tokens, pos)
+}
+
+/// Parses a PHP expression using a Pratt parser, starting at binding power 0.
+/// Returns the parsed expression or a compile error if syntax is invalid.
+pub fn parse_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {
+    pratt::parse_expr_bp(tokens, pos, 0)
+}
+
+/// Parses an assignment-value expression (binding power 7), used in argument
+/// positions, return statements, and other contexts where full expressions are
+/// permitted. Assignment expressions are allowed here per PHP grammar rules.
+pub fn parse_assignment_value_expr(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Expr, CompileError> {
+    pratt::parse_expr_bp(tokens, pos, 7)
+}
+
+/// Returns the name to use for a named-argument label, accepting identifiers and PHP
+/// semi-reserved keywords (e.g. `f(array: 1)`); delegates to the shared bareword mapper.
+fn argument_name_from_token(token: &SpannedToken) -> Option<String> {
+    crate::syntax::parser::keyword_name::bareword_name_from_token(&token.0, &token.1)
+}
+
+/// Returns `span` with its end extended through the most recently consumed token
+/// (typically the closing `)` of an argument list). The start stays anchored, so
+/// diagnostics that point at the span's start position are unaffected.
+pub fn span_through_prev_token(
+    tokens: &[SpannedToken],
+    pos: usize,
+    span: Span,
+) -> Span {
+    match pos.checked_sub(1).and_then(|idx| tokens.get(idx)) {
+        Some((_, prev)) => span.merge(prev.span),
+        None => span,
+    }
+}
+
+/// Returns whether an argument list can end at `pos` (a comma or the closing parenthesis).
+///
+/// Used to tell a PHP 8.6 `?`/`...` partial-application placeholder from an expression that
+/// merely starts with the same token.
+fn argument_list_ended(tokens: &[SpannedToken], pos: usize) -> bool {
+    matches!(
+        tokens.get(pos).map(|(token, _)| token),
+        Some(Token::Comma | Token::RParen)
+    )
+}
+
+/// Parse a comma-separated argument list. The opening `(` must already be consumed.
+/// Consumes through the closing `)`.
+pub fn parse_args(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    err_span: Span,
+) -> Result<Vec<Expr>, CompileError> {
+    parse_args_in(tokens, pos, err_span, ArgumentSyntax::Call)
+}
+
+/// The PHP grammar allowed at the start of an argument.
+enum ArgumentSyntax {
+    Call,
+    Expression,
+    Unset,
+}
+
+/// Parses a parenthesized argument list under the caller's PHP grammar.
+fn parse_args_in(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    err_span: Span,
+    syntax: ArgumentSyntax,
+) -> Result<Vec<Expr>, CompileError> {
+    let validate_list = validation_only() && !matches!(&syntax, ArgumentSyntax::Expression);
+    let mut args = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !args.is_empty() {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(
+                    tokens[*pos].1.span,
+                    "Expected ',' between arguments",
+                ));
+            }
+            *pos += 1;
+            // Allow a trailing comma before the closing paren (PHP 7.3+).
+            if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                break;
+            }
+        }
+        if validate_list {
+            validate_list_argument(tokens, *pos, &syntax, !args.is_empty())?;
+        }
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            let spread_span = tokens[*pos].1.span;
+            *pos += 1;
+            // A trailing comma directly after `...` is rejected on every profile: php-src only
+            // accepts the ellipsis as the final item (`f(...,)` is a syntax error), and the
+            // first-class-callable form is `f(...)` with nothing between `...` and `)`.
+            // `f(..., 1)` is different: it parses, and the partial-application pass reports the
+            // more specific "variadic placeholder must be the last argument" diagnostic.
+            let trailing_comma = tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Comma)
+                && tokens
+                    .get(*pos + 1)
+                    .is_some_and(|(token, _)| *token == Token::RParen);
+            if trailing_comma {
+                return Err(CompileError::new(
+                    tokens[*pos].1.span,
+                    "A `...` placeholder must be the last argument and cannot be followed by a comma",
+                ));
+            }
+            if argument_list_ended(tokens, *pos) {
+                // PHP 8.6 partial application: `foo(1, ...)` forwards the remaining
+                // arguments. `foo(...)` is first-class-callable syntax and never reaches
+                // this branch.
+                crate::pfa::note_marker();
+                args.push(Expr::new(
+                    ExprKind::Spread(Box::new(Expr::new(
+                        ExprKind::Variable(crate::pfa::VARIADIC_PLACEHOLDER_VAR.to_string()),
+                        spread_span,
+                    ))),
+                    spread_span,
+                ));
+            } else {
+                let inner = parse_expr(tokens, pos)?;
+                args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            }
+        } else if matches!(tokens.get(*pos + 1), Some((Token::Colon, _)))
+            && argument_name_from_token(&tokens[*pos]).is_some()
+        {
+            let arg_span = tokens[*pos].1.span;
+            let name = argument_name_from_token(&tokens[*pos]).unwrap();
+            *pos += 2;
+            let value = if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Question)
+                && argument_list_ended(tokens, *pos + 1)
+            {
+                let value_span = tokens[*pos].1.span;
+                *pos += 1;
+                crate::pfa::note_marker();
+                Expr::new(
+                    ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
+                    value_span,
+                )
+            } else {
+                parse_expr(tokens, pos)?
+            };
+            args.push(Expr::new(
+                ExprKind::NamedArg {
+                    name,
+                    value: Box::new(value),
+                },
+                arg_span,
+            ));
+        } else if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Question)
+            && argument_list_ended(tokens, *pos + 1)
+        {
+            let placeholder_span = tokens[*pos].1.span;
+            *pos += 1;
+            crate::pfa::note_marker();
+            args.push(Expr::new(
+                ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
+                placeholder_span,
+            ));
+        } else {
+            args.push(parse_expr(tokens, pos)?);
+        }
+    }
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+        return Err(CompileError::new(err_span, "Expected ')' after arguments"));
+    }
+    *pos += 1;
+    Ok(args)
+}
+
+/// Preserves Zend's distinction between list expressions, call labels and unset operands.
+fn validate_list_argument(
+    tokens: &[SpannedToken],
+    pos: usize,
+    syntax: &ArgumentSyntax,
+    after_comma: bool,
+) -> Result<(), CompileError> {
+    let Some(metadata) = list_keyword(tokens, pos) else {
+        return Ok(());
+    };
+    match syntax {
+        ArgumentSyntax::Call if !matches!(tokens.get(pos + 1), Some((Token::LParen | Token::Colon, _))) => {
+            let span = tokens.get(pos + 1).map_or(metadata.span, |(_, next)| next.span);
+            Err(CompileError::new(span, "Expected ':' after list argument label"))
+        }
+        ArgumentSyntax::Unset => Err(CompileError::new(
+            metadata.span,
+            if after_comma {
+                "Expected ')' before list in unset operands"
+            } else {
+                "Unexpected list in unset operands"
+            },
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Identifies the list keyword at the start of a primary expression or argument.
+fn list_keyword(tokens: &[SpannedToken], pos: usize) -> Option<&TokenMetadata> {
+    match tokens.get(pos) {
+        Some((Token::Identifier(name), metadata))
+            if name.eq_ignore_ascii_case("list") && !has_glued_name_suffix(tokens, pos) =>
+        {
+            Some(metadata)
+        }
+        _ => None,
+    }
+}

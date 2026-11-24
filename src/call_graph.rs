@@ -129,6 +129,16 @@ pub(crate) struct SourceFunc {
     pub calls: u64,
 }
 
+/// One function that ran a query, as the exact profiler charged it: the first
+/// frame above the database driver's own.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct QueryCaller {
+    pub function: String,
+    /// `path:line` of its declaration, or empty when unknown.
+    pub location: String,
+    pub executions: u64,
+}
+
 /// An aggregated call graph ready to render.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct CallGraph {
@@ -139,6 +149,11 @@ pub(crate) struct CallGraph {
     /// runs only), hottest first — the SQL panel / N+1 view. Empty otherwise.
     #[serde(default)]
     pub queries: Vec<(String, u64)>,
+    /// For each query of `queries`, by its text: the functions that ran it, where
+    /// they are declared and how many times, most first — what the Queries
+    /// panel lists when a statement is opened.
+    #[serde(default)]
+    pub query_callers: std::collections::BTreeMap<String, Vec<QueryCaller>>,
     /// Per-line self cost over the PHP source, when a dSYM made it recoverable.
     #[serde(default)]
     pub lines: Option<SourceLines>,
@@ -480,6 +495,23 @@ pub(crate) fn render_html_page(
     asserts: &[AssertOutcome],
     apm: Option<&ApmView>,
 ) -> String {
+    render_html_page_with_timeline(frames, title, live, window_secs, exact, asserts, apm, None)
+}
+
+/// Renders the page with the run's timeline (`monitor::timeline`): every call
+/// at its time and the heap in bytes, which the Flame view draws in its
+/// Timeline mode. Only a launched exact run has one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_html_page_with_timeline(
+    frames: &[(u128, &CallGraph)],
+    title: &str,
+    live: bool,
+    window_secs: u32,
+    exact: bool,
+    asserts: &[AssertOutcome],
+    apm: Option<&ApmView>,
+    timeline: Option<&serde_json::Value>,
+) -> String {
     let frames_json: Vec<serde_json::Value> = frames
         .iter()
         .map(|(ts, g)| {
@@ -536,7 +568,18 @@ pub(crate) fn render_html_page(
             let queries: Vec<serde_json::Value> = g
                 .queries
                 .iter()
-                .map(|(sql, count)| serde_json::json!({"sql": sql, "count": count}))
+                .map(|(sql, count)| {
+                    let callers: Vec<serde_json::Value> = g
+                        .query_callers
+                        .get(sql)
+                        .map(|rows| {
+                            rows.iter()
+                                .map(|c| serde_json::json!({"fn": c.function, "loc": c.location, "n": c.executions}))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    serde_json::json!({"sql": sql, "count": count, "callers": callers})
+                })
                 .collect();
             serde_json::json!({
                 "ts": (*ts as u64),
@@ -599,6 +642,9 @@ pub(crate) fn render_html_page(
     });
     if let Some(view) = apm {
         data["apm"] = view.data.clone();
+    }
+    if let Some(timeline) = timeline {
+        data["timeline"] = timeline.clone();
     }
     // Neutralize `</script>` (and any `</…`) in embedded names: `\/` is a valid
     // JSON escape for `/`, so this stays parseable while it cannot close the tag.
@@ -683,24 +729,28 @@ const TRACE_TEMPLATE_HTML: &str = r##"<!doctype html>
 <title>__TITLE__</title>
 <style>
 :root {
-  --bg: #faf6f3; --panel: #ffffff; --ink: #201a17; --muted: #8a7f78;
-  --border: #efe5df; --accent: #ff0070; --hover: rgba(0,0,0,.035);
+  --bg: #faf9f7; --panel: #ffffff; --ink: #1c1b1a; --muted: #5f5a54;
+  --border: #e7e3de; --accent: #d6005e; --hover: rgba(28,27,26,.05);
+  --brand: linear-gradient(90deg, #ff0070 0%, #ff5252 38%, #ff8f2c 68%, #ffb800 100%);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #17130f; --panel: #201b16; --ink: #f2ebe6; --muted: #a89c94;
-    --border: #2c251f; --accent: #ff3d86; --hover: rgba(255,255,255,.05);
+    --bg: #151413; --panel: #1f1e1c; --ink: #ece9e5; --muted: #b9b3ab;
+    --border: #33302c; --accent: #ff5c99; --hover: rgba(255,255,255,.06);
   }
 }
 :root[data-theme="dark"] {
-  --bg: #17130f; --panel: #201b16; --ink: #f2ebe6; --muted: #a89c94;
-  --border: #2c251f; --accent: #ff3d86; --hover: rgba(255,255,255,.05);
+  --bg: #151413; --panel: #1f1e1c; --ink: #ece9e5; --muted: #b9b3ab;
+  --border: #33302c; --accent: #ff5c99; --hover: rgba(255,255,255,.06);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
-header { display: flex; align-items: center; gap: .75rem; height: 3.1rem; padding: 0 1rem;
-  background: var(--panel); border-bottom: 1px solid var(--border); }
+  font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { position: relative; display: flex; align-items: center; gap: .75rem; height: 3.1rem; padding: 0 1rem 2px;
+  background: var(--panel); }
+header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--brand); }
+header .logo { padding: 4px; box-sizing: content-box; background: #ffffff; border: 1px solid var(--border);
+  border-radius: 10px; }
 header .logo { flex: none; display: block; }
 header h1 { margin: 0; font-size: 1rem; font-weight: 650; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
@@ -760,51 +810,79 @@ const TEMPLATE_HTML: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__ — call graph</title>
 <style>
-/* Warm neutrals biased toward the elephc gradient; magenta (#ff0070, the
-   logo's hottest stop) is the interaction accent. */
+/* Material 3 roles over elephc's colours: a pearl-white surface, the logo's
+   magenta deepened to #d6005e as the primary (white text on it reads at 5:1),
+   the logo's gradient kept for one hairline under the app bar. A selected
+   segment, chip or row takes the primary container; a filled button the
+   primary itself. Pass and fail tags use the M3 container pairs, so their text
+   reads in both themes. Dark is chosen, not flipped: its primary is the light
+   #ff5c99 with dark text on it. */
 :root {
-  --bg: #faf6f3; --panel: #ffffff; --ink: #201a17; --muted: #8a7f78;
-  --line: #e6dad2; --edge: #bcaca2; --border: #efe5df; --accent: #ff0070;
-  --sidebar-w: 20rem; --sel: rgba(255,0,112,.09); --hover: rgba(0,0,0,.035);
+  --bg: #faf9f7; --panel: #ffffff; --ink: #1c1b1a; --muted: #5f5a54;
+  --line: #e5e2de; --edge: #a8a29b; --border: #e7e3de; --accent: #d6005e;
+  --on-accent: #ffffff; --accent-container: #ffe3ee; --on-accent-container: #5c0026;
+  --pass: #1b6d3a; --pass-container: #c8f2d2; --on-pass-container: #00210c;
+  --fail: #ba1a1a; --fail-container: #ffdad6; --on-fail-container: #410002;
+  --live: #1f9d55; --idle: #a8a29b;
+  --mem: #c9d4de; --mem-line: #8a9bab; --tl-dim: rgba(250,249,247,.72);
+  --shadow: 0 1px 3px rgba(28,27,26,.12), 0 4px 12px rgba(28,27,26,.08);
+  --brand: linear-gradient(90deg, #ff0070 0%, #ff5252 38%, #ff8f2c 68%, #ffb800 100%);
+  --sidebar-w: 20rem; --sel: rgba(214,0,94,.08); --hover: rgba(28,27,26,.05);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #17130f; --panel: #201b16; --ink: #f2ebe6; --muted: #a89c94;
-    --line: #3a312b; --edge: #63564d; --border: #2c251f; --accent: #ff3d86;
-    --sel: rgba(255,61,134,.17); --hover: rgba(255,255,255,.05);
+    --bg: #151413; --panel: #1f1e1c; --ink: #ece9e5; --muted: #b9b3ab;
+    --line: #3a3733; --edge: #6e6862; --border: #33302c; --accent: #ff5c99;
+    --on-accent: #3e0018; --accent-container: #5a1530; --on-accent-container: #ffd9e5;
+    --pass: #8bd69b; --pass-container: #00522a; --on-pass-container: #c8f2d2;
+    --fail: #ffb4ab; --fail-container: #93000a; --on-fail-container: #ffdad6;
+    --live: #4cc77a; --idle: #6e6862;
+  --mem: #2c3946; --mem-line: #6f8396; --tl-dim: rgba(21,20,19,.7);
+    --mem: #2c3946; --mem-line: #6f8396; --tl-dim: rgba(21,20,19,.7);
+    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+    --sel: rgba(255,92,153,.16); --hover: rgba(255,255,255,.06);
   }
 }
 :root[data-theme="dark"] {
-  --bg: #17130f; --panel: #201b16; --ink: #f2ebe6; --muted: #a89c94;
-  --line: #3a312b; --edge: #63564d; --border: #2c251f; --accent: #ff3d86;
-  --sel: rgba(255,61,134,.17); --hover: rgba(255,255,255,.05);
+  --bg: #151413; --panel: #1f1e1c; --ink: #ece9e5; --muted: #b9b3ab;
+  --line: #3a3733; --edge: #6e6862; --border: #33302c; --accent: #ff5c99;
+  --on-accent: #3e0018; --accent-container: #5a1530; --on-accent-container: #ffd9e5;
+  --pass: #8bd69b; --pass-container: #00522a; --on-pass-container: #c8f2d2;
+  --fail: #ffb4ab; --fail-container: #93000a; --on-fail-container: #ffdad6;
+  --live: #4cc77a; --idle: #6e6862;
+  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+  --sel: rgba(255,92,153,.16); --hover: rgba(255,255,255,.06);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 /* Fixed-height app bar. The panes below are pinned at 3.1rem, so the header
    must never grow past it: a long title (monitor titles are file paths) would
    otherwise wrap and sit on top of the sidebar and the graph. Nothing wraps;
    the title is the only thing allowed to shrink, and it ellipsizes. */
-header { display: flex; gap: .75rem; align-items: center; padding: 0 1rem;
+header { position: relative; display: flex; gap: .75rem; align-items: center; padding: 0 1rem 2px;
   height: 3.1rem; box-sizing: border-box; flex-wrap: nowrap; overflow: hidden;
-  border-bottom: 1px solid var(--border); background: var(--panel); }
+  background: var(--panel); }
+/* The brand gradient, once: a hairline under the app bar. */
+header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--brand); }
 header > * { flex: none; }
-header .logo { flex: none; display: block; }
-header h1 { font-size: 1rem; margin: 0; font-weight: 650; flex: 0 1 auto; min-width: 3rem;
+/* The logo sits in a white tile in both themes: its gradient is drawn for white. */
+header .logo { flex: none; display: block; padding: 4px; box-sizing: content-box; background: #ffffff;
+  border: 1px solid var(--border); border-radius: 10px; }
+header h1 { font-size: 1.05rem; margin: 0; font-weight: 500; flex: 0 1 auto; min-width: 3rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 header .meta { color: var(--muted); font-size: .82rem; white-space: nowrap;
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 header .spacer { flex: 1 1 auto; min-width: .25rem; }
 header input { padding: .35rem .6rem; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg); color: var(--ink); font-size: .85rem; width: 13rem; }
+  border-radius: 999px; background: var(--bg); color: var(--ink); font-size: .85rem; width: 13rem; }
 /* Segmented controls: the view switcher and the dimension selector. Both are
    single-choice, so both read as one control rather than a row of toggles. */
 #metricbar, #viewbar { display: none; align-items: center; gap: 2px; padding: 2px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px; }
 #metricbar.show, #viewbar.show { display: inline-flex; }
 #metricbar button, #viewbar button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
-  padding: .26rem .55rem; border-radius: 6px; font-size: .78rem; display: inline-flex; align-items: center; gap: .3rem;
+  padding: .26rem .55rem; border-radius: 999px; font-size: .78rem; display: inline-flex; align-items: center; gap: .3rem;
   white-space: nowrap; }
 #metricbar button .g, #viewbar button .g { font-size: .8rem; line-height: 1; }
 /* The three view buttons are now driven by #viewbar; they stay in the DOM so
@@ -830,7 +908,7 @@ header input { padding: .35rem .6rem; border: 1px solid var(--border);
    chosen one also keeps its label while the others stay icons, so the bar reads
    as a sentence — "Graph, by Memory" — at a glance and for one label's width. */
 #metricbar button.on, #viewbar button.on {
-  background: var(--accent); color: #fff8f4; font-weight: 640; }
+  background: var(--accent-container); color: var(--on-accent-container); font-weight: 600; }
 #metricbar button.on .g, #viewbar button.on .g { filter: none; }
 #metricbar button.on span:not(.g) { display: inline; }
 #metricbar button:hover:not(.on), #viewbar button:hover:not(.on) {
@@ -841,45 +919,115 @@ body.hasnav #stage { bottom: 3.1rem; }
 #stage.grabbing { cursor: grabbing; }
 /* Flame graph (icicle): an alternative to the node-link view. Rows of cells,
    width = inclusive time, stacked callee-below-caller. Overlays the stage. */
-#flame { display: none; position: absolute; inset: 0; overflow: auto; cursor: default;
-  background: var(--bg); padding: .4rem .5rem 1rem; }
+/* The four reading panels (Flame, Queries, Source, Checks) share one frame:
+   a head (what is shown, as a title, chips and a quiet note) over a card on
+   the surface. The legend card is the graph's: elsewhere it only covered
+   the panels' heads and figures. */
+#flame, #sqlpanel, #srcpanel, #chkpanel { padding: 1rem 1.25rem 1.5rem; }
+body.flame #legend, body.sql #legend, body.src #legend, body.chk #legend { display: none; }
+.phead { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .6rem; margin: 0 0 .75rem; max-width: 1100px; }
+.phead .pt { font-size: 1rem; font-weight: 500; color: var(--ink); }
+.phead .pnote { font-size: .78rem; color: var(--muted); }
+.phead .pnote b { color: var(--ink); font-weight: 600; }
+.phead .pchip { display: inline-flex; align-items: center; gap: .3rem; height: 1.6rem; padding: 0 .65rem;
+  border: 1px solid var(--border); border-radius: 8px; font-size: .76rem; color: var(--muted); background: var(--panel); }
+.phead .pchip b { color: var(--ink); font-weight: 600; }
+.phead .pchip.pass { border-color: transparent; background: var(--pass-container); color: var(--on-pass-container); }
+.phead .pchip.fail { border-color: transparent; background: var(--fail-container); color: var(--on-fail-container); }
+.phead .pchip.pass b, .phead .pchip.fail b { color: inherit; }
+.phead .pbtn { height: 1.6rem; display: inline-flex; align-items: center; padding: 0 .75rem; border-radius: 999px;
+  background: var(--accent-container); color: var(--on-accent-container); font-size: .76rem; font-weight: 600; text-decoration: none; }
+.pcard { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; max-width: 1100px; }
+.pcard.pempty { padding: 1rem 1.25rem; color: var(--muted); font-size: .85rem; }
+/* The Flame view's two modes, and its Timeline: an overview of the whole
+   run with the picked range, then every call at its time over the heap's
+   bytes. The memory is a cool slate so it never reads as heat. */
+.phead .pseg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; }
+.phead .pseg button { border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 999px; padding: .15rem .7rem; font-size: .76rem; }
+.phead .pseg button:hover:not(.on) { background: var(--hover); color: var(--ink); }
+.phead .pseg button.on { background: var(--accent-container); color: var(--on-accent-container); font-weight: 600; }
+.phead .tl-key { margin-left: auto; display: inline-flex; align-items: center; gap: .4rem; font-size: .74rem; color: var(--muted); }
+.phead .tl-key i { display: inline-block; width: 14px; height: 9px; border-radius: 2px; margin-left: .5rem; }
+.phead .tl-key i.mem { background: var(--mem); border-top: 2px solid var(--mem-line); }
+.phead .tl-key i.own { width: 40px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #f2e9e4, #ffd900 20%, #ff8b1b 45%, #ff522c 70%, #ff0070); }
+.pcard.tl { max-width: none; padding: .75rem 1rem 1rem; }
+.tl-overax { position: relative; height: 18px; margin-left: 64px; font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl-overax span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.tl-overax span:first-child { transform: none; }
+.tl-over { position: relative; margin-left: 64px; height: 96px; border-radius: 8px; overflow: hidden; background: var(--bg); cursor: crosshair; user-select: none; }
+.tl-over canvas { display: block; width: 100%; height: 96px; }
+.tl-dim { position: absolute; top: 0; bottom: 0; background: var(--tl-dim); pointer-events: none; }
+.tl-dim.l { left: 0; } .tl-dim.r { right: 0; }
+.tl-brush { position: absolute; top: 0; bottom: 0; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 4px; pointer-events: none; }
+.tl-main { display: block; width: 100%; margin-top: .75rem; }
+.tl-note { margin: .5rem 0 0 64px; font-size: .74rem; color: var(--muted); }
+.pcard.tl-detail { margin-top: .75rem; max-width: none; display: flex; align-items: center; gap: 1.25rem; padding: .75rem 1rem; }
+.tl-detail .sw { width: 5px; align-self: stretch; border-radius: 3px; }
+.tl-detail .tl-dn { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tl-detail .tl-dn b { font-weight: 500; font-size: .95rem; }
+.tl-detail .tl-dn span { font-size: .78rem; color: var(--muted); }
+.tl-detail .tl-fig { display: flex; flex-direction: column; align-items: flex-end; min-width: 6rem; }
+.tl-detail .tl-fig span { font-size: .72rem; color: var(--muted); }
+.tl-detail .tl-fig b { font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+#flame { display: none; position: absolute; inset: 0; overflow: auto; cursor: default; background: var(--bg); }
 body.flame #stage { cursor: default; }
 body.flame #svg { display: none; }
 body.flame #flame { display: block; }
-#flame .frow { color: var(--muted); font-size: .74rem; padding: .1rem .1rem .35rem; }
-#flame .frow b { color: var(--ink); }
+#flame .fcard { max-width: none; padding: .75rem; }
 #flame .fcanvas { position: relative; }
-#flame .fcell { position: absolute; height: 20px; border-radius: 3px;
-  border: 1px solid rgba(0,0,0,.16); box-sizing: border-box; overflow: hidden;
-  font-size: .72rem; line-height: 18px; padding: 0 5px; white-space: nowrap; cursor: pointer;
-  font-variant-numeric: tabular-nums; }
+/* Cells keep a 2px surface gap to their neighbours, so a row of same-heat
+   frames still reads as separate calls. */
+#flame .fcell { position: absolute; height: 20px; border-radius: 4px; border: 0;
+  border-right: 2px solid var(--panel); box-sizing: border-box; overflow: hidden;
+  font-size: .74rem; font-weight: 500; line-height: 20px; padding: 0 6px; white-space: nowrap; cursor: pointer;
+  text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 #flame .fcell:hover { outline: 2px solid var(--ink); outline-offset: -2px; z-index: 3; }
-#flame .fcell.sel { outline: 2px solid var(--accent, #ff522c); outline-offset: -2px; z-index: 2; }
+#flame .fcell.sel { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 2; }
 /* SQL panel: distinct DB statements and their execution counts (the N+1 view). */
-#sqlpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default;
-  background: var(--bg); padding: .6rem .7rem 1.2rem; }
+#sqlpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default; background: var(--bg); }
 body.sql #stage { cursor: default; }
 body.sql #svg, body.sql #flame { display: none; }
 body.sql #sqlpanel { display: block; }
-#sqlpanel .qhead { color: var(--muted); font-size: .76rem; padding: .1rem .1rem .55rem; }
-#sqlpanel .qhead b { color: var(--ink); }
-#sqlpanel table { border-collapse: collapse; width: 100%; max-width: 1100px; }
-#sqlpanel th { text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--muted); font-weight: 600; padding: .3rem .5rem; border-bottom: 1px solid var(--border); }
-#sqlpanel td { padding: .4rem .5rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+#sqlpanel table { border-collapse: collapse; width: 100%; }
+#sqlpanel th { text-align: left; font-size: .75rem; color: var(--muted); font-weight: 500;
+  padding: .65rem 1rem; border-bottom: 1px solid var(--border); }
+#sqlpanel th:first-child { text-align: right; }
+#sqlpanel td { padding: .75rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+#sqlpanel tbody tr:last-child td { border-bottom: 0; }
+#sqlpanel tbody tr:hover { background: var(--hover); }
 #sqlpanel td.qc { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; text-align: right; }
-#sqlpanel td.qbar { width: 26%; }
-#sqlpanel td.qbar i { display: block; height: 12px; border-radius: 3px; min-width: 2px; }
+#sqlpanel td.qbar { width: 24%; min-width: 8rem; }
+#sqlpanel .qtrack { display: block; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+#sqlpanel .qtrack i { display: block; height: 100%; border-radius: 4px; min-width: 2px; }
 #sqlpanel td.qsql { width: 100%; }
-#sqlpanel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem;
+#sqlpanel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem;
   color: var(--ink); white-space: pre-wrap; word-break: break-word; }
-#sqlpanel tr.warn td.qc { color: var(--accent, #ff522c); }
-#sqlpanel .qn1 { display: inline-block; margin-left: .5rem; font-size: .68rem; font-weight: 700;
-  color: #fff8f4; background: var(--accent, #ff522c); border-radius: 4px; padding: .02rem .32rem;
+#sqlpanel tr.warn td.qc { color: var(--accent); }
+/* A statement with callers opens on click: a chevron that turns, then the
+   functions that ran it with their file and their share of its runs. */
+#sqlpanel tr.qopen { cursor: pointer; }
+#sqlpanel tr.qopen:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#sqlpanel .qchev { display: inline-block; width: 15px; height: 15px; vertical-align: -3px; margin-right: .3rem; color: var(--muted); transition: transform .15s; }
+#sqlpanel tr.open .qchev { transform: rotate(90deg); color: var(--accent); }
+#sqlpanel tr.open td { border-bottom-color: transparent; }
+#sqlpanel .qfromn { margin-left: .6rem; font-size: .72rem; color: var(--muted); }
+#sqlpanel tr.qfrom td { padding-top: 0; background: var(--panel); }
+#sqlpanel tr.qfrom:hover { background: transparent; }
+#sqlpanel .qlist { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg); }
+#sqlpanel .qlh, #sqlpanel .qcaller { display: grid; grid-template-columns: minmax(10rem, 1.4fr) minmax(8rem, 1fr) 4rem 8rem; gap: 1rem; align-items: center; padding: .5rem .85rem; }
+#sqlpanel .qlh { font-size: .72rem; color: var(--muted); border-bottom: 1px solid var(--border); }
+#sqlpanel .qcaller { width: 100%; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+#sqlpanel .qcaller:last-child { border-bottom: 0; }
+#sqlpanel .qcaller:hover { background: var(--hover); }
+#sqlpanel .qfn { font-weight: 500; font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sqlpanel .qloc { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sqlpanel .qn { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; font-size: .85rem; }
+#sqlpanel .qcaller .qtrack i { background: var(--accent); }
+#sqlpanel .qn1 { display: inline-block; margin-left: .6rem; font-size: .68rem; font-weight: 600;
+  color: var(--on-accent-container); background: var(--accent-container); border-radius: 999px; padding: .08rem .5rem;
   vertical-align: middle; }
 /* Checks panel: the performance budget and how this run measured against it. */
-#chkpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default;
-  background: var(--bg); padding: .6rem .7rem 1.2rem; }
+#chkpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default; background: var(--bg); }
 body.chk #stage { cursor: default; }
 body.chk #svg, body.chk #flame, body.chk #sqlpanel, body.chk #srcpanel { display: none; }
 /* Only the graph pans, so its whole tool section is irrelevant elsewhere. */
@@ -888,42 +1036,38 @@ body.flame #fitbtn, body.sql #fitbtn, body.src #fitbtn, body.chk #fitbtn,
 body.flame #critbtn, body.sql #critbtn, body.src #critbtn, body.chk #critbtn,
 body.flame #prunerow, body.sql #prunerow, body.src #prunerow, body.chk #prunerow { display: none; }
 body.chk #chkpanel { display: block; }
-#chkpanel .khead { color: var(--muted); font-size: .78rem; padding: .1rem .1rem .6rem; }
-#chkpanel .khead b { color: var(--ink); }
-#chkpanel .krow { display: grid; grid-template-columns: 4.2rem 1fr auto auto; gap: .7rem;
-  align-items: baseline; padding: .42rem .5rem; border-bottom: 1px solid var(--border); }
-#chkpanel .kt { font-size: .68rem; font-weight: 700; letter-spacing: .05em; border-radius: 4px;
-  padding: .08rem .35rem; text-align: center; color: #fff8f4; }
-#chkpanel .kt.pass { background: #30a46c; }
-#chkpanel .kt.fail { background: #e5484d; }
-#chkpanel .kt.error { background: var(--muted); }
+#chkpanel .krow { display: grid; grid-template-columns: 4.2rem 1fr auto auto; gap: .9rem;
+  align-items: baseline; padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+#chkpanel .krow:last-child { border-bottom: 0; }
+#chkpanel .kt { font-size: .68rem; font-weight: 700; letter-spacing: .05em; border-radius: 999px;
+  padding: .1rem .45rem; text-align: center; }
+#chkpanel .kt.pass { background: var(--pass-container); color: var(--on-pass-container); }
+#chkpanel .kt.fail { background: var(--fail-container); color: var(--on-fail-container); }
+#chkpanel .kt.error { background: var(--line); color: var(--ink); }
 #chkpanel .kspec { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem;
   color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
-#chkpanel .klabel { display: block; font-family: inherit; font-size: .76rem; color: var(--muted); }
+#chkpanel .klabel { display: block; margin-top: .15rem; font-family: Roboto, system-ui, -apple-system, sans-serif; font-size: .78rem; color: var(--muted); }
 #chkpanel .kval { font-variant-numeric: tabular-nums; font-size: .82rem; white-space: nowrap; }
 #chkpanel .kval b { font-weight: 700; }
 #chkpanel .kbudget { font-variant-numeric: tabular-nums; font-size: .78rem; color: var(--muted);
   white-space: nowrap; }
-#chkpanel .knone { color: var(--muted); font-size: .8rem; padding: .4rem .5rem; }
 
 /* Source panel: the PHP file annotated with per-line sampled cost. */
-#srcpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default;
-  background: var(--bg); padding: .6rem 0 1.2rem; }
+#srcpanel { display: none; position: absolute; inset: 0; overflow: auto; cursor: default; background: var(--bg); }
+#srcpanel .scode { max-width: none; padding: .5rem 0; }
 body.src #stage { cursor: default; }
 body.src #svg, body.src #flame, body.src #sqlpanel { display: none; }
 body.src #srcpanel { display: block; }
-#srcpanel .shead { color: var(--muted); font-size: .76rem; padding: 0 .8rem .55rem; }
-#srcpanel .shead b { color: var(--ink); }
 #srcpanel .sline { display: grid; grid-template-columns: 4.6rem 3.2rem 1fr; align-items: baseline;
   gap: .5rem; padding: .02rem .8rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .8rem; line-height: 1.5; }
 #srcpanel .sline.hot { font-weight: 600; }
 #srcpanel .sn { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums;
   font-size: .72rem; }
-#srcpanel .sp { font-variant-numeric: tabular-nums; text-align: right; border-radius: 3px;
-  padding: 0 .3rem; }
+#srcpanel .sp { font-variant-numeric: tabular-nums; text-align: right; border-radius: 999px;
+  padding: 0 .45rem; font-family: Roboto, system-ui, sans-serif; font-size: .72rem; font-weight: 600; }
 #srcpanel .sc { white-space: pre; overflow-x: auto; color: var(--ink); }
-#srcpanel .sfn { font-family: -apple-system, system-ui, sans-serif; font-size: .7rem;
+#srcpanel .sfn { font-family: Roboto, system-ui, -apple-system, sans-serif; font-size: .7rem;
   color: var(--muted); margin-left: .9rem; }
 /* Left sidebar: the sortable function list (Blackfire-style). */
 #sidebar { position: absolute; left: 0; top: 3.1rem; bottom: 0; width: var(--sidebar-w);
@@ -939,13 +1083,29 @@ body.resizing { cursor: col-resize; user-select: none; }
 body.resizing #stage, body.resizing #fnlist { pointer-events: none; }
 .side-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
   padding: .6rem .85rem; border-bottom: 1px solid var(--border); }
-.side-head .t { font-size: .85rem; font-weight: 650; color: var(--ink); }
-.side-head #groupbtn { display: none; margin-right: auto; background: transparent; border: 1px solid var(--border);
-  border-radius: 5px; color: var(--muted); cursor: pointer; font-size: .8rem; line-height: 1; padding: .12rem .3rem; }
-.side-head #groupbtn:hover { color: var(--ink); }
-.side-head #groupbtn.on { background: var(--accent); color: #fff8f4; border-color: var(--accent); }
+.side-head .t { font-size: .92rem; font-weight: 500; color: var(--ink); }
+/* Outlined icons (the page's ICONS): 24 grid, 2px stroke, the text colour. */
+.ic { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.side-head #groupbtn { display: none; place-items: center; width: 28px; height: 28px; padding: 0; background: transparent;
+  border: 1px solid var(--border); border-radius: 999px; color: var(--muted); cursor: pointer; }
+.side-head #groupbtn .ic { width: 15px; height: 15px; }
+.side-head #groupbtn:hover { color: var(--ink); background: var(--hover); }
+.side-head #groupbtn.on { background: var(--accent-container); color: var(--on-accent-container); border-color: transparent; }
+/* Self / Inclusive: which cost the list ranks by and the boxes print. */
+.side-head .scope { margin-left: auto; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border);
+  border-radius: 999px; }
+.side-head .scope button { border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 999px;
+  padding: .2rem .6rem; font-size: .75rem; }
+.side-head .scope button:hover:not(.on) { background: var(--hover); color: var(--ink); }
+.side-head .scope button.on { background: var(--accent-container); color: var(--on-accent-container); font-weight: 600; }
 .side-head .sort { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
   font-variant-numeric: tabular-nums; }
+#sidebar > .sort { padding: .45rem 1rem 0; font-size: .75rem; color: var(--muted); }
+/* Header buttons that hold one icon. */
+#menubtn { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; }
+#nav #prev, #nav #next { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; }
+#menu .mi .ic { width: 18px; height: 18px; margin: 0 auto; }
 /* Grouped list: collapsible class / namespace headers. */
 .grouphdr { display: flex; align-items: center; gap: .4rem; padding: .34rem .55rem; cursor: pointer;
   font-size: .74rem; color: var(--muted); border-top: 1px solid var(--border); }
@@ -956,17 +1116,23 @@ body.resizing #stage, body.resizing #fnlist { pointer-events: none; }
 .grouphdr .gname { font-weight: 700; color: var(--ink); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grouphdr .gcount { color: var(--muted); font-variant-numeric: tabular-nums; }
 .grouphdr.hide { display: none; }
-.fnrow.ingroup { margin-left: .7rem; }
+/* A grouped row is indented under its class; its open detail follows it. */
+.fnrow.ingroup, .fndetail.ingroup { margin-left: .7rem; }
 #fnlist { list-style: none; margin: 0; padding: .3rem; overflow-y: auto; flex: 1; }
-.fnrow { display: grid; grid-template-columns: 8px 1fr auto; gap: .55rem; align-items: center;
-  padding: .4rem .5rem; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.fnrow { display: grid; grid-template-columns: 4px 1fr auto; gap: .65rem; align-items: center;
+  padding: .45rem .6rem; border-radius: 12px; cursor: pointer; border: 1px solid transparent; }
 .fnrow:hover { background: var(--hover); }
-.fnrow.sel { background: var(--sel); border-color: var(--accent); }
+.fnrow.sel { background: var(--accent-container); }
+.fnrow.sel .nm .n, .fnrow.sel .val .pv { color: var(--on-accent-container); }
 .fnrow.hide { display: none; }
-.fnrow .sw { display: block; width: 8px; height: 28px; border-radius: 3px; }
+.fnrow .sw { display: flex; align-items: flex-end; width: 4px; height: 30px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.fnrow .sw > i { display: block; width: 100%; min-height: 3px; border-radius: 2px; }
 .fnrow .nm { min-width: 0; }
-.fnrow .nm .n { display: block; font-size: .82rem; color: var(--ink); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; }
+/* The name shortens, its query badge does not: the badge sits beside the
+   ellipsized name instead of inside it. */
+.fnrow .nm .n { display: flex; align-items: center; min-width: 0; font-size: .82rem; color: var(--ink); }
+.fnrow .nm .n .nt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fnrow .nm .n .qbadge { flex: none; }
 .fnrow .nm .m2 { display: block; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .fnrow .val { display: flex; flex-direction: column; align-items: flex-end; }
@@ -974,14 +1140,14 @@ body.resizing #stage, body.resizing #fnlist { pointer-events: none; }
 .fnrow .val .mini { display: block; height: 4px; width: 4rem; border-radius: 2px; background: var(--line); margin-top: 3px; overflow: hidden; }
 .fnrow .val .mini > i { display: block; height: 100%; background: var(--accent); }
 .qbadge { display: inline-block; font-size: .62rem; line-height: 1.4; padding: 0 .32rem; border-radius: 4px;
-  margin-left: .35rem; background: rgba(255,0,112,.13); color: var(--accent); font-variant-numeric: tabular-nums;
+  margin-left: .35rem; background: var(--accent-container); color: var(--on-accent-container); font-variant-numeric: tabular-nums;
   vertical-align: middle; }
 #empty { color: var(--muted); font-size: .78rem; padding: 1rem .85rem; }
 /* The selected function opens in place, as in Blackfire: its row and a card
    attached under it with its figures and its callers / callees. */
 .fnrow.sel.open { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.fndetail { list-style: none; margin: -1px 0 .35rem; padding: .55rem .55rem .45rem; background: var(--panel);
-  border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; cursor: default; }
+.fndetail { list-style: none; margin: -1px 0 .35rem; padding: .55rem .55rem .45rem; background: var(--bg);
+  border: 1px solid var(--accent-container); border-top: 0; border-radius: 0 0 12px 12px; cursor: default; }
 .fndetail.hide { display: none; }
 .fndetail .fig { display: grid; grid-template-columns: 1fr auto auto; gap: .18rem .8rem; align-items: baseline;
   font-size: .76rem; font-variant-numeric: tabular-nums; margin-bottom: .55rem; }
@@ -997,7 +1163,7 @@ body.resizing #stage, body.resizing #fnlist { pointer-events: none; }
 .fndetail .dseg button { border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 5px;
   padding: .18rem .5rem; font-size: .74rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .fndetail .dseg button:hover:not(.on):not(:disabled) { background: var(--hover); color: var(--ink); }
-.fndetail .dseg button.on { background: var(--accent); color: #fff8f4; font-weight: 640; }
+.fndetail .dseg button.on { background: var(--accent-container); color: var(--on-accent-container); font-weight: 600; }
 .fndetail .dseg button:disabled { opacity: .45; cursor: default; }
 .fndetail .dgo { margin-left: auto; border: 1px solid var(--border); background: var(--bg); color: var(--ink);
   border-radius: 6px; cursor: pointer; padding: .16rem .45rem; font-size: .72rem; white-space: nowrap; }
@@ -1012,23 +1178,28 @@ svg { width: 100%; height: 100%; display: block; }
 .edge { fill: none; stroke: var(--edge); stroke-width: 1; opacity: .5; }
 .edge.hi { stroke: var(--accent); stroke-width: 2; opacity: 1; }
 .elabel { fill: var(--muted); font-size: 9.5px; text-anchor: middle; pointer-events: none;
-  paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round;
+  paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
   font-variant-numeric: tabular-nums; }
 .edge.fresh { stroke: var(--accent); opacity: .95; }
-.node rect { stroke: var(--line); stroke-width: 1; rx: 6; }
+.node { cursor: pointer; }
+.node .card { fill: var(--panel); stroke: var(--border); stroke-width: 1; }
+.node:hover .card { stroke: var(--edge); }
+.node .track, .node .gauge { fill: var(--line); }
+.node .bar { fill: var(--accent); }
 .node.dim { opacity: .25; }
 .node.search-dim { opacity: .12; }
 .node.absent { opacity: .16; }
-.node.hotter rect { stroke: var(--accent); stroke-width: 2.5; }
+.node.hotter .card { stroke: var(--accent); stroke-width: 2.5; }
 /* A/B diff (baseline vs current): regression red, improvement green. */
-.node.grew rect { stroke: #e5484d; stroke-width: 3; }
-.node.shrank rect { stroke: #30a46c; stroke-width: 3; }
-.node.newfn rect { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 5 3; }
-.node.removed rect { stroke: #30a46c; stroke-width: 2; stroke-dasharray: 4 4; }
+.node.grew .card { stroke: var(--fail); stroke-width: 3; }
+.node.shrank .card { stroke: var(--pass); stroke-width: 3; }
+.node.newfn .card { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 5 3; }
+.node.removed .card { stroke: var(--pass); stroke-width: 2; stroke-dasharray: 4 4; }
 .node.removed { opacity: .4; }
 .edge.gone { stroke-dasharray: 5 4; opacity: .4; }
 .edge.critical { stroke: var(--accent); stroke-width: 3.5; opacity: 1; }
-.node.critical rect { stroke: var(--accent); stroke-width: 3; }
+.node.critical .card { stroke: var(--accent); stroke-width: 3; }
+.node.sel .card { stroke: var(--accent); stroke-width: 2.5; }
 .node.pruned, .edge.pruned, .elabel.pruned { display: none; }
 /* The overflow menu. Everything that is set once and left alone lives here, so
    the bar keeps only what a reading loop touches: which view, which dimension,
@@ -1063,7 +1234,7 @@ svg { width: 100%; height: 100%; display: block; }
   border: 1px solid var(--border); border-radius: 7px; flex: none; }
 #menu .mseg button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
   border-radius: 5px; padding: .16rem .42rem; font-size: .76rem; }
-#menu .mseg button.on { background: var(--accent); color: #fff8f4; }
+#menu .mseg button.on { background: var(--accent-container); color: var(--on-accent-container); }
 
 /* Hover explanations for the header controls. Positioned by script from a body
    level element: the header clips its own overflow, so a bubble anchored inside
@@ -1092,27 +1263,28 @@ svg { width: 100%; height: 100%; display: block; }
   padding: .05rem .4rem; justify-self: start; color: var(--ink); }
 #help dd { margin: 0; font-size: .84rem; color: var(--ink); }
 #help .hf { margin-top: .9rem; font-size: .74rem; color: var(--muted); }
-.htool { padding: .26rem .55rem; border: 1px solid var(--border); border-radius: 6px;
+.htool { padding: .26rem .55rem; border: 1px solid var(--border); border-radius: 999px;
   background: var(--bg); color: var(--ink); font-size: .78rem; cursor: pointer; }
-.htool.on { background: var(--accent); color: #fff8f4; border-color: var(--accent); }
+.htool.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 select.htool { padding: .2rem .35rem; }
-.node text { fill: #201a17; font-size: 11px; pointer-events: none; }
-.node .sub { font-size: 9.5px; opacity: .72; }
+.node text { fill: var(--ink); font-size: 12px; font-weight: 500; pointer-events: none; }
+.node .sub { font-size: 10px; font-weight: 400; fill: var(--muted); }
+.node .pv { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 #tip { position: absolute; pointer-events: none; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 8px; padding: .55rem .7rem;
-  font-size: .82rem; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 22rem; display: none; }
+  border: 1px solid var(--border); border-radius: 12px; padding: .55rem .7rem;
+  font-size: .82rem; box-shadow: var(--shadow); max-width: 22rem; display: none; }
 #tip h3 { margin: 0 0 .3rem; font-size: .85rem; }
 #tip .row { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted); }
 #tip .bar { height: 6px; border-radius: 3px; background: var(--accent); margin-top: 2px; }
 #tip .cause { margin-top: .35rem; }
 .legend { position: absolute; top: 3.4rem; right: .8rem; font-size: .74rem;
   color: var(--muted); background: var(--panel); border: 1px solid var(--border);
-  border-radius: 6px; padding: .4rem .6rem; max-width: 20rem; }
+  border-radius: 12px; padding: .4rem .6rem; max-width: 20rem; }
 #nav { position: absolute; left: 0; right: 0; bottom: 0; display: none; gap: .55rem;
   align-items: center; padding: .45rem .8rem; background: var(--panel); border-top: 1px solid var(--border); }
 #nav.show { display: flex; }
 #nav button { border: 1px solid var(--border); background: var(--bg); color: var(--ink);
-  border-radius: 6px; cursor: pointer; padding: .25rem .5rem; font-size: .8rem; line-height: 1; }
+  border-radius: 999px; cursor: pointer; padding: .25rem .5rem; font-size: .8rem; line-height: 1; }
 #nav button:hover { border-color: var(--accent); }
 #nav .pills { display: flex; gap: 3px; flex: 1; align-items: center; }
 #nav .pill { flex: 1; min-width: 4px; max-width: 44px; height: 22px; border-radius: 3px;
@@ -1122,11 +1294,11 @@ select.htool { padding: .2rem .35rem; }
 #nav .tog { font-size: .78rem; color: var(--muted); display: inline-flex; align-items: center;
   gap: .3rem; cursor: pointer; user-select: none; }
 #nav .live { display: inline-flex; align-items: center; gap: .35rem; }
-#nav .live .dot { width: 8px; height: 8px; border-radius: 50%; background: #b8a99f; }
-#nav .live.on .dot { background: #2ec26a; box-shadow: 0 0 0 3px rgba(46,194,106,.22); }
+#nav .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+#nav .live.on .dot { background: var(--live); box-shadow: 0 0 0 3px rgba(46,194,106,.22); }
 #nav .label { font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (prefers-reduced-motion: no-preference) {
-  .node.hotter rect { animation: hotpulse 1.2s ease-in-out infinite; }
+  .node.hotter .card { animation: hotpulse 1.2s ease-in-out infinite; }
 }
 @keyframes hotpulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: .4; } }
 __APM_STYLE__</style>
@@ -1144,10 +1316,12 @@ __APM_STYLE__</style>
   <button id="srcbtn" hidden></button>
   <button id="chkbtn" hidden></button>
   <input id="search" type="search" placeholder="Find a function…" autocomplete="off">
-  <button id="menubtn" class="htool" data-tip="Graph tools, appearance and shortcuts">☰</button>
+  <button id="menubtn" class="htool" aria-label="Menu" data-tip="Graph tools, appearance and shortcuts"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 </header>
 <aside id="sidebar">
-  <div class="side-head"><span class="t">Functions</span><button id="groupbtn" data-tip="Group the list under its classes and namespaces">⊞</button><span class="sort" id="sortlabel"></span></div>
+  <div class="side-head"><span class="t">Functions</span><button id="groupbtn" aria-label="Group" data-tip="Group the list under its classes and namespaces"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg></button>
+    <span class="scope" id="scopeseg" role="group" aria-label="Cost"><button data-scope="self" data-tip="A function's own cost, without its callees (exclusive)">Self</button><button data-scope="incl" data-tip="A function's cost with everything it calls (inclusive)">Inclusive</button></span></div>
+  <div class="sort" id="sortlabel"></div>
   <ul id="fnlist"></ul>
 </aside>
 <div id="dragger" title="Drag to resize the list"></div>
@@ -1155,11 +1329,11 @@ __APM_STYLE__</style>
 <div id="tip"></div>
 <div id="htip" hidden></div>
 __APM_PANEL__<div id="menu" hidden>
-  <button id="resetbtn" class="mrow mfirst"><span class="mi">↺</span><span class="ml">Start over<em>Call graph, time, nothing selected or filtered</em></span><kbd>r</kbd></button>
+  <button id="resetbtn" class="mrow mfirst"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></svg></span><span class="ml">Start over<em>Call graph, time, nothing selected or filtered</em></span><kbd>r</kbd></button>
   <div class="mh" id="mh-graph">Graph</div>
-  <button id="fitbtn" class="mrow"><span class="mi">⤢</span><span class="ml">Fit in view<em>Frame it again if zoom or pan lost it</em></span><kbd>0</kbd></button>
-  <button id="critbtn" class="mrow"><span class="mi">⚡</span><span class="ml">Critical path<em>The heaviest chain, entry point down</em></span><kbd>p</kbd></button>
-  <label class="mrow" id="prunerow"><span class="mi">⌀</span><span class="ml">Hide the small<em>Drop functions under a share of the run</em></span>
+  <button id="fitbtn" class="mrow"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></span><span class="ml">Fit in view<em>Frame it again if zoom or pan lost it</em></span><kbd>0</kbd></button>
+  <button id="critbtn" class="mrow"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></svg></span><span class="ml">Critical path<em>The heaviest chain, entry point down</em></span><kbd>p</kbd></button>
+  <label class="mrow" id="prunerow"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg></span><span class="ml">Hide the small<em>Drop functions under a share of the run</em></span>
     <select id="prune">
       <option value="0">all</option>
       <option value="1">≥1%</option>
@@ -1168,11 +1342,11 @@ __APM_PANEL__<div id="menu" hidden>
     </select>
   </label>
   <div class="mh">Appearance</div>
-  <div class="mrow mstatic"><span class="mi">◐</span><span class="ml">Theme</span>
+  <div class="mrow mstatic"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></span><span class="ml">Theme</span>
     <span class="mseg" id="themeseg"></span>
   </div>
   <div class="mh" id="mh-help">Help</div>
-  <button id="helpbtn" class="mrow"><span class="mi">?</span><span class="ml">Keyboard shortcuts</span><kbd>?</kbd></button>
+  <button id="helpbtn" class="mrow"><span class="mi"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg></span><span class="ml">Keyboard shortcuts</span><kbd>?</kbd></button>
 </div>
 <div id="help" hidden><div class="card">
   <div class="hh">Keyboard</div>
@@ -1181,8 +1355,8 @@ __APM_PANEL__<div id="menu" hidden>
 </div></div>
 <div class="legend" id="legend">Sampled — cost is a share of samples, not instrumented time. Hotter = more self time.</div>
 <div id="nav">
-  <button id="prev" title="Previous frame (←)">◀</button>
-  <button id="next" title="Next frame (→)">▶</button>
+  <button id="prev" title="Previous frame (←)" aria-label="Previous frame"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+  <button id="next" title="Next frame (→)" aria-label="Next frame"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
   <div class="pills" id="pills"></div>
   <label class="tog"><input type="checkbox" id="diff"> Δ vs previous</label>
   <button class="live" id="live" title="Follow latest / pause (l)"><span class="dot"></span><span id="livetext">live</span></button>
@@ -1190,6 +1364,23 @@ __APM_PANEL__<div id="menu" hidden>
 </div>
 <script>
 const DATA = __DATA_JSON__;
+// Outlined icons (24 grid, 2px stroke, currentColor) in place of emoji, so they
+// follow the theme and read the same on every system; the page stays offline.
+const ICONS = {
+  graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7.6 8.1l3 7.6M16.4 8.1l-3 7.6"/>',
+  flame: '<path d="M12 3c.8 3 5 5.2 5 10a5 5 0 0 1-10 0c0-2.6 1.4-4.2 2.6-5.2.2 1.6.9 2.6 1.9 3.2.6-3-.4-5.6.5-8z"/>',
+  db: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+  code: '<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  timer: '<circle cx="12" cy="13.5" r="7"/><path d="M12 10v3.5l2.5 2M10 3h4"/>',
+  memory: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 3v3M14.5 3v3M9.5 18v3M14.5 18v3M3 9.5h3M3 14.5h3M18 9.5h3M18 14.5h3"/>',
+  drop: '<path d="M12 3.5c3 4 6 7.2 6 10.5a6 6 0 0 1-12 0c0-3.3 3-6.5 6-10.5z"/>',
+  hourglass: '<path d="M7 3h10M7 21h10M8 3v3.5l4 5.5-4 5.5V21M16 3v3.5L12 12l4 5.5V21"/>',
+  outbound: '<path d="M7 17L17 7M9 7h8v8"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.4 2.5 3.5 5.5 3.5 9s-1.1 6.5-3.5 9c-2.4-2.5-3.5-5.5-3.5-9s1.1-6.5 3.5-9z"/>',
+  hash: '<path d="M5 9h14M5 15h14M10.5 4l-2 16M15.5 4l-2 16"/>',
+};
+function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 // The page's chrome — theme, header hints, the ☰ menu — set up apart from the
 // call graph and before it. The graph script stops early on a page with no
 // profile yet (a monitor page before its first capture), and the menu and the
@@ -1326,13 +1517,14 @@ const PAGE = (function() {
   }
 
   const NS = 'http://www.w3.org/2000/svg';
-  const W = 190, H = 46, GAPX = 34, GAPY = 78;
+  const W = 236, H = 52, GAPX = 32, GAPY = 74;
   const vp = document.getElementById('viewport'), tip = document.getElementById('tip');
   const nav = document.getElementById('nav'), pills = document.getElementById('pills');
   const navlabel = document.getElementById('navlabel'), liveBtn = document.getElementById('live');
   const diffBox = document.getElementById('diff'), metricbar = document.getElementById('metricbar');
   const stage = document.getElementById('stage'), svg = document.getElementById('svg');
   const fnlist = document.getElementById('fnlist'), sortlabel = document.getElementById('sortlabel');
+  const scopeEls = [...document.querySelectorAll('#scopeseg button')];
   const searchInput = document.getElementById('search'), dragger = document.getElementById('dragger');
   const critbtn = document.getElementById('critbtn'), pruneSel = document.getElementById('prune');
   const flame = document.getElementById('flame'), flamebtn = document.getElementById('flamebtn');
@@ -1360,6 +1552,12 @@ const PAGE = (function() {
   // Which dimension colors the graph: 'time' (self time share) or 'mem' (self
   // allocation share). Memory is only available under --instrument.
   let metric = 'time';
+  // Which cost the list ranks and the boxes show: a function's own ('self',
+  // exclusive) or its own plus its callees' ('incl', inclusive), as Blackfire
+  // splits them. The heat stays on the own cost whatever the choice: ranked by
+  // inclusive cost the entry point is always first, and colour would stop
+  // pointing at the function that does the work.
+  let scope = 'self';
   const hasMem = !!DATA.exact && FRAMES.some(f => f.totalAllocs > 0);
   const hasIo = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.ioInclN || 0) > 0));
   const hasRet = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.retInclN || 0) !== 0));
@@ -1368,14 +1566,14 @@ const PAGE = (function() {
   const hasNetworkWait = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.networkWaitInclN || 0) > 0));
   // Selectable cost dimensions (Blackfire-style). Availability depends on data.
   const METRICS = [
-    { key: 'time',  label: 'Time',     icon: '⏱', on: !!DATA.exact },
-    { key: 'mem',   label: 'Memory',   icon: '🧠', on: hasMem },
-    { key: 'ret',   label: 'Retained', icon: '💧', on: hasRet },
-    { key: 'wait',  label: 'Wait',     icon: '⏳', on: hasWait },
-    { key: 'io',    label: 'SQL',      icon: '🗄', on: hasIo },
-    { key: 'network', label: 'Network', icon: '↗', on: hasNetwork },
-    { key: 'networkWait', label: 'Net wait', icon: '🌐', on: hasNetworkWait },
-    { key: 'calls', label: 'Calls',    icon: '#',  on: !!DATA.exact },
+    { key: 'time',  label: 'Time',     icon: 'timer', on: !!DATA.exact },
+    { key: 'mem',   label: 'Memory',   icon: 'memory', on: hasMem },
+    { key: 'ret',   label: 'Retained', icon: 'drop', on: hasRet },
+    { key: 'wait',  label: 'Wait',     icon: 'hourglass', on: hasWait },
+    { key: 'io',    label: 'SQL',      icon: 'db', on: hasIo },
+    { key: 'network', label: 'Network', icon: 'outbound', on: hasNetwork },
+    { key: 'networkWait', label: 'Net wait', icon: 'globe', on: hasNetworkWait },
+    { key: 'calls', label: 'Calls',    icon: 'hash', on: !!DATA.exact },
   ];
   // Per-frame scales used to color the io / calls / retained dimensions.
   let frameIoTotal = 0, frameNetworkTotal = 0, frameCallMax = 1, frameRetMax = 1;
@@ -1421,6 +1619,32 @@ const PAGE = (function() {
   }
   // Signed retained count, formatted with an explicit sign so a net release reads.
   function fmtSigned(v) { return (v > 0 ? '+' : '') + fmtK(Math.abs(v)).replace(/^/, v < 0 ? '-' : ''); }
+  // The cost the list ranks by and the boxes print: own or inclusive, per the
+  // Self / Inclusive switch. Calls have no inclusive form; they read the same.
+  function scopedShare(n) { return scope === 'incl' ? nodeInclShare(n) : nodeShare(n); }
+  function scopedValue(n) { return scope === 'incl' ? metricInclValue(n) : metricValue(n); }
+  function scopedSub(n) { return scope === 'incl' ? metricSelfSub(n) : metricSub(n); }
+  function metricInclValue(n) {
+    if (metric === 'mem') return fmtK(n.allocInclN || 0);
+    if (metric === 'io') return (n.ioInclN || 0) + ' q';
+    if (metric === 'network') return (n.networkInclN || 0) + ' ops';
+    if (metric === 'networkWait') return fmtNs(n.networkWaitInclN || 0);
+    if (metric === 'calls') return fmtK(n.calls || 0);
+    if (metric === 'ret') return fmtSigned(n.retInclN || 0);
+    if (metric === 'wait') return fmtNs(n.waitInclN || 0);
+    return n.incl.toFixed(1) + '%';
+  }
+  // Under the inclusive figure, the own one, so the two stay side by side.
+  function metricSelfSub(n) {
+    if (metric === 'mem') return 'self ' + fmtK(n.allocExclN || 0) + ' allocs';
+    if (metric === 'io') return 'self ' + (n.ioExclN || 0) + ' q';
+    if (metric === 'network') return 'self ' + (n.networkExclN || 0) + ' network ops';
+    if (metric === 'networkWait') return 'self network wait ' + fmtNs(n.networkWaitExclN || 0);
+    if (metric === 'calls') return 'incl ' + n.incl.toFixed(0) + '% time';
+    if (metric === 'ret') return 'self ' + fmtSigned(n.retExclN || 0) + ' retained';
+    if (metric === 'wait') return 'self wait ' + fmtNs(n.waitExclN || 0);
+    return 'self ' + n.excl.toFixed(1) + '%';
+  }
   function metricValue(n) {
     if (metric === 'mem') return fmtK(n.allocExclN || 0);
     if (metric === 'io') return (n.ioExclN || 0) + ' q';
@@ -1488,9 +1712,41 @@ const PAGE = (function() {
     return pale.map((p, i) => Math.round(p + (tgt[i] - p) * f));
   }
   function diffFill(d) { const c = diffRgb(d); return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; }
-  function diffInk(d) { const c = diffRgb(d); return (0.299*c[0] + 0.587*c[1] + 0.114*c[2]) < 150 ? '#fff8f4' : '#201a17'; }
   function ink(excl) { const c = heatRgb(excl); return (0.299*c[0] + 0.587*c[1] + 0.114*c[2]) < 150 ? '#fff8f4' : '#201a17'; }
   function clip(s, n) { return s.length > n ? s.slice(0, n-1) + '…' : s; }
+  // A function's name for a card: the method is what a reader looks for, so it
+  // is kept whole. A long name first loses its namespace, then the middle of
+  // its class; only a name that still does not fit is cut at the end. The full
+  // name is the card's tooltip.
+  function shortName(name, n) {
+    if (name.length <= n) return name;
+    const ci = name.indexOf('::');
+    const owner = ci > 0 ? name.slice(0, ci) : name, member = ci > 0 ? name.slice(ci) : '';
+    const s = owner.slice(owner.lastIndexOf('\\') + 1) + member;
+    if (s.length <= n) return s;
+    const keep = n - member.length - 1;
+    if (member && keep >= 5) { const cls = s.slice(0, s.length - member.length);
+      const head = Math.ceil(keep / 2), tail = keep - head;
+      return cls.slice(0, head) + '…' + (tail ? cls.slice(-tail) : '') + member; }
+    return clip(s, n);
+  }
+  // The heat as a gauge: how far up its track a function's own cost reaches,
+  // on the same scale as its colour (a third of the run is full).
+  // A card name is fitted to the room its value leaves, measured in the page's
+  // own font: counting characters let a wide name (capitals, `::`) run into
+  // the figure beside it.
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  const cardFont = getComputedStyle(document.body).fontFamily;
+  function textW(s, weight) { if (!measureCtx) return s.length * 7; measureCtx.font = weight + ' 12px ' + cardFont; return measureCtx.measureText(s).width; }
+  function fitName(name, px) {
+    for (let n = name.length; n > 8; n--) { const s = shortName(name, n); if (textW(s, 500) <= px) return s; }
+    return shortName(name, 8);
+  }
+  function gaugePct(share) { return Math.max(0, Math.min(100, share * 3)); }
+  function setGauge(rect, share, fill) {
+    const track = H - 18, h = Math.max(3, track * gaugePct(share) / 100);
+    rect.setAttribute('y', 9 + track - h); rect.setAttribute('height', h); rect.setAttribute('fill', fill);
+  }
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   // esc() is for element content and leaves quotes alone; an attribute value
   // needs them escaped too or a name containing one would break out of it.
@@ -1573,15 +1829,24 @@ const PAGE = (function() {
       const g = document.createElementNS(NS, 'g');
       g.setAttribute('class', 'node');
       g.setAttribute('transform', 'translate(' + xy[v].x + ',' + xy[v].y + ')');
-      const r = document.createElementNS(NS, 'rect');
-      r.setAttribute('width', W); r.setAttribute('height', H); r.setAttribute('rx', 6);
-      g.appendChild(r);
-      const t1 = document.createElementNS(NS, 'text');
-      t1.setAttribute('x', 8); t1.setAttribute('y', 18); t1.setAttribute('class', 'nm');
-      t1.textContent = clip(name, 26); g.appendChild(t1);
-      const t2 = document.createElementNS(NS, 'text');
-      t2.setAttribute('x', 8); t2.setAttribute('y', 34); t2.setAttribute('class', 'sub');
-      g.appendChild(t2);
+      // A card on the surface, as in the Functions list: the heat as a stripe
+      // on its left, the name and its other figures, the chosen cost (self or
+      // inclusive) on the right over a bar.
+      const el = (tag, attrs) => { const e = document.createElementNS(NS, tag);
+        Object.keys(attrs).forEach(k => e.setAttribute(k, attrs[k])); g.appendChild(e); return e; };
+      el('rect', { class: 'card', width: W, height: H, rx: 10 });
+      // The heat is a gauge: a grey track the full height of the card, filled
+      // from the bottom as far as the heat reaches and in its colour, so a quiet
+      // function still shows a visible (short, pale) mark on the white card.
+      el('rect', { class: 'gauge', x: 7, y: 9, width: 4, height: H - 18, rx: 2 });
+      el('rect', { class: 'stripe', x: 7, y: H - 9, width: 4, height: 0, rx: 2 });
+      const t1 = el('text', { class: 'nm', x: 19, y: 22 });
+      t1.textContent = shortName(name, 26);
+      const ti = document.createElementNS(NS, 'title'); ti.textContent = name; g.appendChild(ti);
+      el('text', { class: 'sub', x: 19, y: 39 });
+      el('text', { class: 'pv', x: W - 11, y: 22, 'text-anchor': 'end' });
+      el('rect', { class: 'track', x: W - 51, y: 33, width: 40, height: 4, rx: 2 });
+      el('rect', { class: 'bar', x: W - 51, y: 33, width: 0, height: 4, rx: 2 });
       g.addEventListener('mousemove', ev => showTip(ev, name));
       g.addEventListener('mouseleave', hideTip);
       g.addEventListener('click', () => selectNode(v, false));
@@ -1625,7 +1890,7 @@ const PAGE = (function() {
   function highlight(v) {
     const near = new Set([v]);
     EDGES.forEach(e => { if (e.from === v) near.add(e.to); if (e.to === v) near.add(e.from); });
-    nodeEls.forEach((g, i) => g.classList.toggle('dim', !near.has(i)));
+    nodeEls.forEach((g, i) => { g.classList.toggle('dim', !near.has(i)); g.classList.toggle('sel', i === v); });
     edgeEls.forEach((p, k) => p.classList.toggle('hi', EDGES[k].from === v || EDGES[k].to === v));
   }
   // Clicking the background clears the selection — but the end of a pan lands
@@ -1650,32 +1915,37 @@ const PAGE = (function() {
     computeScales(fN);
     const prev = (diffOn && i > 0) ? frameNode[i-1] : null;
     const prevE = (diffOn && i > 0) ? frameEdge[i-1] : null;
+    // The card bars compare with the frame's largest figure in the chosen scope.
+    let topShare = 0; fN.forEach(n => { topShare = Math.max(topShare, scopedShare(n)); });
+    topShare = topShare || 1;
     NAMES.forEach((name, v) => {
       const g = nodeEls[v], n = fN.get(name);
-      const rect = g.querySelector('rect'), nm = g.querySelector('.nm'), sub = g.querySelector('.sub');
+      const stripe = g.querySelector('.stripe'), sub = g.querySelector('.sub'), pv = g.querySelector('.pv'), bar = g.querySelector('.bar'), nm = g.querySelector('.nm');
       if (!n) {
         g.classList.add('absent'); g.classList.remove('hotter', 'grew', 'shrank', 'newfn');
         // In diff mode, a node present in the baseline but gone now is "removed".
         g.classList.toggle('removed', !!(prev && prev.get(name)));
-        // ink(0), not a literal: the cold end of the ramp is pale on a light
-        // ground and dark on a dark one, so the label has to follow it.
-        rect.setAttribute('fill', heat(0)); nm.setAttribute('fill', ink(0)); sub.setAttribute('fill', ink(0)); sub.textContent = ''; return;
+        setGauge(stripe, 0, heat(0)); sub.textContent = ''; pv.textContent = ''; bar.setAttribute('width', 0); return;
       }
       g.classList.remove('absent', 'removed');
       const share = nodeShare(n);
-      let fill = heat(share), tone = ink(share);
+      let fill = heat(share);
       g.classList.remove('hotter', 'grew', 'shrank', 'newfn');
       if (prev) {
         const p = prev.get(name);
         if (!p) { g.classList.add('newfn'); }             // appeared since the baseline
         else {
           const d = share - nodeShare(p);
-          if (d > 1.5) { g.classList.add('grew'); fill = diffFill(d); tone = diffInk(d); }
-          else if (d < -1.5) { g.classList.add('shrank'); fill = diffFill(d); tone = diffInk(d); }
+          if (d > 1.5) { g.classList.add('grew'); fill = diffFill(d); }
+          else if (d < -1.5) { g.classList.add('shrank'); fill = diffFill(d); }
         }
       }
-      rect.setAttribute('fill', fill); nm.setAttribute('fill', tone); sub.setAttribute('fill', tone);
+      setGauge(stripe, share, fill);
       sub.textContent = nodeSub(n);
+      pv.textContent = scopedValue(n);
+      const label = fitName(name, W - 19 - 24 - textW(pv.textContent, 600));
+      if (nm.textContent !== label) nm.textContent = label;
+      bar.setAttribute('width', Math.max(1, 40 * Math.min(1, scopedShare(n) / topShare)).toFixed(1));
     });
     edgeEls.forEach((p, k) => {
       const e = EDGES[k], pct = fE.get(e.key);
@@ -1713,24 +1983,28 @@ const PAGE = (function() {
     const q = (searchInput.value || '').toLowerCase();
     const fN = frameNode[cur];
     const mdef = METRICS.find(m => m.key === metric);
-    sortlabel.textContent = 'by ' + (mdef ? mdef.label.toLowerCase() : 'self time');
+    sortlabel.textContent = 'by ' + (scope === 'incl' ? 'inclusive ' : 'self ') + (mdef ? mdef.label.toLowerCase() : 'time');
+    scopeEls.forEach(b => b.classList.toggle('on', b.dataset.scope === scope));
     const rows = [];
     NAMES.forEach((name, v) => { const n = fN.get(name); if (n) rows.push({ name, v, n }); });
-    rows.sort((a, b) => nodeShare(b.n) - nodeShare(a.n));
+    rows.sort((a, b) => scopedShare(b.n) - scopedShare(a.n));
+    // Bars are relative to the list's largest figure, so the switch does not
+    // leave every inclusive bar pinned full.
+    const topShare = rows.reduce((m, r) => Math.max(m, scopedShare(r.n)), 0) || 1;
     fnlist.textContent = '';
     if (!rows.length) { const d = document.createElement('li'); d.id = 'empty'; d.textContent = 'no functions'; fnlist.appendChild(d); return; }
     const makeRow = r => {
       const n = r.n, share = nodeShare(n);
       const li = document.createElement('li');
       li.className = 'fnrow' + (r.v === selected ? ' sel' : '') + (q && !r.name.toLowerCase().includes(q) ? ' hide' : '');
-      const val = metricValue(n);
-      let sub = metricSub(n);
+      const val = scopedValue(n);
+      let sub = scopedSub(n);
       if (n.calls != null && metric !== 'calls') sub += ' · ' + n.calls + (n.calls === 1 ? ' call' : ' calls');
       const qb = (n.ioExclN > 0 && metric !== 'io') ? '<span class="qbadge">' + n.ioExclN + ' q</span>' : '';
       li.innerHTML =
-        '<span class="sw" style="background:' + heat(share) + '"></span>' +
-        '<span class="nm"><span class="n">' + esc(r.name) + qb + '</span><span class="m2">' + sub + '</span></span>' +
-        '<span class="val"><span class="pv">' + val + '</span><span class="mini"><i style="width:' + Math.min(100, share * 3) + '%"></i></span></span>';
+        '<span class="sw"><i style="height:' + gaugePct(share) + '%;background:' + heat(share) + '"></i></span>' +
+        '<span class="nm"><span class="n"><span class="nt" title="' + escAttr(r.name) + '">' + esc(r.name) + '</span>' + qb + '</span><span class="m2">' + sub + '</span></span>' +
+        '<span class="val"><span class="pv">' + val + '</span><span class="mini"><i style="width:' + Math.min(100, 100 * scopedShare(n) / topShare).toFixed(1) + '%"></i></span></span>';
       if (r.v === selected) li.classList.add('open');
       // A second click on the open function folds it.
       li.addEventListener('click', () => { if (r.v === selected) clearSelection(); else selectNode(r.v, true); });
@@ -1742,7 +2016,8 @@ const PAGE = (function() {
       // keep the metric order. Headers collapse the group.
       const groups = new Map();
       rows.forEach(r => { const k = groupKey(r.name); let g = groups.get(k);
-        if (!g) { g = { key: k, rows: [], agg: 0 }; groups.set(k, g); } g.rows.push(r); g.agg += nodeShare(r.n); });
+        if (!g) { g = { key: k, rows: [], agg: 0 }; groups.set(k, g); } g.rows.push(r);
+        g.agg = scope === 'incl' ? Math.max(g.agg, scopedShare(r.n)) : g.agg + nodeShare(r.n); });
       [...groups.values()].sort((a, b) => b.agg - a.agg).forEach(g => {
         const isColl = collapsed.has(g.key);
         const anyMatch = !q || g.rows.some(r => r.name.toLowerCase().includes(q));
@@ -1753,7 +2028,7 @@ const PAGE = (function() {
         h.addEventListener('click', () => { if (collapsed.has(g.key)) collapsed.delete(g.key); else collapsed.add(g.key); buildList(); });
         fnlist.appendChild(h);
         if (!isColl) g.rows.forEach(r => { const li = makeRow(r); li.classList.add('ingroup'); fnlist.appendChild(li);
-          if (r.v === selected) fnlist.appendChild(detailItem(li)); });
+          if (r.v === selected) { const d = detailItem(li); d.classList.add('ingroup'); fnlist.appendChild(d); } });
       });
     } else {
       rows.forEach(r => { const li = makeRow(r); fnlist.appendChild(li); if (r.v === selected) fnlist.appendChild(detailItem(li)); });
@@ -1842,12 +2117,230 @@ const PAGE = (function() {
     return li;
   }
 
+  // --- timeline: the Flame view's other mode, as Blackfire draws it ---
+  // Every call where and when it ran (rows by depth, on a time axis), the heap
+  // in bytes behind them, and an overview of the whole run to pick a range on.
+  // Only a launched exact run carries one (`DATA.timeline`, written by
+  // monitor::timeline). Drawn on canvases: a request makes tens of thousands of
+  // calls, more than the DOM draws smoothly.
+  const TL = DATA.timeline || null;
+  let flameMode = TL ? 'timeline' : 'merged';
+  let tlT0 = 0, tlT1 = TL ? TL.totalNs : 1, tlPick = -1, tlDrag = null, tlDragEnd = 0;
+  const TL_SPANS = [];
+  let TL_DEPTH = 1, TL_PEAK = 1;
+  const TL_ROW = 22, TL_GUTTER = 64, TL_AXIS = 22;
+  if (TL) {
+    const a = TL.spans || [];
+    // Each call's own time comes measured over every recorded call, before the cut to
+    // the longest: a callee the page does not draw is not its caller's work (review).
+    for (let i = 0; i + 6 < a.length; i += 7) TL_SPANS.push({ n: a[i], d: a[i + 1], s: a[i + 2], len: a[i + 3], own: a[i + 4], hs: a[i + 5], he: a[i + 6] });
+    TL_SPANS.forEach(sp => { if (sp.d + 1 > TL_DEPTH) TL_DEPTH = sp.d + 1; });
+    const m = TL.memory || [];
+    for (let i = 1; i < m.length; i += 2) TL_PEAK = Math.max(TL_PEAK, m[i]);
+  }
+  function fmtBytes(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MiB' : b >= 1024 ? (b / 1024).toFixed(0) + ' KiB' : b + ' B'; }
+  // The heap at `t`: the last reading at or before it.
+  function memAt(t) {
+    const m = TL.memory; let lo = 0, hi = m.length / 2 - 1;
+    if (hi < 0) return 0;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (m[mid * 2] <= t) lo = mid; else hi = mid - 1; }
+    return m[lo * 2 + 1];
+  }
+  // A call wears its function's heat: the function's own time over the run,
+  // as in the graph and the list, so repeated short calls of a hot function
+  // read hot together.
+  function tlHeat(n) { const node = frameNode[cur] && frameNode[cur].get(TL.names[n]); return node ? node.excl : 0; }
+  function tlColors() {
+    const cs = getComputedStyle(document.documentElement), v = k => cs.getPropertyValue(k).trim();
+    return { ink: v('--ink'), muted: v('--muted'), border: v('--border'), accent: v('--accent'), mem: v('--mem'), memLine: v('--mem-line'), panel: v('--panel') };
+  }
+  function niceStep(range, n) { const raw = range / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
+  function tlTicks(a, b, n) { const st = niceStep(Math.max(1, b - a), n), out = []; for (let v = Math.ceil(a / st) * st; v <= b; v += st) out.push(v); return out; }
+  function tlFmt(ns) { return ns === 0 ? '0' : fmtNs(Math.round(ns)); }
+  function fitText(g, s, w) {
+    if (g.measureText(s).width <= w) return s;
+    let lo = 0, hi = s.length;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (g.measureText(s.slice(0, mid) + '…').width <= w) lo = mid; else hi = mid - 1; }
+    return lo > 1 ? s.slice(0, lo) + '…' : '';
+  }
+  function tlCanvas(id, h) {
+    const cv = document.getElementById(id); if (!cv) return null;
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth;
+    cv.style.height = h + 'px'; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    return { cv, g, w, h };
+  }
+  function tlMemArea(g, x0, w, top, h, a, b, C) {
+    const steps = Math.max(2, Math.min(Math.round(w), 1600));
+    g.beginPath(); g.moveTo(x0, top + h);
+    for (let i = 0; i <= steps; i++) { const t = a + (b - a) * i / steps; g.lineTo(x0 + w * i / steps, top + h - memAt(t) / TL_PEAK * h * 0.92); }
+    g.lineTo(x0 + w, top + h); g.closePath(); g.fillStyle = C.mem; g.fill();
+    g.beginPath();
+    for (let i = 0; i <= steps; i++) { const t = a + (b - a) * i / steps, y = top + h - memAt(t) / TL_PEAK * h * 0.92; if (i) g.lineTo(x0 + w * i / steps, y); else g.moveTo(x0, y); }
+    g.strokeStyle = C.memLine; g.lineWidth = 1; g.stroke();
+  }
+  function drawTlOverview() {
+    const c = tlCanvas('tlover', 96); if (!c) return;
+    const { g, w, h } = c, C = tlColors(), total = TL.totalNs;
+    tlMemArea(g, 0, w, 0, h, 0, total, C);
+    const rowH = Math.max(1.5, Math.min(5, (h - 8) / TL_DEPTH));
+    const last = [];
+    TL_SPANS.forEach(sp => {
+      const x0 = sp.s / total * w, x1 = Math.max(x0 + 1, (sp.s + sp.len) / total * w);
+      if (last[sp.d] !== undefined && x1 <= last[sp.d]) return;
+      last[sp.d] = x1;
+      g.fillStyle = heat(tlHeat(sp.n)); g.fillRect(x0, 4 + sp.d * rowH, Math.max(1, x1 - x0 - 0.5), Math.max(1, rowH - 1));
+    });
+    const brush = document.getElementById('tlbrush'), dl = document.getElementById('tldiml'), dr = document.getElementById('tldimr');
+    const pct = t => (t / total * 100).toFixed(3) + '%';
+    if (brush) { brush.style.left = pct(tlT0); brush.style.width = pct(tlT1 - tlT0); }
+    if (dl) dl.style.width = pct(tlT0);
+    if (dr) dr.style.width = pct(total - tlT1);
+    const ax = document.getElementById('tloverax');
+    if (ax) ax.innerHTML = tlTicks(0, total, 9).map(v => '<span style="left:' + pct(v) + '">' + tlFmt(v) + '</span>').join('');
+  }
+  function drawTlMain() {
+    const height = TL_AXIS + 8 + TL_DEPTH * TL_ROW;
+    const c = tlCanvas('tlmain', Math.max(320, height)); if (!c) return;
+    const { g, w, h } = c, C = tlColors();
+    const plotW = w - TL_GUTTER, plotH = h - TL_AXIS, span = Math.max(1, tlT1 - tlT0);
+    const X = t => TL_GUTTER + (t - tlT0) / span * plotW;
+    tlMemArea(g, TL_GUTTER, plotW, TL_AXIS, plotH, tlT0, tlT1, C);
+    g.font = '11px ' + cardFont; g.textBaseline = 'middle';
+    tlTicks(tlT0, tlT1, 10).forEach(v => {
+      const x = X(v); g.fillStyle = C.border; g.fillRect(Math.round(x), TL_AXIS, 1, plotH);
+      g.fillStyle = C.muted; g.textAlign = 'center'; g.fillText(tlFmt(v), Math.min(w - 24, Math.max(TL_GUTTER + 18, x)), TL_AXIS / 2);
+    });
+    g.fillStyle = C.border; g.fillRect(TL_GUTTER, TL_AXIS - 1, plotW, 1);
+    g.textAlign = 'right'; g.fillStyle = C.muted;
+    [0.25, 0.5, 0.75, 1].forEach(f => g.fillText(fmtBytes(Math.round(TL_PEAK / 0.92 * f)), TL_GUTTER - 8, TL_AXIS + plotH * (1 - f) + (f === 1 ? 7 : 0)));
+    g.textAlign = 'left'; g.font = '500 12px ' + cardFont;
+    const last = [];
+    let picked = null;
+    for (let i = 0; i < TL_SPANS.length; i++) {
+      const sp = TL_SPANS[i];
+      if (sp.s > tlT1) break;
+      if (sp.s + sp.len < tlT0) continue;
+      let x0 = Math.max(X(sp.s), TL_GUTTER), x1 = Math.min(X(sp.s + sp.len), w);
+      if (x1 - x0 < 1) { if (last[sp.d] !== undefined && x0 < last[sp.d]) continue; x1 = x0 + 1; }
+      last[sp.d] = x1;
+      const y = TL_AXIS + 4 + sp.d * TL_ROW, excl = tlHeat(sp.n);
+      g.fillStyle = heat(excl);
+      const bw = Math.max(1, x1 - x0 - 1.5);
+      if (bw > 6 && g.roundRect) { g.beginPath(); g.roundRect(x0, y, bw, TL_ROW - 3, 4); g.fill(); } else g.fillRect(x0, y, bw, TL_ROW - 3);
+      if (bw > 30) { const label = fitText(g, TL.names[sp.n], bw - 12); if (label) { g.fillStyle = ink(excl); g.fillText(label, x0 + 6, y + (TL_ROW - 3) / 2 + 0.5); } }
+      if (i === tlPick) picked = { x0, y, bw };
+    }
+    if (picked) { g.strokeStyle = C.accent; g.lineWidth = 2.5; g.strokeRect(picked.x0 + 1, picked.y + 1, picked.bw - 2, TL_ROW - 5); }
+  }
+  // The call under a point of the main canvas, or -1.
+  function tlHit(ev) {
+    const cv = document.getElementById('tlmain'); if (!cv) return -1;
+    const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+    const d = Math.floor((y - TL_AXIS - 4) / TL_ROW);
+    if (x < TL_GUTTER || d < 0 || d >= TL_DEPTH) return -1;
+    const t = tlT0 + (x - TL_GUTTER) / (r.width - TL_GUTTER) * (tlT1 - tlT0);
+    for (let i = TL_SPANS.length - 1; i >= 0; i--) { const sp = TL_SPANS[i]; if (sp.d === d && sp.s <= t && sp.s + sp.len >= t) return i; }
+    return -1;
+  }
+  function tlZoom(a, b) { const total = TL.totalNs; const min = Math.max(1, total / 1e6); tlT0 = Math.max(0, a); tlT1 = Math.min(total, Math.max(b, tlT0 + min)); }
+  function buildTimeline() {
+    const picked = TL_SPANS[tlPick];
+    const zoomed = tlT0 > 0 || tlT1 < TL.totalNs;
+    let head = '<div class="phead"><span class="pt">Flame</span>' + flameModeSwitch() +
+      '<span class="pchip">range <b>' + tlFmt(tlT0) + ' – ' + fmtNs(Math.round(tlT1)) + '</b></span>' +
+      (picked ? '<span class="pchip"><b>' + esc(TL.names[picked.n]) + '</b></span>' : '') +
+      (zoomed ? '<a href="#" id="tlhome" class="pbtn">Whole run</a>' : '') +
+      '<span class="pnote">drag on the overview to pick a range &middot; click a call to zoom on it &middot; wheel to zoom</span>' +
+      '<span class="tl-key"><i class="mem"></i>memory in use<i class="own"></i>own time</span></div>';
+    // What the page leaves out: the longest calls kept of those recorded, and the calls
+    // past the recording limit, which were not recorded at all (review).
+    const notes = [];
+    if (TL.shown < TL.recorded) notes.push(TL.shown + ' longest of ' + TL.recorded + ' calls shown');
+    if (TL.dropped > 0) notes.push(TL.dropped + ' later calls past the recording limit not recorded');
+    const note = notes.length ? '<div class="tl-note">' + notes.join(' &middot; ') + '</div>' : '';
+    let detail = '';
+    if (picked) {
+      // The call's own heap readings, at its start and its end: the chart's curve keeps each
+      // slice's peak only, and read from it a call's change could show zero (review).
+      const before = picked.hs, after = picked.he, delta = after - before;
+      detail = '<div class="pcard tl-detail"><span class="sw" style="background:' + heat(tlHeat(picked.n)) + '"></span>' +
+        '<span class="tl-dn"><b>' + esc(TL.names[picked.n]) + '</b><span>starts at ' + tlFmt(picked.s) + ' &middot; lasts ' + fmtNs(picked.len) + ' &middot; depth ' + picked.d + '</span></span>' +
+        [['Wall time', fmtNs(picked.len)], ['Own time', fmtNs(picked.own)], ['Memory at start', fmtBytes(before)],
+         ['Memory change', (delta < 0 ? '−' : '+') + fmtBytes(Math.abs(delta))]]
+          .map(f => '<span class="tl-fig"><span>' + f[0] + '</span><b>' + f[1] + '</b></span>').join('') + '</div>';
+    }
+    flame.innerHTML = head + '<div class="pcard tl">' +
+      '<div class="tl-overax" id="tloverax"></div>' +
+      '<div class="tl-over" id="tloverwrap"><canvas id="tlover"></canvas><div class="tl-dim l" id="tldiml"></div><div class="tl-dim r" id="tldimr"></div><div class="tl-brush" id="tlbrush"></div></div>' +
+      '<canvas id="tlmain" class="tl-main"></canvas>' + note + '</div>' + detail;
+    drawTlOverview(); drawTlMain();
+    bindFlameModeSwitch();
+    const home = document.getElementById('tlhome');
+    if (home) home.addEventListener('click', ev => { ev.preventDefault(); tlT0 = 0; tlT1 = TL.totalNs; tlPick = -1; buildTimeline(); });
+    const over = document.getElementById('tloverwrap');
+    const at = ev => { const r = over.getBoundingClientRect(); return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * TL.totalNs; };
+    over.addEventListener('mousedown', ev => { ev.preventDefault(); tlDrag = at(ev);
+      const move = e => { const t = at(e); tlZoom(Math.min(tlDrag, t), Math.max(tlDrag, t)); drawTlOverview(); drawTlMain(); };
+      const up = e => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+        const t = at(e);
+        // A click without a drag frames an eighth of the run around it.
+        if (Math.abs(t - tlDrag) < TL.totalNs / 400) { const half = TL.totalNs / 16; tlZoom(t - half, t + half); }
+        tlDrag = null; tlDragEnd = Date.now(); buildTimeline(); };
+      window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); });
+    const main = document.getElementById('tlmain');
+    main.addEventListener('mousemove', ev => {
+      const i = tlHit(ev);
+      if (i < 0) { hideTip(); main.style.cursor = 'default'; return; }
+      main.style.cursor = 'pointer';
+      const sp = TL_SPANS[i];
+      tip.innerHTML = '<h3>' + esc(TL.names[sp.n]) + '</h3>' +
+        '<div class="row"><span>wall</span><b>' + fmtNs(sp.len) + '</b></div>' +
+        '<div class="row"><span>own</span><b>' + fmtNs(sp.own) + '</b></div>' +
+        '<div class="row"><span>starts at</span><b>' + tlFmt(sp.s) + '</b></div>' +
+        '<div class="row"><span>heap at its end</span><b>' + fmtBytes(memAt(sp.s + sp.len)) + '</b></div>';
+      tip.style.display = 'block'; tip.style.left = (ev.clientX + 14) + 'px'; tip.style.top = (ev.clientY + 12) + 'px';
+    });
+    main.addEventListener('mouseleave', hideTip);
+    main.addEventListener('click', ev => {
+      // The end of a drag on the overview is not a click on a call.
+      if (Date.now() - tlDragEnd < 400) return;
+      const i = tlHit(ev); if (i < 0) return;
+      const sp = TL_SPANS[i], pad = sp.len * 0.05;
+      tlPick = i; tlZoom(sp.s - pad, sp.s + sp.len + pad);
+      const v = nameId.get(TL.names[sp.n]);
+      if (v != null) { selected = v; highlight(v); buildList(); }
+      hideTip(); buildTimeline(); save();
+    });
+    // The wheel zooms around the pointer, as a map does.
+    main.addEventListener('wheel', ev => {
+      ev.preventDefault();
+      const r = main.getBoundingClientRect(), f = Math.max(0, Math.min(1, (ev.clientX - r.left - TL_GUTTER) / (r.width - TL_GUTTER)));
+      const span = tlT1 - tlT0, t = tlT0 + f * span, next = Math.min(TL.totalNs, span * Math.exp(ev.deltaY * 0.0025));
+      tlZoom(t - f * next, t - f * next + next); drawTlOverview(); drawTlMain();
+      const chip = flame.querySelector('.phead .pchip b'); if (chip) chip.textContent = tlFmt(tlT0) + ' – ' + fmtNs(Math.round(tlT1));
+    }, { passive: false });
+  }
+  function flameModeSwitch() {
+    if (!TL) return '';
+    return '<span class="pseg" id="flamemode" role="group" aria-label="Flame mode">' +
+      '<button data-mode="merged" class="' + (flameMode === 'merged' ? 'on' : '') + '" data-tip="Calls of one function merged into one bar; width is inclusive time">Merged</button>' +
+      '<button data-mode="timeline" class="' + (flameMode === 'timeline' ? 'on' : '') + '" data-tip="Every call where and when it ran, with the memory in use">Timeline</button></span>';
+  }
+  function bindFlameModeSwitch() {
+    flame.querySelectorAll('#flamemode button').forEach(b => b.addEventListener('click', () => {
+      if (flameMode === b.dataset.mode) return; flameMode = b.dataset.mode; hideTip(); buildFlame(); save();
+    }));
+  }
+  window.addEventListener('resize', () => { if (flameOn && TL && flameMode === 'timeline') { drawTlOverview(); drawTlMain(); } });
+
   // --- flame graph (icicle) built from the exact inclusive-time tree ---
   // Each edge's `pct` is the callee's inclusive time under that caller (a % of
   // the whole run), so a child cell's width is exactly that share of its
   // parent's width. Recursion is drawn once (we don't descend a cycle).
   function buildFlame() {
     if (!flameOn) return;
+    if (TL && flameMode === 'timeline') { buildTimeline(); return; }
     const fN = frameNode[cur], fE = frameEdge[cur];
     const out = NAMES.map(() => []), incoming = new Array(NAMES.length).fill(0);
     EDGES.forEach(e => { if (fE.get(e.key) != null) { out[e.from].push(e); incoming[e.to]++; } });
@@ -1883,9 +2376,12 @@ const PAGE = (function() {
     roots.forEach(v => { const w = Math.max(1e-4, inclOf(v)) / totalRoot; walk(v, x, w, 0, new Set()); x += w; });
     const W = Math.max(1, flame.clientWidth - 16), H = (maxDepth + 1) * ROWH;
     const rootLabel = (flameRoot >= 0 && nodeOf(flameRoot)) ? esc(NAMES[flameRoot]) : 'all roots';
-    let html = '<div class="frow">Flame · time · root: <b>' + rootLabel + '</b>' +
-      (flameRoot >= 0 ? ' · <a href="#" id="freset">⌂ reset</a>' : '') +
-      ' · click a frame to zoom, Esc to reset</div><div class="fcanvas" style="height:' + H + 'px">';
+    // A head that reads like the other panels': what is shown, from which root
+    // (a chip, with its way back), and how to use it; the bars sit in a card.
+    let html = '<div class="phead"><span class="pt">Flame</span>' + flameModeSwitch() + '<span class="pchip">root <b>' + rootLabel + '</b></span>' +
+      (flameRoot >= 0 ? '<a href="#" id="freset" class="pbtn">Back to all roots</a>' : '') +
+      '<span class="pnote">width is inclusive time, colour own time &middot; click a frame to zoom, Esc to reset</span></div>' +
+      '<div class="pcard fcard"><div class="fcanvas" style="height:' + H + 'px">';
     cells.forEach(c => {
       const label = c.w * W > 34 ? esc(c.name) + '  ' + c.incl.toFixed(1) + '%' : '';
       html += '<div class="fcell' + (c.v === selected ? ' sel' : '') + '" data-v="' + c.v +
@@ -1893,10 +2389,11 @@ const PAGE = (function() {
         ' style="left:' + (c.x * 100).toFixed(4) + '%;width:' + (c.w * 100).toFixed(4) + '%;top:' +
         (c.depth * ROWH) + 'px;background:' + heat(c.excl) + ';color:' + ink(c.excl) + '">' + label + '</div>';
     });
-    flame.innerHTML = html + '</div>';
+    flame.innerHTML = html + '</div></div>';
     flame.querySelectorAll('.fcell').forEach(el => el.addEventListener('click', () => {
       const v = +el.dataset.v; selected = v; flameRoot = v; highlight(v); buildList(); buildFlame(); save();
     }));
+    bindFlameModeSwitch();
     const rst = document.getElementById('freset');
     if (rst) rst.addEventListener('click', ev => { ev.preventDefault(); flameRoot = -1; buildFlame(); save(); });
   }
@@ -1915,25 +2412,56 @@ const PAGE = (function() {
   // --- SQL panel: distinct DB statements and their execution counts. Query
   // texts are normalized (literals -> ?), so an N+1's repeated statement folds
   // into one row whose count is the smoking gun. The heaviest few are flagged. ---
+  // The statements opened to show who ran them, kept across repaints.
+  const sqlOpen = new Set();
   function buildSql() {
     if (!sqlOn) return;
     const qs = (FRAMES[cur].queries || []).slice().sort((a, b) => b.count - a.count);
     const total = qs.reduce((s, q) => s + q.count, 0);
     const max = qs.length ? qs[0].count : 1;
-    let html = '<div class="qhead"><b>' + qs.length + '</b> distinct ' +
-      (qs.length === 1 ? 'statement' : 'statements') + ' · <b>' + total + '</b> executions</div>';
-    if (!qs.length) { sqlpanel.innerHTML = html + '<div class="qhead">no DB queries recorded</div>'; return; }
-    html += '<table><thead><tr><th>Runs</th><th></th><th>Statement</th></tr></thead><tbody>';
-    qs.forEach(q => {
+    let html = '<div class="phead"><span class="pt">Queries</span><span class="pnote"><b>' + qs.length + '</b> distinct ' +
+      (qs.length === 1 ? 'statement' : 'statements') + ' &middot; <b>' + total + '</b> executions</span></div>';
+    if (!qs.length) { sqlpanel.innerHTML = html + '<div class="pcard pempty">no DB queries recorded</div>'; return; }
+    html += '<div class="pcard"><table><thead><tr><th>Runs</th><th>Share</th><th>Statement</th></tr></thead><tbody>';
+    qs.forEach((q, i) => {
       const share = q.count / max;
+      const callers = q.callers || [];
+      const open = callers.length > 0 && sqlOpen.has(q.sql);
       // Flag a likely N+1: the same statement executed many times.
-      const warn = q.count >= 20 ? ' class="warn"' : '';
+      const cls = (q.count >= 20 ? 'warn' : '') + (callers.length ? ' qopen' : '') + (open ? ' open' : '');
       const badge = q.count >= 20 ? '<span class="qn1">N+1?</span>' : '';
-      html += '<tr' + warn + '><td class="qc">×' + q.count + '</td>' +
-        '<td class="qbar"><i style="width:' + Math.max(4, share * 100) + '%;background:' + heat(share * 33) + '"></i></td>' +
-        '<td class="qsql"><code>' + esc(q.sql) + '</code>' + badge + '</td></tr>';
+      const chevron = callers.length
+        ? '<svg class="ic qchev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>' : '';
+      html += '<tr class="' + cls + '" data-q="' + i + '"' + (callers.length ? ' aria-expanded="' + open + '" tabindex="0"' : '') + '>' +
+        '<td class="qc">' + chevron + '×' + q.count + '</td>' +
+        '<td class="qbar"><span class="qtrack"><i style="width:' + Math.max(4, share * 100) + '%;background:' + heat(share * 33) + '"></i></span></td>' +
+        '<td class="qsql"><code>' + esc(q.sql) + '</code>' + badge +
+        (callers.length ? '<span class="qfromn">' + callers.length + (callers.length === 1 ? ' caller' : ' callers') + '</span>' : '') + '</td></tr>';
+      if (open) {
+        // Who ran it: the application function above the driver, where it is
+        // declared, and how many of the statement's executions it made.
+        html += '<tr class="qfrom"><td></td><td colspan="2"><div class="qlist">' +
+          '<div class="qlh"><span>Called from</span><span>File</span><span>Runs</span><span>Share</span></div>' +
+          callers.map(c => {
+            const at = c.loc || '', cut = at.lastIndexOf('/'), short = cut >= 0 ? at.slice(cut + 1) : at;
+            return '<button class="qcaller" data-fn="' + escAttr(c.fn) + '"><span class="qfn">' + esc(c.fn) + '</span>' +
+              '<span class="qloc" title="' + escAttr(at) + '">' + (short ? esc(short) : '&mdash;') + '</span>' +
+              '<span class="qn">×' + c.n + '</span>' +
+              '<span class="qtrack"><i style="width:' + Math.max(3, 100 * c.n / q.count).toFixed(1) + '%"></i></span></button>';
+          }).join('') + '</div></td></tr>';
+      }
     });
-    sqlpanel.innerHTML = html + '</tbody></table>';
+    sqlpanel.innerHTML = html + '</tbody></table></div>';
+    sqlpanel.querySelectorAll('tr.qopen').forEach(row => {
+      const toggle = () => { const q = qs[+row.dataset.q]; if (sqlOpen.has(q.sql)) sqlOpen.delete(q.sql); else sqlOpen.add(q.sql); buildSql(); };
+      row.addEventListener('click', toggle);
+      row.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } });
+    });
+    // A caller opens in the function list, as a click in the graph would.
+    sqlpanel.querySelectorAll('.qcaller').forEach(b => b.addEventListener('click', () => {
+      const v = nameId.get(b.dataset.fn); if (v == null) return;
+      selected = v; highlight(v); buildList(); save();
+    }));
   }
   function setSql(on) {
     sqlOn = on;
@@ -1978,8 +2506,8 @@ const PAGE = (function() {
       ? total + ' samples attributed to ' + hits.size + ' lines &middot; share of the run per line'
       : funcs.length + ' measured function' + (funcs.length === 1 ? '' : 's') +
         ' &middot; self time per function (exact)';
-    let html = '<div class="shead"><b title="' + escAttr(LINES.file) + '">' + esc(base) +
-      '</b> &middot; ' + summary + '</div>';
+    let html = '<div class="phead"><span class="pt" title="' + escAttr(LINES.file) + '">' + esc(base) +
+      '</span><span class="pnote">' + summary + '</span></div><div class="pcard scode">';
     LINES.source.forEach((text, i) => {
       const n = i + 1;
       let cell = '<span class="sp"></span>', hot = false, tint = '';
@@ -2008,7 +2536,7 @@ const PAGE = (function() {
       html += '<div class="sline' + (hot ? ' hot' : '') + '"' + tint + '><span class="sn">' + n + '</span>' +
         cell + '<span class="sc">' + esc(text) + note + '</span></div>';
     });
-    srcpanel.innerHTML = html;
+    srcpanel.innerHTML = html + '</div>';
   }
   // --- checks panel: the performance budget, and how this run measured up.
   // Failures first — a gate is read when it is red, and the reason should not
@@ -2018,9 +2546,11 @@ const PAGE = (function() {
     const rank = { fail: 0, error: 1, pass: 2 };
     const rows = ASSERTS.slice().sort((a, b) => rank[a.status] - rank[b.status]);
     const n = s => ASSERTS.filter(a => a.status === s).length;
-    let html = '<div class="khead"><b>' + n('pass') + '</b> passed &middot; <b>' + n('fail') +
-      '</b> failed' + (n('error') ? ' &middot; <b>' + n('error') + '</b> not evaluated' : '') + '</div>';
-    if (!rows.length) { chkpanel.innerHTML = html + '<div class="knone">no assertions for this run</div>'; return; }
+    let html = '<div class="phead"><span class="pt">Checks</span><span class="pchip pass"><b>' + n('pass') + '</b> passed</span>' +
+      '<span class="pchip' + (n('fail') ? ' fail' : '') + '"><b>' + n('fail') + '</b> failed</span>' +
+      (n('error') ? '<span class="pchip"><b>' + n('error') + '</b> not evaluated</span>' : '') + '</div>';
+    if (!rows.length) { chkpanel.innerHTML = html + '<div class="pcard pempty">no assertions for this run</div>'; return; }
+    html += '<div class="pcard">';
     rows.forEach(a => {
       const measured = a.actual == null
         ? '<span class="kval">' + esc(a.note || '-') + '</span>'
@@ -2033,7 +2563,7 @@ const PAGE = (function() {
         (a.label ? '<span class="klabel">' + esc(a.label) + '</span>' : '') + '</span>' +
         measured + budget + '</div>';
     });
-    chkpanel.innerHTML = html;
+    chkpanel.innerHTML = html + '</div>';
   }
   // Counts read as integers; times keep their decimals.
   function fmtNum(v) { return Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(3); }
@@ -2074,7 +2604,7 @@ const PAGE = (function() {
   }
   function clearSelection() {
     selected = -1;
-    nodeEls.forEach(g => g.classList.remove('dim'));
+    nodeEls.forEach(g => g.classList.remove('dim', 'sel'));
     edgeEls.forEach(p => p.classList.remove('hi'));
     buildList();
   }
@@ -2123,6 +2653,8 @@ const PAGE = (function() {
   sqlbtn.addEventListener('click', () => setSql(!sqlOn));
   srcbtn.addEventListener('click', () => setSrc(!srcOn));
   groupbtn.addEventListener('click', () => { grouped = !grouped; groupbtn.classList.toggle('on', grouped); buildList(); save(); });
+  // Self / Inclusive: re-ranks the list and re-prints the boxes; the heat stays.
+  scopeEls.forEach(b => b.addEventListener('click', () => { if (scope === b.dataset.scope) return; scope = b.dataset.scope; paint(cur); }));
   // The graph-only tools are meaningless without exact per-edge weights.
   if (!DATA.exact) { critbtn.classList.add('off'); document.getElementById('prunerow').classList.add('off'); }
   if (hasQueries) sqlbtn.style.display = '';
@@ -2130,7 +2662,7 @@ const PAGE = (function() {
   // Offer grouping only when names actually carry a class or namespace.
   // (Explicit value: the default `display:none` lives in a CSS rule, so ''
   // would fall back to it rather than reveal the button.)
-  if (hasGroups) groupbtn.style.display = 'inline-block';
+  if (hasGroups) groupbtn.style.display = 'inline-grid';
 
   // --- navigator / pills ---
   if (DATA.live || FRAMES.length > 1) { nav.classList.add('show'); document.body.classList.add('hasnav'); }
@@ -2203,7 +2735,7 @@ const PAGE = (function() {
     metricbar.classList.add('show');
     availMetrics.forEach(m => {
       const b = document.createElement('button');
-      b.innerHTML = '<span class="g">' + m.icon + '</span><span>' + m.label + '</span>';
+      b.innerHTML = '<span class="g">' + icon(m.icon) + '</span><span>' + m.label + '</span>';
       b.dataset.tip = 'Colour every function by ' + m.label.toLowerCase() +
         ' \u2014 the list re-sorts too (m cycles)';
       b.addEventListener('click', () => setMetric(m.key));
@@ -2217,15 +2749,15 @@ const PAGE = (function() {
   // independent on/off buttons made the exclusivity invisible and ate header
   // width the fixed-height bar cannot spare.
   const VIEWS = [
-    { key: 'graph', label: 'Graph',   icon: '🕸', on: () => true,
+    { key: 'graph', label: 'Graph',   icon: 'graph', on: () => true,
       hint: 'Who calls whom, one box per function' },
-    { key: 'flame', label: 'Flame',   icon: '🔥', on: () => !!DATA.exact,
+    { key: 'flame', label: 'Flame',   icon: 'flame', on: () => !!DATA.exact,
       hint: 'The same tree as nested bars, width = time. Click to zoom (f)' },
-    { key: 'sql',   label: 'Queries', icon: '🗄', on: () => hasQueries,
+    { key: 'sql',   label: 'Queries', icon: 'db', on: () => hasQueries,
       hint: 'Every distinct DB statement and how many times it ran (q)' },
-    { key: 'src',   label: 'Source',  icon: '📄', on: () => !!LINES,
+    { key: 'src',   label: 'Source',  icon: 'code', on: () => !!LINES,
       hint: 'Your PHP file with the cost of each line (s)' },
-    { key: 'chk',   label: 'Checks',  icon: '✅', on: () => ASSERTS.length > 0,
+    { key: 'chk',   label: 'Checks',  icon: 'check', on: () => ASSERTS.length > 0,
       hint: 'The performance budget and what this run measured (c)' },
   ];
   const viewbar = document.getElementById('viewbar');
@@ -2249,7 +2781,7 @@ const PAGE = (function() {
     viewbar.classList.add('show');
     avail.forEach(v => {
       const b = document.createElement('button');
-      b.innerHTML = '<span class="g">' + v.icon + '</span><span>' + v.label + '</span>';
+      b.innerHTML = '<span class="g">' + icon(v.icon) + '</span><span>' + v.label + '</span>';
       b.dataset.tip = v.hint;
       b.addEventListener('click', () => setView(v.key));
       viewbar.appendChild(b);
@@ -2319,6 +2851,7 @@ const PAGE = (function() {
     else if (ev.key === '0' || ev.key === 'Home') fitView(false);
     else if (ev.key === 'r' || ev.key === 'R') resetAll();
     else if (ev.key === 'Escape' && flameOn && flameRoot >= 0) { flameRoot = -1; buildFlame(); save(); }
+    else if (ev.key === 'Escape' && flameOn && TL && flameMode === 'timeline' && (tlT0 > 0 || tlT1 < TL.totalNs)) { tlT0 = 0; tlT1 = TL.totalNs; tlPick = -1; buildFlame(); }
     else if ((ev.key === 'm' || ev.key === 'M') && availMetrics.length > 1) {
       const idx = availMetrics.findIndex(x => x.key === metric);
       setMetric(availMetrics[(idx + 1) % availMetrics.length].key);
@@ -2336,6 +2869,9 @@ const PAGE = (function() {
   // True while nobody has moved the view by hand: an automatic framing may be
   // recomputed, a chosen one must never be.
   let viewIsAuto = true;
+  // The smallest scale an arrival framing goes to: card names (12 px) still
+  // read at about 9 px.
+  const READABLE_SCALE = 0.75;
   function fitView(auto) {
     const rect = svg.getBoundingClientRect();
     // The page can be laid out before it has been given a size — an artifact
@@ -2361,6 +2897,23 @@ const PAGE = (function() {
       (rect.height - pad * 2) / spanY)));
     tx = (rect.width - spanX * scale) / 2 - minX * scale;
     ty = (rect.height - spanY * scale) / 2 - minY * scale;
+    // On arrival, a graph too big to fit at a readable size opens readable
+    // instead: the top of the tree, centred on its entry point, at the smallest
+    // scale whose card text still reads. A request of a real application has
+    // dozens of functions, and fitting all of them shrank every card to a
+    // smudge. Fit in view (0) still frames the whole graph.
+    if (auto && scale < READABLE_SCALE) {
+      scale = READABLE_SCALE;
+      let rootX = 0, roots = 0;
+      NAMES.forEach((name, v) => {
+        const g = nodeEls[v];
+        if (!g || !xy[v] || g.classList.contains('pruned') || g.classList.contains('absent') || xy[v].y !== minY) return;
+        rootX += xy[v].x + W / 2; roots++;
+      });
+      const centre = roots ? rootX / roots : (minX + maxX) / 2;
+      tx = rect.width / 2 - centre * scale;
+      ty = pad - minY * scale;
+    }
     apply(); save();
     return true;
   }
@@ -2465,7 +3018,7 @@ const PAGE = (function() {
   const CAPTURE = DATA.apm && DATA.apm.trace;
   const STORE_KEY = 'elephc-callgraph:' + (DATA.title || '') +
     (CAPTURE ? ':trace:' + CAPTURE.id + ':' + CAPTURE.t : '');
-  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify({follow: follow, diff: diffOn, metric: metric, sbw: sbw, crit: critOn, prune: pruneT, grouped: grouped, selTs: FRAMES[cur] ? FRAMES[cur].ts : 0, tx: tx, ty: ty, scale: scale})); } catch (e) {} writeHash(); }
+  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify({follow: follow, diff: diffOn, metric: metric, scope: scope, fm: flameMode, sbw: sbw, crit: critOn, prune: pruneT, grouped: grouped, selTs: FRAMES[cur] ? FRAMES[cur].ts : 0, tx: tx, ty: ty, scale: scale})); } catch (e) {} writeHash(); }
   function load() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; } }
 
   // --- shareable URL: the discrete view (dimension, selection, active view,
@@ -2475,15 +3028,19 @@ const PAGE = (function() {
     try {
       const p = [];
       if (metric !== 'time') p.push('m=' + metric);
+      if (scope === 'incl') p.push('sc=incl');
       if (selected >= 0 && NAMES[selected]) p.push('s=' + encodeURIComponent(NAMES[selected]));
       if (flameOn) { p.push('v=flame'); if (flameRoot >= 0 && NAMES[flameRoot]) p.push('fr=' + encodeURIComponent(NAMES[flameRoot])); }
       else if (sqlOn) p.push('v=sql');
       else if (srcOn) p.push('v=src');
       else if (chkOn) p.push('v=chk');
+      if (TL && flameMode === 'merged') p.push('fm=merged');
       if (pruneT) p.push('pr=' + pruneT);
       if (critOn) p.push('c=1');
-      // The transactions view (monitor --apm) owns `a`, `ar` and `at`; keep them.
-      (location.hash || '').replace(/^#/, '').split('&').forEach(kv => { if (/^(a|ar|at)=/.test(kv)) p.push(kv); });
+      // The transactions view (monitor --apm) owns `a`, `ar`, `at`, a shared link's period
+      // and comparison (`afrom`, `ato`, `acmp`) and the section it opens on (`as`); keep
+      // them all (review).
+      (location.hash || '').replace(/^#/, '').split('&').forEach(kv => { if (/^(a|ar|at|afrom|ato|acmp|as)=/.test(kv)) p.push(kv); });
       const h = p.length ? '#' + p.join('&') : location.pathname + location.search;
       if (('#' + p.join('&')) !== location.hash) history.replaceState(null, '', h);
     } catch (e) {}
@@ -2520,6 +3077,10 @@ const PAGE = (function() {
   diffOn = !!saved.diff; diffBox.checked = diffOn;
   if (saved.metric && availMetrics.some(m => m.key === saved.metric)) metric = saved.metric;
   if (hash.m && availMetrics.some(m => m.key === hash.m)) metric = hash.m;
+  if (saved.scope === 'incl' || hash.sc === 'incl') scope = 'incl';
+  if (TL && saved.fm === 'merged') flameMode = 'merged';
+  if (TL && hash.fm) flameMode = hash.fm === 'merged' ? 'merged' : 'timeline';
+  if (hash.sc === 'self') scope = 'self';
   Object.keys(metricEls).forEach(k => metricEls[k].classList.toggle('on', k === metric));
   if (saved.sbw) applySidebar(saved.sbw);
   critOn = !!saved.crit || hash.c === '1';
@@ -2602,6 +3163,7 @@ mod tests {
             edges: vec![GraphEdge { from: 0, to: 1, weight: 80, count: None }],
             total: 100,
             queries: Vec::new(),
+            query_callers: Default::default(),
             lines: None,
             trace: None,
         }
@@ -2811,7 +3373,7 @@ mod tests {
     /// A name in an attribute goes through `escAttr`, which escapes quotes:
     /// `esc` leaves them, and a capture shared with `--baseline` could carry a
     /// function named `x" onmouseover="…` that breaks out of a `title` built
-    /// with it (review G13). No attribute of the page is built with `esc`.
+    /// with it. No attribute of the page is built with `esc`.
     fn names_in_attributes_escape_their_quotes() {
         let html = render_html(&sample_graph(), "demo");
         for attribute in ["title", "data-v", "href", "alt", "value"] {
@@ -2884,6 +3446,7 @@ mod tests {
             edges: vec![],
             total: 1,
             queries: Vec::new(),
+            query_callers: Default::default(),
             lines: None,
             trace: None,
         };

@@ -44,6 +44,8 @@ mod implode_boxed;
 mod encoding;
 #[path = "strings/ctype.rs"]
 mod ctype;
+#[path = "strings/setlocale.rs"]
+mod setlocale;
 #[path = "strings/inet.rs"]
 mod inet;
 #[path = "strings/iconv.rs"]

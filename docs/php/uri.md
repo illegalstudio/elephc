@@ -1,22 +1,22 @@
 ---
 title: "URI"
-description: "PHP 8.5/8.6 ext/uri: RFC 3986 and WHATWG parsing, types, builders, percent encoding, mutation, validation errors, and serialization."
+description: "PHP 8.5's ext/uri: RFC 3986 and WHATWG URL parsing, normalization, mutation, validation errors, and serialization."
 sidebar:
   order: 26
 ---
 
-elephc implements PHP 8.5's `uri` extension and its PHP 8.6 additions:
-`Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, their builders, the URI/host-type enums,
+elephc implements PHP 8.5's `uri` extension: `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`,
 the `Uri\UriComparisonMode` and `Uri\WhatWg\UrlValidationErrorType` enums, the
 `Uri\UriException` / `Uri\UriError` / `Uri\InvalidUriException` hierarchy, and
 `Uri\WhatWg\InvalidUrlException` with its `UrlValidationError` list. Parsing and
 normalization follow php-src's bundled uriparser and lexbor behavior, and the
-public surface is exercised by the vendored `ext/uri` PHPT suites.
+public surface is exercised by the embedded php-src `ext/uri` case table.
 
 The extension is pay-for-use: a program that never names `Uri\` neither declares
 the classes nor links the `elephc_uri` bridge. `--with-uri` force-enables it for
-indirect calls and opaque `eval()` source. Whenever the surface is present,
-`extension_loaded('uri')` reports `true`.
+indirect calls and opaque `eval()` source; it requires a PHP 8.5 or later profile,
+because ext/uri does not exist on older profiles and the combination is rejected.
+Whenever the surface is present, `extension_loaded('uri')` reports `true`.
 
 ## RFC 3986
 
@@ -78,82 +78,6 @@ its second solidus, leading-zero IPv4 parts (`Ipv4NonDecimalPart`), and removed
 component whitespace. A forbidden domain code point inside a non-ASCII label is
 rejected with `DomainInvalidCodePoint`.
 
-## URI and host types (PHP 8.6)
-
-`Uri\Rfc3986\Uri` exposes `getUriType()` and `getHostType()`, backed by the
-`Uri\Rfc3986\UriType` and `Uri\Rfc3986\UriHostType` enums. `Uri\WhatWg\Url`
-exposes `getHostType()` backed by `Uri\WhatWg\UrlHostType`, plus
-`isSpecialScheme()`.
-
-```php
-<?php
-$uri = Uri\Rfc3986\Uri::parse("//example.com/a");
-echo $uri->getUriType()->name, "\n"; // NetworkPathReference
-echo $uri->getHostType()->name, "\n"; // RegisteredName
-
-$url = Uri\WhatWg\Url::parse("scheme://example.com");
-echo $url->getHostType()->name, "\n"; // Opaque
-var_dump($url->isSpecialScheme());     // false
-```
-
-The URI-type values are `AbsolutePathReference`, `RelativePathReference`,
-`NetworkPathReference`, and `Uri`. RFC host types are `IpV4`, `IpV6`,
-`IpVFuture`, and `RegisteredName`; WHATWG host types are `IpV4`, `IpV6`,
-`Domain`, `Opaque`, and `Empty`. A missing host returns `null`.
-
-## Builders (PHP 8.6)
-
-`Uri\Rfc3986\UriBuilder` and `Uri\WhatWg\UrlBuilder` hold components, validate
-each setter, and produce a value with `build()`:
-
-```php
-<?php
-$uri = new Uri\Rfc3986\UriBuilder()
-    ->setScheme("https")
-    ->setHost("example.com")
-    ->setPath("/a/b")
-    ->setQuery("x=1")
-    ->build();
-
-echo $uri->toRawString(), "\n"; // https://example.com/a/b?x=1
-echo $uri->getHostType()->name, "\n"; // RegisteredName
-
-$url = new Uri\WhatWg\UrlBuilder()
-    ->setScheme("https")
-    ->setHost("example.com")
-    ->setPath("/a/b")
-    ->build(new Uri\WhatWg\Url("https://example.com/base"));
-
-echo $url->toAsciiString(), "\n"; // https://example.com/a/b
-```
-
-Both builders support `reset()`, nullable component setters, and an optional
-base value. A relative or scheme-less RFC base is rejected with
-`Uri\InvalidUriException`; WHATWG builds resolve relative references against the
-base and report soft validation entries through the optional `$softErrors`
-parameter. The RFC builder rejects a port or userinfo without a host and a path
-that cannot be represented with the selected scheme/host.
-
-## WHATWG percent encoding (PHP 8.6)
-
-`Uri\WhatWg\url_percent_encode()` applies one of the standard WHATWG
-percent-encode sets selected by `Uri\WhatWg\UrlPercentEncodingMode`:
-
-```php
-<?php
-use Uri\WhatWg\UrlPercentEncodingMode as Mode;
-use function Uri\WhatWg\url_percent_encode;
-
-echo url_percent_encode("a b/c", Mode::Path), "\n";        // a%20b/c
-echo url_percent_encode("a b/c", Mode::PathSegment), "\n"; // a%20b%2Fc
-echo url_percent_encode("a b+c", Mode::FormQuery), "\n";   // a+b%2Bc
-```
-
-Modes are `Username`, `Password`, `OpaqueHost`, `Path`, `OpaquePath`,
-`PathSegment`, `Query`, `SpecialQuery`, `FormQuery`, and `Fragment`. The
-function lives in the `Uri\WhatWg` namespace, so call it fully qualified or
-import it with `use function`.
-
 ## Validation errors
 
 `Uri\WhatWg\UrlValidationError` exposes `context`, `type`, and `failure`.
@@ -195,47 +119,63 @@ var_export($uri);
 
 ## Compatibility notes
 
-- The php-src `ext/uri` PHPT suite is vendored under
-  `tests/fixtures/php_src_uri` and run by
-  `cargo test --test codegen_tests test_uri_php_src_phpt_bundle`.
-- The `zend_test`-driven fixtures (`100.phpt`–`102.phpt`) exercise php-src's
-  test-only `zend_test_uri_parser()` helper. The harness supplies an equivalent
-  helper built on the public `Uri\*` classes, so those fixtures validate the same
-  parsing, raw/normalized component, large-port, and validation-error behavior
-  without the `zend_test` extension.
-- `--INI-- memory_limit` is honored as the runtime heap ceiling. 318 of the 330
-  vendored 8.5 fixtures pass; the twelve `oom_*` cases are skipped because elephc's
-  heap-exhaustion fatal text is not yet php-src-parity. The 8.6 builder/getter corpus
-  passes all 204 fixtures.
+- The php-src `ext/uri` compliance cases are embedded as a Rust table in
+  `tests/codegen/uri_php_src/cases.rs` and run by
+  `cargo test --test codegen_tests_ext test_uri_php_src_bundle`.
+- The `zend_test`-driven cases (`100`–`102`) exercise php-src's test-only
+  `zend_test_uri_parser()` helper. The Rust harness supplies an equivalent helper
+  built on the public `Uri\*` classes, so those cases validate the same parsing,
+  raw/normalized component, large-port, and validation-error behavior without the
+  `zend_test` extension.
+- The OOM cases run with their recorded `memory_limit` heap ceiling and the fatal
+  message matches php-src's `Allowed memory size of N bytes exhausted …` form. All 332
+  embedded cases pass, including the eleven OOM cases.
 - The URI implementations retain one path-segment node per segment (an estimated 32-byte
-  node) plus copied text for non-empty segments. Because that storage lives inside the Rust
-  bridge rather than in the elephc heap, the prelude mirrors the footprint in hidden PHP
-  arrays charged against `_heap_limit`: `4 * segments + 2 * non-empty segments` array cells
-  (32 bytes per segment plus 16 bytes of text). The charge arrays live in private static
-  maps keyed by `spl_object_id`, are dropped by `__destruct`, and are rebuilt by `__clone`
-  and `__unserialize`. `--INI-- memory_limit` and runtime `ini_set('memory_limit', …)` both
-  observe the charge.
-- `057.phpt` (8.5) and the corresponding 8.6 builder fixture run with the typed
-  property by-reference write-back. Their harness rewrites `catch (Throwable $e)` to
-  `catch (\TypeError $e)`, because the write-back raises the concrete `TypeError`
-  those fixtures expect.
+  node) plus copied text for non-empty segments, and the complete path string itself.
+  Because that storage lives inside the Rust bridge rather than in the elephc heap, the
+  prelude mirrors the footprint in hidden PHP arrays charged against `_heap_limit`:
+  `4 * segments + 2 * non-empty segments` array cells (32 bytes per segment plus 16 bytes
+  of text), plus one string header and its real byte payload for the path. Charging the
+  path bytes keeps a single very long segment from hiding behind the per-segment node
+  count. The charge arrays live in private static maps keyed by `spl_object_id`, are
+  dropped by `__destruct`, and are rebuilt by `__clone` and `__unserialize`. The OOM heap
+  ceiling and runtime `ini_set('memory_limit', …)` both observe the charge. The charge also
+  mirrors the retained scheme, userinfo, host, port, query, and fragment strings as one
+  header plus payload cells per string.
+- A resolved WHATWG reference keeps the base URL's saved ASCII/Unicode host pair and its
+  extra-solidus file path. `withScheme()`, `withHost()`, and other unrelated writes preserve
+  that saved path; only a write that actually changes the path clears it.
+- WHATWG validation warnings share the parsed input with byte ranges instead of copying the
+  remaining URL suffix for every invalid byte, so a warning-heavy untrusted URL stays linear
+  in the input size until the PHP error list is charged against `memory_limit`.
+- Relaxed `xn--` host recovery also applies to absolute references parsed with a base,
+  network-relative references, and `withHost()` writes, not only to a standalone parse.
+- Relative references are scanned for lexbor's component warnings; the base scheme decides
+  whether a path reverse solidus is `InvalidReverseSoldius` and query/fragment bytes remain
+  `InvalidUrlUnit`.
+- A direct `__clone()` call on a URI object raises PHP's `Call to undefined method …::__clone()`
+  error instead of replacing and leaking the original native handle; the `clone` operator
+  still produces an independent value.
+- Case `057` passes a typed object property by reference. A compatible cell is shared for
+  the call's duration, so a write through the alias is visible immediately; an incompatible
+  concrete property type raises PHP's call-site `TypeError` and leaves the property unchanged.
 - To let user code call `parse()` and `equals()` on values whose static type is
-  `?Uri` (a common php-src test shape), the prelude accepts `mixed` for those
-  parameters and performs the runtime `instanceof` check itself. This means
-  `ReflectionMethod` reports `mixed` there, and a wrong-type argument's message
-  lacks php-src's `, <type> given` suffix; the methods, return values, and
-  exceptions otherwise match PHP.
-- `with*()` builds its result through `__elephc_rebind`: the original handle is cleared just
-  for the PHP object copy and restored immediately, so the copy starts without a bridge handle
-  and receives the mutated one directly. This performs no extra native clone or free compared
-  with php-src's `zend_object` copy; user-visible clone semantics are unchanged.
+  `?Uri` (a common php-src test shape), the prelude keeps a wider internal `mixed`
+  contract and performs the runtime `instanceof` check itself. Reflection reports
+  php-src's declared `?Uri\…` parameter types, and a runtime wrong-type argument raises
+  php-src's exact `TypeError` wording, including the `, <type> given` suffix.
+- `with*()` clones the receiver before calling the native copy operation. The clone owns an
+  independent duplicate of the original native URL; once the new handle arrives, the copy
+  switches to it and frees the duplicate before charging the new URL. Cloning first keeps the
+  receiver's handle intact if a PHP allocation fails, and the new native URL cannot leak
+  across that allocation. This costs one extra native clone and free compared with php-src's
+  `zend_object` copy; user-visible clone semantics are unchanged.
 - `withScheme(null)` matches PHP 8.5.10: it removes the scheme without a deprecation notice.
-- The general AOT by-reference limits documented in [PHP types](types.md) apply to URI calls:
-  an incompatible concrete property type is rejected at compile time, and a property passed by
-  reference is copied in and written back after the call.
+- The general AOT by-reference limits documented in [PHP types](types.md) apply to URI calls.
 - The classes are prelude-declared, but Reflection reports php-src's engine shape:
   `isInternal()`, `isReadOnly()`, and `isFinal()` are true and `getModifiers()` is
   `65568`. `newInstanceWithoutConstructor()` throws php-src's internal-final-class
   `ReflectionException`, and the parsing, getter, mutation, cast, serialization,
-  and debug behavior matches. Assigning an undeclared property is refused at compile
-  time; php-src reports `Error: Cannot create dynamic property …` at run time.
+  and debug behavior matches. Assigning an undeclared property compiles and throws
+  php-src's `Error: Cannot create dynamic property …` at run time; reading it afterwards
+  reports `Warning: Undefined property: …` and answers `null`.

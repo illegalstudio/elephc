@@ -4,7 +4,7 @@
 //! `--with-<flag>`, auto-detected from feature usage (e.g. `hash()` / `bcadd()`), or absent.
 //!
 //! Called from:
-//! - `cargo test --test extension_loaded_tests` through Rust's test harness.
+//! - `cargo test --test integration extension_loaded_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
@@ -61,7 +61,9 @@ fn compile_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> P
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
@@ -153,6 +155,31 @@ fn hash_usage_reports_hash_extension_loaded() {
          bool(true)\nbool(true)\nbool(false)\n",
         "using hash(): hash loaded (both APIs), PDO not loaded"
     );
+}
+
+/// Verifies a native UTF-8 `mb_check_encoding()` keeps mbstring loaded and rejects bad input
+/// even though the program no longer enables the mbstring bridge runtime.
+#[test]
+fn native_utf8_check_encoding_reports_mbstring_loaded() {
+    let dir = make_test_dir("ext_mbstring_native_utf8");
+    let src = "<?php function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } \
+        $bad = $argc > 5 ? 'x' : \"\\xC3\\x28\"; \
+        var_dump(valid('Caffè'), valid($bad), valid(''), extension_loaded('mbstring'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "bool(true)\nbool(false)\nbool(true)\nbool(true)\n");
+}
+
+/// Verifies a builtin string callback still runs through the mbstring bridge when a native
+/// UTF-8 check survives and the only direct bridge call is dead code.
+#[test]
+fn mbstring_string_callback_survives_dead_bridge_call_pruning() {
+    let dir = make_test_dir("ext_mbstring_string_callback");
+    let src = "<?php function unused(string $text): int { return mb_strlen($text); } \
+        function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } \
+        var_dump(valid('Caffè')); echo implode(',', array_map('mb_strtoupper', ['àb', 'c'])), \"\\n\"; \
+        var_dump(extension_loaded('mbstring'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "bool(true)\nÀB,C\nbool(true)\n");
 }
 
 /// Verifies a bridge-free program does not report BCMath merely because its names are known.
@@ -254,13 +281,15 @@ fn with_mysqli_forces_surface_past_reachability() {
     let php = dir.join("asm.php");
     fs::write(&php, src).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
     cmd.args(["--with-mysqli", "--emit-asm"]).arg(&php);
-    let output = cmd.output().expect("failed to spawn elephc --emit-asm");
+    let output = cmd.output().expect("failed to spawn elephc build --emit-asm");
     assert!(
         output.status.success(),
-        "elephc --emit-asm failed:\n{}",
+        "elephc build --emit-asm failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let asm = fs::read_to_string(dir.join("asm.s")).expect("emitted assembly missing");

@@ -183,15 +183,14 @@ mod tests {
         // +7: the complete `ctype_*` surface (cntrl/graph/lower/print/punct/upper/xdigit).
         // +2: the PHP-visible setlocale/nl_langinfo contracts declared by the locale prelude.
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
-        // +1: `get_debug_type`, the resolved debug type name.
-        // +1: `__elephc_poll_revents`, the internal Io\Poll revents probe.
-        // +2: PHP 8.6 `pack`/`unpack` endianness surface.
-        // +1: PHP 8.6 `stream_context_set_options`.
-        // +1: PHP 8.6 `url_percent_encode`.
+        // +2: `__elephc_builtin_warning_at` / `__elephc_builtin_deprecated_at`, the tokenizer
+        // prelude's line-aware diagnostic helpers.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
-        // +1: PHP 8.6 `stream_socket_get_crypto_status`.
-        // +2: PHP 8.6 `gmp_powm_sec` and `gmp_prevprime`.
-        assert_eq!(contracts().len(), 1327 + curl_surface);
+        // +1: the internal `__elephc_set_memory_limit` runtime setter.
+        // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
+        // +2: the internal `__elephc_unserialize_store_property` and
+        // `__elephc_phar_archive_valid` helpers.
+        assert_eq!(contracts().len(), 1326 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -160,6 +160,7 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
 /// Classifies one expression for a human-readable eval AOT fallback marker.
 pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason> {
     match &expr.kind {
+        ExprKind::Runtime(_) => Some(EvalAotFallbackReason::UnsupportedConstruct),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

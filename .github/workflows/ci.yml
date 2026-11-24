@@ -928,7 +928,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -998,7 +998,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1068,7 +1068,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1451,7 +1451,7 @@ jobs:
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
         run: |
           bash scripts/ci/run_prebuilt_tests.sh \
-            'binary(=codegen_tests) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
+            'binary(/^codegen_tests_/) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
 
       - name: Audit consumer compilation
         if: always()
@@ -1614,14 +1614,60 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
-  # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
-  # deterministic shard in one libtest process so runtime-object and bridge caches
-  # survive between cases, with two workers preserving bounded parallelism.
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
+  uri-ios-compile-link:
+    name: URI iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: [plan, build-archive-macos-aarch64, build-ios]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
+      - name: Compile and link the URI bridge
+        run: |
+          bash scripts/ci/test_ios_uri_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
       - name: Audit consumer compilation
         if: always()
         uses: ./.github/actions/assert-consumer-builds
+
+  # Eval integration tests compile, link, and run full programs while exercising
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
 
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
@@ -1920,7 +1966,14 @@ jobs:
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-tokenizer-engine) and kind(lib)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
+
+      - name: Check the forced text view against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+          ELEPHC_TOKEN_VIEW: text
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
 
       - name: Audit consumer compilation
         if: always()
@@ -1962,17 +2015,23 @@ jobs:
       - name: Run the native tokenizer example
         shell: elephc-ci-shell {0}
         run: |
-          target/debug/elephc --with-tokenizer examples/tokenizer/main.php
+          target/debug/elephc build --with-tokenizer examples/tokenizer/main.php
           trap 'rm -f "$RUNNER_TEMP/tokenizer-example.out"' EXIT
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run the inline php-src tokenizer corpus
+        env:
+          ELEPHC_TEST_COMPILER: ${{ github.workspace }}/target/debug/elephc
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=tokenizer_php_src)' --run-ignored only
+
       - name: Run focused native, eval and argument regressions
         shell: elephc-ci-shell {0}
         run: |
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(test_tokenizer_)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=error_tests) and test(tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(test_tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^error_tests::/) and test(tokenizer_)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets)'
@@ -2056,7 +2115,7 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=builtin_parity_tests)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^builtin_parity_tests::/)'
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude
@@ -2166,6 +2225,7 @@ jobs:
       - gmp-ios-compile-link
       - tidy-ios-compile-link
       - gmp-phpt-corpus
+      - uri-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -2224,7 +2284,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link uri-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

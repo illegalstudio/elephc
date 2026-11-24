@@ -623,6 +623,23 @@ mbstring into their runtime object or link.
 Native eval scopes also omit mbstring dispatcher arms unless mbstring or the full
 eval bridge is enabled, preserving links that need only native scope helpers.
 
+`mb_check_encoding($string, 'UTF-8')` over a value already typed `string`, with a
+literal `UTF-8`/`UTF8` encoding, never enters the bridge: it calls the leaf validator
+`__rt_mb_strlen_utf8`, which every runtime object contains. Runtime-feature discovery
+and codegen share one predicate for this shape (`crate::ir::native_mbstring`), so such
+a call alone leaves the mbstring runtime feature off. The checker still links the
+bridge archive for it as a `BridgeIdentity` requirement, so `extension_loaded('mbstring')`
+stays true, but nothing in the archive is referenced. Arrays, nullable or coerced
+subjects, dynamic encodings, spread arguments and callable uses keep the bridge.
+
+The bridge's codec tables are compacted at build time. `crates/elephc-mbstring/build.rs`
+reads the generated `src/encoding/data/*.bin` files named by `index_table!` and
+`dense_table!` in the catalog: sorted key/value indexes become fixed-width offset
+blocks searched by bisection, and dense word arrays become page directories into one
+deduplicated page pool.
+`encoding::mapping` reads both layouts, and its tests compare every compacted table with
+its canonical file.
+
 The preparatory bridge entries `elephc_mbstring_arity_v1` and
 `elephc_mbstring_prepare_v1` validate the outer call before request-state dispatch.
 They derive arity, types, and parameter names from the shared contract. Preparation
@@ -1506,8 +1523,12 @@ layout crosses the boundary. `compile` returns an opaque handle and slot count;
 `exec` writes fixed 16-byte `[start, end]` signed-64-bit pairs, initializing
 unmatched and surplus slots to `[-1, -1]`.
 
-`__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`,
-`m`, `s`, `u`, `U`) to shim compile flags. `__rt_pcre_to_posix` keeps its
+`__rt_preg_strip` parses PHP delimiters the way php-src does (leading whitespace,
+bracket pairs with nesting, the first unescaped closer) and maps the modifiers
+`i`, `m`, `s`, `u`, `U` to pcre2posix `REG_*` bits and `x`, `A`, `D`, `n`, `J`,
+`r` to the shim's private compile bits; `S`, `X`, space, LF and CR are ignored.
+Any pattern PHP rejects before compiling sets bit 30, which every helper tests
+right after the strip to return its failure value. `__rt_pcre_to_posix` keeps its
 historic symbol name for compatibility but only materializes a null-terminated
 pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
 whole regex family is emitted only when the program's `RuntimeFeatures` request
@@ -1517,15 +1538,24 @@ only when static regex detection or `--with-regex` requests the same feature.
 There is no production system-PCRE2 fallback; compilation itself never installs
 a package.
 
+Every regex helper executes through `__rt_preg_exec`, a wrapper over the shim's
+match entry point that keeps its ABI and records the match-failure category
+(backtrack limit, recursion limit, malformed UTF-8, bad UTF-8 offset, or internal
+error) in `_preg_exec_error`. EIR lowering clears the error state before each
+`preg_*` call and turns a recorded failure into PHP's `false` or `null` result,
+so a nested error raised inside a `preg_replace_callback()` callback stays visible
+to `preg_last_error()` without failing the outer call. `__rt_preg_last_error_msg`
+maps the stored `_preg_last_error` code to PHP's message table.
+
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees. The removed `/e` modifier and a failed compile return the failure sentinel before a match result is produced | pattern + subject strings | `x0`/`rax` = 1 (match), 0 (no match), or -1 (PHP `false`) |
 | `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings. `/e` is rejected before compilation. The -1 path still returns a fresh empty array so the caller can release it without storing it | pattern + subject strings | `x0`/`rax` = 1, 0, or -1; `x1`/`rdx` = matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
-| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
-| `__rt_preg_replace_callback` | Replace all regex matches in a dedicated output buffer, building an indexed `$matches` string array and appending the callback result. A successful replacement is a Mixed string and the output buffer is released after that cell copies it. An invalid pattern boxes PHP null: unknown modifiers, a missing ending delimiter, a compile failure, and the removed `/e` modifier (bit 30 from `__rt_preg_strip`). Space, LF, and CR in the modifier suffix are ignored. `/x` sets bit 13 and the PCRE2 shim compiles with `PCRE2_EXTENDED`, so leading `(*UTF)` and `(*ANYCRLF)` verbs stay at the start of the pattern. Other valid modifiers the runtime does not map are not null | pattern + callback + subject | `x0`/`rax` = Mixed cell (string, or null) |
-| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
+| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector. Every exec searches the whole subject with `REG_STARTEND`, and later ones use the shim's global continuation, so empty matches and the subject end behave like php-src | pattern + replacement + subject | `x1`/`x2` = result string |
+| `__rt_preg_replace_callback` | Replace all regex matches in a dedicated output buffer, building an indexed `$matches` string array and appending the callback result. A successful replacement is a Mixed string and the output buffer is released after that cell copies it. An invalid pattern boxes PHP null: every pattern `__rt_preg_strip` rejects (bit 30) and a compile failure. `/x` sets bit 13 and the PCRE2 shim compiles with `PCRE2_EXTENDED`, so leading `(*UTF)` and `(*ANYCRLF)` verbs stay at the start of the pattern. The match loop is the same global iteration as `__rt_preg_replace` | pattern + callback + subject | `x0`/`rax` = Mixed cell (string, or null) |
+| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout. Iterates like `__rt_preg_replace`, and only returned pieces count toward the limit | pattern + subject strings, limit, flags | `x0` = array pointer |
 
 ## I/O routines
 
@@ -1989,6 +2019,8 @@ The tables above document the public runtime operations. The emitters also split
 - **GC, cleanup, exceptions, and diagnostics:** `__rt_backtrace_print_arg`, `__rt_call_object_destructor_body`, `__rt_cleanup_call`, `__rt_cleanup_chain_previous`, `__rt_cleanup_invoke`, `__rt_cleanup_preserve_exception`, `__rt_destructor_throw_mixed`, `__rt_diag_reset`, `__rt_diag_write`, `__rt_dispatch_uncaught_exception`, `__rt_error_handler_invoke`, `__rt_error_handler_restore`, `__rt_exception_chain`, `__rt_gc_collect_cycles_explicit`, `__rt_gc_collector_begin`, `__rt_gc_collector_end`, `__rt_gc_destructor_begin`, `__rt_gc_destructor_end`, `__rt_gc_destructors`, `__rt_gc_disable`, `__rt_gc_drop_pins`, `__rt_gc_enable`, `__rt_gc_enabled`, `__rt_gc_eval_object_children`, `__rt_gc_free_begin`, `__rt_gc_mem_caches`, `__rt_gc_protected_destructor`, `__rt_gc_request_start`, `__rt_gc_rethrow_pending`, `__rt_gc_status_metric`, `__rt_gc_unpin_reachable`, `__rt_heap_debug_live_blocks`, `__rt_magic_set_guard_pop`, `__rt_magic_set_guard_push`, `__rt_throw_boxed_destructor_exception`, `__rt_throwable_append_previous`, `__rt_throwable_box_owned`, `__rt_throwable_initialize`, `__rt_throwable_previous`, `__rt_throwable_previous_slot`, `__rt_throwable_take_boxed`, `__rt_warning_cleanup`, and `__rt_wrapper_unbox_int`.
 - **Curl and iconv bridge adapters:** `__rt_curl_easy_body`, `__rt_curl_easy_str_op`, `__rt_curl_invoke_callback`, `__rt_curl_rethrow_pending`, `__rt_curl_version`, `__rt_iconv_build_array`, `__rt_iconv_call`, `__rt_iconv_call_bool`, `__rt_iconv_invoke`, `__rt_iconv_materialize`, `__rt_iconv_mime_option`, `__rt_iconv_option_table`, and `__rt_iconv_release_block`.
 - **Serialization and formatting internals:** `__rt_implode_cast_string`, `__rt_serialize_magic_body`, `__rt_serialize_sleep_body`, `__rt_sprintf_throw_string_error`, `__rt_sprintf_throw_string_error_x64`, `__rt_sprintf_warn_array_to_string`, `__rt_sprintf_warn_array_to_string_x64`, `__rt_sprintf_warn_object_numeric`, `__rt_sprintf_warn_object_numeric_x64`, `__rt_str_numeric_value`, `__rt_unser_allowed_object_to_string`, `__rt_unser_throw_object_string_error`, `__rt_unser_throw_type_error`, `__rt_unser_validate_at`, `__rt_unser_validate_key`, `__rt_unser_validate_uint`, `__rt_unserialize_class_allowed`, `__rt_unserialize_defer_data`, `__rt_unserialize_detach_data`, `__rt_unserialize_end`, `__rt_unserialize_finish_data`, `__rt_unserialize_register_array`, `__rt_unserialize_set_options`, `__rt_unserialize_set_options_indexed`, and `__rt_unserialize_set_options_mixed`.
+- **ctype, typed property references, and startup diagnostics:** `__rt_ctype_string`, `__rt_ctype_byte`, `__rt_ctype_int`, `__rt_ctype_check`, `__rt_ctype_object`, `__rt_ctype_deprecated`, `__rt_property_reference_cell_new`, `__rt_property_reference_store_guard`, `__rt_property_reference_numeric`, `__rt_warn_nan_coerced_string`, and `__rt_mbstring_startup_status`.
+  The ctype helpers scan strings under the active `LC_CTYPE` locale, apply php-src's deprecated integer fallback (`0..255`, `-128..-1`, `allow_digits` and `allow_minus`), and dispatch boxed operands by runtime tag before writing the `will be interpreted as string in the future` deprecation through the shared warning dispatcher. A typed-property reference cell keeps the ordinary two-word payload plus four metadata words (diagnostic suffix and declared-type acceptance code); its store guard validates writes through a by-reference call temporary before coercion and raises PHP's reference-form `TypeError`. `__rt_warn_nan_coerced_string` reports PHP 8.5's `unexpected NAN value was coerced to string` warning ahead of float-to-string conversion. `__rt_mbstring_startup_status` publishes the mbstring bridge's startup configuration diagnostics at program entry.
 - **Resources, eval objects, files, and display:** `__rt_eval_object_release_children`, `__rt_file_put_contents_maybe_phar_flagged`, `__rt_get_resources`, `__rt_ob_release_eval_handler`, `__rt_resource_inventory_close`, `__rt_resource_inventory_insert`, `__rt_resource_inventory_register`, `__rt_resource_inventory_reset`, `__rt_resource_inventory_retire`, `__rt_resource_type_selector`, and `__rt_var_dump_emit_callable`.
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.

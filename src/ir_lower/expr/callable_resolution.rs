@@ -65,6 +65,7 @@ pub(super) fn lower_static_callable_call(
             let result_staging = prepublish_user_call_result(
                 ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
+            let reference_property_guard_mark = ctx.reference_property_guards.len();
             begin_call_argument_evaluation(ctx);
             let previous_description = ctx.call_description.replace(function_name.clone());
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
@@ -87,6 +88,11 @@ pub(super) fn lower_static_callable_call(
                 ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
             );
             stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+            super::enum_argument_guards::drain_reference_property_guards(
+                ctx,
+                reference_property_guard_mark,
+                expr.span,
+            );
             release_owned_call_arg_temporaries_with_roots(
                 ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
             );
@@ -192,6 +198,7 @@ pub(super) fn lower_static_callable_call(
                 &php_type,
                 expr.span,
             );
+            let reference_property_guard_mark = ctx.reference_property_guards.len();
             begin_call_argument_evaluation(ctx);
             let label = ctx.closure_function(&name).and_then(|function| function.display_name.clone())
                 .or_else(|| (ctx.builder.function().name == name)
@@ -221,6 +228,11 @@ pub(super) fn lower_static_callable_call(
                 ctx, call, Some(&signature), reference_staging.as_ref(), expr.span,
             );
             stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+            super::enum_argument_guards::drain_reference_property_guards(
+                ctx,
+                reference_property_guard_mark,
+                expr.span,
+            );
             release_owned_call_arg_temporaries_with_roots(
                 ctx, &arg_values, Some(call.value), &return_alias,
                 Some(&signature), &roots, expr.span,

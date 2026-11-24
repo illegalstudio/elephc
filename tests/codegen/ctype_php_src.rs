@@ -139,17 +139,30 @@ fn apply_runtime_ini(source: &str, ini: &[(&str, &str)]) -> String {
 /// `de_DE` locale. Rust tests cannot use corpus skip blocks, so the fixture calls this
 /// helper and returns early when the host lacks the locale. The probe reads `locale -a`
 /// in a child process and never mutates the test process.
+///
+/// CI provides German locales on every executing target and sets
+/// `ELEPHC_REQUIRE_TEST_LOCALES`; there a missing locale panics instead of letting the
+/// caller skip, so locale-dependent behavior cannot go unverified behind a green run.
 pub(crate) fn locale_available(names: &[&str]) -> bool {
-    let Ok(output) = Command::new("locale").arg("-a").output() else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let available = String::from_utf8_lossy(&output.stdout);
-    names
-        .iter()
-        .any(|name| available.lines().any(|line| line == *name))
+    let available = Command::new("locale")
+        .arg("-a")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            let listed = String::from_utf8_lossy(&output.stdout);
+            names.iter().any(|name| listed.lines().any(|line| line == *name))
+        });
+    assert!(
+        available || !test_locales_required(),
+        "ELEPHC_REQUIRE_TEST_LOCALES is set but none of {names:?} is listed by `locale -a`"
+    );
+    available
+}
+
+/// Reports whether this run must execute locale-dependent tests instead of skipping them.
+pub(crate) fn test_locales_required() -> bool {
+    std::env::var_os("ELEPHC_REQUIRE_TEST_LOCALES").is_some_and(|value| value == "1")
 }
 
 /// Runs one inline php-src ctype fixture and returns its merged output.

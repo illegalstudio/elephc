@@ -2,7 +2,7 @@
 //! End-to-end integration tests for the PHP BCMath builtin surface.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the math test group.
+//! - `cargo test --test codegen_tests_data` through the math test group.
 //!
 //! Key details:
 //! - Expected strings follow PHP BCMath truncation and fixed-scale formatting.
@@ -162,6 +162,19 @@ try { bcround('1', 0, 9); } catch (\ValueError $e) { echo get_class($e), '|', $e
         out,
         "ValueError|bcadd(): Argument #1 ($num1) is not well-formed\nDivisionByZeroError|Division by zero\nValueError|bcround(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)"
     );
+}
+
+/// Embedded NUL bytes must reject the whole operand instead of accepting a numeric prefix.
+#[test]
+fn test_bcmath_rejects_embedded_nul_operands() {
+    let out = compile_and_run(
+        r#"<?php
+try { bcadd("1\0garbage", '0'); echo 'accepted|'; } catch (ValueError $error) { echo 'add|'; }
+try { bccomp("1\0999", '2'); echo 'accepted|'; } catch (ValueError $error) { echo 'cmp|'; }
+try { bcadd("1.2\03", '0', 4); echo 'accepted'; } catch (ValueError $error) { echo 'frac'; }
+"#,
+    );
+    assert_eq!(out, "add|cmp|frac");
 }
 
 /// Verifies the BCMath procedural surface participates in builtin discovery.

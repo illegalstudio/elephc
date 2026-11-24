@@ -1390,6 +1390,32 @@ fclose($m);
     assert_eq!(out, "abc=C3=A9=0A=3D");
 }
 
+/// A chunk-final space or tab is escaped as =20/=09 without reading past the chunk.
+#[test]
+fn test_quoted_printable_encode_chunk_boundary_space_and_tab() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([" " => " \n", "\t" => "\t\n"] as $tail => $line_break) {
+    $m = fopen("php://memory", "r+");
+    fwrite($m, str_repeat("A", 15) . $tail);
+    rewind($m);
+    stream_set_chunk_size($m, 16);
+    stream_filter_append($m, "convert.quoted-printable-encode", STREAM_FILTER_READ, [
+        "line-break-chars" => $line_break,
+        "line-length" => 100000000,
+    ]);
+    $data = stream_get_contents($m);
+    echo strlen($data), "|", bin2hex($data), "\n";
+    fclose($m);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "18|4141414141414141414141414141413d3230\n18|4141414141414141414141414141413d3039\n"
+    );
+}
+
 /// Verifies compiled PHP output for stream filter base64 decode decompacts.
 #[test]
 fn test_stream_filter_base64_decode_decompacts() {
@@ -1929,6 +1955,19 @@ fn build_minimal_phar(entries: &[(&str, &[u8])]) -> Vec<u8> {
     build_phar(&raw)
 }
 
+/// Writes a native PHAR fixture and signs it with SHA-1, matching the signature a
+/// PHP-created phar carries. The default `phar.require_hash=1` policy rejects an
+/// unsigned native phar, so prebuilt byte fixtures must be signed before a
+/// `phar://` read.
+fn write_signed_phar_fixture(path: &std::path::Path, bytes: &[u8]) {
+    std::fs::write(path, bytes).unwrap();
+    let path_bytes = path.to_string_lossy();
+    let signed = unsafe {
+        elephc_phar::elephc_phar_sign_hash(path_bytes.as_ptr(), path_bytes.len(), 2)
+    };
+    assert_eq!(signed, 1, "sign native phar fixture");
+}
+
 /// Builds a minimal POSIX tar archive with regular-file entries.
 fn build_tar_phar_container(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -1951,6 +1990,42 @@ fn build_tar_phar_container(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let padded_len = ((content.len() + 511) / 512) * 512;
         out.resize(out.len() + padded_len - content.len(), 0);
     }
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+/// Builds a POSIX tar archive with both a regular file and typeflag-2 symlink entries.
+///
+/// Mirrors the PHP-PrettyHorriblePatches E31 fixture: a full-path and a relative
+/// symlink point at the regular entry, so a reader that follows links must not
+/// rewrite or truncate the link entry name while resolving them.
+fn build_tar_phar_symlink_fixture() -> Vec<u8> {
+    /// Emits one 512-byte tar header plus its padded payload.
+    fn record(name: &str, payload: &[u8], typeflag: u8, link: &str) -> Vec<u8> {
+        let mut header = [0u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = format!("{:011o}\0", payload.len());
+        header[124..124 + size.len()].copy_from_slice(size.as_bytes());
+        header[156] = typeflag;
+        header[157..157 + link.len()].copy_from_slice(link.as_bytes());
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        let checksum: u32 = header.iter().map(|&b| b as u32).sum();
+        let checksum = format!("{:06o}\0 ", checksum);
+        header[148..156].copy_from_slice(checksum.as_bytes());
+        let mut out = Vec::from(header);
+        out.extend_from_slice(payload);
+        let padded_len = ((payload.len() + 511) / 512) * 512;
+        out.resize(out.len() + padded_len - payload.len(), 0);
+        out
+    }
+    let mut out = Vec::new();
+    out.extend(record("a/b/c/target", b"PAYLOAD", b'0', ""));
+    out.extend(record("a/b/c/link", b"", b'2', "a/b/c/target"));
+    out.extend(record("a/b/c/relative", b"", b'2', "target"));
     out.extend_from_slice(&[0u8; 1024]);
     out
 }
@@ -2029,7 +2104,7 @@ fn test_fopen_phar_reads_uncompressed_entry() {
         ("dir/inner.txt", b"inner content here"),
     ]);
     let path = std::env::temp_dir().join(format!("elephc_phar_m1_read_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php
 $f = fopen("phar://{p}/hello.txt", "r");
@@ -2058,7 +2133,7 @@ fn test_file_get_contents_literal_phar_entry_honors_offset_and_length() {
     let phar = build_minimal_phar(&[("hello.txt", b"Hello from phar!\n")]);
     let path =
         std::env::temp_dir().join(format!("elephc_phar_fgc_range_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php
 var_dump(file_get_contents("phar://{p}/hello.txt"));
@@ -2088,7 +2163,7 @@ fn test_fopen_phar_runtime_path_reads_entry() {
         ("dir/inner.txt", b"inner content here"),
     ]);
     let path = std::env::temp_dir().join(format!("elephc_phar_m2_rt_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php
 $p = "{p}";
@@ -2107,9 +2182,9 @@ echo "|" . ($m === false ? "false" : "open");
 
 /// phar:// write Milestone 1: `fopen("phar://...","w")` + `fwrite` + `fclose`
 /// assembles a valid single-entry uncompressed phar that sets the
-/// PHAR_HDR_SIGNATURE (0x10000) global flag and appends a SHA1 signature
-/// trailer (`raw-sha1 ++ LE32(0x0002) ++ "GBMB"`), so real PHP — which requires
-/// a hash by default — accepts the archive. elephc's own phar reader is
+/// PHAR_HDR_SIGNATURE (0x10000) global flag and appends a SHA-256 signature
+/// trailer (`raw-sha256 ++ LE32(0x0003) ++ "GBMB"`), so real PHP — which
+/// requires a hash by default — accepts the archive. elephc's own phar reader is
 /// compile-time (it reads the archive during compilation), so a runtime-written
 /// archive can't be read back in the same program; this test verifies the
 /// on-disk bytes directly. (Manually confirmed that real PHP's `new Phar(...)`
@@ -2133,9 +2208,9 @@ echo (fclose($f) ? "ok" : "fail") . $n;
         &[0x00, 0x00, 0x01, 0x00],
         "PHAR_HDR_SIGNATURE flag not set"
     );
-    // Signature trailer: <20 raw SHA1 bytes> ++ LE32(0x0002 = Phar::SHA1) ++ "GBMB".
+    // Signature trailer: <32 raw SHA-256 bytes> ++ LE32(0x0003 = Phar::SHA256) ++ "GBMB".
     let tail = &bytes[bytes.len() - 8..];
-    assert_eq!(&tail[0..4], &[0x02, 0x00, 0x00, 0x00], "signature type not SHA1");
+    assert_eq!(&tail[0..4], &[0x03, 0x00, 0x00, 0x00], "signature type not SHA-256");
     assert_eq!(&tail[4..8], b"GBMB", "phar magic missing");
 }
 
@@ -2159,7 +2234,7 @@ echo file_put_contents("phar://out.phar/note.txt", "via fpc");
         "PHAR_HDR_SIGNATURE flag not set"
     );
     let tail = &bytes[bytes.len() - 8..];
-    assert_eq!(&tail[0..4], &[0x02, 0x00, 0x00, 0x00], "signature type not SHA1");
+    assert_eq!(&tail[0..4], &[0x03, 0x00, 0x00, 0x00], "signature type not SHA-256");
     assert_eq!(&tail[4..8], b"GBMB", "phar magic missing");
 }
 
@@ -2379,6 +2454,31 @@ echo Phar::GZ . "|" . PharData::TAR;
     );
 }
 
+/// Tar symlink entries are ignored without rewriting the link name or crashing a later read.
+#[test]
+fn test_phar_tar_symlink_entries_do_not_mutate_names_or_crash() {
+    let tar = build_tar_phar_symlink_fixture();
+    let path_buf = std::env::temp_dir().join(format!(
+        "elephc_phar_tar_symlink_{}.tar",
+        std::process::id()
+    ));
+    std::fs::write(&path_buf, &tar).unwrap();
+    let path = path_buf.to_string_lossy();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$p = new PharData("{path}");
+echo $p["a/b/c/target"]->getContent() === "PAYLOAD" ? "target|" : "bad-target|";
+echo isset($p["a/b/c/link"]) ? "link|" : "absent|";
+echo isset($p["a/b/c/relative"]) ? "relative|" : "absent|";
+echo @file_get_contents("phar://{path}/a/b/c/link") === false ? "missing|" : "read|";
+echo $p["a/b/c/target"]->getContent() === "PAYLOAD" ? "stable|" : "mutated|";
+echo @file_get_contents("phar://{path}/a/b/c/target") === "PAYLOAD" ? "read-target" : "bad-read";
+"#
+    ));
+    std::fs::remove_file(&path_buf).ok();
+    assert_eq!(out, "target|absent|absent|missing|stable|read-target");
+}
+
 /// `Phar::addFromString()` and `PharData::addFromString()` use the same runtime
 /// writer as ArrayAccess assignment for native PHAR and tar containers.
 #[test]
@@ -2433,8 +2533,9 @@ echo $pd->getMetadata() . "|" . $pd->__toString();
     );
 }
 
-/// Global metadata and the stub persist into the archive and are read back by a fresh
-/// `Phar`/`PharData` object across all three families (native, tar, zip).
+/// Global metadata persists into the archive and is read back by a fresh
+/// `Phar`/`PharData` object across all three families (native, tar, zip), while a
+/// `PharData` rejects `setStub()` and reports no stub, like PHP.
 #[test]
 fn test_phar_oop_metadata_stub_persist_across_objects() {
     let out = compile_and_run(
@@ -2448,9 +2549,14 @@ echo $m["v"], ":", $m["n"], ":", ($q->hasMetadata() ? "y" : "n"), "|";
 $t = new PharData("persist.tar");
 $t->addFromString("b.txt", "bravo");
 $t->setMetadata("tar-meta");
-$t->setStub("<?php __HALT_COMPILER(); ?>");
+try {
+    $t->setStub("<?php __HALT_COMPILER(); ?>");
+    echo "accepted|";
+} catch (UnexpectedValueException $error) {
+    echo "rejected|";
+}
 $t2 = new PharData("persist.tar");
-echo $t2->getMetadata(), ":", $t2->getStub(), "|";
+echo $t2->getMetadata(), ":", ($t2->getStub() === "" ? "empty" : "bad"), "|";
 echo $t2->count(), "|";
 $z = new PharData("persist.zip");
 $z->addFromString("c.txt", "charlie");
@@ -2462,7 +2568,7 @@ echo $zm["zip"];
     );
     assert_eq!(
         out,
-        "1.0:5:y|tar-meta:<?php __HALT_COMPILER(); ?>|1|1"
+        "1.0:5:y|rejected|tar-meta:empty|1|1"
     );
 }
 
@@ -2603,6 +2709,7 @@ $s = $p->getSignature();
 echo $s["hash_type"], ":", strlen($s["hash"]), ":";
 echo file_get_contents("phar://" . $archive . "/a.txt"), "|";
 $p->setSignatureAlgorithm(Phar::SHA256);
+unlink("signed.phar.pubkey");
 $s2 = $p->getSignature();
 echo $s2["hash_type"], ":", strlen($s2["hash"]);
 unlink("signed.phar");
@@ -2611,6 +2718,222 @@ unlink("signed.phar.pubkey");
     );
     // 1024-bit RSA signature = 128 bytes = 256 uppercase-hex chars; SHA-256 = 32 bytes = 64 hex.
     assert_eq!(out, "closed:closed|OpenSSL:256:alpha|SHA-256:64");
+}
+
+/// The legacy two-operand `__elephc_phar_sign_openssl(path, key)` bridge still signs
+/// with RSA-SHA1 and produces a verifiable OpenSSL signature.
+#[test]
+fn test_phar_legacy_sign_openssl_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+$key = <<<'KEYEOF'
+-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l
+BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk
+jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+
+umuMCPtLmuF6UUXiebMzyH21x7jvAgMBAAECgYBBhL+2rgVxzrxm5vsnhEFQ9zB2
+i0ncYNey+7V1zr0PfoPi3cGwhOlmfJcqAp9ak534/c/kyqSK9esL+bTdvn5zIQqC
+Swt2znffaW9nC6lM/pkZcvGLETt2m0L71n6pZVkMewsGBm9YrBQFA1krC7BV674U
+mlOmmYpM3LPgzmRLwQJBAPm/G7O4Stmzu5xV5qtvYX1dNZ2gydkVyfK/AwCYpfbK
+8ZXntKeWCt1BER1hNBSMPacHKb0LotK3j3LNNteLHCECQQDxZdNsXNLTHylWKA/X
+dyM3SH9mM6ESZP07cU7Ifq6t9zJdTfGdiyxsAjaaXxDmShL+bAjU16iwaTAGcYTB
+NrMPAkEAoUGwVV7Nlbvji5I7mr4UKKoikGDdc/oJp1+GRMBLiQqI6s3ta7gJ08rL
+jjjRM+NJe6u4W4RD4eL8EJhIrOv5gQJAK4Tm+8c0PtmEU0L/sCGLWMEaLquqIy3P
+tXK0+FJWXYiOLOILaBKaHJK9k1EGM+4wxGtnoC+M+tjLzq2SeF7LIwJAPdLUn2Qq
+eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w
+rNiobfy8sSb6iw==
+-----END PRIVATE KEY-----
+KEYEOF;
+$publicKey = <<<'KEYEOF'
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrgD+8WWlX4cJ/ZQWjIMSj1NTg
+wabk+2G7uhWr9N0yadQSnNcFDIl51D62lFCNkdicaGrbQ3u0fy3BpI1aD4gRhj6M
+cU2gcneSyWSZOjCQIhgYc0E+25CtzjAxy0Koc4nn6gxX5wy7f0ze/rprjAj7S5rh
+elFF4nmzM8h9tce47wIDAQAB
+-----END PUBLIC KEY-----
+KEYEOF;
+$p = new Phar("legacy.phar");
+$p->addFromString("a.txt", "alpha");
+echo __elephc_phar_sign_openssl("legacy.phar", $key) ? "signed|" : "failed|";
+file_put_contents("legacy.phar.pubkey", $publicKey);
+$s = $p->getSignature();
+echo $s["hash_type"], ":", strlen($s["hash"]), ":", $p["a.txt"]->getContent();
+unlink("legacy.phar");
+unlink("legacy.phar.pubkey");
+"#,
+    );
+    assert_eq!(out, "signed|OpenSSL:256:alpha");
+}
+
+/// `PharData::setStub()` is rejected like PHP instead of converting a data archive.
+#[test]
+fn test_phardata_set_stub_is_rejected() {
+    let out = compile_and_run(
+        r#"<?php
+$d = new PharData("stub.tar");
+try {
+    $d->setStub("<?php __HALT_COMPILER(); ?>");
+    echo 'accepted';
+} catch (UnexpectedValueException $error) {
+    echo 'rejected';
+}
+"#,
+    );
+    assert_eq!(out, "rejected");
+}
+
+/// `ELEPHC_PHAR_REQUIRE_HASH=0` relaxes the runtime constructor policy.
+#[test]
+fn test_phar_require_hash_env_relaxes_runtime_construction() {
+    let phar = build_minimal_phar(&[("a.txt", b"alpha")]);
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("elephc_require_hash_{unique}.phar"));
+    std::fs::write(&path, &phar).unwrap();
+    let source = format!(
+        r#"<?php
+$p = new Phar("{}");
+echo $p["a.txt"]->getContent();
+"#,
+        path.display()
+    );
+
+    let strict = compile_and_run_capture(&source);
+    let relaxed = compile_and_run_capture_with_env(
+        &source,
+        &[("ELEPHC_PHAR_REQUIRE_HASH", std::ffi::OsStr::new("0"))],
+    );
+    std::fs::remove_file(&path).ok();
+
+    assert!(
+        !strict.success && strict.stdout.contains("UnexpectedValueException"),
+        "default policy must reject the unsigned archive: status={:?} stdout={:?} stderr={:?}",
+        strict.status,
+        strict.stdout,
+        strict.stderr
+    );
+    assert!(
+        relaxed.success,
+        "relaxed policy must open the archive: {:?}",
+        relaxed.stderr
+    );
+    assert_eq!(relaxed.stdout, "alpha");
+}
+
+/// An unsigned native archive is rejected loudly by the OOP constructor.
+#[test]
+fn test_phar_oop_rejects_unsigned_archive_under_require_hash() {
+    let phar = build_minimal_phar(&[("a.txt", b"alpha")]);
+    let path = std::env::temp_dir().join(format!(
+        "elephc_unsigned_phar_{}.phar",
+        std::process::id()
+    ));
+    std::fs::write(&path, &phar).unwrap();
+    let out = compile_and_run(&format!(
+        r#"<?php
+try {{
+    $p = new Phar("{}");
+    echo 'opened:', count($p);
+}} catch (UnexpectedValueException $error) {{
+    echo 'rejected';
+}}
+"#,
+        path.display()
+    ));
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "rejected");
+}
+
+/// `PharData` containers stay unsigned until asked, while a new executable `Phar`
+/// keeps PHP's SHA-256 default signature.
+#[test]
+fn test_phardata_default_is_unsigned_and_executable_phar_is_sha256() {
+    let out = compile_and_run(
+        r#"<?php
+$d = new PharData("data.tar");
+$d->addFromString("x.txt", "x");
+echo ($d->getSignature() === false ? "unsigned" : "signed"), "|";
+$raw = file_get_contents("data.tar");
+echo str_contains($raw, ".phar/signature.bin") ? "sig-entry" : "no-sig", "|";
+$d["y.txt"] = "y";
+echo ($d->getSignature() === false ? "unsigned" : "signed"), "|";
+$d->setSignatureAlgorithm(Phar::SHA256);
+echo $d->getSignature()["hash_type"], "|";
+$d["z.txt"] = "z";
+echo $d->getSignature()["hash_type"], "|";
+$z = new PharData("data.zip");
+$z["x.txt"] = "x";
+echo ($z->getSignature() === false ? "unsigned" : "signed"), "|";
+echo $z["x.txt"]->getContent(), "|";
+$p = new Phar("exec.phar");
+$p["a.txt"] = "a";
+echo $p->getSignature()["hash_type"], "|";
+echo $p["a.txt"]->getContent();
+unlink("data.tar");
+unlink("data.zip");
+unlink("exec.phar");
+"#,
+    );
+    assert_eq!(
+        out,
+        "unsigned|no-sig|unsigned|SHA-256|SHA-256|unsigned|x|SHA-256|a"
+    );
+}
+
+/// `Phar::OPENSSL_SHA256` and `Phar::OPENSSL_SHA512` select the RSA digest and read
+/// back through `getSignature()` while the signed archive stays readable.
+#[test]
+fn test_phar_oop_openssl_sha256_and_sha512_signatures() {
+    let out = compile_and_run(
+        r#"<?php
+$key = <<<'KEYEOF'
+-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l
+BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk
+jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+
+umuMCPtLmuF6UUXiebMzyH21x7jvAgMBAAECgYBBhL+2rgVxzrxm5vsnhEFQ9zB2
+i0ncYNey+7V1zr0PfoPi3cGwhOlmfJcqAp9ak534/c/kyqSK9esL+bTdvn5zIQqC
+Swt2znffaW9nC6lM/pkZcvGLETt2m0L71n6pZVkMewsGBm9YrBQFA1krC7BV674U
+mlOmmYpM3LPgzmRLwQJBAPm/G7O4Stmzu5xV5qtvYX1dNZ2gydkVyfK/AwCYpfbK
+8ZXntKeWCt1BER1hNBSMPacHKb0LotK3j3LNNteLHCECQQDxZdNsXNLTHylWKA/X
+dyM3SH9mM6ESZP07cU7Ifq6t9zJdTfGdiyxsAjaaXxDmShL+bAjU16iwaTAGcYTB
+NrMPAkEAoUGwVV7Nlbvji5I7mr4UKKoikGDdc/oJp1+GRMBLiQqI6s3ta7gJ08rL
+jjjRM+NJe6u4W4RD4eL8EJhIrOv5gQJAK4Tm+8c0PtmEU0L/sCGLWMEaLquqIy3P
+tXK0+FJWXYiOLOILaBKaHJK9k1EGM+4wxGtnoC+M+tjLzq2SeF7LIwJAPdLUn2Qq
+eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w
+rNiobfy8sSb6iw==
+-----END PRIVATE KEY-----
+KEYEOF;
+$p = new Phar("signed2.phar");
+$p->addFromString("a.txt", "alpha");
+$p->setSignatureAlgorithm(Phar::OPENSSL_SHA256, $key);
+$publicKey = <<<'KEYEOF'
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrgD+8WWlX4cJ/ZQWjIMSj1NTg
+wabk+2G7uhWr9N0yadQSnNcFDIl51D62lFCNkdicaGrbQ3u0fy3BpI1aD4gRhj6M
+cU2gcneSyWSZOjCQIhgYc0E+25CtzjAxy0Koc4nn6gxX5wy7f0ze/rprjAj7S5rh
+elFF4nmzM8h9tce47wIDAQAB
+-----END PUBLIC KEY-----
+KEYEOF;
+file_put_contents("signed2.phar.pubkey", $publicKey);
+$s = $p->getSignature();
+echo $s["hash_type"], ":", strlen($s["hash"]), ":";
+$archive = "signed2.phar";
+echo file_get_contents("phar://" . $archive . "/a.txt"), "|";
+$p->setSignatureAlgorithm(Phar::OPENSSL_SHA512, $key);
+$s2 = $p->getSignature();
+echo $s2["hash_type"], ":", strlen($s2["hash"]), ":";
+echo file_get_contents("phar://" . $archive . "/a.txt");
+unlink("signed2.phar");
+unlink("signed2.phar.pubkey");
+"#,
+    );
+    assert_eq!(
+        out,
+        "OpenSSL_SHA256:256:alpha|OpenSSL_SHA512:256:alpha"
+    );
 }
 
 /// Tar and zip phars carry their signature in a `.phar/signature.bin` entry rather
@@ -2870,7 +3193,7 @@ fn test_file_get_contents_phar_literal_entry() {
         ("dir/inner.txt", b"inner content here"),
     ]);
     let path = std::env::temp_dir().join(format!("elephc_phar_fgc_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php
 echo file_get_contents("phar://{p}/dir/inner.txt");
@@ -2933,7 +3256,7 @@ fn test_fopen_phar_reads_gzip_entry() {
         flags: 0x0000_11a4, // gzip (0x1000) | 0644
     }]);
     let path = std::env::temp_dir().join(format!("elephc_phar_m2_gz_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php $f = fopen("phar://{p}/z.txt", "r"); $s = fread($f, 8192); fclose($f); echo strlen($s) . "|" . substr($s, 0, 4);"#,
         p = path.display()
@@ -2962,7 +3285,7 @@ fn test_fopen_phar_runtime_path_reads_gzip_entry() {
         flags: 0x0000_11a4, // gzip (0x1000) | 0644
     }]);
     let path = std::env::temp_dir().join(format!("elephc_phar_rt_gz_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php $p = "{p}"; $f = fopen("phar://" . $p . "/z.txt", "r"); $s = fread($f, 8192); fclose($f); echo strlen($s) . "|" . substr($s, 0, 4);"#,
         p = path.display()
@@ -2995,7 +3318,7 @@ fn test_fopen_phar_reads_bzip2_entry() {
         flags: 0x0000_21a4, // bzip2 (0x2000) | 0644
     }]);
     let path = std::env::temp_dir().join(format!("elephc_phar_m2_bz_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php $f = fopen("phar://{p}/b.txt", "r"); $s = fread($f, 4096); fclose($f); echo strlen($s) . "|" . substr($s, 0, 26);"#,
         p = path.display()
@@ -3017,7 +3340,7 @@ fn test_file_get_contents_phar_runtime_path_reads_bzip2_entry() {
         flags: 0x0000_21a4, // bzip2 (0x2000) | 0644
     }]);
     let path = std::env::temp_dir().join(format!("elephc_phar_rt_bz_{}.phar", std::process::id()));
-    std::fs::write(&path, &phar).unwrap();
+    write_signed_phar_fixture(&path, &phar);
     let src = format!(
         r#"<?php $p = "{p}"; $s = file_get_contents("phar://" . $p . "/b.txt"); echo strlen($s) . "|" . substr($s, 0, 26);"#,
         p = path.display()

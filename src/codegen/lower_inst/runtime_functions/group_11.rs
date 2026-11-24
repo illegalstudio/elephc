@@ -100,6 +100,9 @@ pub(super) fn lower(
         | RuntimeFnId::MemoryGetUsage
         | RuntimeFnId::MemoryResetPeakUsage
         => Some(crate::codegen::lower_inst::builtins::memory::lower(ctx, inst, target)),
+        RuntimeFnId::ElephcSetMemoryLimit => Some({
+            crate::codegen::lower_inst::builtins::memory::lower_set_memory_limit(ctx, inst)
+        }),
         RuntimeFnId::Microtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_microtime(ctx, inst)
         }),
@@ -132,6 +135,15 @@ pub(super) fn lower(
         }),
         RuntimeFnId::PregSplit => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_split(ctx, inst)
+        }),
+        RuntimeFnId::PregCompile => Some({
+            crate::codegen::lower_inst::builtins::regex_compiled::lower_preg_compile(ctx, inst)
+        }),
+        RuntimeFnId::PregFree => Some({
+            crate::codegen::lower_inst::builtins::regex_compiled::lower_preg_free(ctx, inst)
+        }),
+        RuntimeFnId::PregMatchCompiled => Some({
+            crate::codegen::lower_inst::builtins::regex_compiled::lower_preg_match_compiled(ctx, inst)
         }),
         RuntimeFnId::Putenv => Some({
             crate::codegen::lower_inst::builtins::system::lower_putenv(ctx, inst)

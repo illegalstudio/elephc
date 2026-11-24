@@ -39,6 +39,8 @@ pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable, lower_prepared_builtin_callable};
 mod interface_adapters;
 pub(crate) use interface_adapters::lower_optional_interface_adapters;
+mod narrowed_vtable_adapters;
+pub(crate) use narrowed_vtable_adapters::lower_narrowed_vtable_adapters;
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(
@@ -125,6 +127,7 @@ pub(crate) fn lower_main(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -281,6 +284,7 @@ pub(crate) fn lower_user_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -413,6 +417,7 @@ pub(crate) fn lower_class_method(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -543,6 +548,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -682,6 +688,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -808,6 +815,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1196,6 +1204,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1326,6 +1335,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
+        &check_result.element_value_views,
         &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1556,6 +1566,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.array_push_property_plans,
             &check_result.member_receiver_types,
             &check_result.array_append_element_types,
+            &check_result.element_value_views,
             &check_result.local_value_read_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
@@ -1832,6 +1843,7 @@ fn lower_closure_function_with_signature(
         parent.array_push_property_plans,
         parent.member_receiver_types,
         parent.array_append_element_types,
+        parent.element_value_views,
         parent.local_value_read_types,
 
         parent.boxed_reference_promotion_sites,
@@ -1888,12 +1900,16 @@ fn lower_body_into_function(
     declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
-    throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
+    throw_access_sites: &std::collections::HashMap<
+        (String, Span),
+        crate::types::ThrowAccessInfo,
+    >,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     closure_generator_spans: &std::collections::HashSet<Span>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
     array_append_element_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
+    element_value_views: &crate::types::ElementValueViews,
     local_value_read_types: &crate::types::LocalValueReadTypes,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
@@ -1960,7 +1976,8 @@ fn lower_body_into_function(
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
             declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
             throw_access_sites, builtin_call_types, closure_generator_spans,
-            array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types,
+            array_push_property_plans, member_receiver_types, array_append_element_types, element_value_views,
+            local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
@@ -2070,6 +2087,7 @@ fn lower_body_into_function(
         array_push_property_plans,
         member_receiver_types,
         array_append_element_types,
+        element_value_views,
         local_value_read_types,
 
         boxed_reference_promotion_sites,
@@ -3116,7 +3134,9 @@ fn direct_closure_return_mixed_literal_type(
                 .1
             }
             crate::parser::ast::ArrayEntry::Keyed(_, value)
-            | crate::parser::ast::ArrayEntry::Value(value) => direct_closure_return_array_item_type(
+            | crate::parser::ast::ArrayEntry::Value(value)
+            | crate::parser::ast::ArrayEntry::Reference(value)
+            | crate::parser::ast::ArrayEntry::KeyReference(_, value) => direct_closure_return_array_item_type(
                 value,
                 captures,
                 params,

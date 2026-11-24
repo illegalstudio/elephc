@@ -420,6 +420,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
         Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
         Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
+        Op::ReferenceArgumentTypeError => {
+            objects::lower_reference_argument_type_error(ctx, &inst)
+        }
         Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
         Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
@@ -489,6 +492,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
         Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
         Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
+        Op::EvalConstantFetchOrGlobal => builtins::lower_eval_constant_fetch_or_global(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew | Op::CallableValueNew => lower_first_class_callable_new(ctx, &inst),

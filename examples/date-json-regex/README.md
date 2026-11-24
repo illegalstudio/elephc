@@ -9,7 +9,7 @@ From the repository root, either use the committed lock directly:
 ```bash
 cd examples/date-json-regex
 elephc native install --locked
-elephc main.php
+elephc build main.php
 ./main
 ```
 
@@ -19,7 +19,7 @@ is idempotent):
 ```bash
 cd examples/date-json-regex
 elephc native add pcre2
-elephc main.php
+elephc build main.php
 ./main
 ```
 

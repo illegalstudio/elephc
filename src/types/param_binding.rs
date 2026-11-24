@@ -39,8 +39,8 @@ pub(crate) use native_selections::{
     native_selection_reference_receiver, native_selection_reference_receiver_type,
 };
 pub(crate) use union::{
-    runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
-    runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
+    runtime_int_binding_needs_diagnostics, runtime_reference_param_acceptance,
+    runtime_scalar_param_binding, runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
 };
 
 /// How a declared parameter binds an argument whose type does not already match.
@@ -181,6 +181,11 @@ pub(crate) fn classify_param_binding(
                     PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)))
     {
         return classify_numeric_binding(expected, arg);
+    }
+    // A `mixed` or `object|null` argument reaches a class, interface, `object` or nullable
+    // class parameter unchanged; EIR lowering checks its class at the call site.
+    if crate::types::object_boundary::runtime_object_boundary(expected, actual).is_some() {
+        return ParamBinding::ObjectGuard;
     }
     // A union that names the declared class plus exactly one of `false`/`null` is accepted by
     // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is

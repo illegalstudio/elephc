@@ -198,6 +198,7 @@ impl Checker {
                 captures,
                 capture_refs,
                 by_ref_return: _,
+                ..
             } => {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;
@@ -361,11 +362,17 @@ impl Checker {
                 let object_type = self.infer_type(object, env)?;
                 let object_only = match &object_type {
                     PhpType::Object(_) => true,
+                    // PHP allows `$value::class` through a nullable object type; a null value
+                    // raises the same runtime error `get_class(null)` does, which the lowering
+                    // already reaches. A union with any other non-object member stays refused.
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members
-                                .iter()
-                                .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
+                            && members.iter().all(|member| {
+                                matches!(
+                                    member,
+                                    PhpType::Object(_) | PhpType::Void | PhpType::Never
+                                )
+                            })
                     }
                     _ => false,
                 };

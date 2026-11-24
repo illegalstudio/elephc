@@ -15,6 +15,9 @@ case "$role" in
     pkg-config --exists libpcre2-8 libpq openssl odbc
     valgrind --version
     command -v kinit
+    locale -a | grep -qx de_DE
+    locale -a | grep -qx de_DE.iso88591
+    locale -a | grep -qx de_DE.utf8
     ;;
   kdc)
     command -v krb5kdc

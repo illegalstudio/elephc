@@ -2,7 +2,7 @@
 //! Parser test root wiring and shared AST assertion helpers for PHP syntax coverage.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness.
+//! - `cargo test --test integration parser_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Helpers parse inline PHP snippets, assert failures, and inspect literals or promoted assignments.
@@ -105,3 +105,32 @@ mod generated_locals;
 
 #[path = "parser_tests/standalone_null.rs"]
 mod standalone_null;
+
+
+/// DNF parameter and return types keep their parenthesized intersections.
+#[test]
+fn test_dnf_type_parentheses_parse() {
+    for src in [
+        "<?php function f((A&B)|C $x) {}",
+        "<?php function f(C|(A&B) $x) {}",
+        "<?php function f(A|(B&C) $x): (A&B)|null {}",
+        "<?php function f(A &$x) {}",
+    ] {
+        parse_source(src);
+    }
+}
+
+/// Legacy `var` properties, `new` method names, and named-class dynamic static calls parse.
+#[test]
+fn test_legacy_property_and_semi_reserved_members_parse() {
+    for src in [
+        "<?php class C { var $x; }",
+        "<?php class C { function new() {} }",
+        "<?php class C { function class() {} }",
+        "<?php A::$x();",
+        "<?php X::class();",
+        "<?php [A::class, 'b']();",
+    ] {
+        parse_source(src);
+    }
+}

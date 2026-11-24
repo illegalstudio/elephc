@@ -33,6 +33,11 @@ pub(crate) struct RouteSummary {
     /// Share of this route's wall time spent waiting on the database or the
     /// network, percent.
     pub io_wait_pct: f64,
+    /// Mean peak memory of a request, bytes; 0 when none was measured.
+    pub mem_mean_bytes: u64,
+    /// The 95th percentile of a request's peak memory, as its bucket's upper edge, bytes;
+    /// 0 when none was measured.
+    pub mem_p95_bytes: u64,
 }
 
 /// Summarizes `row` over `span_ms`, with `total_ns` the wall time of every route.
@@ -61,6 +66,8 @@ pub(crate) fn summarize(row: &RouteStats, span_ms: u64, total_ns: u64) -> RouteS
         time_pct: pct(row.sum_ns, total_ns),
         queries_per_txn: 0.0,
         io_wait_pct: 0.0,
+        mem_mean_bytes: row.mem_mean().unwrap_or(0),
+        mem_p95_bytes: row.mem_percentile(95.0).unwrap_or(0),
     }
 }
 
@@ -137,10 +144,17 @@ pub(crate) fn render_table(title: &str, windows: &[&Window], span_ms: u64) -> St
     // Database and network columns only when something recorded them, so a
     // web service's table keeps its width.
     let with_io = rows.iter().any(|row| row.queries_per_txn > 0.0 || row.io_wait_pct > 0.0);
+    // A request's peak memory, when a --web service measured it: before the status columns,
+    // so the columns counted from either end keep their place.
+    let with_mem = rows.iter().any(|row| row.mem_mean_bytes > 0);
     out.push_str(&format!(
-        "{:<width$} {:>8} {:>8} {:>9} {:>9} {:>9} {:>9} {:>6} {:>6} {:>6}",
-        "route", "req", "req/s", "mean", "p50", "p95", "p99", "4xx", "5xx", "time",
+        "{:<width$} {:>8} {:>8} {:>9} {:>9} {:>9} {:>9}",
+        "route", "req", "req/s", "mean", "p50", "p95", "p99",
     ));
+    if with_mem {
+        out.push_str(&format!(" {:>10}", "mem/req"));
+    }
+    out.push_str(&format!(" {:>6} {:>6} {:>6}", "4xx", "5xx", "time"));
     if with_io {
         out.push_str(&format!(" {:>6} {:>6}", "q/req", "wait"));
     }
@@ -153,7 +167,7 @@ pub(crate) fn render_table(title: &str, windows: &[&Window], span_ms: u64) -> St
             row.route.clone()
         };
         out.push_str(&format!(
-            "{:<width$} {:>8} {:>8.1} {:>9} {:>9} {:>9} {:>9} {:>5.1}% {:>5.1}% {:>5.1}%",
+            "{:<width$} {:>8} {:>8.1} {:>9} {:>9} {:>9} {:>9}",
             name,
             row.n,
             row.rps,
@@ -161,10 +175,12 @@ pub(crate) fn render_table(title: &str, windows: &[&Window], span_ms: u64) -> St
             fmt_ns(row.p50_ns),
             fmt_ns(row.p95_ns),
             fmt_ns(row.p99_ns),
-            row.client_error_pct,
-            row.server_error_pct,
-            row.time_pct,
         ));
+        if with_mem {
+            let mem = if row.mem_mean_bytes > 0 { fmt_bytes(row.mem_mean_bytes) } else { "–".to_string() };
+            out.push_str(&format!(" {mem:>10}"));
+        }
+        out.push_str(&format!(" {:>5.1}% {:>5.1}% {:>5.1}%", row.client_error_pct, row.server_error_pct, row.time_pct));
         if with_io {
             out.push_str(&format!(" {:>6.1} {:>5.1}%", row.queries_per_txn, row.io_wait_pct));
         }
@@ -174,6 +190,28 @@ pub(crate) fn render_table(title: &str, windows: &[&Window], span_ms: u64) -> St
         "\nwall time from request head to handler return; percentiles are the upper edge of a \
          latency bucket at most 12.5% wide\n",
     );
+    out.push_str(&render_errors(windows));
+    out
+}
+
+/// The most errors the terminal lists.
+const ERRORS_SHOWN: usize = 10;
+
+/// The errors failed transactions ended with over a span, most frequent first: count,
+/// exception class, where it was thrown, transaction. Empty when there were none.
+pub(crate) fn render_errors(windows: &[&Window]) -> String {
+    let errors = merge_errors(windows.iter().copied());
+    if errors.is_empty() {
+        return String::new();
+    }
+    let total: u64 = errors.iter().map(|error| error.n).sum();
+    let mut out = format!("\nerrors of failed transactions — {total} in {} group{}\n", errors.len(), if errors.len() == 1 { "" } else { "s" });
+    for error in errors.iter().take(ERRORS_SHOWN) {
+        out.push_str(&format!("  {:>6}  {}  at {}  ({})\n", error.n, error.class, error.at, error.route));
+    }
+    if errors.len() > ERRORS_SHOWN {
+        out.push_str(&format!("  … and {} more\n", errors.len() - ERRORS_SHOWN));
+    }
     out
 }
 

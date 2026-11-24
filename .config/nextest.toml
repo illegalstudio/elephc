@@ -14,17 +14,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # the managed libxml2 bridge. Keep the corpus at five slow-timeout periods; this copy is first
 # so nextest's first-match override policy sees it before the broad macOS codegen override.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
 # Serialize only their scheduling, preserving their assertions and existing bundle budget.
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
 test-group = 'simplexml-large-bundles'
 
 # These two single-compile XML catalog probes each reached 360s twice while
@@ -32,7 +32,7 @@ test-group = 'simplexml-large-bundles'
 # or timeout, and use CI fixture phase records to distinguish assembly from run.
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(codegen_tests) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
 threads-required = "num-test-threads"
 
 # The 200,000-node projection completed AOT but exceeded the unchanged 60s runtime
@@ -40,14 +40,14 @@ threads-required = "num-test-threads"
 # The indexed-incdec eval probe also reached its 360s deadline twice in x86_64
 # assembly after 211s of EIR work and 131s of codegen. Keep its source and deadline.
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
 threads-required = "num-test-threads"
 
 # This AOT/eval GMP/XML pair reached its 360s deadline twice during x86_64
 # linking under shared workers. Each program is now its own test; keep the pool reserved for both.
 [[profile.ci.overrides]]
 platform = 'cfg(target_arch = "x86_64")'
-filter = 'binary(codegen_tests) and (test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle) or test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_eval_bundle))'
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle) or test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_eval_bundle))'
 threads-required = "num-test-threads"
 
 # These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
@@ -65,18 +65,20 @@ filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subcla
 threads-required = "num-test-threads"
 
 # These five SimpleXML fixtures compile ONE catalog-sized program each, so they cannot be split
-# further. Green merge-queue runs measured them at 270-357s against the 360s bundle budget
-# (one such compile emits about 276 MB of assembly and takes about 210s on a loaded macOS
-# runner), and a slower runner evicted queue entries on that margin alone. Ten periods keep a
-# hang bounded; the fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
+# further. One such compile emits about 276 MB of assembly and measured 1101s on a local macOS
+# host after the recent catalog growth, well past the previous 600s budget. Twenty-five periods
+# bound a hang; they also reserve the pool so the catalog compile does not share CPU with other
+# fixtures. The fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
 # compile time). This must stay ahead of the bundle budget below: the first match wins.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
-slow-timeout = { period = "60s", terminate-after = 10 }
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 25 }
+threads-required = "num-test-threads"
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
-slow-timeout = { period = "60s", terminate-after = 10 }
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 25 }
+threads-required = "num-test-threads"
 
 # This probe lowers one deeply nested program on a deliberately small stack: a single
 # operation that reached 152s of its 180s budget on a loaded x86_64 runner.
@@ -88,6 +90,17 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# The php-src ext/uri case bundle compiles the embedded Rust case table as 15 bundled programs
+# plus the isolation cases. It measures 100-320s locally and shares a shard with other codegen
+# tests on CI; give it a wider budget than the generic bundle override.
+[[profile.default.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::uri_php_src::test_uri_php_src_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::uri_php_src::test_uri_php_src_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
 # still executes every case under heap diagnostics, so the single test runs longer than any of
@@ -95,11 +108,11 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # Nextest takes the FIRST matching override for a setting, so a budget that must beat a
 # broader filter has to stay ahead of it in this file.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+filter = 'binary(/^codegen_tests_/) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+filter = 'binary(/^codegen_tests_/) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 # This dynamic-eval cast probe lowers the whole builtin catalog through the opaque eval
@@ -116,11 +129,11 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
 # Keep their assertions and use the same bounded budget as REPL eval hosts.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+filter = 'binary(/^codegen_tests_/) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+filter = 'binary(/^codegen_tests_/) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # The eval builtin parity probes compile opaque-eval catalog hosts, including the
@@ -149,21 +162,21 @@ slow-timeout = { period = "60s", terminate-after = 18 }
 # 214s under cargo test before archive migration, so the ordinary 180s single-case
 # budget cannot cover it. Keep its corpus intact with a bounded ten-minute budget.
 [[profile.default.overrides]]
-filter = 'binary(=codegen_tests) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
-filter = 'binary(=codegen_tests) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 # The GMP eval parity fixture compiles one opaque-eval host (the whole builtin catalog)
 # and links the GMP bridge; it measured 329s on a debug macOS host.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+filter = 'binary(/^codegen_tests_/) and test(~codegen::gmp_eval)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+filter = 'binary(/^codegen_tests_/) and test(~codegen::gmp_eval)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
@@ -171,12 +184,12 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # 240s budget on both Linux x86_64 and macOS runners. Give the family a bounded ten-period
 # budget so a loaded shard cannot turn a passing probe into a timeout.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::repl)'
-slow-timeout = { period = "60s", terminate-after = 10 }
+filter = 'binary(/^codegen_tests_/) and test(~codegen::repl)'
+slow-timeout = { period = "60s", terminate-after = 4 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::repl)'
-slow-timeout = { period = "60s", terminate-after = 10 }
+filter = 'binary(/^codegen_tests_/) and test(~codegen::repl)'
+slow-timeout = { period = "60s", terminate-after = 4 }
 
 # Core eval GC fixtures use opaque eval and link Magician just like codegen::eval.
 # Collection comparisons and heap-debug/tagged controls often compile twice.
@@ -187,25 +200,39 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # remains 60s independently of this outer budget. This block stays ahead of the
 # opaque-eval families below, which also match some of these tests with five periods.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 # These opaque-eval families compile the whole builtin catalog and run under heap
 # diagnostics; measured 76-196s on a local macOS host and 100-170s on loaded Linux
 # shards. Give the families a bounded 300s allowance.
+# The opaque `codegen::eval*` families also lower the whole builtin catalog: one compile
+# emitted ~91 MB of assembly and spent most of its 324-430s in the assembler on a macOS host
+# after the declared-callable inventory growth. The three-period default cut off a different
+# member on each macOS eval shard. Keep a bounded twelve periods.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::eval/)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::eval/)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
 # Native XML factory/accessor eval probes compile the same catalog. The constructorless
 # factory probe generated 249 MB of assembly and reached 180s before linking finished.
 # Include that workload here rather than giving each probe a separate timeout override.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # `retries = 1`: a test that fails once is run again on its own before the shard reports, and
@@ -221,11 +248,18 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 status-level = "slow"
 
 # OPcache probes compile eval-capable hosts and reached the 180s cap when
-# two catalog compiles shared a macOS runner. Reserve the worker pool for each
-# probe to serialize this compilation work within the shard.
+# two catalog compiles shared a macOS runner; one probe timed out twice at the
+# three-period default. Reserve the worker pool for each probe and give the
+# binary a bounded six periods on macOS.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(/^opcache_/)'
+filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
 threads-required = "num-test-threads"
 
 # One JUnit report per CI run, written under nextest's store dir, which is
@@ -348,11 +382,11 @@ on-missing = "error"
 # several times slower; twenty periods keep a real hang bounded while letting the
 # first attempt finish instead of spending the job budget on retries.
 [[profile.default.overrides]]
-filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::environment::web_environment_computed_eval_retains_population)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::environment::web_environment_computed_eval_retains_population)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 # This fixture compiles the web prelude together with native closures and opaque
@@ -370,30 +404,30 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # crossed the 60s guard on macOS while sharing the web shard with the edge
 # tests; keep the 60s slow warning and terminate a hang at 180s.
 [[profile.default.overrides]]
-filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+filter = 'binary_id(elephc::integration) and test(/^web_tests::environment::review::web_environment_.*_retains_population$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+filter = 'binary_id(elephc::integration) and test(/^web_tests::environment::review::web_environment_.*_retains_population$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::environment::web_environment_opaque_eval_retains_population)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::environment::web_environment_opaque_eval_retains_population)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # This ownership fixture likewise compiles the web prelude with opaque eval and
 # then drives several requests. Both retries on macOS CI reached nextest's exact
 # 60s termination boundary without a test panic or server diagnostic.
 [[profile.default.overrides]]
-filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::web_eval_superglobal_reload_releases_replaced_owners)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::web_eval_superglobal_reload_releases_replaced_owners)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
@@ -403,30 +437,30 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
 # guard on the macOS runners, on both attempts, in two consecutive runs.
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::opcache_reset_is_performed_at_the_next_request_boundary)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::opcache_reset_is_performed_at_the_next_request_boundary)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # One web-runtime compile plus a served request: median 44s and up to 58s on macOS in the
 # CI JUnit reports of 2026-10-20..22, with five retried 60s timeouts in three days. Keep the
 # 60s slow warning and terminate a hang at 180s, like the other web session entries above.
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::ini_get_session_name_tracks_session_name)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::ini_get_session_name_tracks_session_name)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # PDO_OCI loads the full PDO surface and the cold optional ODPI-C archive build
@@ -477,11 +511,11 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 # Standalone eval integration binaries retain their existing longer branch budget.
 # The global 180s default replaces the redundant three-period overrides.
 [[profile.default.overrides]]
-filter = 'binary(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^eval_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
-filter = 'binary(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^eval_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 # The profile-differential corpus compiles and runs each case once per maintained
 # `--php-version`, so one test is four complete compile-link-run cycles. Most cases stay
@@ -490,14 +524,17 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # containerized runners are involved. The budget is larger than the 180s default because
 # the cost here is dominated by linking a large archive rather than by compilation, which
 # is exactly what a loaded runner stretches most.
-# The NaN string-cast eval fixture also compiles and links one host per PHP profile.
+# The NaN string-cast eval fixture also compiles and links one host per PHP profile, and its
+# source arrives at run time, so every profile lowers the whole builtin catalog: 497s measured
+# on an idle macOS host, against a 300s cap that a loaded shard worker crossed twice. Three
+# periods bound a hang while leaving room for the profile compiles under the shard's parallelism.
 [[profile.default.overrides]]
-filter = '(binary(php_profile_independence_tests) and test(/^eval_/)) or (binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once))'
-slow-timeout = { period = "300s", terminate-after = 1 }
+filter = '(binary_id(elephc::integration) and test(/^php_profile_independence_tests::eval_/)) or (binary_id(elephc::integration) and test(=nan_bool_coercion_tests::nan_string_dynamic_eval_cast_warns_once))'
+slow-timeout = { period = "300s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = '(binary(php_profile_independence_tests) and test(/^eval_/)) or (binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once))'
-slow-timeout = { period = "300s", terminate-after = 1 }
+filter = '(binary_id(elephc::integration) and test(/^php_profile_independence_tests::eval_/)) or (binary_id(elephc::integration) and test(=nan_bool_coercion_tests::nan_string_dynamic_eval_cast_warns_once))'
+slow-timeout = { period = "300s", terminate-after = 3 }
 # The prebuilt bridge guard rejects accidental driver-feature substitutions.
 [[profile.ci.archive.include]]
 path = "debug/elephc-pdo-features.txt"
@@ -511,12 +548,12 @@ relative-to = "target"
 # exceptions below, and a real hang still terminates at 180s on macOS.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(codegen_tests)'
+filter = 'binary(/^codegen_tests_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(codegen_tests)'
+filter = 'binary(/^codegen_tests_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These multi-compile mbstring, eval, and ownership families reached 60s on both
@@ -527,12 +564,12 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # Unrelated codegen tests and the compiled-program watchdog retain their 60s guards.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "linux")'
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "linux")'
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,
@@ -540,19 +577,19 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # 60s global guard on the shared macOS runners (60.01s, on both tries) in runs that were
 # otherwise green, and passed on the next attempt. Same budget as the named family.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # This native-default ownership probe lowers/emits a deep program for all five targets.
@@ -570,10 +607,20 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # three-minute termination window, so give the migrated corpus the same bounded budget as
 # the other catalog-sized integration probes.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+
+# The inline php-src tokenizer corpus compiles all 54 cases with the debug compiler and
+# measured 299s locally, beyond the ordinary 180s single-case budget.
+[[profile.default.overrides]]
+filter = 'binary(=tokenizer_php_src)'
+slow-timeout = { period = "60s", terminate-after = 8 }
+
+[[profile.ci.overrides]]
+filter = 'binary(=tokenizer_php_src)'
+slow-timeout = { period = "60s", terminate-after = 8 }

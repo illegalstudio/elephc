@@ -4,7 +4,7 @@
 //! by autovivifying the parent element as an array (issue #555).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests arrays::nested_autovivify`.
+//! - `cargo test --test codegen_tests_data arrays::nested_autovivify`.
 //!
 //! Key details:
 //! - Before the fix, the parent chain of a nested assignment was lowered as a

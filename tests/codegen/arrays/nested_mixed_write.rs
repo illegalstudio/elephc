@@ -5,7 +5,7 @@
 //! (issue #529).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests arrays::nested_mixed_write`.
+//! - `cargo test --test codegen_tests_data arrays::nested_mixed_write`.
 //!
 //! Key details:
 //! - The nested-assign statement used to lower the FULL target as a read and

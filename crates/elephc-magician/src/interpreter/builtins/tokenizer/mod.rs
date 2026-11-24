@@ -8,6 +8,8 @@
 //! - Runtime arrays own their text and nested token tuples through EvalArrayBuilder.
 //! - Parse errors leave through the ordinary catchable Throwable channel.
 
+use elephc_chopper::syntax::php_tokenizer;
+
 use super::super::*;
 use super::collection_builder::EvalArrayBuilder;
 mod arguments;
@@ -28,6 +30,30 @@ pub(in crate::interpreter) fn eval_builtin_tokenizer(
     })
 }
 
+/// Emits each non-fatal tokenizer diagnostic through PHP's error-handler channel.
+///
+/// The tokenizer's severity is PHP's own (`E_WARNING` for `declare(encoding=...)`, otherwise
+/// `E_DEPRECATED`), and the reported line is the line inside the scanned source. Routing
+/// through the shared user-error dispatcher keeps a throwing handler catchable by the
+/// `try`/`catch` around `eval()`.
+fn report_tokenizer_warnings(
+    warnings: &[php_tokenizer::Warning],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for warning in warnings {
+        eval_dispatch_php_error_at(
+            &warning.message,
+            warning.severity,
+            Some(""),
+            Some(warning.line),
+            context,
+            values,
+        )?;
+    }
+    Ok(())
+}
+
 /// Materializes PHP's array-or-character stream from the shared engine's token offsets.
 pub(in crate::interpreter) fn eval_tokenizer_values(
     name: &str, args: &[RuntimeCellHandle], context: &mut ElephcEvalContext,
@@ -36,17 +62,23 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
     if name == "token_name" {
         let [value] = args else { return Err(EvalStatus::RuntimeFatal); };
         let id = tokenizer_int(*value, name, 1, "id", context, values)?;
-        return values.string(elephc_tokenizer_engine::token_name(id).unwrap_or("UNKNOWN"));
+        return values.string(php_tokenizer::token_name(id).unwrap_or("UNKNOWN"));
     }
     let Some(code) = args.first().copied() else { return Err(EvalStatus::RuntimeFatal); };
     let code = tokenizer_source(code, name, context, values)?;
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
-    let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
-        Ok(tokens) => tokens,
-        Err(error) => return location::throw_parse_error(&error, context, values),
+    let output = match php_tokenizer::tokenize_with_warnings(&code, flags) {
+        Ok(output) => output,
+        Err(error) => {
+            // PHP emits the diagnostics that precede the failure, then throws.
+            report_tokenizer_warnings(&error.warnings, context, values)?;
+            return location::throw_parse_error(&error, context, values);
+        }
     };
+    report_tokenizer_warnings(&output.warnings, context, values)?;
+    let tokens = output.tokens;
     let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
     for (index, token) in tokens.iter().enumerate() {
         let text = &code[token.pos..token.pos + token.len];
@@ -79,10 +111,15 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
             Some(value) => tokenizer_int(*value, "PhpToken::tokenize", 2, "flags", context, values)?,
             None => 0,
         };
-        let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
-            Ok(tokens) => tokens,
-            Err(error) => return location::throw_parse_error(&error, context, values),
+        let output = match php_tokenizer::tokenize_with_warnings(&code, flags) {
+            Ok(output) => output,
+            Err(error) => {
+                report_tokenizer_warnings(&error.warnings, context, values)?;
+                return location::throw_parse_error(&error, context, values);
+            }
         };
+        report_tokenizer_warnings(&output.warnings, context, values)?;
+        let tokens = output.tokens;
         let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
         for (index, token) in tokens.iter().enumerate() {
             out.index(index, |values| {

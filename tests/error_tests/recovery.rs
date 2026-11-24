@@ -3,7 +3,8 @@
 //! collects multiple errors, parser block recovery collects multiple errors, type checker recovery
 //! collects multiple errors, failed-assignment targets not cascading into `Undefined variable`, and
 //! function-body errors raised from a top-level call, a callback or a first-class callable
-//! surviving the stale initial-error filter.
+//! surviving the stale initial-error filter, and class members that fail to parse being reported
+//! once without cascading into the rest of the class.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -626,4 +627,125 @@ fn test_variadic_callback_rewalk_runs_before_descriptor_promotion() {
         "<?php function f(...$n) { return g()[0]; } function g() { return C::$v; } \
          class C { public static $v; } var_dump(call_user_func('f', 1)); C::$v = [9];",
     );
+}
+
+/// Parses `src` and returns every parse error message, in order.
+fn parse_error_messages(src: &str) -> Vec<String> {
+    let tokens = tokenize(src).unwrap();
+    parse(&tokens)
+        .expect_err("expected source to fail parsing")
+        .flatten()
+        .iter()
+        .map(|error| error.message.clone())
+        .collect()
+}
+
+/// A promoted parameter's `null` default on a type that rejects null is a single error, as in
+/// php 8.5 (`Fatal error: Cannot use null as default value for parameter $s of type string`).
+/// It used to cascade: recovery resumed inside the constructor, so its `{}` and the class's `}`
+/// were also reported as unexpected tokens.
+#[test]
+fn test_promoted_null_default_error_does_not_cascade() {
+    for (src, expected) in [
+        (
+            "<?php class A { public function __construct(public string $s = null) {} }\necho 1;",
+            "Cannot use null as default value for parameter $s of type string",
+        ),
+        (
+            "<?php class A {\n  public function __construct(public string $s = null, public int $i = 1) {}\n  public function m() {}\n}\necho 1;",
+            "Cannot use null as default value for parameter $s of type string",
+        ),
+        (
+            "<?php $o = new class { public function __construct(public int $i = null) {} };\necho 1;",
+            "Cannot use null as default value for parameter $i of type int",
+        ),
+        (
+            "<?php enum E { case A; public function __construct(public int $i = null) {} }",
+            "Cannot use null as default value for parameter $i of type int",
+        ),
+    ] {
+        assert_eq!(parse_error_messages(src), vec![expected.to_string()], "source: {}", src);
+    }
+}
+
+/// A member that fails to parse is skipped to its end: errors in two members of one class, or
+/// in an interface member and a later statement, are each reported once, with nothing between.
+#[test]
+fn test_class_member_recovery_reports_each_member_error_once() {
+    assert_eq!(
+        parse_error_messages(
+            "<?php class A {\n  public function __construct(public string $s = null) {}\n  public $p { get => 1; }\n  public function __construct(public array $a = null) { echo 1; }\n}",
+        ),
+        vec![
+            "Cannot use null as default value for parameter $s of type string".to_string(),
+            "Cannot use null as default value for parameter $a of type array".to_string(),
+        ],
+    );
+    assert_eq!(
+        parse_error_messages(
+            "<?php interface I {\n  public function m(public int $x);\n  public function n();\n}\necho ;",
+        ),
+        vec![
+            "Cannot declare promoted property outside a constructor".to_string(),
+            "Unexpected token: Semicolon".to_string(),
+        ],
+    );
+}
+
+/// An unbalanced `(` or `[` inside a method body does not stretch the skip past that body's `}`:
+/// the next member is still parsed, so its own error is reported too.
+#[test]
+fn test_class_member_recovery_stops_at_body_with_unclosed_delimiter() {
+    for opener in ["(", "["] {
+        let src = format!(
+            "<?php class A {{ function one() {{ echo {opener}; }} function two(public int $x) {{}} }}"
+        );
+        let messages = parse_error_messages(&src);
+        assert_eq!(messages.len(), 2, "source: {src}, got {messages:?}");
+        assert_eq!(
+            messages[1], "Cannot declare promoted property outside a constructor",
+            "source: {src}, got {messages:?}"
+        );
+    }
+}
+
+/// A `{` inside a property or constant initializer (a `match`) does not end the skipped member:
+/// the skip goes on to the declaration's `;`, so that `;` is not reported as a stray member, and
+/// the next member's own error is still reported. A hook block after a default, even an empty or
+/// misspelled one, still ends the member, and so does a `match` followed directly by a member.
+#[test]
+fn test_class_member_recovery_skips_braces_inside_initializers() {
+    assert_eq!(
+        parse_error_messages(
+            "<?php class A { static const X = match (1) { default => 1 }; public function f() {} }",
+        ),
+        vec!["Class constants cannot be declared static".to_string()],
+    );
+    for src in [
+        "<?php class A { public static readonly int $p = match (1) { default => 1 }; function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = 1 { get => 2; } function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = match (1) { default => 1 } + 1; function two(public int $x) {} }",
+        "<?php class A { public static readonly int $p = match (1) { default => 1 } function two(public int $x) {} }",
+    ] {
+        assert_eq!(
+            parse_error_messages(src),
+            vec![
+                "Static properties cannot be readonly".to_string(),
+                "Cannot declare promoted property outside a constructor".to_string(),
+            ],
+            "source: {src}",
+        );
+    }
+    for src in [
+        "<?php class A { public int $p = 1 {} function two(public int $x) {} }",
+        "<?php class A { public int $p = 1 { gte => 2; } function two(public int $x) {} }",
+        "<?php class A { public int $p = 1 {} #[A] public function two(public int $x) {} }",
+    ] {
+        let messages = parse_error_messages(src);
+        assert_eq!(messages.len(), 2, "source: {src}, got {messages:?}");
+        assert_eq!(
+            messages[1], "Cannot declare promoted property outside a constructor",
+            "source: {src}, got {messages:?}"
+        );
+    }
 }

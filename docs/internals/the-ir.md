@@ -13,12 +13,12 @@ into assembly.
 **Authoritative source audit for this spec:**
 
 - `src/types/model.rs`
-- `src/parser/ast/expr.rs`
-- `src/parser/ast/stmt.rs`
-- `src/parser/ast/operators.rs`
-- `src/parser/ast/types.rs`
-- `src/parser/ast/oop.rs`
-- `src/parser/ast/ffi.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/expr.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/stmt.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/operators.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/types.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/oop.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/ffi.rs`
 - `src/ir/`
 - `src/ir_lower/`
 - `src/codegen/`
@@ -872,6 +872,29 @@ preserves PHP exponentiation result rules.
 | `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
+A boxed operand written as a container element is first projected to the type
+the checker proved for it. A hash `foreach` binding, a guard-narrowed `mixed`
+local and a branch merge are boxed cells in EIR while the checker types them as
+one scalar or a concrete array, and the checker's container type follows that
+type, not the box. Lowering reads `CheckResult::element_value_views`
+(`src/ir_lower/expr/element_values.rs`) at the three places an element is
+formed, a local append, a local keyed write and an array literal: a scalar is
+extracted with `Cast`, and a local's own array or hash with `MixedUnbox`, so no
+`ArrayToMixed` / `HashToMixed` is emitted for a container that is empty or
+already stores that type. A boxed local read at such a site produces the
+projected value itself, which is what keeps a literal's predicted storage and its
+lowered items in agreement. An operand without a published view, and one whose
+type the container does not store, still widen the container as described below.
+
+An `if`, ternary or `match` merge reconciles a local array whose arms disagree on
+the element storage by boxing every arm's elements (`ArrayToMixed`, or
+`ArrayToHash` / `HashToMixed` when an arm holds a hash). An arm that still holds
+the empty `array<never>` it entered with has nothing to box: it adopts the
+layout the other arms agree on, which is the type the checker joins the two to.
+`$out = []; if ($c) { $out[] = $v; }` therefore leaves `$out` an `array<int>` on
+both paths, and an empty arm joined with a typed hash becomes that hash on its
+own edge.
+
 A local indexed-array append or offset write emits `ArrayToMixed` only when the
 stored value cannot share the element storage. An object whose class is the
 element class, a subclass of it, or an implementation of the element interface
@@ -1172,6 +1195,7 @@ slot. Passes treat the instruction as a writer of the named slot.
 | `PropSet(class_id, property, value)` | object, value | `Void` | `writes_heap`, `refcount_op`, maybe `may_deopt` |
 | `PackedFieldMixedToInt`, `PackedFieldMixedToFloat`, `PackedFieldMixedToBool` | boxed value bound for a packed or extern struct field, `TypeError` message prefix | raw `I64`, `F64` or bool payload: only the field's own runtime type passes (a float field also widens an int), anything else throws | `reads_heap`, `alloc_heap`, `may_throw` |
 | `PropertyBoundaryCheckedToInt` | checked add/sub/mul result bound for a declared `int` property, full `TypeError` message | raw `I64`: an int forwards, an overflowed float inside `[-2^63, 2^63)` truncates, any other float throws `Cannot assign float to property C::$p of type int`; it only reads the cell, so the producer can use a frame cell | `reads_heap`, `alloc_heap`, `may_throw` |
+| `ReferenceArgumentTypeError(message)` | complete call-site `TypeError` message | `Void`; always throws | `reads_global`, `alloc_heap`, `may_throw` |
 | `DynamicPropGet`, `DynamicPropSet` | object, property string/value | value or `Void` | `reads_heap`/`writes_heap`, `may_deopt`, maybe `may_warn` |
 | `NullsafePropGet`, `NullsafeMethodCall` | nullable object and metadata | nullable result | branch plus underlying op effects |
 | `MethodLookup` | object, method id | callable entry | `reads_heap`, `reads_global`, `may_deopt` |
@@ -1386,7 +1410,7 @@ Required properties:
 `--emit-ir` is a diagnostic output mode:
 
 ```bash
-cargo run -- --emit-ir examples/hello/main.php
+cargo run -- build --emit-ir examples/hello/main.php
 ```
 
 The compiler runs the normal frontend order through type checking and AST
@@ -2438,8 +2462,8 @@ preheader exists, so passes either skip the loop or create one when needed.
 
 ## AST Lowering Catalogue
 
-Lowering must cover every variant in `src/parser/ast/expr.rs` and
-`src/parser/ast/stmt.rs`. The catalogue below is exhaustive for the current
+Lowering must cover every variant in `crates/elephc-chopper/src/syntax/parser/ast/expr.rs` and
+`crates/elephc-chopper/src/syntax/parser/ast/stmt.rs`. The catalogue below is exhaustive for the current
 source tree.
 
 ### Supporting AST Metadata

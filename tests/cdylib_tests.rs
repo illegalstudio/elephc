@@ -4,12 +4,13 @@
 //! per the scalar and owned-string contracts.
 //!
 //! Called from:
-//! - `cargo test --test cdylib_tests` through Rust's test harness.
+//! - `cargo test --test integration cdylib_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI binary as a subprocess (CARGO_BIN_EXE_elephc)
-//!   inside an isolated temp dir with an isolated runtime cache, then compile
-//!   a minimal C host with the system C compiler and run it.
+//!   inside an isolated temp dir with a private XDG cache root and the shared
+//!   runtime-object cache, then compile a minimal C host with the system C
+//!   compiler and run it.
 //! - The platform symbol table is also asserted: internal globals stay private,
 //!   while only documented boundary symbols and `#[Export]` trampolines remain.
 //! - Host-target only: each platform/arch covers itself (macOS aarch64 runs
@@ -59,7 +60,9 @@ fn elephc_bin() -> String {
 /// runtime cache so parallel tests never share cached runtime objects.
 fn elephc_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd
 }

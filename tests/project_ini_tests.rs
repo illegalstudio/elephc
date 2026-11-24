@@ -3,7 +3,7 @@
 //! project sets once instead of passing `--ini` on every compile.
 //!
 //! Called from:
-//! - `cargo test --test project_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration project_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp
@@ -55,8 +55,9 @@ fn probe(keys: &[&str]) -> String {
 
 /// Compiles `source` (a path under `root`) with `extra` CLI arguments.
 fn compile(root: &Path, source: &Path, extra: &[&str]) -> Output {
-    Command::new(elephc_bin())
+    Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", root.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(root)
         .args(extra)
         .arg(source)
@@ -138,6 +139,53 @@ fn ini_entries_of_the_project_manifest_act_like_ini_flags() {
          opcache.max_accelerated_files='4000'\n"
     );
     assert_eq!(from_manifest, from_flags, "an [ini] entry is exactly one --ini flag");
+}
+
+/// The merged list is checked again after `[ini]` entries are prepended: a manifest
+/// `memory_limit` below PHP's startup floor is refused, reported, and leaves the default.
+#[test]
+fn manifest_memory_limit_below_the_startup_floor_is_refused() {
+    let root = make_test_dir("project_ini_memory_floor");
+    fs::write(root.join("elephc.toml"), "[ini]\nmemory_limit = \"1M\"\n").unwrap();
+    let source = root.join("main.php");
+    fs::write(&source, probe(&["memory_limit"])).unwrap();
+
+    let output = compile(&root, &source, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Warning: Failed to set memory limit to 1048576 bytes (Current memory usage is 2097152 bytes)"
+        ),
+        "{stderr}"
+    );
+    let run = Command::new(source.with_extension(""))
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "memory_limit='128M'\n"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// The manifest `memory_limit` participates in arena sizing: it may grow the default heap,
+/// but it cannot silently exceed an explicitly requested `--heap-size`.
+#[test]
+fn manifest_memory_limit_respects_an_explicit_heap_size() {
+    let root = make_test_dir("project_ini_memory_arena");
+    fs::write(root.join("elephc.toml"), "[ini]\nmemory_limit = \"256M\"\n").unwrap();
+    let source = root.join("main.php");
+    fs::write(&source, "<?php echo 1;\n").unwrap();
+
+    let output = compile(&root, &source, &["--heap-size=67108864"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "the compile must fail");
+    assert!(
+        stderr.contains("--ini memory_limit=256M exceeds --heap-size=67108864"),
+        "{stderr}"
+    );
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// An `--ini` on the command line wins over the manifest's value for the same directive.

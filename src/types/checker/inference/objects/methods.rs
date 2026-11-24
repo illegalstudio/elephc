@@ -526,7 +526,26 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info
+                let uri_destructor = method_key == "__destruct"
+                    && crate::uri_prelude::is_internal_uri_class(class_name);
+                if uri_destructor {
+                    // php-src's internal URI classes own a native handle and do not expose a
+                    // callable `__destruct`; a direct call reports the ordinary undefined-method
+                    // Error. Our prelude still declares one so automatic cleanup runs.
+                    let scope = self.current_loop_storage_scope.clone();
+                    crate::types::checker::record_throw_access_site(
+                        &mut self.throw_access_sites,
+                        &scope,
+                        expr.span,
+                        crate::types::ThrowAccessInfo {
+                            span: expr.span,
+                            kind: crate::types::ThrowAccessKind::UndefinedMethod {
+                                class_name: class_name.to_string(),
+                                method: method.to_string(),
+                            },
+                        },
+                    );
+                } else if let Some(visibility) = class_info
                     .method_visibilities
                     .get(&method_key)
                     .or_else(|| class_info.static_method_visibilities.get(&method_key))
@@ -545,8 +564,10 @@ impl Checker {
                         // compile-time rejection. Record the throw site so EIR lowering
                         // emits the throw sequence, and continue with the declared return
                         // type so later passes stay type-consistent.
+                        let scope = self.current_loop_storage_scope.clone();
                         crate::types::checker::record_throw_access_site(
                             &mut self.throw_access_sites,
+                            &scope,
                             expr.span,
                             crate::types::ThrowAccessInfo {
                                 span: expr.span,

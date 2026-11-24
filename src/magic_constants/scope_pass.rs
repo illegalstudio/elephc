@@ -240,9 +240,10 @@ impl Pass for ScopePass {
     /// - `__FUNCTION__`: closure name if inside a closure, otherwise FQN (unqualified inside class/trait).
     /// - `__METHOD__`: closure name if inside a closure, otherwise `ClassName::methodName`.
     /// - `__FILE__` / `__DIR__`: empty string (handled by the file pass; reaching here means it was skipped).
-    fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {
+    fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind {
         let s = &self.scope;
         match mc {
+            MagicConstant::Line => ExprKind::IntLiteral(i64::from(span.line)),
             MagicConstant::Namespace => {
                 ExprKind::StringLiteral(s.namespace.clone().unwrap_or_default())
             }

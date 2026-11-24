@@ -50,6 +50,17 @@ pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 /// Value reads keyed by body scope, source span and local name; visits join conservatively.
 pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
 
+/// The types the checker proved for values that become container elements.
+///
+/// EIR keeps a hash `foreach` binding, a guard-narrowed `mixed` local and a branch merge as
+/// boxed cells, so the operand's storage alone cannot tell lowering which payload the
+/// checker's container type promises. The key is the body scope, the span of the value and
+/// the local the value reads directly, `None` for a branch merge. The local is part of the
+/// key because a synthesized node can share its span with its first operand. The value is
+/// `int`, `float`, `bool`, `string` or a loop binding's concrete array or hash; conflicting
+/// visits hold `None`.
+pub(crate) type ElementValueViews = HashMap<(String, Span, Option<String>), Option<PhpType>>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
 /// exception at runtime instead of a compile-time rejection.
@@ -79,6 +90,14 @@ pub enum ThrowAccessKind {
         /// Class declaring the constructor (e.g. `C`).
         class_name: String,
     },
+    /// A call to a method PHP does not expose to user code even though the class declares
+    /// a compiler-owned implementation of it (the internal URI classes' destructor).
+    UndefinedMethod {
+        /// Class holding the method (e.g. `Uri\\Rfc3986\\Uri`).
+        class_name: String,
+        /// Method name without the trailing parentheses (e.g. `__destruct`).
+        method: String,
+    },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
@@ -92,6 +111,25 @@ pub enum ThrowAccessKind {
     ReflectionReadOnlyProperty {
         /// Property name without the leading `$`.
         property: String,
+    },
+    /// A property argument whose declared storage cannot satisfy a typed by-reference
+    /// parameter. PHP raises the call-site `TypeError` before the callee body runs; lowering
+    /// reports this exact message and skips the callee.
+    ReferenceArgumentType {
+        /// The complete diagnostic prefix through `must be of type T, `; lowering appends
+        /// the property's CURRENT runtime type and ` given`.
+        prefix: String,
+        /// The declared parameter type the property's current value must satisfy.
+        expected: PhpType,
+        /// Whether a current value could satisfy the parameter. A union/mixed property needs
+        /// the runtime guard; a concrete disjoint type throws unconditionally.
+        conditional: bool,
+        /// Whether the place is an UNTYPED property. PHP weakly coerces its current value to
+        /// a declared scalar by-reference parameter; a declared property (including `mixed`)
+        /// is checked without coercion.
+        coerces_weakly: bool,
+        /// The declared property type's PHP name, used by the unconditional path.
+        given: String,
     },
 }
 
@@ -143,6 +181,14 @@ pub struct CheckResult {
     /// (enclosing body scope, `new` site) -> the instantiated class it resolved to, consumed by
     /// `generics::classes` as an AST rewrite. See `Checker::generic_new_sites` for the key.
     pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
+    /// Whether the checked source can call `eval()` anywhere, including code the optimizer may
+    /// later remove. EIR lowering keeps an unresolved declared-initializer constant on the
+    /// eval-aware runtime lookup instead of reading native global storage when this is set.
+    pub program_contains_eval: bool,
+    /// Literal names a compiled `define()` declares anywhere in the checked source, including
+    /// calls inside functions. These names keep the native global lookup even in an eval-aware
+    /// program, because the compiled call writes native storage rather than an eval context.
+    pub native_defined_constants: HashSet<String>,
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub function_attribute_names: HashMap<String, Vec<String>>,
@@ -166,10 +212,25 @@ pub struct CheckResult {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    /// Subset of `required_libraries` whose bridge runtime some call site may reach.
+    ///
+    /// A library missing here was required only for extension identity by calls that
+    /// lower natively; EIR feature discovery remains authoritative for surviving calls.
+    pub runtime_bridge_libraries: Vec<String>,
+    /// Libraries required by builtins named as callable values (`name(...)`, a string
+    /// callback, or a literal kept by a declared `callable`).
+    ///
+    /// The reachability usage scan sees only direct calls, so it cannot prove that a callable
+    /// reference died with a pruned declaration; reconciliation keeps these libraries, and
+    /// their bridge runtimes, linked.
+    pub callable_builtin_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime exception throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// keyed by the owning body scope and the source span of the offending
+    /// call/assignment. The scope half is `current_loop_storage_scope`; a trait body is
+    /// checked once per using class, so its spans alone cannot identify which class's
+    /// property/method the site resolved against.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.
@@ -184,6 +245,8 @@ pub struct CheckResult {
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Source-point element proofs for declared-array appends; conflicts disable projection.
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Checked scalar views of element-forming values; conflicting visits disable projection.
+    pub element_value_views: ElementValueViews,
     /// Source-point value read contracts; these never change a local's reference storage.
     pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.

@@ -79,7 +79,7 @@ def smoke(tarball):
                 if field.endswith(".a") and not (root / field).is_file():
                     raise ValueError(f"Packaged capability is missing {field}")
         (root / "probe.php").write_text("<?php echo hash('sha256', 'artifact');")
-        subprocess.run([str(compiler), "--with-crypto", "probe.php"], cwd=root, env=environment, check=True)
+        subprocess.run([str(compiler), "build", "--with-crypto", "probe.php"], cwd=root, env=environment, check=True)
         actual = subprocess.check_output([str(root / "probe")], cwd=root, text=True, env=environment)
         if actual != hashlib.sha256(b"artifact").hexdigest():
             raise ValueError("Development package compile/link probe produced the wrong output")

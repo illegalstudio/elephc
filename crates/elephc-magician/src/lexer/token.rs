@@ -5,7 +5,7 @@
 //!
 //! Called from:
 //! - `crate::lexer::scan::tokenize()`
-//! - `crate::parser::state::Parser`
+//! - `crate::parser::state::FragmentInput`
 //!
 //! Key details:
 //! - Magic constants carry precomputed fragment line metadata when needed.

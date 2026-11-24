@@ -7,7 +7,7 @@
 //! `opcache_prelude::bake_manifest`.
 //!
 //! Called from:
-//! - `cargo test --test opcache_manifest_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_manifest_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The multi-file fixture is the point: the entry `require`s a sibling, pulls a PSR-4 class in
@@ -64,7 +64,9 @@ fn elephc_bin() -> String {
 /// returns the executable path.
 fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(dir.join(format!("{}.php", stem)));
     for assignment in ini {
@@ -983,8 +985,9 @@ if (is_array($s)) {
         )
         .unwrap();
 
-        let output = Command::new(elephc_bin())
+        let output = Command::new(elephc_bin()).arg("build")
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg(version)

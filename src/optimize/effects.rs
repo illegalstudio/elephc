@@ -299,6 +299,7 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
     match &expr.kind {
+        ExprKind::Runtime(_) => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(
@@ -527,7 +528,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
         }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
-        ExprKind::ObjectClassName { object } => expr_effect(object),
+        // A nullable or `mixed` receiver raises PHP's `Cannot use "::class" on null`
+        // TypeError at run time, so this expression can throw even though the operand
+        // itself is only read.
+        ExprKind::ObjectClassName { object } => expr_effect(object).with_may_throw(),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

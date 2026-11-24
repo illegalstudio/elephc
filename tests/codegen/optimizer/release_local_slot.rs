@@ -3,7 +3,7 @@
 //! Compares optimized and unoptimized EIR plus native heap-debug behavior.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::release_local_slot`.
+//! - `cargo test --test codegen_tests_core optimizer::release_local_slot`.
 //!
 //! Key details:
 //! - A promotion after a loop must not suppress releases inside that loop.
@@ -22,10 +22,10 @@ fn emit_release_ir(source: &str, ir_opt: bool) -> String {
         .arg(mode)
         .arg(&php_path)
         .output()
-        .expect("failed to run elephc --emit-ir");
+        .expect("failed to run elephc build --emit-ir");
     assert!(
         output.status.success(),
-        "elephc --emit-ir failed: stderr={}",
+        "elephc build --emit-ir failed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).expect("EIR output should be UTF-8");

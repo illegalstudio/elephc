@@ -129,6 +129,42 @@ fn configured_eval_injects_all_opcache_targets() {
     }
 }
 
+/// What the autoload closure references, declares, or evals drives injection as the entry
+/// program's own code does: a reference injects, a declaration there wins, and an
+/// interpreter-backed eval there supplies every OPcache target in a configured binary.
+#[test]
+fn autoload_closure_facts_drive_injection() {
+    use crate::opcache_prelude::AutoloadedFunctions;
+    let all = [
+        "opcache_get_configuration", "opcache_get_status", "opcache_reset",
+        "opcache_invalidate", "opcache_compile_file", "opcache_is_script_cached",
+        "opcache_is_script_cached_in_file_cache", "opcache_jit_blacklist",
+    ];
+    let inject = |autoloaded: &AutoloadedFunctions, overrides: &[(String, String)]| {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        inject_if_used(
+            parse("<?php echo 1;"), PhpVersion::Php85, false, None, &[], overrides, None, false,
+            false, autoloaded, &mut inventory,
+        ).0
+    };
+    let configured = [("opcache.enable_cli".to_string(), "1".to_string())];
+    let eval = AutoloadedFunctions::for_test(&[], &[], true);
+    for name in all {
+        assert!(detect::program_declares(&inject(&eval, &configured), name), "{name}");
+        assert!(!detect::program_declares(&inject(&eval, &[]), name), "{name}, CLI default");
+    }
+    let facts = AutoloadedFunctions::for_test(
+        &["opcache_reset", "opcache_get_status", "ini_get"],
+        &["opcache_get_status", "ini_get"],
+        false,
+    );
+    let injected = inject(&facts, &[]);
+    assert!(detect::program_declares(&injected, "opcache_reset"));
+    assert!(!detect::program_declares(&injected, "opcache_get_status"));
+    assert!(!detect::program_declares(&injected, "ini_get"));
+    assert!(!detect::program_declares(&injected, "opcache_compile_file"));
+}
+
     /// Injection fires when `opcache_get_configuration` is called.
     #[test]
 pub(super) fn injects_when_called() {
@@ -467,4 +503,29 @@ pub(super) fn injects_file_functions_per_function() {
             // Exactly one OPcache function per referenced name, plus the shared state block.
             assert_eq!(injected.len(), program.len() + 1 + STATE_HELPER_DECLS);
         }
+    }
+
+    /// Forcing the INI surface declares `ini_get` even when the program never mentions it.
+    #[test]
+    fn forced_ini_get_is_injected_for_the_tokenizer_memory_guard() {
+        let program = parse("<?php echo 1;");
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let (program, _) = inject_if_used(
+            program,
+            PhpVersion::default(),
+            false,
+            None,
+            &[],
+            &[],
+            None,
+            false,
+            true,
+            &crate::opcache_prelude::AutoloadedFunctions::default(),
+            &mut inventory,
+        );
+        assert!(program.iter().any(|stmt| matches!(
+            &stmt.kind,
+            crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                if name.eq_ignore_ascii_case("ini_get")
+        )));
     }

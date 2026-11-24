@@ -2233,6 +2233,13 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 /// unless the probe symbol table was built (i.e. `--probe`).
 fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
     let target = ctx.emitter.target;
+    // The project's include/exclude rules reach the probe before anything can count, and
+    // so does where it reads a request's peak memory (the start-up text is baked whenever
+    // the probe is linked).
+    if ctx.shared.apm_rules {
+        crate::codegen_support::apm_init::emit_apm_rules_slot(ctx.emitter);
+        crate::codegen_support::apm_init::emit_heap_peak_slot(ctx.emitter);
+    }
     if let Some((table_label, count)) = ctx.shared.probe_table.clone() {
         ctx.emitter.comment("probe: install SIGPROF sampler (--probe)");
         // The instrumentation's half of an exact capture, for the endpoint:
@@ -2364,6 +2371,10 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         &target.extern_symbol("elephc_probe_apm_event_fn"),
         0,
     );
+    // And each web request's trace context, which the exact runtime's trace hook hands
+    // on in a combined build, where it owns the bridge's slot (review).
+    abi::emit_symbol_address(ctx.emitter, scratch, &target.extern_symbol("elephc_probe_trace_begin"));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_probe_trace_fn"), 0);
     // Whether the bridges time their database and network calls is asked
     // through this slot. Installed in every probe build, the combined one
     // included, because under --apm the answer is yes from boot: a request's
@@ -2417,8 +2428,8 @@ fn emit_probe_dump(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the `--instrument` name table and the `elephc_instr_init` call in main's
-/// prologue (and the `--web` entry stub). The table is `(name_ptr, name_len)`
-/// pairs in function-id order — the registry the per-function prologues built as
+/// prologue (and the `--web` entry stub). The table is `(name_ptr, name_len,
+/// location_ptr, location_len)` quads in function-id order — the registry the per-function prologues built as
 /// they were emitted. Main is emitted last, so the registry is complete here.
 /// Inert unless `--instrument`.
 fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
@@ -2429,11 +2440,18 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     if names.is_empty() {
         return;
     }
-    let mut words = Vec::with_capacity(names.len() * 2);
-    for name in &names {
+    let locations = ctx.shared.instr_locations().to_vec();
+    // Four words per function: its name, then where it is declared (`path:line`,
+    // empty when unknown), each as a pointer and a length.
+    let mut words = Vec::with_capacity(names.len() * 4);
+    for (index, name) in names.iter().enumerate() {
         let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
         words.push(DataWord::Symbol(name_label));
         words.push(DataWord::U64(name_len as u64));
+        let location = locations.get(index).map(String::as_str).unwrap_or("");
+        let (location_label, location_len) = ctx.data.add_string(location.as_bytes());
+        words.push(DataWord::Symbol(location_label));
+        words.push(DataWord::U64(location_len as u64));
     }
     let table_label = ctx.data.add_words(words);
     ctx.emitter
@@ -2445,6 +2463,18 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, count_arg, names.len() as i64);
     let entry = target.extern_symbol("elephc_instr_init");
     abi::emit_call_label(ctx.emitter, &entry);
+    // Hand the instrumentation the address of the live-heap byte counter
+    // (`_gc_live`, what memory_get_usage() returns), so each call it records on
+    // the timeline carries the heap's size when it ended. An address rather
+    // than the symbol, the same way the sampler gets `_gc_allocs`.
+    let live_scratch = abi::int_arg_reg_name(target, 0);
+    abi::emit_symbol_address(ctx.emitter, live_scratch, "_gc_live");
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        live_scratch,
+        &target.extern_symbol("elephc_instr_live_ptr"),
+        0,
+    );
     // Publish elephc_instr_io into the runtime slot so I/O builtins (PDO
     // queries) can count operations per function without a compile-time coupling
     // to the instrument crate. The slot stays zero in non-instrument binaries.
@@ -2564,8 +2594,31 @@ fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
         return;
     }
     let id = ctx.shared.register_instr(ctx.function.display_name().to_owned());
+    if let Some(location) = function_declaration_location(ctx) {
+        ctx.shared.note_instr_location(id, location);
+    }
     ctx.instr_id = Some(id);
     emit_registered_instr_enter(ctx);
+}
+
+/// Where the function being emitted is declared, as `path:line`: the file and
+/// first line of its own source instructions. The profile uses it to say which
+/// file a query came from. `None` for a body with no source span (synthetic).
+fn function_declaration_location(ctx: &FunctionContext<'_>) -> Option<String> {
+    let span = ctx
+        .function
+        .instructions
+        .iter()
+        .filter_map(|inst| inst.span)
+        .filter(|span| span.is_from_source() && span.line > 0)
+        .min_by_key(|span| span.line)?;
+    let path = ctx
+        .module
+        .source_paths
+        .get(&span.source_id())
+        .cloned()
+        .or_else(|| ctx.module.source_path.clone())?;
+    Some(format!("{path}:{}", span.line))
 }
 
 /// Emits the `--instrument` exit hook for one return path. Preserves the return

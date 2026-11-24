@@ -1,7 +1,7 @@
 <?php
 // elephc-web Phase 2: request input via standard PHP superglobals.
 //
-// Compile: cargo run -- --web examples/web-request/main.php
+// Compile: cargo run -- build --web examples/web-request/main.php
 // Run:     ./examples/web-request/main --listen 127.0.0.1:8080
 // Try:     curl 'http://127.0.0.1:8080/hello?name=ada'
 //          curl -d 'msg=hi' http://127.0.0.1:8080/

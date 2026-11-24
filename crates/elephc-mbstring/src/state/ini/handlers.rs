@@ -141,9 +141,9 @@ fn input(state: &mut impl Access, value: &[u8], caller: &str, emit: &mut impl Fn
     }
 }
 
-/// Applies PHP's length-aware output lookup, including strncmp pass handling, without diagnostics.
+/// Applies PHP's exact `pass` output lookup without diagnostics.
 fn output(state: &mut impl Access, value: &[u8]) -> bool {
-    let pass = b"pass".starts_with(value) || c_string(value) == b"pass";
+    let pass = c_string(value) == b"pass";
     let encoding = if pass { Some(OutputEncoding::Pass) } else { Encoding::lookup(value).map(OutputEncoding::Convert) };
     if let Some(encoding) = encoding { state.with(|state| state.output = encoding); true } else { false }
 }

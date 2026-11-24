@@ -8,6 +8,8 @@
 //! Key details:
 //! - Proofs are source-point facts, never the function's final environment.
 //! - The existing TaggedScalar-to-I64 cast preserves the target-aware payload ABI.
+//! - A boxed local read as a container element is projected to its checked element view
+//!   (`element_values`), so the element and the storage predicted for it agree.
 
 use super::*;
 
@@ -54,6 +56,12 @@ pub(super) fn lower_local_value(
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
     } else if projected_local_value_type(ctx, name, span).is_some() && value.ir_type == IrType::TaggedScalar {
         coerce_to_int_at_span(ctx, value, Some(span))
+    } else if element_values::projected_local_element_type(
+        ctx, name, span, &ctx.builder.value_php_type(value.value),
+    ).is_some() {
+        // A boxed local written as a container element is read as the value the checker
+        // proved, which keeps the container on the payload its checked type promises.
+        element_values::project_element_value(ctx, value, span, Some(name), None)
     } else {
         value
     }
@@ -88,8 +96,13 @@ pub(super) fn projected_local_value_type(
     let tagged = ctx.local_slots.get(name).is_some_and(|slot|
         ctx.builder.function().locals[slot.as_raw() as usize].ir_type == IrType::TaggedScalar)
         || ctx.local_load_php_type(name).is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar);
-    (integer_read && tagged)
-        .then_some(PhpType::Int)
+    if integer_read && tagged {
+        return Some(PhpType::Int);
+    }
+    // A boxed local read as a container element produces the checked value (see
+    // `lower_local_value`), so literal storage is predicted from that type as well.
+    let physical = ctx.local_load_php_type(name)?;
+    element_values::projected_local_element_type(ctx, name, span, &physical)
 }
 
 /// Loads a reference argument's actual local slot without projecting its value view.

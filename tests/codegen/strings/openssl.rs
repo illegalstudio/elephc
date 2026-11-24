@@ -2,7 +2,7 @@
 //! End-to-end AOT tests for OpenSSL constants, helpers, and AES cipher modes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests openssl` through the Rust test harness.
+//! - `cargo test --test codegen_tests_data openssl` through the Rust test harness.
 //!
 //! Key details:
 //! - Ciphertext expectations come from the checked-in PHP 8.4/OpenSSL 3.6 fixtures.

@@ -18,7 +18,7 @@
 //! silently removed interpolation from every transitively included file too.
 //!
 //! Called from:
-//! - `cargo test --test eval_string_interpolation_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_string_interpolation_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - EVERY expected string here was captured from reference PHP 8.5.6 with
@@ -98,7 +98,9 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

@@ -114,5 +114,13 @@ pub(super) fn push_unique_constant_name(name: &str, names: &mut Vec<String>, see
 
 /// Normalizes PHP constant names for case-sensitive eval dynamic probes.
 pub(super) fn normalize_constant_name(name: &str) -> String {
-    name.trim_start_matches('\\').to_string()
+    let name = name.trim_start_matches('\\');
+    // PHP namespaces are case-insensitive, while the final constant segment is not:
+    // `\APP\NSC` and `\App\NSC` name the same constant, but `\App\nsc` does not.
+    match name.rsplit_once('\\') {
+        Some((namespace, constant)) => {
+            format!("{namespace}\\{constant}", namespace = namespace.to_ascii_lowercase())
+        }
+        None => name.to_string(),
+    }
 }

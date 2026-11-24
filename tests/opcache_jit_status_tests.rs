@@ -6,7 +6,7 @@
 //! invalid-spelling behavior, and the 8.2 per-version default.
 //!
 //! Called from:
-//! - `cargo test --test opcache_jit_status_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_jit_status_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP, reproduced on this host with
@@ -92,7 +92,9 @@ fn compile(dir: &Path, stem: &str, args: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.args(args);
@@ -252,7 +254,9 @@ if (is_array($c)) {
         let php = dir.join("app.php");
         fs::write(&php, INI_PROBE).unwrap();
         let mut cmd = Command::new(elephc_bin());
+        cmd.arg("build");
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
         cmd.current_dir(&dir);
         cmd.arg(&php);
         cmd.arg("--ini").arg("opcache.enable_cli=1");

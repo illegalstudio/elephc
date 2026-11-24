@@ -831,7 +831,7 @@ fn emit_numeric_string_loose_eq(
 }
 
 /// Converts the current string result register pair to PHP truthiness in the integer result register.
-fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
     let falsy_label = ctx.next_label("str_falsy");
     let truthy_label = ctx.next_label("str_truthy");
     let done_label = ctx.next_label("str_truth_done");

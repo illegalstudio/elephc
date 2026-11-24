@@ -33,6 +33,8 @@ pub(crate) mod fibers;
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// Runtime instance checks admitted at class-like boundaries for `mixed` sources.
+pub(crate) mod object_boundary;
 /// PHP type spelling shared by parameter and property diagnostics.
 pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
@@ -100,7 +102,9 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
 };
-pub(crate) use result::{LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
+pub(crate) use result::{
+    ElementValueViews, LocalValueReadTypes, LoopStorageTypes, PromotableArrays,
+};
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
@@ -115,8 +119,8 @@ pub use schema::{
 };
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
-    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
-    PackedFieldInfo, PropertyHookContract,
+    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, NarrowedVtableSlot,
+    PackedClassInfo, PackedFieldInfo, PropertyHookContract,
 };
 pub use schema::{ClassBindingFacts, TraitCollisionDefault};
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};

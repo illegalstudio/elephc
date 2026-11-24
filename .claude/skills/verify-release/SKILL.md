@@ -54,8 +54,8 @@ Read the current version section in `ROADMAP.md`:
 
 Read test function names from all test files (`tests/*.rs` and `tests/**/*.rs`). For each implemented feature, check:
 
-- **Codegen tests** (`tests/codegen_tests.rs`, `tests/codegen/`): every built-in function should have at least 1 test. Every operator should have at least 1 test. Every statement type should have at least 1 test. List functions/features with ZERO tests.
-- **Error tests** (`tests/error_tests.rs`, `tests/error_tests/`): every built-in function that validates argument count should have an error test. List functions missing error tests.
+- **Codegen tests** (`tests/codegen_tests_*.rs`, `tests/codegen/`): every built-in function should have at least 1 test. Every operator should have at least 1 test. Every statement type should have at least 1 test. List functions/features with ZERO tests.
+- **Error tests** (`tests/error_tests.rs`, `tests/error_tests/`, mounted in `integration`): every built-in function that validates argument count should have an error test. List functions missing error tests.
 - **Lexer tests** (`tests/lexer_tests.rs`): every new token type should have a test.
 - **Parser tests** (`tests/parser_tests.rs`): every new AST construct should have a test.
 

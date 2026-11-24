@@ -201,6 +201,15 @@ pub(crate) fn lower_elephc_normalize_callable(
         super::super::callables::emit_factory_callable_descriptor(ctx, value, dynamic)?;
         return store_if_result(ctx, inst);
     }
+    if let Some(Immediate::DeclaredCallableFactory(dynamic)) = inst.immediate {
+        // The factory resolves a declared `callable` among the same names as invoking it, so it
+        // links no wrapper for a builtin named only at run time and raises the same named Error.
+        ctx.declared_callable_candidates = Some(declared_callable_runtime_names(ctx));
+        let lowered = super::super::callables::emit_factory_callable_descriptor(ctx, value, dynamic);
+        ctx.declared_callable_candidates = None;
+        lowered?;
+        return store_if_result(ctx, inst);
+    }
     match ctx.value_php_type(value)? {
         PhpType::Callable => {
             ctx.load_value_to_result(value)?;
@@ -213,11 +222,10 @@ pub(crate) fn lower_elephc_normalize_callable(
             if inst.immediate == Some(crate::ir::Immediate::DeclaredCallableNames) {
                 ctx.declared_callable_candidates = Some(declared_callable_runtime_names(ctx));
             }
-            let lowered = super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+            let lowered = super::super::callables::emit_scoped_runtime_mixed_callable_descriptor_value(
                 ctx,
                 value,
                 "__elephc_normalize_callable",
-                true,
             );
             ctx.declared_callable_candidates = None;
             lowered?;

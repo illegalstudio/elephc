@@ -415,15 +415,15 @@ routing and web transport verification remain open.
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
 | `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
 | `ctype_alnum()` | `ctype_alnum(mixed $text): bool` | All chars are alphanumeric |
-| `ctype_alpha()` | `ctype_alpha(mixed $text): bool` | All chars are A-Z/a-z |
+| `ctype_alpha()` | `ctype_alpha(mixed $text): bool` | All bytes are letters under the active `LC_CTYPE` (A-Z/a-z in the C locale) |
 | `ctype_cntrl()` | `ctype_cntrl(mixed $text): bool` | All chars are control characters |
 | `ctype_digit()` | `ctype_digit(mixed $text): bool` | All chars are 0-9 |
 | `ctype_graph()` | `ctype_graph(mixed $text): bool` | All chars are printable and not space |
-| `ctype_lower()` | `ctype_lower(mixed $text): bool` | All chars are a-z |
+| `ctype_lower()` | `ctype_lower(mixed $text): bool` | All bytes are lowercase letters under the active `LC_CTYPE` (a-z in the C locale) |
 | `ctype_print()` | `ctype_print(mixed $text): bool` | All chars are printable |
 | `ctype_punct()` | `ctype_punct(mixed $text): bool` | All chars are punctuation |
 | `ctype_space()` | `ctype_space(mixed $text): bool` | All chars are whitespace |
-| `ctype_upper()` | `ctype_upper(mixed $text): bool` | All chars are A-Z |
+| `ctype_upper()` | `ctype_upper(mixed $text): bool` | All bytes are uppercase letters under the active `LC_CTYPE` (A-Z in the C locale) |
 | `ctype_xdigit()` | `ctype_xdigit(mixed $text): bool` | All chars are hexadecimal digits |
 
 The `ctype_*` functions follow php-src 8.5 exactly: the empty string is always

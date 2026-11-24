@@ -8,34 +8,16 @@
 //! - `crate::interpreter::include_exec` for the uncached path.
 //!
 //! Key details:
-//! - ONE PROGRAM PER FILE, as php-src compiles a whole script. Each block used to be parsed
-//!   on its own, so a block spanning the tags failed: the most common template shape,
-//!   `<?php foreach ($rows as $r) { ?><li><?= $r ?></li><?php } ?>`, was a parse error where
-//!   reference PHP 8.5.10 runs it (MEASURED). The file is now cut at its tags ([`split_script`],
-//!   the same scan as before) and the pieces are joined into one token stream: a code block is
-//!   lexed where it sits, inline HTML becomes `echo "<bytes>";`, `?>` becomes `;` and `<?=`
-//!   becomes `echo`, which are exactly the tokens the eval lexer produces for a `?>` in eval'd
-//!   code (`crate::lexer::inline_html`).
-//! - Inline HTML is carried as BYTES, not lexed: an included template may hold any encoding
-//!   outside its PHP blocks, and the eval lexer only reads UTF-8.
-//! - A PARSE ERROR ANYWHERE FAILS THE WHOLE FILE before any of it runs, as in PHP. Replay used
-//!   to print the blocks ahead of the broken one first.
-//! - Each block is lexed at its own line, and `?>` swallows the one newline after it, as the
-//!   Zend scanner does: `__LINE__` restarted at 1 in every block, and the newline was printed.
-//! - `<?php` opens code only when followed by whitespace or the end of the file (`<?phpX` is
-//!   HTML), and `<?=` opens an echo; the short `<?` stays HTML (`short_open_tag` is off in the
-//!   production php.ini). The eval lexer applies the same rules.
-//! - [`ParseMode`] is load-bearing, not a tuning knob. With the script cache OFF this parse
-//!   runs on EVERY include, so it must go through a byte-keyed parse memo; dropping the memo
-//!   regressed a 63 KiB include from 1.58 ms to 5.38 ms. With the cache ON the script entry IS
-//!   the memo, and memoizing it a second time would only pin another copy.
+//! - Chopper scans a whole file across PHP and HTML tags before Magician lowers it.
+//! - Inline HTML retains its original bytes, even if it is not valid UTF-8.
+//! - The cache stores a single program or a parse failure for the whole source.
+//! - ParseMode determines whether this entry point keeps its own byte-keyed memo.
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::{tokenize_at_line, Token, TokenKind};
+use crate::lexer::tokenize_script;
 use crate::parse_cache::parse_script_cached;
 use crate::parser;
-use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 use std::sync::Arc;
 
 /// Whether a script parse should go through the byte-keyed parse memo.
@@ -86,378 +68,7 @@ pub(crate) fn segment_script(bytes: &[u8], mode: ParseMode) -> Vec<ScriptSegment
 
 /// Parses a whole PHP file, which starts in HTML mode, into one program.
 pub(crate) fn parse_script(bytes: &[u8]) -> Result<EvalProgram, EvalParseError> {
-    let mut tokens = Vec::new();
-    let mut line: i64 = 1;
-    let mut counted = 0;
-    for piece in split_script(bytes) {
-        line += newlines(&bytes[counted..piece.start()]);
-        counted = piece.start();
-        match piece {
-            ScriptPiece::Html { bytes: html, .. } => push_inline_html(&mut tokens, html, line),
-            ScriptPiece::Code { code, echo, closed, .. } => {
-                if echo {
-                    tokens.push(Token::new(TokenKind::Ident("echo".to_string()), line));
-                }
-                let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-                let mut block = tokenize_at_line(source, line)?;
-                block.pop(); // this block's end-of-input sentinel: the file goes on
-                tokens.extend(block);
-                line += newlines(code);
-                counted += code.len();
-                if closed {
-                    // `?>` ends a statement, as a `;` does.
-                    tokens.push(Token::new(TokenKind::Semicolon, line));
-                }
-            }
-        }
-    }
-    line += newlines(&bytes[counted..]);
-    tokens.push(Token::new(TokenKind::Eof, line));
-    parser::parse_tokens(tokens, bytes.len())
-}
-
-/// One piece of an included file, as its tags cut it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScriptPiece<'a> {
-    /// Bytes outside any PHP block, echoed verbatim.
-    Html { start: usize, bytes: &'a [u8] },
-    /// The code between an open tag and its `?>` (or the end of the file).
-    Code {
-        start: usize,
-        code: &'a [u8],
-        /// Opened by `<?=`, so the block's expression is echoed.
-        echo: bool,
-        /// Ended by `?>` rather than by the end of the file.
-        closed: bool,
-    },
-}
-
-impl ScriptPiece<'_> {
-    /// Returns the piece's byte offset in the file.
-    fn start(&self) -> usize {
-        match self {
-            Self::Html { start, .. } | Self::Code { start, .. } => *start,
-        }
-    }
-}
-
-/// Cuts a PHP file at its open and close tags, dropping the tags and the newline a `?>`
-/// swallows. Empty HTML runs are not pieces.
-fn split_script(bytes: &[u8]) -> Vec<ScriptPiece<'_>> {
-    let mut pieces = Vec::new();
-    let mut cursor = 0;
-    while let Some(tag) = find_open_tag(bytes, cursor) {
-        push_html(&mut pieces, bytes, cursor, tag.start);
-        let close = find_php_close_tag(bytes, tag.code_start);
-        let code_end = close.unwrap_or(bytes.len());
-        pieces.push(ScriptPiece::Code {
-            start: tag.code_start,
-            code: &bytes[tag.code_start..code_end],
-            echo: tag.echo,
-            closed: close.is_some(),
-        });
-        let Some(close) = close else {
-            return pieces;
-        };
-        cursor = close + 2 + swallowed_newline_len(&bytes[close + 2..]);
-    }
-    push_html(&mut pieces, bytes, cursor, bytes.len());
-    pieces
-}
-
-/// Appends `bytes[start..end]` as an HTML piece unless it is empty.
-fn push_html<'a>(pieces: &mut Vec<ScriptPiece<'a>>, bytes: &'a [u8], start: usize, end: usize) {
-    if start < end {
-        pieces.push(ScriptPiece::Html { start, bytes: &bytes[start..end] });
-    }
-}
-
-/// Returns how many bytes of newline a `?>` swallows from `rest`: one `\n`, `\r\n` or `\r`.
-fn swallowed_newline_len(rest: &[u8]) -> usize {
-    match rest {
-        [b'\r', b'\n', ..] => 2,
-        [b'\n' | b'\r', ..] => 1,
-        _ => 0,
-    }
-}
-
-/// Counts the `\n` bytes in `bytes`, the line breaks the eval lexer counts.
-fn newlines(bytes: &[u8]) -> i64 {
-    bytes.iter().filter(|&&byte| byte == b'\n').count() as i64
-}
-
-/// Emits `echo "<html>";` for an inline HTML run, keeping its exact bytes.
-fn push_inline_html(tokens: &mut Vec<Token>, html: &[u8], line: i64) {
-    let mut text = String::with_capacity(html.len());
-    for chunk in html.utf8_chunks() {
-        for ch in chunk.valid().chars() {
-            push_literal_char(ch, &mut text);
-        }
-        for &byte in chunk.invalid() {
-            push_escaped_byte(byte, &mut text);
-        }
-    }
-    tokens.push(Token::new(TokenKind::Ident("echo".to_string()), line));
-    tokens.push(Token::new(TokenKind::String(text), line));
-    tokens.push(Token::new(TokenKind::Semicolon, line));
-}
-
-/// Where an open tag sits and where its code starts.
-struct OpenTag {
-    start: usize,
-    code_start: usize,
-    echo: bool,
-}
-
-/// Whether `byte` may follow `<?php` for the tag to open code: the Zend scanner accepts a
-/// space, a tab, or a line break, and nothing else — not the other Unicode spaces.
-///
-/// The eval lexer (`crate::lexer::inline_html`) opens tags by the same rule, so a file and an
-/// `eval()` string agree on where code starts.
-pub(crate) fn is_open_tag_separator(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
-}
-
-/// Finds the next `<?php` (followed by whitespace or the end of the file) or `<?=` tag.
-fn find_open_tag(bytes: &[u8], from: usize) -> Option<OpenTag> {
-    let mut at = from;
-    while let Some(start) = find_from(bytes, at, b"<?") {
-        let after = &bytes[start + 2..];
-        if after.first() == Some(&b'=') {
-            return Some(OpenTag { start, code_start: start + 3, echo: true });
-        }
-        if after.len() >= 3
-            && after[..3].eq_ignore_ascii_case(b"php")
-            && after.get(3).copied().is_none_or(is_open_tag_separator)
-        {
-            return Some(OpenTag { start, code_start: start + 5, echo: false });
-        }
-        at = start + 2;
-    }
-    None
-}
-
-
-/// Finds the `?>` that ENDS the code block starting at `start`, as PHP's lexer does.
-///
-/// A `?>` inside a single-quoted, double-quoted or backtick string, a `/* */` comment, or a
-/// heredoc / nowdoc body is part of that token and does not close the block. One inside a `//`
-/// or `#` line comment DOES — PHP's own rule, and why a line comment is scanned for it rather
-/// than skipped. A plain byte search split `<?php echo "?>";` at the quote and handed the parser
-/// ` echo "` — an unterminated string — so a valid file failed to include and
-/// `opcache_compile_file()` refused it. MEASURED: reference prints `a?>b c?>d done` and compiles
-/// the file; elephc raised a parse error. The same naive search predates this module (it lived
-/// in `include_exec`), so every include was affected, not only the cache.
-///
-/// An unterminated string or comment runs to the end of the file, as in PHP: there is no
-/// closing tag, and the parser reports whatever is wrong with the code.
-pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut i = start;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'?' if bytes.get(i + 1) == Some(&b'>') => return Some(i),
-            b'\'' | b'"' | b'`' => match skip_quoted(bytes, i) {
-                QuotedScan::Closed(end) => i = end,
-                QuotedScan::PhpCloseTag(close) => return Some(close),
-                QuotedScan::Unterminated => return None,
-            },
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = find_from(bytes, i + 2, b"*/")? + 2;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                if let Some(close) = scan_line_comment(bytes, i + 2) {
-                    return Some(close);
-                }
-                i = next_line(bytes, i + 2);
-            }
-            // `#[` opens an attribute, which is code; any other `#` is a line comment.
-            b'#' if bytes.get(i + 1) != Some(&b'[') => {
-                if let Some(close) = scan_line_comment(bytes, i + 1) {
-                    return Some(close);
-                }
-                i = next_line(bytes, i + 1);
-            }
-            b'<' if bytes[i..].starts_with(b"<<<") => match skip_heredoc(bytes, i + 3) {
-                Some(end) => i = end,
-                None => i += 3,
-            },
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// Result of scanning a quoted token that may contain PHP close tags inside line comments.
-enum QuotedScan {
-    Closed(usize),
-    PhpCloseTag(usize),
-    Unterminated,
-}
-
-/// Returns the index just past the closing quote of the string opening at `open`, or `None`
-/// when it never closes. A backslash escapes the next byte in all three quote styles.
-///
-/// Double-quoted and backtick strings INTERPOLATE, and a complex interpolation `{$expr}` (or
-/// `${expr}`) may contain a string of the SAME quote style: `"{$a["?>"]}"` is valid PHP. Ending
-/// the outer string at that inner quote left the `?>` inside it looking like code, and the block
-/// was cut there. MEASURED: reference runs `echo "{$a["?>"]}";` and prints the value; elephc
-/// raised a parse error. The interpolation is skipped as a balanced `{...}`, its own strings
-/// included, before the outer string resumes. Found by GLM.
-fn skip_quoted(bytes: &[u8], open: usize) -> QuotedScan {
-    let quote = bytes[open];
-    let interpolates = quote != b'\'';
-    let mut i = open + 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'{' if interpolates && bytes.get(i + 1) == Some(&b'$') => {
-                match skip_interpolation(bytes, i) {
-                    QuotedScan::Closed(end) => i = end,
-                    other => return other,
-                }
-            }
-            b'$' if interpolates && bytes.get(i + 1) == Some(&b'{') => {
-                match skip_interpolation(bytes, i + 1) {
-                    QuotedScan::Closed(end) => i = end,
-                    other => return other,
-                }
-            }
-            byte if byte == quote => return QuotedScan::Closed(i + 1),
-            _ => i += 1,
-        }
-    }
-    QuotedScan::Unterminated
-}
-
-/// Returns the index just past the `}` that balances the `{` at `open`, skipping any string
-/// inside the braces. `None` when it never balances, which leaves the string unterminated —
-/// the parser then reports what is wrong, as PHP does.
-fn skip_interpolation(bytes: &[u8], open: usize) -> QuotedScan {
-    let mut depth = 0usize;
-    let mut i = open;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'{' => {
-                depth += 1;
-                i += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return QuotedScan::Closed(i);
-                }
-            }
-            b'\'' | b'"' | b'`' => match skip_quoted(bytes, i) {
-                QuotedScan::Closed(end) => i = end,
-                other => return other,
-            },
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                match find_from(bytes, i + 2, b"*/") {
-                    Some(end) => i = end + 2,
-                    None => return QuotedScan::Unterminated,
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                if let Some(close) = scan_line_comment(bytes, i + 2) {
-                    return QuotedScan::PhpCloseTag(close);
-                }
-                i = next_line(bytes, i + 2);
-            }
-            b'#' if bytes.get(i + 1) != Some(&b'[') => {
-                if let Some(close) = scan_line_comment(bytes, i + 1) {
-                    return QuotedScan::PhpCloseTag(close);
-                }
-                i = next_line(bytes, i + 1);
-            }
-            _ => i += 1,
-        }
-    }
-    QuotedScan::Unterminated
-}
-
-/// Returns the offset of `needle` at or after `from`.
-fn find_from(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    bytes
-        .get(from..)?
-        .windows(needle.len())
-        .position(|window| window == needle)
-        .map(|offset| from + offset)
-}
-
-/// Returns the `?>` that ends a line comment before its newline, if there is one.
-fn scan_line_comment(bytes: &[u8], from: usize) -> Option<usize> {
-    let mut i = from;
-    while i < bytes.len() && bytes[i] != b'\n' {
-        if bytes[i] == b'?' && bytes.get(i + 1) == Some(&b'>') {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Returns the index just past the newline ending the line that contains `from`.
-fn next_line(bytes: &[u8], from: usize) -> usize {
-    find_from(bytes, from, b"\n").map_or(bytes.len(), |newline| newline + 1)
-}
-
-/// Whether `byte` can continue a PHP label.
-fn is_label_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
-}
-
-/// Skips a heredoc or nowdoc whose `<<<` ends at `after_marker`, returning the index just past
-/// its closing label. `None` when this is not a heredoc opener — the caller then treats `<<<`
-/// as ordinary code. The closing label may be indented and is followed by any non-label byte,
-/// as PHP 7.3+ allows.
-fn skip_heredoc(bytes: &[u8], after_marker: usize) -> Option<usize> {
-    let mut i = after_marker;
-    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
-        i += 1;
-    }
-    let quote = match bytes.get(i) {
-        Some(&q @ (b'\'' | b'"')) => {
-            i += 1;
-            Some(q)
-        }
-        _ => None,
-    };
-    let label_start = i;
-    while bytes.get(i).is_some_and(|&byte| is_label_byte(byte)) {
-        i += 1;
-    }
-    let label = &bytes[label_start..i];
-    if label.is_empty() || label[0].is_ascii_digit() {
-        return None;
-    }
-    if let Some(q) = quote {
-        if bytes.get(i) != Some(&q) {
-            return None;
-        }
-        i += 1;
-    }
-    if bytes.get(i) == Some(&b'\r') {
-        i += 1;
-    }
-    if bytes.get(i) != Some(&b'\n') {
-        return None;
-    }
-    let mut line = i + 1;
-    while line < bytes.len() {
-        let mut j = line;
-        while matches!(bytes.get(j), Some(b' ' | b'\t')) {
-            j += 1;
-        }
-        if bytes[j..].starts_with(label)
-            && !bytes.get(j + label.len()).is_some_and(|&byte| is_label_byte(byte))
-        {
-            return Some(j + label.len());
-        }
-        line = next_line(bytes, line);
-    }
-    // Never closed: the body runs to the end of the file, so there is no closing tag.
-    Some(bytes.len())
+    parser::parse_tokens(tokenize_script(bytes)?, bytes.len())
 }
 
 #[cfg(test)]
@@ -483,21 +94,53 @@ mod tests {
 
     /// Returns a compact description of where the tags cut `bytes`, for shape assertions.
     fn shape(bytes: &[u8]) -> Vec<String> {
-        split_script(bytes)
-            .iter()
-            .map(|piece| match piece {
-                ScriptPiece::Html { bytes, .. } => {
-                    format!("out({})", String::from_utf8_lossy(bytes))
-                }
-                ScriptPiece::Code { echo: true, .. } => "echo".to_string(),
-                ScriptPiece::Code { .. } => "code".to_string(),
+        use elephc_chopper::scanner::{scan_runtime, token_name};
+
+        scan_runtime(bytes, true).unwrap().tokens.iter()
+            .filter_map(|token| match token_name(token.id) {
+                Some("T_OPEN_TAG") => Some("code".to_string()),
+                Some("T_OPEN_TAG_WITH_ECHO") => Some("echo".to_string()),
+                Some("T_INLINE_HTML") => Some(format!("out({})",
+                    String::from_utf8_lossy(&bytes[token.pos..token.pos + token.len]))),
+                _ => None,
             })
             .collect()
+    }
+
+    /// Reports the PHP close-tag offset from Chopper's PHP tokenization profile.
+    fn first_close_tag(bytes: &[u8]) -> Option<usize> {
+        use elephc_chopper::scanner::{scan, token_name};
+
+        scan(bytes).unwrap().tokens.into_iter()
+            .find(|token| token_name(token.id) == Some("T_CLOSE_TAG"))
+            .map(|token| token.pos)
     }
 
     /// Returns whether a fixture parsed as one program.
     fn parses(bytes: &[u8]) -> bool {
         matches!(segment_script_fresh(bytes).as_slice(), [ScriptSegment::Code(_)])
+    }
+
+    /// Verifies the shared file scan keeps tag transitions and magic constant lines.
+    #[test]
+    fn chopper_file_scan_preserves_tokens_across_tags() {
+        let sources: [&[u8]; 6] = [
+            b"before\n<?php if ($enabled) { ?>\r\n<?=(__LINE__)?>\nafter <?php }",
+            b"<?php echo 'a?>b'; /* ?> */ ?>\nnext <?= __LINE__ ?>",
+            b"<?php // comment ?>\nhtml <?PHP echo __LINE__;",
+            b"plain HTML with <?phpX and <? ignored\n",
+            b"<?php namespace App; ?><?php echo __NAMESPACE__;",
+            b"\xff<?php echo \"line {$name}\"; ?>\xfe<?= __LINE__ ?>",
+        ];
+        for source in sources {
+            assert!(parses(source), "{source:?}");
+        }
+        let tokens = tokenize_script(b"before\n<?php echo __LINE__; ?>\n<?=__LINE__?>").unwrap();
+        let lines: Vec<_> = tokens.iter().filter_map(|token| match token.kind() {
+            crate::lexer::TokenKind::Magic(crate::eval_ir::EvalMagicConst::Line(line)) => Some(*line),
+            _ => None,
+        }).collect();
+        assert_eq!(lines, [2, 3]);
     }
 
     /// Verifies a `?>` inside a string, a block comment or a heredoc does NOT close PHP mode.
@@ -531,7 +174,7 @@ mod tests {
         ];
         for (source, close) in searched {
             assert_eq!(
-                find_php_close_tag(source, 5),
+                first_close_tag(source),
                 Some(close),
                 "{}",
                 String::from_utf8_lossy(source)
@@ -583,7 +226,7 @@ mod tests {
         }
         let dollar_brace: &[u8] = b"<?php echo \"${a[\"?>\"]}\"; ?>tail";
         assert_eq!(
-            find_php_close_tag(dollar_brace, 5),
+            first_close_tag(dollar_brace),
             Some(dollar_brace.len() - 6),
             "the `${{...}}` form is skipped the same way"
         );
@@ -600,15 +243,15 @@ mod tests {
             String::from_utf8_lossy(source)
         );
         assert_eq!(
-            find_php_close_tag(source, 5),
+            first_close_tag(source),
             Some(source.len() - 6),
             "the block comment's quote, brace, and close tag are all inert"
         );
 
         let line_comment: &[u8] = b"<?php echo \"{$a[ // ?>\n 0]}\"; ?>tail";
-        let line_comment_close = find_from(line_comment, 5, b"?>").unwrap();
+        let line_comment_close = line_comment.windows(2).position(|bytes| bytes == b"?>").unwrap();
         assert_eq!(
-            find_php_close_tag(line_comment, 5),
+            first_close_tag(line_comment),
             Some(line_comment_close),
             "a close tag in an interpolation line comment still ends PHP mode"
         );
@@ -643,7 +286,7 @@ mod tests {
     /// Verifies an empty file has no pieces, and still parses (to nothing).
     #[test]
     fn an_empty_file_has_no_pieces() {
-        assert!(split_script(b"").is_empty());
+        assert!(shape(b"").is_empty());
         assert!(parses(b""));
     }
 

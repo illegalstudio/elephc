@@ -51,10 +51,14 @@ pub(in crate::ir_lower) fn release_indexed_array_write_operand(
     if !ctx.value_is_owning_temporary(value) && !detached_string {
         return;
     }
+    // Boxing a concrete operand into a `mixed` slot takes over an owning temporary. A string is
+    // the exception: the box persists its own copy, like every other container write, so a
+    // detached string (a cast of a boxed value) still has to be retired here.
     if matches!(
         container_elem_ty.map(PhpType::codegen_repr),
         Some(PhpType::Mixed)
     ) && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
+        && !detached_string
     {
         return;
     }
@@ -295,6 +299,13 @@ fn lower_array_assign_from_value(
     value_value = ctx.borrow_write_operand_if_needed(value_value, span);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
+    // A boxed operand the checker typed as the payload this container stores is written as
+    // that payload, so the keyed write keeps the element layout every checked reader expects.
+    if let Some(element) = crate::ir_lower::expr::container_element_type(&container_ty) {
+        value_value = crate::ir_lower::expr::project_element_value(
+            ctx, value_value, value.span, None, Some(&element),
+        );
+    }
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
     let (array_value, hash_storeback) = if op == Op::HashSet {

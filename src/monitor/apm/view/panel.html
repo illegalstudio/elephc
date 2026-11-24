@@ -14,6 +14,18 @@
         <span class="nm"><span class="n">Transactions</span><span class="m2" id="apm-n-transactions">Per route or script</span></span>
         <span class="val"><span class="pv" id="apm-v-transactions">–</span></span>
       </button>
+      <button type="button" class="navrow" data-section="apm-s-scripts" id="apm-nav-scripts" hidden>
+        <span class="nm"><span class="n">Scripts</span><span class="m2" id="apm-n-scripts">Every run of each script</span></span>
+        <span class="val"><span class="pv" id="apm-v-scripts">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-apps" id="apm-nav-apps" hidden>
+        <span class="nm"><span class="n">Apps</span><span class="m2" id="apm-n-apps">Instances and versions</span></span>
+        <span class="val"><span class="pv" id="apm-v-apps">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-errors" id="apm-nav-errors" hidden>
+        <span class="nm"><span class="n">Errors</span><span class="m2" id="apm-n-errors">By exception and place</span></span>
+        <span class="val"><span class="pv" id="apm-v-errors">–</span></span>
+      </button>
       <button type="button" class="navrow" data-section="apm-s-traces" id="apm-nav-traces" hidden>
         <span class="nm"><span class="n">Slow and failed</span><span class="m2" id="apm-n-traces">Exact profiles kept</span></span>
         <span class="val"><span class="pv" id="apm-v-traces">–</span></span>
@@ -40,8 +52,23 @@
         <button data-range="86400">24h</button>
         <button data-range="604800">7d</button>
       </div>
+      <form class="period" id="apm-period" aria-label="Period">
+        <input type="datetime-local" id="apm-from" step="60" aria-label="From">
+        <span aria-hidden="true">→</span>
+        <input type="datetime-local" id="apm-to" step="60" aria-label="To">
+        <button type="submit">Show</button>
+      </form>
+      <label class="compare" id="apm-compare-box">Compare with
+        <select id="apm-compare">
+          <option value="">nothing</option>
+          <option value="prev">the period before</option>
+          <option value="day">a day earlier</option>
+          <option value="week">a week earlier</option>
+        </select>
+      </label>
     </div>
     <div class="banner" id="apm-banner"></div>
+    <div class="deploys" id="apm-deploys" hidden></div>
     <section class="sec" id="apm-s-overview">
       <section class="tiles">
         <div class="tile"><div class="label" id="apm-k-rps-label">Throughput</div><div class="value" id="apm-k-rps">–</div><div class="sub" id="apm-k-rps-sub">&nbsp;</div></div>
@@ -70,12 +97,46 @@
         <table id="apm-routes">
           <thead><tr>
             <th data-key="route">Transaction</th><th data-key="n">Count</th><th data-key="rps">Rate</th>
-            <th data-key="mean_ns">Mean</th><th data-key="p50_ns">p50</th><th data-key="p95_ns">p95</th><th data-key="p99_ns">p99</th>
+            <th data-key="mean_ns">Mean</th><th data-key="p50_ns">p50</th><th data-key="p95_ns">p95</th><th data-key="p99_ns">p99</th><th data-key="mem_mean_bytes" title="Peak memory of a request, on average">Memory</th>
             <th data-key="client_error_pct">4xx</th><th data-key="server_error_pct">5xx / failed</th>
             <th data-key="queries_per_txn">Queries</th><th data-key="time_pct">Time share</th>
           </tr></thead>
           <tbody></tbody>
           <tfoot></tfoot>
+        </table>
+      </div>
+    </section>
+    <section class="sec card" id="apm-s-scripts" hidden>
+      <h2>Scripts<span class="unit" id="apm-scripts-unit">every run, one mark each</span></h2>
+      <div class="scripts" id="apm-scripts"></div>
+      <div class="script-detail" id="apm-script-detail" hidden></div>
+    </section>
+    <section class="sec card table-card" id="apm-s-apps" hidden>
+      <h2>Apps<span class="unit" id="apm-apps-unit">programs that send to this collector</span></h2>
+      <h3 class="sub-title">Error rate by version<span class="unit">% of calls · the three newest versions · dashed: a deploy</span></h3>
+      <div class="key" id="apm-l-apps"></div><div class="plot apps-plot" id="apm-c-apps"></div>
+      <h3 class="sub-title">Versions<span class="unit">newest first · ×: errors against the version before</span></h3>
+      <div class="table-wrap">
+        <table id="apm-versions">
+          <thead><tr><th>Build</th><th>Instances</th><th>Calls</th><th>Rate</th><th>Errors</th><th>p95</th><th>Memory</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h3 class="sub-title">Instances<span class="unit" id="apm-instances-unit"></span></h3>
+      <div class="table-wrap">
+        <table id="apm-instances">
+          <thead><tr><th>Instance</th><th>State</th><th>Build</th><th>Last send</th><th>Calls</th><th>Errors</th><th>Memory</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="note apps-note">Silent: no send for 15 s, counted as time with no calls. Gone: no send for 10 minutes, its history kept.</div>
+    </section>
+    <section class="sec card table-card" id="apm-s-errors" hidden>
+      <h2>Errors<span class="unit" id="apm-errors-unit"></span></h2>
+      <div class="table-wrap">
+        <table id="apm-errors">
+          <thead><tr><th>Exception</th><th>Thrown at</th><th>Transaction</th><th>Count</th><th>Last</th><th title="W3C trace id of the last occurrence">Trace</th></tr></thead>
+          <tbody></tbody>
         </table>
       </div>
     </section>

@@ -22,9 +22,8 @@ use super::plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, PlannedVariadicArg,
     SpreadBoundsCheck,
 };
-use super::static_spread::{
-    expand_static_assoc_spread_args_with_origins, validate_static_unpack_order, ExpandedArgOrigin,
-};
+use super::static_spread::{expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin};
+use elephc_chopper::syntax::call_args::CallArgumentOrderError;
 
 /// Validates and normalizes call-site arguments against `sig`, inferring the
 /// caller-visible regular parameter count from the signature.
@@ -164,6 +163,24 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     )
 }
 
+/// Maps one shared syntactic ordering error to the planner's error type.
+fn call_order_error(error: CallArgumentOrderError) -> CallArgPlanError {
+    match error {
+        CallArgumentOrderError::SpreadAfterNamed { span } => {
+            CallArgPlanError::SpreadAfterNamed { span }
+        }
+        CallArgumentOrderError::PositionalAfterNamed { span } => {
+            CallArgPlanError::PositionalAfterNamed { span }
+        }
+        CallArgumentOrderError::PositionalAfterSpread { span } => {
+            CallArgPlanError::PositionalAfterSpread { span }
+        }
+        CallArgumentOrderError::PositionalAfterNamedUnpack { span } => {
+            CallArgPlanError::PositionalAfterNamedUnpack { span }
+        }
+    }
+}
+
 /// Returns `Ok` unless an argument-unpacking (`...`) expression appears after a
 /// named argument, in which case it returns `SpreadAfterNamed` for the offending
 /// spread.
@@ -177,50 +194,18 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
 /// would otherwise hide the `Spread` node from the ordering check inside
 /// `plan_named_call_args`. Only literal `name:` syntax counts as a preceding
 /// named argument, matching PHP: `f(...["a" => 1], ...$rest)` stays legal.
-///
-/// Shared by signature-backed planning and the unresolved-call ordering validator.
 fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    let mut seen_named = false;
-    for arg in args {
-        match &arg.kind {
-            ExprKind::NamedArg { .. } => seen_named = true,
-            ExprKind::Spread(_) if seen_named => {
-                return Err(CallArgPlanError::SpreadAfterNamed { span: arg.span });
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+    elephc_chopper::syntax::call_args::validate_spread_after_named(args).map_err(call_order_error)
 }
 
-/// Validates syntactic ordering even when no callee signature is available for planning.
-pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    validate_no_spread_after_named(args)?;
-    validate_positional_spread_order(args)?;
-    validate_static_unpack_order(args)?;
-    let mut seen_named = false;
-    for arg in args {
-        if matches!(arg.kind, ExprKind::NamedArg { .. }) {
-            seen_named = true;
-        } else if seen_named {
-            return Err(CallArgPlanError::PositionalAfterNamed { span: arg.span });
-        }
-    }
-    Ok(())
-}
-
-/// Returns `Ok` if no positional argument appears after a spread expression,
-/// otherwise returns `PositionalAfterSpread` for the offending argument.
+/// Validates that no positional argument follows an unpack.
 fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    let mut seen_spread = false;
-    for arg in args {
-        if matches!(arg.kind, ExprKind::Spread(_)) {
-            seen_spread = true;
-        } else if seen_spread && !matches!(arg.kind, ExprKind::NamedArg { .. }) {
-            return Err(CallArgPlanError::PositionalAfterSpread { span: arg.span });
-        }
-    }
-    Ok(())
+    elephc_chopper::syntax::call_args::validate_positional_spread_order(args).map_err(call_order_error)
+}
+
+/// Validates the order of a statically known associative unpack.
+fn validate_static_unpack_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
+    elephc_chopper::syntax::call_args::validate_static_unpack_order(args).map_err(call_order_error)
 }
 
 /// Core named-argument planning: resolves named params, spreads, positional prefixes,

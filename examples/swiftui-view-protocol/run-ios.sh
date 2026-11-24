@@ -45,7 +45,7 @@ if [ ! -x "$ELEPHC" ]; then
 fi
 
 echo "==> compiling main.php for ios-sim-arm64"
-(cd "$HERE" && "$ELEPHC" --target ios-sim-arm64 --emit staticlib main.php)
+(cd "$HERE" && "$ELEPHC" build --target ios-sim-arm64 --emit staticlib main.php)
 
 echo "==> archive members and their Mach-O platform"
 (cd "$HERE" && for member in $(ar t libmain.a | grep -v SYMDEF); do

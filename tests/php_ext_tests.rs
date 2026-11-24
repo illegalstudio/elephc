@@ -3,7 +3,7 @@
 //! `elephc_demo` fixture extension from source, and compiled programs call it.
 //!
 //! Called from:
-//! - `cargo test --test php_ext_tests`.
+//! - `cargo test --test integration php_ext_tests::`.
 //!
 //! Key details:
 //! - Nothing is downloaded: the fixture is built with the system C compiler
@@ -66,7 +66,7 @@ fn assert_success(output: &Output, what: &str) {
 fn compile_and_run(dir: &Path, source: &str) -> Output {
     let main = dir.join("main.php");
     fs::write(&main, source).unwrap();
-    let compile = Command::new(elephc()).current_dir(dir).arg(&main).output().expect("run elephc");
+    let compile = Command::new(elephc()).arg("build").current_dir(dir).arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile");
     Command::new(dir.join("main")).current_dir(dir).output().expect("run the compiled program")
 }
@@ -173,7 +173,7 @@ echo $total, "\n";
 "#,
     )
     .unwrap();
-    let compile = Command::new(elephc()).current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
+    let compile = Command::new(elephc()).arg("build").current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
     assert_success(&compile, "compile");
     let run = Command::new(dir.join("main")).output().unwrap();
     assert_success(&run, "compiled program");
@@ -272,7 +272,7 @@ echo $sum > 0 ? "ran" : "empty", " ", elephc_zend_live_blocks() - $blocks, " ", 
 "#,
     )
     .unwrap();
-    let compile = Command::new(elephc()).current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
+    let compile = Command::new(elephc()).arg("build").current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
     assert_success(&compile, "compile");
     let run = Command::new(dir.join("main")).output().unwrap();
     assert_success(&run, "compiled program");
@@ -322,7 +322,7 @@ object(TwiceCounter)#3 (1) {\n  [\"twice\"]=>\n  int(8)\n}\n";
     // call when it compiles it, as it does for any undefined method of a known class.
     let main = dir.join("direct.php");
     fs::write(&main, "<?php\n(new DemoCounter(1))->__debugInfo();\n").unwrap();
-    let compile = Command::new(elephc()).current_dir(&dir).arg(&main).output().expect("run elephc");
+    let compile = Command::new(elephc()).arg("build").current_dir(&dir).arg(&main).output().expect("run elephc");
     let stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(!compile.status.success(), "{stderr}");
     assert!(stderr.contains("Undefined method: DemoCounter::__debugInfo"), "{stderr}");
@@ -702,7 +702,7 @@ echo $child->tag(), " | ", $child->describe(), "\n";
 fn run_traced(dir: &Path, source: &str) -> (Vec<String>, Option<i32>, String) {
     let main = dir.join("main.php");
     fs::write(&main, source).unwrap();
-    let compile = Command::new(elephc()).current_dir(dir).arg(&main).output().expect("run elephc");
+    let compile = Command::new(elephc()).arg("build").current_dir(dir).arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile");
     let run = Command::new(dir.join("main")).env("ELEPHC_DEMO_TRACE", "1").output().expect("run the program");
     let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
@@ -814,7 +814,7 @@ fn extension_request_state_does_not_cross_web_requests() {
         "<?php\n$tag = \"t\" . strlen(\"ab\");\ndemo_keep(\"seen\");\necho count(demo_kept()), \"\\n\";\ndemo_keep(function () use ($tag) { return $tag; });\n",
     )
     .unwrap();
-    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    let compile = Command::new(elephc()).arg("build").current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile --web");
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let address = format!("127.0.0.1:{port}");
@@ -843,7 +843,7 @@ fn a_failed_request_startup_ends_the_web_worker() {
     let dir = project("web-rinit-failure");
     let main = dir.join("main.php");
     fs::write(&main, "<?php\ndemo_keep(\"seen\");\necho count(demo_kept()), \"\\n\";\n").unwrap();
-    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    let compile = Command::new(elephc()).arg("build").current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile --web");
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let address = format!("127.0.0.1:{port}");

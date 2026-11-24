@@ -146,7 +146,14 @@ pub(super) fn reflection_property_hook_members(
                 get_by_ref,
                 return_type,
                 None,
-                None,
+                info.method_attribute_names
+                    .get(&php_symbol_key(&property_hook_get_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
+                info.method_attribute_args
+                    .get(&php_symbol_key(&property_hook_get_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
             ),
         ));
     }
@@ -177,7 +184,14 @@ pub(super) fn reflection_property_hook_members(
                     reflection_builtin_named_type("void", false),
                 )),
                 parameter_type,
-                set_parameter_doc_comment,
+                info.method_attribute_names
+                    .get(&php_symbol_key(&property_hook_set_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
+                info.method_attribute_args
+                    .get(&php_symbol_key(&property_hook_set_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
             ),
         ));
     }
@@ -196,7 +210,8 @@ pub(super) fn reflection_property_hook_method_member(
     returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
-    parameter_doc_comment: Option<String>,
+    attr_names: Vec<String>,
+    attr_args: Vec<Option<Vec<crate::types::AttrArgEntry>>>,
 ) -> ReflectionListedMember {
     let visibility = reflection_visibility_from_member_flags(property_flags);
     let flags = reflection_member_flags(false, &visibility, false, is_abstract, false, false);
@@ -205,8 +220,8 @@ pub(super) fn reflection_property_hook_method_member(
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: name.clone(),
         declaring_class_name: declaring_class_name.clone(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: attr_names.clone(),
+        attr_args: attr_args.clone(),
         flags,
         required_parameter_count,
         type_metadata: return_type.clone(),
@@ -227,8 +242,8 @@ pub(super) fn reflection_property_hook_method_member(
     ReflectionListedMember {
         name,
         declaring_class_name,
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names,
+        attr_args,
         constant_value: None,
         backing_value: None,
         is_enum_case: false,

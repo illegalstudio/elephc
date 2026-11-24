@@ -7,6 +7,8 @@
 //! Called from:
 //! - `crate::opcache_prelude::inject_if_used`.
 //! - `crate::version_prelude::inject_if_used`.
+//! - `crate::autoload::prelude_probe`, which asks the same per-function question of the
+//!   autoload closure.
 //! - `crate::php_profile::sensitivity::scan`, which needs the SPAN of the first reference to
 //!   point a diagnostic at the construct that made a program profile-dependent.
 //! - `crate::optimize::exception_flow::destruction`, which asks whether a `__destruct`
@@ -22,9 +24,14 @@
 //!   which stop at the first hit — so this is the same walk with a wider return type, not a
 //!   more expensive one. `program_references` remains as a `bool` wrapper for the injection
 //!   call sites that only need the yes/no answer.
-//! - Runs before name resolution, so `Name`s are raw source text; matched on the
-//!   unqualified last segment, since `\opcache_reset` and `opcache_reset` are the same
-//!   symbol.
+//! - The single-name searches run before name resolution, so `Name`s are raw source text;
+//!   matched on the unqualified last segment, since `\opcache_reset` and `opcache_reset` are
+//!   the same symbol.
+//! - [`resolved_program_references`] is the exception: the autoload prelude probe asks it
+//!   about the NAME-RESOLVED autoload closure, where a call already carries its canonical
+//!   name. There the last segment would make `Vendor\Util\ini_get()` a call to the global
+//!   `ini_get`, so it matches the canonical name, or the global fallback the resolver
+//!   recorded for an unqualified call in a namespace. It looks for every name in ONE walk.
 //! - The search is typed by [`SymbolKind`], because the kinds of symbol elephc needs to find
 //!   obey DIFFERENT matching rules, and the right rule follows from what a false positive
 //!   costs the caller. A `Function` is matched case-insensitively and also inside string
@@ -50,6 +57,7 @@ use crate::parser::ast::{
     InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 use crate::span::Span;
+use std::cell::Cell;
 
 /// What kind of PHP symbol a reference walk is looking for.
 ///
@@ -146,6 +154,61 @@ pub(crate) struct Symbol<'a> {
     pub(crate) kind: SymbolKind,
     /// Narrows a FUNCTION match by what the call asks about — see [`ArgFilter`].
     pub(crate) args: ArgFilter<'a>,
+    /// Set only by [`resolved_program_references`]: every name position records its hits
+    /// here and reports no match, so the walk visits the whole program exactly once.
+    pub(crate) collect: Option<&'a ResolvedNames<'a>>,
+}
+
+/// The names a [`resolved_program_references`] walk looks for, and which of them it found.
+pub(crate) struct ResolvedNames<'a> {
+    names: &'a [&'a str],
+    found: Vec<Cell<bool>>,
+}
+
+impl ResolvedNames<'_> {
+    /// Marks every name `matches` accepts as found.
+    fn record(&self, matches: impl Fn(&str) -> bool) {
+        for (name, found) in self.names.iter().zip(&self.found) {
+            if !found.get() && matches(name) {
+                found.set(true);
+            }
+        }
+    }
+}
+
+/// Returns whether a call position in a NAME-RESOLVED program names the global function
+/// `target`: its canonical name is `target`, or it is an unqualified call in a namespace whose
+/// resolver-recorded global fallback is `target`.
+fn resolved_name_is(name: &Name, target: &str) -> bool {
+    name.as_str().trim_start_matches('\\').eq_ignore_ascii_case(target)
+        || name
+            .function_fallback()
+            .is_some_and(|fallback| fallback.eq_ignore_ascii_case(target))
+}
+
+/// Returns which of the global FUNCTION `names` (already lowercase) a NAME-RESOLVED program
+/// references, in one walk.
+///
+/// The matching rules are those of [`program_references`] (call positions, callable strings,
+/// literal `eval` fragments), except that a call position matches on its resolved name: see
+/// [`resolved_name_is`]. A namespaced `Vendor\Util\ini_get()` is a different function.
+pub(crate) fn resolved_program_references<'a>(program: &[Stmt], names: &[&'a str]) -> Vec<&'a str> {
+    let collect = ResolvedNames {
+        names,
+        found: names.iter().map(|_| Cell::new(false)).collect(),
+    };
+    let target = Symbol {
+        collect: Some(&collect),
+        ..Symbol::function("")
+    };
+    let none = first_reference(program, target);
+    debug_assert!(none.is_none(), "a collecting walk never reports a match");
+    names
+        .iter()
+        .zip(&collect.found)
+        .filter(|(_, found)| found.get())
+        .map(|(name, _)| *name)
+        .collect()
 }
 
 impl<'a> Symbol<'a> {
@@ -155,6 +218,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Function,
             args: ArgFilter::Any,
+            collect: None,
         }
     }
 
@@ -164,6 +228,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Function,
             args,
+            collect: None,
         }
     }
 
@@ -194,6 +259,7 @@ impl<'a> Symbol<'a> {
             name: "",
             kind,
             args: ArgFilter::Any,
+            collect: None,
         }
     }
 
@@ -206,6 +272,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::CallSite,
             args: ArgFilter::Any,
+            collect: None,
         }
     }
 
@@ -215,6 +282,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Constant,
             args: ArgFilter::Any,
+            collect: None,
         }
     }
 }
@@ -286,6 +354,16 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
 /// calls, which the reachability pruner then removes, while a false negative is the silent
 /// wrong answer above.
 fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
+    if let Some(collect) = target.collect {
+        if resolved_name_is(name, "eval") {
+            for arg in args {
+                if let ExprKind::StringLiteral(source) = &arg.kind {
+                    collect.record(|wanted| mentions_word(source, wanted));
+                }
+            }
+        }
+        return false;
+    }
     if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
         return false;
     }
@@ -439,6 +517,10 @@ fn stmt_declaration_span(stmt: &Stmt, target: &str) -> Option<Span> {
 /// constant, so a constant search must not match `foo()` merely because a constant of that
 /// name exists.
 fn name_is(name: &Name, target: Symbol<'_>) -> bool {
+    if let Some(collect) = target.collect {
+        collect.record(|wanted| resolved_name_is(name, wanted));
+        return false;
+    }
     match target.kind {
         SymbolKind::Function | SymbolKind::CallSite => name
             .last_segment()
@@ -584,15 +666,22 @@ fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> 
 /// exhaustive so a new `ExprKind` cannot silently bypass detection.
 fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().find_map(|value| expr_refs(value, target)),
         // `require`/`include` in expression position: recurse into the path expression.
         ExprKind::IncludeValue { path, .. } => expr_refs(path, target),
         // A matching string literal counts (function_exists/callable) — for FUNCTION targets
         // only. A constant name inside a string is prose, not a reference to the constant.
         // A matching string is a reference for `Function` (it may be how the program reaches
         // the callee) but NOT for `CallSite` — see [`SymbolKind::CallSite`].
-        ExprKind::StringLiteral(value) => (target.kind == SymbolKind::Function
-            && value.eq_ignore_ascii_case(target.name))
-        .then_some(expr.span),
+        ExprKind::StringLiteral(value) => match target.collect {
+            Some(collect) => {
+                collect.record(|wanted| value.eq_ignore_ascii_case(wanted));
+                None
+            }
+            None => (target.kind == SymbolKind::Function
+                && value.eq_ignore_ascii_case(target.name))
+            .then_some(expr.span),
+        },
 
         // The only position at which a global constant is referenced.
         ExprKind::ConstRef(name) => const_name_is(name, target).then_some(expr.span),

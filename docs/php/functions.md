@@ -356,7 +356,7 @@ echo $hello("Ada"); // Hello Ada
 
 Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. Branch-shaped immediate calls and equivalent `call_user_func()` / `call_user_func_array()` calls that select captured callable descriptors at runtime, such as `($ok ? $a->method(...) : $b->method(...))($value)`, `($ok ? $a->method(...) : $b->method(...))(...$args, suffix: "!")`, `call_user_func($ok ? $a->method(...) : $b->method(...), $value)`, or `call_user_func_array($ok ? $a->method(...) : $b->method(...), [$value])`, route through descriptor invokers for positional arguments, named arguments, spread prefixes, defaults, and variadics. Method first-class callable variables also invoke through the stored descriptor environment, so `$fn = $obj->method(...); $obj = $other; $fn()` still uses the receiver captured when `$fn` was created while descriptor metadata applies names, defaults, variadics, and by-reference flags. A callable variable or array element whose descriptor was selected earlier at runtime also invokes through the descriptor metadata, including by-reference parameter decisions that are only known from the stored descriptor. `callable` parameters with no local signature metadata follow the same descriptor path for named arguments and positional prefixes before indexed spreads, including source-variable mutation for runtime by-reference parameters. Direct captured callable values can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `call_user_func()`, and `call_user_func_array()`. When a captured callable is stored in a local variable or received through a `callable` parameter, these callback runtimes retain the descriptor itself rather than rebuilding captures from current source locals. Branch-shaped runtime selection of captured callable descriptors is supported for `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `iterator_apply()`, `CallbackFilterIterator`, and `RecursiveCallbackFilterIterator`. Callable descriptors carry signature defaults, by-reference flags, variadic metadata, receiver/capture environments, and the invocation shape for function, builtin, extern, closure, first-class, static-method, instance-method, callable-array, and invokable-object forms. For by-reference callback parameters, `call_user_func()` preserves source-variable mutation even when the visible callback signature is known only through the runtime descriptor. `call_user_func_array()` passes original variable slots from literal argument arrays such as `call_user_func_array($cb, [$value])`; dynamic argument arrays are accepted through temporary reference cells, so callback writes do not mutate the source array or source variable. PHP disallows nullsafe first-class callable syntax (`$obj?->method(...)`), and elephc reports the same error.
 
-`call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
+`call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Inside a class they also resolve arrays naming the private and protected methods that class may call, such as `call_user_func([$this, "helper"], $x)`, as PHP resolves a callback from the calling scope; the same applies to invoking a value received through a `callable` parameter. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
 
 A function reached **only** through a dynamic callable returns what it was given. Untyped
 parameters are normally narrowed by the direct call sites the compiler can see; with none, an
@@ -586,6 +586,11 @@ Known gaps against PHP for these nullable by-reference parameters:
   ("requires a variable with mixed/union/nullable storage when passed by reference").
 - A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
   message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
+- Passing the same property twice to two by-reference parameters (`f($box->n, $box->n)`)
+  shares one live cell when the property storage can be addressed that way, as in PHP. For a
+  declared property that needs the copy-in/copy-out temporary, each argument gets its own
+  snapshot, so the second argument sees the value read at its source position rather than the
+  first callee write.
 
 An element of a **typed array** can be passed to a wider by-reference parameter such as
 `mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
@@ -735,6 +740,44 @@ $items = &$bag->items;
 $items[] = "apple";
 echo implode(", ", $bag->items); // apple
 ```
+
+An untyped property binds its live reference cell when it is passed to a by-reference
+parameter, so another view of the object sees the callee's write while the call is still
+running. A declared scalar property (and declared `mixed`/union storage whose representation
+cannot share the cell) instead uses a boxed copy-in temporary and writes the value back after
+the call. The declared property type is enforced on that write-back, so an incompatible value
+raises PHP's `Cannot assign … to reference held by property …` `TypeError` and the property
+keeps its previous value:
+
+```php
+<?php
+class Box { public string $text = "old"; }
+function replace(mixed &$slot) { $slot = ["not", "text"]; }
+$box = new Box();
+try {
+    replace($box->text);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo $box->text; // old
+```
+
+A concretely typed parameter is supported for any property whose storage can be read into
+the call and written back, even when the declared type is not statically compatible with the
+parameter: the property's CURRENT value is checked at the call boundary. A compatible value,
+such as an `int|string` property holding an `int` passed to `int &$slot`, reaches the callee
+and is written back. An incompatible value (a `string` property, or the `string` member of a
+union) raises PHP's call-site `f(): Argument #N ($x) must be of type T, U given`
+`TypeError` before the callee body runs, and the property keeps its previous value. Array
+elements of untyped properties are widened and promoted the same way, so
+`bump($box->items[0])` writes through to the property array.
+
+An **untyped** property is PHP's ordinary writable zval rather than a declared type: in weak
+mode its current value is coerced to the parameter (a numeric string to `int`, an `int` to
+`string`, and so on), the callee mutates the converted temporary, and the result is written
+back. A value the weak predicate refuses raises the same call-site `TypeError` and leaves the
+property unchanged. `declare(strict_types=1)` performs no conversion, and a declared `mixed`
+property is not coercible either: both keep the strict current-value check.
 
 Aliasing works for any declared property type, including `string` and `float`. Reassigning
 an array alias to a differently-typed literal keeps the property readable, because the new

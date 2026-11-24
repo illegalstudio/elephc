@@ -154,6 +154,7 @@ fn rewrite_expr(
     parent_name: ParentScope<'_>,
 ) -> Result<Expr, CompileError> {
     let kind = match &expr.kind {
+        ExprKind::Runtime(_) => return Err(CompileError::new(expr.span, "Runtime fragment syntax is not a native class constant")),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

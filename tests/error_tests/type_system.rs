@@ -78,30 +78,6 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
     );
 }
 
-/// Direct scalar property references need writeback support distinct from nested array origins.
-#[test]
-fn test_error_by_ref_argument_rejects_direct_property_storage() {
-    for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
-        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
-/// Method by-reference parameters reject property storage the rewrite cannot narrow back.
-///
-/// Union and callable properties need a runtime type dispatch the current write-back does not
-/// provide; they keep their pre-existing rejection instead of silently passing a copy.
-#[test]
-fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
-    for source in [
-        "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
 #[test]
 fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
@@ -115,6 +91,19 @@ fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
     }
 }
 
+/// A static `iterable` property passed directly to a by-reference parameter keeps the
+/// "must be passed a variable" refusal. Instance properties take the copy-in/copy-out path
+/// covered by `codegen::references::test_by_reference_untyped_property_widens_storage`.
+#[test]
+fn test_error_by_ref_argument_rejects_static_iterable_property_storage() {
+    // Instance properties use the boxed-temporary write-back; a static `iterable` slot
+    // cannot provide the declared array storage that write-back needs.
+    expect_error(
+        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
+        "must be passed a variable",
+    );
+}
+
 /// Builds the non-null PHP array contract without assuming indexed or associative storage.
 fn declared_array_contract() -> PhpType {
     PhpType::Union(vec![
@@ -123,8 +112,7 @@ fn declared_array_contract() -> PhpType {
     ])
 }
 
-/// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
-/// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
+/// Verifies `??=` without a right-hand expression reports the parser's unexpected-token error.
 #[test]
 fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
@@ -1043,6 +1031,102 @@ class C {
     public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
 }
 "#,
+    );
+}
+
+/// A backed-case value must still be a constant expression of the backing type: a string
+/// constant cannot back an int enum, and a function call is rejected as PHP does.
+#[test]
+fn test_error_enum_case_value_must_fold_to_the_backing_type() {
+    expect_error(
+        r#"<?php
+final class Codes { public const NAME = 'n'; }
+enum Level: int { case Low = Codes::NAME; }
+"#,
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        r#"<?php
+enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
+"#,
+        "Constant expression contains invalid operations",
+    );
+}
+
+/// A literal array decides a condition only when building it is clean: an array key is PHP's
+/// fatal "Illegal offset type", a fractional float or `null` key raises a deprecation and a float
+/// outside the `i64` range a warning, so such an array is not dropped as a known-true condition
+/// and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
+    for key in [
+        "[]", "[1]", "1.5", "null", "9223372036854775808.0", "-9223372036854777856.0", "1e300",
+        "INF",
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = [{key} => 1] ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = ['k' => [[] => 1]] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = [1, 'a' => 2, 1.5 => 3] ? 7 : 8; }\n",
+        "Enum int backing values must be integer literals",
+    );
+}
+
+/// After an int key of `PHP_INT_MAX` PHP has no next key, so an append throws "Cannot add
+/// element to the array as the next element is already occupied": such an array is not a
+/// known-true condition and the case value does not fold.
+#[test]
+fn test_error_enum_case_value_keeps_arrays_overflowing_the_next_key_undecided() {
+    for array in [
+        "[PHP_INT_MAX => 1, 2]",
+        "[9223372036854775807 => 1, 2]",
+        "['9223372036854775807' => 1, 2]",
+        "[9223372036854775806 => 1, 2, 3]",
+        "[9223372036854775807 => 1, 1 => 'k', 2]",
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: int {{ case A = {array} ? 7 : 8; }}\n"),
+            "Enum int backing values must be integer literals",
+        );
+    }
+}
+
+/// A backed-case value is checked for PHP's forbidden constant-expression forms before folding
+/// prunes a branch: a class or user constant does not decide a branch at compile time, so a
+/// variable or call in the branch it skips is still rejected, with PHP's messages.
+#[test]
+fn test_error_enum_case_value_rejects_forbidden_constant_expression_forms() {
+    let invalid = "Constant expression contains invalid operations";
+    for source in [
+        "<?php\nclass C { const YES = true; }\nenum E: int { case A = C::YES ? 1 : $x; }\n",
+        "<?php\nconst Z = true;\nenum E: int { case A = Z ? 1 : strlen('a'); }\n",
+        "<?php\nenum E: string { case A = 'a' . $x; }\n",
+        "<?php\nenum E: int { case A = [1, 2][$i]; }\n",
+        "<?php\nenum E: int { case A = (1 ? 1 : 2) + $x; }\n",
+    ] {
+        expect_error(source, invalid);
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = PHP_INT_SIZE ? new stdClass : 1; }\n",
+        "New expressions are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = static::X; }\n",
+        "\"static::\" is not allowed in compile-time constants",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = (object) []; }\n",
+        "Object casts are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = function () { return 1; }; }\n",
+        "Closures in constant expressions must be static",
     );
 }
 
@@ -3477,7 +3561,7 @@ fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
 /// that the checker really marked each one.
 #[test]
 fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
-    for source in crate::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
+    for source in super::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3529,7 +3613,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 ///   entry here.
 #[test]
 fn test_every_lowering_fixture_takes_the_retype_path() {
-    for &source in crate::locals_retype_fixtures::RETYPE_FIXTURES {
+    for &source in super::locals_retype_fixtures::RETYPE_FIXTURES {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3564,7 +3648,7 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
 /// honest about still taking the boxed path.
 #[test]
 fn test_the_capture_only_lowering_fixture_is_marked_silently() {
-    let source = crate::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
+    let source = super::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
     let result = check_source_full(source).expect("fixture must type-check");
     assert!(
         result.mixed_storage_local_names().contains("m"),

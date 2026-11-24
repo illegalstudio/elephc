@@ -173,13 +173,34 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    let property_place = match effective_sig.params.get(param_idx) {
-                        Some((_, expected_ty)) => {
-                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
+                    let expected_ty = if effective_sig
+                        .declared_params
+                        .get(param_idx)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        effective_sig.params.get(param_idx).map(|(_, ty)| ty)
+                    } else {
+                        // An inferred parameter type is not a PHP declaration; an undeclared
+                        // by-reference parameter is `mixed` and must bind a live property cell.
+                        Some(&crate::types::PhpType::Mixed)
+                    };
+                    let property_place = match expected_ty {
+                        Some(expected_ty) => {
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                expected_ty,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
                         None => false,
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         let param_name = effective_sig
                             .params
                             .get(param_idx)
@@ -267,6 +288,7 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, param_name.as_str())),
                             supplied_reference,
+                            param_idx + 1,
                         )?;
                     } else if !runtime_unboxed_callable && !proven_callable_array {
                         self.require_compatible_arg_type(

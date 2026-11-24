@@ -290,15 +290,9 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
             }
         }
         ExprKind::ArrayLiteralMixed(entries) => {
-            use crate::parser::ast::ArrayEntry;
             for entry in entries {
-                match entry {
-                    ArrayEntry::Value(value) | ArrayEntry::Spread(value) =>
-                        *value = resolve(value.clone(), constants, active, depth + 1)?,
-                    ArrayEntry::Keyed(key, value) => {
-                        *key = resolve(key.clone(), constants, active, depth + 1)?;
-                        *value = resolve(value.clone(), constants, active, depth + 1)?;
-                    }
+                for value in entry.exprs_mut() {
+                    *value = resolve(value.clone(), constants, active, depth + 1)?;
                 }
             }
         }

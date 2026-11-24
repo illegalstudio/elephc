@@ -5,7 +5,7 @@
 //! silently closes or widens a divergence fails a test and forces the docs to move with it.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::divergences` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::divergences` through Rust's test harness.
 //!
 //! Key details:
 //! - Each PHP transcript was taken with `php` 8.5.10 (libxml2 2.15.3) on the same source;

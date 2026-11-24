@@ -13,6 +13,8 @@ use super::*;
 mod syntax_misc;
 #[path = "misc/classes.rs"]
 mod classes;
+#[path = "misc/optional_parameter_widening.rs"]
+mod optional_parameter_widening;
 #[path = "misc/system_builtins.rs"]
 mod system_builtins;
 #[path = "misc/pointers.rs"]

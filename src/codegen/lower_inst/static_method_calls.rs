@@ -15,9 +15,22 @@ use super::*;
 /// against the runtime called class. Early-bound and final calls keep the resolved signature.
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let raw_target = method_name_data(ctx, inst)?.to_string();
+    // `@this@Class::m` calls Class's instance method on `$this`: the EIR dispatch for a
+    // late-bound call whose lexical method is private chose Class already.
+    if let Some(target) = raw_target.strip_prefix("@this@") {
+        let (receiver_label, method_name) = parse_static_method_target(target)?;
+        let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+        return lower_lexical_instance_static_method_call(ctx, inst, receiver.as_str(), method_name);
+    }
+    let (raw_target, late_private_arms) = split_late_private_dispatch(&raw_target)?;
     let object_static = raw_target.starts_with("@object@");
+    // `@forward@Class::m` calls Class's method with `static` forwarded from this frame: the
+    // EIR dispatch for a late-bound call whose lexical method is private chose Class already
+    // (`ir_lower::expr::private_late_static_calls`).
+    let forwarded_static = raw_target.starts_with("@forward@");
     let target = raw_target
         .strip_prefix("@object@")
+        .or_else(|| raw_target.strip_prefix("@forward@"))
         .unwrap_or(&raw_target)
         .to_string();
     let adjusted;
@@ -47,6 +60,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     }
     let called_class_id = match object_value {
         Some(object) => CalledClassIdArg::Object(object),
+        None if forwarded_static => resolve_static_called_class_arg(ctx, "static", &receiver)?,
         None => resolve_static_called_class_arg(ctx, receiver_label, &receiver)?,
     };
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
@@ -59,7 +73,9 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             intrinsic,
         );
     }
-    let late_bound_static = object_value.is_some() || is_late_bound_static_receiver(receiver_label);
+    let late_bound_static = object_value.is_some()
+        || forwarded_static
+        || is_late_bound_static_receiver(receiver_label);
     let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
         if builtins::has_eval_context(ctx) {
             return builtins::lower_eval_static_method_call(
@@ -115,7 +131,9 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         .iter()
         .map(|(_, ty)| ty.codegen_repr())
         .collect::<Vec<_>>();
-    let dynamic_static_slot = if late_bound_static {
+    // A forwarded call names the class whose method every called class in its dispatch arm
+    // inherits, so it binds that implementation directly and only forwards `static`.
+    let dynamic_static_slot = if late_bound_static && !forwarded_static {
         receiver_info.static_vtable_slots.get(&method_key).copied()
     } else {
         None
@@ -151,6 +169,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     // even while an eval-declared Child override is active.
     let eval_done_label = if late_bound_static
         && object_value.is_none()
+        && !forwarded_static
         && ctx.module.required_runtime_features.eval_bridge
     {
         let no_override_label = ctx.next_label("eval_late_static_no_override");
@@ -187,6 +206,8 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             &reference_entries,
             &callee_sig.return_type,
         )?;
+    } else if let Some(arms) = late_private_arms.as_deref() {
+        emit_late_private_dispatch_call(ctx, impl_class, &method_key, arms);
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
@@ -200,6 +221,64 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         ctx.emitter.label(&done_label);
     }
     Ok(())
+}
+
+/// Splits `@late@Class=id,id;Class=id@static::m` into the call target and the redeclarations
+/// that the called class selects (`ir_lower::expr::private_late_static_calls`).
+fn split_late_private_dispatch(raw_target: &str) -> Result<(String, Option<Vec<(String, Vec<u64>)>>)> {
+    let Some(rest) = raw_target.strip_prefix("@late@") else {
+        return Ok((raw_target.to_string(), None));
+    };
+    let invalid = || CodegenIrError::invalid_module(format!("invalid late private dispatch '{raw_target}'"));
+    let (encoded, target) = rest.split_once('@').ok_or_else(invalid)?;
+    let mut arms = Vec::new();
+    for arm in encoded.split(';') {
+        let (class_name, ids) = arm.split_once('=').ok_or_else(invalid)?;
+        let ids = ids
+            .split(',')
+            .map(|id| id.parse::<u64>().map_err(|_| invalid()))
+            .collect::<Result<Vec<_>>>()?;
+        arms.push((class_name.to_string(), ids));
+    }
+    Ok((target.to_string(), Some(arms)))
+}
+
+/// Calls the scope's private static method, or the same-signature redeclaration the called
+/// class selects. The arguments, including the hidden called-class id in the first integer
+/// argument register, are already in place, so only the branch target depends on the class.
+fn emit_late_private_dispatch_call(
+    ctx: &mut FunctionContext<'_>,
+    scope_class: &str,
+    method_key: &str,
+    arms: &[(String, Vec<u64>)],
+) {
+    let called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    let done_label = ctx.next_label("late_private_done");
+    let arm_labels = arms
+        .iter()
+        .map(|_| ctx.next_label("late_private_arm"))
+        .collect::<Vec<_>>();
+    // -- branch to the redeclaration the hidden called-class id selects, if any --
+    for ((_, class_ids), arm_label) in arms.iter().zip(&arm_labels) {
+        for class_id in class_ids {
+            abi::emit_load_int_immediate(ctx.emitter, scratch, *class_id as i64);
+            ctx.emitter.instruction(&format!("cmp {}, {}", called_class_reg, scratch)); // compare the called-class id with a class that selects a redeclaration
+            let branch = match ctx.emitter.target.arch {
+                Arch::AArch64 => "b.eq",
+                Arch::X86_64 => "je",
+            };
+            ctx.emitter.instruction(&format!("{} {}", branch, arm_label));      // run that redeclaration for this called class
+        }
+    }
+    // -- every other called class runs the scope's private method, then each arm its own --
+    abi::emit_call_label(ctx.emitter, &static_method_symbol(scope_class, method_key));
+    for ((class_name, _), arm_label) in arms.iter().zip(&arm_labels) {
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(arm_label);
+        abi::emit_call_label(ctx.emitter, &static_method_symbol(class_name, method_key));
+    }
+    ctx.emitter.label(&done_label);
 }
 
 /// Lowers a direct static-method call against a class declared by a previous eval fragment.

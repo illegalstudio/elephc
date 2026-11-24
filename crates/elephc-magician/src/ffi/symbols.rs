@@ -18,6 +18,8 @@ use super::util::clear_result;
 use crate::abi::ElephcEvalResult;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 #[cfg(not(test))]
+use crate::context::live_native_context_constant;
+#[cfg(not(test))]
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
@@ -174,7 +176,13 @@ unsafe fn eval_constant_fetch_inner(
         return EvalStatus::RuntimeFatal.code();
     };
     clear_result(out);
-    let Some(value) = context.constant(&name) else {
+    // PHP constants are global. A compiled frame can lower the fetch with its own activation
+    // context (or a fresh one) and still need a constant another live activation defined, such
+    // as a property initializer reading a name an earlier `eval()` created.
+    let value = context
+        .constant(&name)
+        .or_else(|| unsafe { live_native_context_constant(ctx, &name) });
+    let Some(value) = value else {
         // PHP throws a catchable `Error` for an undefined constant.
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
         return match crate::interpreter::execute_context_undefined_constant(context, &name, &mut values) {

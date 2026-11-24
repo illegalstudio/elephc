@@ -4,7 +4,7 @@
 //! still compiles.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_floor_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_floor_tests::` through Rust's test harness.
 //!
 //! Key details:
 //!
@@ -63,7 +63,7 @@ fn compile(name: &str, source: &str, profile: Option<&str>) -> Output {
         args.push(profile.to_string());
     }
     args.push("prog.php".to_string());
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .args(&args)
         .current_dir(&dir)
         .output()

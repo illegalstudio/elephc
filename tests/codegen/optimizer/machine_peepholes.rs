@@ -3,7 +3,7 @@
 //! compare-and-branch lowering, redundant move/jump cleanup, and cold overflow layout.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests machine_peephole`.
+//! - `cargo test --test codegen_tests_core machine_peephole`.
 //!
 //! Key details:
 //! - Runtime argc keeps every tested value unknown to the AST and EIR folders.

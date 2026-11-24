@@ -4,7 +4,7 @@
 //! SKIPS the loop body, runs the statement after the loop, and exits 0.
 //!
 //! Called from:
-//! - `cargo test --test foreach_non_iterable_tests` through Rust's test harness.
+//! - `cargo test --test integration foreach_non_iterable_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,
@@ -87,7 +87,9 @@ fn compile(dir: &Path, source: &str, stem: &str) -> (PathBuf, String) {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
@@ -340,7 +342,9 @@ fn opcache_restricted_configuration_repro_exits_zero() {
     let php = dir.join("opcache_probe.php");
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
     cmd.arg("--ini").arg("opcache.restrict_api=/nowhere").arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

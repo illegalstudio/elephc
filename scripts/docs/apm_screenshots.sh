@@ -80,3 +80,28 @@ echo "writing $OUT"
 shot transactions 1000 '#a=1&at=300'
 # The whole page, down to the budgets.
 shot transactions-full 2150 '#a=1&at=300'
+
+# --- programs that send to a collector -----------------------------------------
+# The Scripts and Apps sections show only what programs push to a listening
+# collector, which the web demo does not: examples/apm-apps runs two versions of
+# a worker against one, and the whole page is photographed down to its Apps.
+kill -TERM "$DEMO_PID" 2>/dev/null || true
+wait "$DEMO_PID" 2>/dev/null || true
+export COLLECTOR_PORT="${COLLECTOR_PORT:-19475}" DASHBOARD_PORT="${APPS_DASHBOARD_PORT:-19100}"
+export STORE="$WORK/apps-store"
+"$ROOT/examples/apm-apps/demo.sh" >"$WORK/apps.log" 2>&1 &
+DEMO_PID=$!
+PAGE="http://127.0.0.1:$DASHBOARD_PORT/"
+for _ in $(seq 600); do
+  curl -s -o /dev/null "$PAGE" && break
+  kill -0 "$DEMO_PID" 2>/dev/null || { cat "$WORK/apps.log" >&2; exit 1; }
+  sleep 0.5
+done
+APPS_SETTLE="${APPS_SETTLE:-90}"
+echo "collector up; letting the workers run for ${APPS_SETTLE}s"
+sleep "$APPS_SETTLE"
+# Opened on the Scripts section (`as`): a mark per run and the exit code of each
+# failed one, then the Apps section below it, each version's error rate, the
+# versions and their instances. The transactions table above lists every
+# instance, so the whole page would push both out of the picture.
+shot scripts-apps 1500 '#a=1&at=300&as=apm-s-scripts'

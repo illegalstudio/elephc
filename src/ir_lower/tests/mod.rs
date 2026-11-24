@@ -68,6 +68,7 @@ mod mbstring_fast_semantics;
 mod buffer_element_updates;
 mod ref_local_append;
 mod foreach_hash_scalars;
+mod element_value_views;
 mod settype_foreach;
 mod string_offset_lifetime;
 mod string_offset_writes;
@@ -283,19 +284,20 @@ fn try_lower_source_at_for_target_with_reachability(
         &[],
         None,
         false,
+        false,
+        &crate::opcache_prelude::AutoloadedFunctions::default(),
         &mut prelude_inventory,
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the URI surface is declared before the core prelude.
     let ast = crate::uri_prelude::inject_if_used_for_version(
         ast,
         false,
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, false, false, false, &mut prelude_inventory);
-    let ast = crate::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -310,11 +312,12 @@ fn try_lower_source_at_for_target_with_reachability(
         &mut prelude_inventory,
     );
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used_with_web(ast, false, 134_217_728, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
+        &crate::opcache_prelude::AutoloadedFunctions::default(),
         &mut prelude_inventory,
     );
     let ast = crate::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);

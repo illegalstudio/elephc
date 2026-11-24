@@ -22,6 +22,15 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         && mbstring_fast::try_lower(ctx, inst, operation)? {
         return Ok(());
     }
+    let features = ctx.module.required_runtime_features;
+    if !features.mbstring && !features.eval_bridge {
+        // Feature discovery omitted the bridge because this call was proven native; reaching
+        // the coordinator now would reference symbols this program does not link.
+        return Err(CodegenIrError::invalid_module(format!(
+            "{}() needs the mbstring bridge that runtime-feature discovery left out",
+            elephc_builtin_contract::lookup_id(operation.builtin_id()).map_or("mbstring", |contract| contract.name),
+        )));
+    }
     lower_mbstring_impl(ctx, inst, operation, true)
 }
 
@@ -334,28 +343,11 @@ pub(crate) fn lower_mb_http_input_len(
 }
 
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
+///
+/// Shares its operand walk with runtime-feature discovery, so a call that discovery left
+/// without the bridge is recognized here by exactly the same rule.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
-    let mut value = value;
-    for _ in 0..4 {
-        let Some(definition) = ctx.function.value(value) else {
-            break;
-        };
-        let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
-            break;
-        };
-        let Some(instruction) = ctx.function.instruction(inst) else {
-            break;
-        };
-        if instruction.op == crate::ir::Op::Acquire && instruction.operands.len() == 1 {
-            value = instruction.operands[0];
-            continue;
-        }
-        break;
-    }
-    let Some(encoding) = super::super::shared::maybe_const_string_operand(ctx, value)? else {
-        return Ok(false);
-    };
-    Ok(encoding.eq_ignore_ascii_case("UTF-8") || encoding.eq_ignore_ascii_case("UTF8"))
+    Ok(crate::ir::native_mbstring::const_string_is_utf8(ctx.module, ctx.function, value))
 }
 
 /// Shared mbstring invocation with an optional result store for a fast-path fallback.

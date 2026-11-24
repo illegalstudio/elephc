@@ -7,8 +7,7 @@
 //! - `crate::pipeline::compile()` before name resolution, through `inject_if_used`.
 //!
 //! Key details:
-//! - The value classes and enums are built in Rust; the two 8.6 builders are parsed from
-//!   one PHP source string because their component composition is ordinary PHP.
+//! - Every declaration is built in Rust. No PHP text is parsed at compile time.
 //! - The classes are declared in `SourceMode::Php` so `__debugInfo()` is a run-time call:
 //!   internal classes use declared descriptor rows instead, and these objects have none.
 //! - Per-object native state lives in a private opaque slot the property walkers skip, so
@@ -16,13 +15,16 @@
 //! - Injection is pay-for-use: a program that never names `Uri\` neither declares the
 //!   classes nor links the bridge.
 
-mod builders;
 mod rfc3986;
 mod types;
 mod whatwg;
 
-use crate::parser::ast::{CType, Program, Stmt};
-use crate::synthetic_class::extern_fn;
+use crate::names::php_symbol_key;
+use crate::parser::ast::{BinOp, CType, Expr, Program, Stmt, TypeExpr};
+use crate::synthetic_class::{
+    e_binop, e_call, e_instance_of, e_new_fq, e_not, e_null, e_str, e_var, extern_fn, s_if,
+    s_throw, t_class, t_nullable,
+};
 
 /// The prelude group id used by declaration reachability and `--with-uri`.
 pub(crate) const PRELUDE_GROUP: &str = "uri";
@@ -33,10 +35,10 @@ pub(crate) fn uri_declarations() -> Program {
         crate::source::SourceProfile::new(crate::source::SourceMode::Php),
         || {
             let mut declarations = bridge_externs();
+            declarations.push(types::uri_type_name_declaration());
             declarations.push(types::uri_types_declaration());
             declarations.push(rfc3986::rfc3986_declaration());
             declarations.push(whatwg::whatwg_declaration());
-            declarations.extend(builders::declarations());
             declarations
         },
     )
@@ -75,32 +77,8 @@ fn bridge_externs() -> Vec<Stmt> {
             .param("is_null", CType::Int)
             .returns(CType::Int)
             .build(),
-        extern_fn("elephc_uri_percent_encode", "elephc_uri")
-            .param("mode", CType::Int)
-            .param("input", CType::Str)
-            .returns(CType::NullableStr)
-            .build(),
-        extern_fn("elephc_uri_validate", "elephc_uri")
-            .param("kind", CType::Int)
-            .param("component", CType::Int)
-            .param("input", CType::Str)
-            .returns(CType::Int)
-            .build(),
-        extern_fn("elephc_uri_uri_type", "elephc_uri")
-            .param("handle", CType::Int)
-            .returns(CType::Int)
-            .build(),
-        extern_fn("elephc_uri_host_type", "elephc_uri")
-            .param("handle", CType::Int)
-            .returns(CType::Int)
-            .build(),
         extern_fn("elephc_uri_charge_units", "elephc_uri")
             .param("handle", CType::Int)
-            .returns(CType::Int)
-            .build(),
-        extern_fn("elephc_uri_set_opaque_path", "elephc_uri")
-            .param("handle", CType::Int)
-            .param("path", CType::Str)
             .returns(CType::Int)
             .build(),
         extern_fn("elephc_uri_with_port", "elephc_uri")
@@ -141,6 +119,128 @@ fn bridge_externs() -> Vec<Stmt> {
             .build(),
         extern_fn("elephc_uri_clear_errors", "elephc_uri").build(),
     ]
+}
+
+/// Builds php-src's `TypeError` message tail: `<prefix><type> given`.
+pub(super) fn type_error_message(prefix: &str, value: &str) -> Expr {
+    e_binop(
+        e_str(prefix),
+        BinOp::Concat,
+        e_binop(
+            e_call("\\__elephc_uri_type_name", vec![e_var(value)]),
+            BinOp::Concat,
+            e_str(" given"),
+        ),
+    )
+}
+
+/// Rejects a runtime argument that is not an instance of the declared URI class.
+///
+/// `allow_null` matches a nullable parameter; a null value is legal there, while `equals()`
+/// takes a non-nullable URI and must reject it.
+pub(super) fn s_reject_wrong_uri_instance(
+    value: &str,
+    class: &str,
+    prefix: &str,
+    allow_null: bool,
+) -> Stmt {
+    let wrong_type = e_not(e_instance_of(e_var(value), class));
+    let condition = if allow_null {
+        e_binop(
+            e_binop(e_var(value), BinOp::StrictNotEq, e_null()),
+            BinOp::And,
+            wrong_type,
+        )
+    } else {
+        wrong_type
+    };
+    s_if(
+        condition,
+        vec![s_throw(e_new_fq(
+            "TypeError",
+            vec![type_error_message(prefix, value)],
+        ))],
+        vec![],
+        None,
+    )
+}
+
+/// Returns whether `name` is one of the two internal URI classes defined by the prelude.
+///
+/// A user class may live in the `Uri\` namespace (`Uri\Custom`); only these exact classes
+/// own a native handle and the compiler-generated destructor/clone helpers.
+pub(crate) fn is_internal_uri_class(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("Uri\\Rfc3986\\Uri") || name.eq_ignore_ascii_case("Uri\\WhatWg\\Url")
+}
+
+/// Restores php-src's reflected parameter types for methods whose internal contract stays
+/// wider (`mixed`) so nullable and runtime-checked URI values remain callable.
+///
+/// The public methods keep the prelude's runtime guards and exact `TypeError` wording; this
+/// only repairs `ReflectionParameter::getType()` and the callable-signature metadata.
+pub fn apply_reflection_signatures(check: &mut crate::types::CheckResult) {
+    let rfc_class = t_class("\\Uri\\Rfc3986\\Uri");
+    let whatwg_class = t_class("\\Uri\\WhatWg\\Url");
+    patch_signature(
+        check,
+        "Uri\\Rfc3986\\Uri",
+        "parse",
+        true,
+        1,
+        t_nullable(rfc_class.clone()),
+    );
+    patch_signature(
+        check,
+        "Uri\\Rfc3986\\Uri",
+        "__construct",
+        false,
+        1,
+        t_nullable(rfc_class.clone()),
+    );
+    patch_signature(check, "Uri\\Rfc3986\\Uri", "equals", false, 0, rfc_class);
+    patch_signature(
+        check,
+        "Uri\\WhatWg\\Url",
+        "parse",
+        true,
+        1,
+        t_nullable(whatwg_class.clone()),
+    );
+    patch_signature(
+        check,
+        "Uri\\WhatWg\\Url",
+        "__construct",
+        false,
+        1,
+        t_nullable(whatwg_class.clone()),
+    );
+    patch_signature(check, "Uri\\WhatWg\\Url", "equals", false, 0, whatwg_class);
+}
+
+/// Replaces one reflected parameter type on a static or instance method.
+fn patch_signature(
+    check: &mut crate::types::CheckResult,
+    class: &str,
+    method: &str,
+    is_static: bool,
+    index: usize,
+    ty: TypeExpr,
+) {
+    let Some(info) = check.classes.get_mut(class) else {
+        return;
+    };
+    let signatures = if is_static {
+        &mut info.static_methods
+    } else {
+        &mut info.methods
+    };
+    let Some(signature) = signatures.get_mut(&php_symbol_key(method)) else {
+        return;
+    };
+    if let Some(slot) = signature.param_type_exprs.get_mut(index) {
+        *slot = Some(ty);
+    }
 }
 
 /// Injects the URI prelude for an explicit PHP compatibility version.

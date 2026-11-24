@@ -3,11 +3,12 @@
 //! launch it with `--listen`, drive it over raw TCP, and assert the response.
 //!
 //! Called from:
-//! - `cargo test --test web_tests` through Rust's test harness.
+//! - `cargo test --test integration web_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an
-//!   isolated temp dir with an isolated runtime cache, mirroring cdylib_tests.
+//!   isolated temp dir with a private XDG cache root and the shared
+//!   runtime-object cache, mirroring cdylib_tests.
 //! - The HTTP client is a hand-written minimal HTTP/1.1 request over a
 //!   std::net::TcpStream so the test pulls in no HTTP client dependency.
 //! - Host-target only: each platform/arch covers itself (macOS aarch64 local,
@@ -85,16 +86,18 @@ fn compile_web_with_native(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     if regex {
         managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
     }
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),
-        "elephc --web failed:\n{}",
+        "elephc build --web failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     dir.join(stem)
@@ -2921,8 +2924,54 @@ fn web_sigterm_during_respawn_churn_exits_master() {
 /// serving other requests afterward.
 #[test]
 fn web_uncaught_exception_returns_500() {
-    let dir = make_test_dir("web_500");
-    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new Exception('kaboom'); } echo 'ok';";
+    uncaught_exception_returns_500(
+        "web_500",
+        "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new Exception('kaboom'); } echo 'ok';",
+    );
+}
+
+/// The same net for a namespaced program: the catch-all is put in once the resolver has
+/// flattened its namespaces. Without it the worker died (exit 255) and the connection
+/// closed with no answer.
+#[test]
+fn web_uncaught_exception_in_a_namespaced_program_returns_500() {
+    uncaught_exception_returns_500(
+        "web_500_namespaced",
+        "<?php namespace App;\nfunction boom(): void { throw new \\RuntimeException('kaboom'); }\nif (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { boom(); }\necho 'ok';",
+    );
+}
+
+/// And for a program using PDO, whose prelude brings namespaced classes (`Pdo\…`) into a
+/// program that has none of its own.
+#[test]
+fn web_uncaught_exception_with_pdo_returns_500() {
+    uncaught_exception_returns_500(
+        "web_500_pdo",
+        "<?php function db(): PDO { return new PDO('sqlite::memory:'); }\nif (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new RuntimeException('kaboom'); }\necho 'ok';",
+    );
+}
+
+/// And for a program that includes a file: its functions are declared through the
+/// include, and stay callable once the program is wrapped.
+#[test]
+fn web_uncaught_exception_with_an_include_returns_500() {
+    let dir = make_test_dir("web_500_include");
+    fs::write(dir.join("lib.php"), "<?php\nfunction answer(): string { return 'ok'; }\n").unwrap();
+    uncaught_exception_returns_500_in(
+        &dir,
+        "<?php require __DIR__ . '/lib.php';\nif (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new RuntimeException('kaboom'); }\necho answer();",
+    );
+}
+
+/// Serves `src` and checks that `/boom`, which throws, is answered 500 between two
+/// requests answered normally.
+fn uncaught_exception_returns_500(name: &str, src: &str) {
+    uncaught_exception_returns_500_in(&make_test_dir(name), src);
+}
+
+/// `uncaught_exception_returns_500`, in a directory the caller prepared.
+fn uncaught_exception_returns_500_in(dir: &Path, src: &str) {
+    let dir = dir.to_path_buf();
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);

@@ -485,6 +485,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
 /// Returns true when an expression contains a direct regex builtin call.
 fn expr_has_regex_call(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_has_regex_call),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {
@@ -688,7 +689,14 @@ fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
 fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
+        "preg_match"
+            | "preg_match_all"
+            | "preg_replace"
+            | "preg_replace_callback"
+            | "preg_split"
+            | "__elephc_preg_compile"
+            | "__elephc_preg_match_compiled"
+            | "__elephc_preg_free"
     )
 }
 
@@ -841,6 +849,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         return true;
     }
     match &expr.kind {
+        ExprKind::Runtime(_) => true,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {

@@ -369,7 +369,7 @@ Prefer named handler functions over a runtime table of handler closures. The sho
 Compile the complete showcase:
 
 ```bash
-cargo run -- showcases/http-server/main.php
+cargo run -- build showcases/http-server/main.php
 ./showcases/http-server/main
 ```
 

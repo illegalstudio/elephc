@@ -48,15 +48,16 @@ mod wrappers;
 
 pub(crate) use arrays::emit_array_value_type_stamp;
 pub(crate) use compilation_context::{
-    compile_is_web_sapi, compile_php_version, linked_extensions, opcache_api_restricted,
-    opcache_manifest_len,
+    compile_is_web_sapi, compile_php_version, linked_extensions, memory_limit_bytes,
+    opcache_api_restricted, opcache_manifest_len,
 };
 #[allow(unused_imports)]
 pub use compilation_context::{
-    autoload_rule_count, ini_bool, ini_overrides, parse_memory_limit_bytes,
+    autoload_rule_count, ini_bool, ini_overrides, parse_startup_memory_limit_bytes,
     set_autoload_rule_count, set_compile_profile, set_ini_overrides, set_linked_extensions,
     set_opcache_api_restricted, set_opcache_manifest_len,
 };
+pub(crate) use compilation_context::startup_memory_limit_value;
 pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,
 };

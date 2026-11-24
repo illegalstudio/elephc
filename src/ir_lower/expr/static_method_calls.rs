@@ -17,7 +17,7 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_static_method_call_impl(ctx, receiver, method, args, expr, None)
+    lower_static_method_call_bound(ctx, receiver, method, args, expr, None, StaticCallBinding::Lexical)
 }
 
 /// Lowers `$object->staticMethod()` through the statically named `receiver`.
@@ -32,17 +32,36 @@ pub(super) fn lower_object_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_static_method_call_impl(ctx, receiver, method, args, expr, Some(object))
+    lower_static_method_call_bound(
+        ctx, receiver, method, args, expr, Some(object), StaticCallBinding::Lexical,
+    )
+}
+
+/// How a static call binds its receiver class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StaticCallBinding<'a> {
+    /// The receiver as written; a late-bound call to a private method may still dispatch.
+    Lexical,
+    /// The receiver's own method, already chosen by a called-class dispatch.
+    Resolved,
+    /// The named receiver's method, with `static` forwarded from the caller's called class.
+    Forwarded,
+    /// The named receiver's instance method, called on `$this` without virtual dispatch.
+    ForwardedThis,
+    /// `static::m()` to the scope's private method, where codegen picks among same-signature
+    /// redeclarations by called class (`Class=id,id;Class=id`, see `private_late_static_calls`).
+    Dispatched(&'a str),
 }
 
 /// Shared static-call lowering with an optional object receiver for late static binding.
-fn lower_static_method_call_impl(
+pub(super) fn lower_static_method_call_bound(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,
     args: &[Expr],
     expr: &Expr,
     object_receiver: Option<crate::ir::ValueId>,
+    binding: StaticCallBinding<'_>,
 ) -> LoweredValue {
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
@@ -59,9 +78,18 @@ fn lower_static_method_call_impl(
         }
     }
 
+    if binding == StaticCallBinding::Lexical {
+        if let Some(call) = super::private_late_static_calls::try_lower_private_late_static_call(
+            ctx, receiver, method, args, expr, object_receiver,
+        ) {
+            return call;
+        }
+    }
     let magic_args;
-    let (dispatch_method, call_args) = if let Some(args) =
-        magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
+    let (dispatch_method, call_args) = if let Some(args) = (binding
+        != StaticCallBinding::ForwardedThis)
+        .then(|| magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span))
+        .flatten()
     {
         magic_args = args;
         ("__callStatic", magic_args.as_slice())
@@ -88,9 +116,17 @@ fn lower_static_method_call_impl(
             }
         }
     }
-    let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
-        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
-        .cloned();
+    let sig = if binding == StaticCallBinding::ForwardedThis {
+        // A subclass inherits the scope's private static method into its static tables, so
+        // the instance method `$this` runs is looked up among the instance methods only.
+        static_receiver_class_name(ctx, receiver).and_then(|class_name| {
+            class_method_signature(ctx, &class_name, &php_symbol_key(dispatch_method))
+        })
+    } else {
+        static_method_implementation_signature(ctx, receiver, dispatch_method)
+            .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
+    }
+    .cloned();
     // The result type and the alias summary are decided by the receiver and the method alone, so
     // they are resolved up front: the reference lease and the ordinary owned result both need
     // their staging published BEFORE any argument expression runs, and the result staging has to
@@ -106,8 +142,16 @@ fn lower_static_method_call_impl(
             }
         });
     let late_static_receiver_type = static_late_binding_receiver_type_for_ir(ctx, receiver);
+    let late_static_return = if binding == StaticCallBinding::ForwardedThis {
+        static_receiver_class_name(ctx, receiver).and_then(|class_name| {
+            ctx.classes.get(&class_name)?.late_static_method_returns
+                .get(&php_symbol_key(dispatch_method)).cloned()
+        })
+    } else {
+        static_method_late_static_return_for_ir(ctx, receiver, dispatch_method)
+    };
     let result_type = match (
-        static_method_late_static_return_for_ir(ctx, receiver, dispatch_method),
+        late_static_return,
         late_static_receiver_type.as_deref(),
     ) {
         (Some(return_type), Some(receiver_type)) => {
@@ -115,14 +159,23 @@ fn lower_static_method_call_impl(
         }
         _ => result_type,
     };
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    let return_alias = if binding == StaticCallBinding::ForwardedThis {
+        ReturnArgAlias::Unknown
+    } else {
+        static_method_return_arg_alias(ctx, receiver, dispatch_method)
+    };
     // A by-reference-returning static method transfers a lease that must outlive this caller's
     // argument cleanup, so its staging is published before the arguments are evaluated.
     let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !call_args.iter().any(is_spread_arg);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         ref_place_args::rewrite_typed_property_ref_args(ctx, signature, call_args)
     });
@@ -147,9 +200,18 @@ fn lower_static_method_call_impl(
         }
     }
     emit_deprecated_enum_case_notice(ctx, receiver, dispatch_method);
-    let name = match object_receiver {
-        Some(_) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
-        None => format!("{}::{}", receiver_name(receiver), dispatch_method),
+    let name = match (object_receiver, binding) {
+        (Some(_), _) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
+        (None, StaticCallBinding::Forwarded) => {
+            format!("@forward@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, StaticCallBinding::ForwardedThis) => {
+            format!("@this@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, StaticCallBinding::Dispatched(arms)) => {
+            format!("@late@{arms}@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, _) => format!("{}::{}", receiver_name(receiver), dispatch_method),
     };
     let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
@@ -184,6 +246,11 @@ fn lower_static_method_call_impl(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
@@ -396,6 +463,7 @@ pub(super) fn lower_static_method_descriptor_call(
     let descriptor = lower_first_class_callable(ctx, &target, expr);
     let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
     let mut operands = vec![descriptor.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let conversion_roots =
         root_unpublished_argument_conversions(ctx, &mut operands[1..], expr.span);
@@ -411,6 +479,11 @@ pub(super) fn lower_static_method_descriptor_call(
     for slot in conversion_roots.into_iter().rev() {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
@@ -538,7 +611,20 @@ pub(super) fn static_method_implementation_signature<'a>(
 }
 
 /// Returns the declared result type for a static method call before its arguments are lowered.
+///
+/// A `static::m()` that dispatches over redeclarations of a private method answers the joined
+/// type its dispatch stores (`private_late_static_calls`).
 pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<PhpType> {
+    super::private_late_static_calls::private_late_static_result_type(ctx, receiver, method)
+        .or_else(|| lexical_static_method_call_expr_type_for_ir(ctx, receiver, method))
+}
+
+/// Returns the result type of the static method `receiver` names, without late-bound dispatch.
+pub(super) fn lexical_static_method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,

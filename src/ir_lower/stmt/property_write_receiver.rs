@@ -272,6 +272,31 @@ fn narrow_nullable_write_receiver(
         Op::mixed_unbox_effects(&target), Some(span))
 }
 
+/// Guards a write-context property receiver against `null`.
+///
+/// Taking a property by reference (`f($receiver->prop)`, `$ref = &$receiver->prop`) fetches
+/// the receiver for WRITE, so a null receiver raises PHP's modification Error before the
+/// callee runs instead of emitting read warnings and failing at write-back.
+pub(crate) fn guard_write_receiver_not_null(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    property: &str,
+    span: Span,
+) {
+    let ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Void) {
+        return;
+    }
+    narrow_nullable_write_receiver(
+        ctx,
+        value,
+        None,
+        WritePropertyName::Literal(property),
+        "modify",
+        span,
+    );
+}
+
 /// Guards a boxed intermediate property hop without changing its enclosing receiver lease.
 pub(crate) fn guard_mixed_write_hop(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, span: Span,

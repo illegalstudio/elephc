@@ -16,7 +16,7 @@ fn generics_review_instanceof_comparisons() {
         let source = format!("echo $value instanceof C < {right};");
         let program = parse_fragment(source.as_bytes()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
         assert!(matches!(&program.statements()[0], EvalStmt::Echo(EvalExpr::Binary { op: EvalBinOp::Lt, left, .. })
-            if matches!(left.as_ref(), EvalExpr::InstanceOf { .. })), "{source}");
+            if matches!(left.as_ref(), EvalExpr::InstanceOf { .. })), "{source}: {:?}", program.statements());
         assert!(!program.native_generic_syntax(), "{source}");
     }
     let program = parse_fragment(b"echo new C < $limit;").unwrap();

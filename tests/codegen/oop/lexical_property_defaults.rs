@@ -3,7 +3,7 @@
 //! Checks trait consumer binding and deferred errors for missing parent scopes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests property_default_review_`.
+//! - `cargo test --test codegen_tests_oop property_default_review_`.
 //!
 //! Key details:
 //! - Stored defaults must preserve declaration scope rather than caller or subclass scope.
@@ -1090,4 +1090,235 @@ array(2) {
 }
 "#
     );
+}
+
+/// A property default may reference a constant defined at runtime by `define()`.
+#[test]
+fn test_property_default_review_runtime_define_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+define('RUNTIME_DEFAULT', 7);
+class Consumer { public int $value = RUNTIME_DEFAULT; }
+echo (new Consumer())->value;
+"#);
+    assert_eq!(out, "7");
+}
+
+/// A constant defined by dynamic `eval()` is left for the runtime lookup, not failed early.
+#[test]
+fn test_property_default_review_eval_defined_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+$code = $argc > 0 ? 'define("EVAL_DEFAULT", 21);' : '';
+eval($code);
+class EvalDefault { public int $value = EVAL_DEFAULT; }
+echo (new EvalDefault())->value;
+"#);
+    assert_eq!(out, "21");
+}
+
+/// Untyped property slots keep the eval-defined constant's real type instead of coercing to int.
+#[test]
+fn test_property_default_review_eval_defined_untyped_values() {
+    let out = crate::support::compile_and_run(r#"<?php
+$code = $argc > 0
+    ? 'define("EVAL_STRING", "str"); define("EVAL_FLOAT", 1.5); define("EVAL_ARRAY", [1, 2]);'
+    : '';
+eval($code);
+class EvalUntyped {
+    public $s = EVAL_STRING;
+    public $f = EVAL_FLOAT;
+    public $a = EVAL_ARRAY;
+}
+$o = new EvalUntyped();
+echo $o->s, '|', $o->f, '|', $o->a[0], $o->a[1];
+"#);
+    assert_eq!(out, "str|1.5|12");
+}
+
+/// The eval-aware lookup must still raise PHP's error when the constant was never defined.
+#[test]
+fn test_property_default_review_eval_missing_constant_throws() {
+    let out = crate::support::compile_and_run(r#"<?php
+$code = $argc > 0 ? 'define("SOME_OTHER_EVAL", 1);' : '';
+eval($code);
+class MissingEvalDefault { public int $value = MISSING_EVAL_DEFAULT; }
+try { new MissingEvalDefault(); echo 'no throw'; } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "Undefined constant \"MISSING_EVAL_DEFAULT\"");
+}
+
+/// Namespace segments of eval-defined constants are case-insensitive; the final segment is not.
+#[test]
+fn test_property_default_review_eval_namespace_case() {
+    let out = crate::support::compile_and_run(r#"<?php
+namespace App;
+$code = $argc > 0 ? 'define("App\\NSC3B", 15);' : '';
+eval($code);
+class NamespaceCase { public int $value = \APP\NSC3B; }
+echo (new NamespaceCase())->value;
+"#);
+    assert_eq!(out, "15");
+}
+
+/// An eval call the optimizer removes still keeps default constants on the runtime lookup.
+#[test]
+fn test_property_default_review_removed_eval_keeps_runtime_error() {
+    let out = crate::support::compile_and_run(r#"<?php
+function never_called() { eval('return 1;'); }
+class MissingAfterDce { public int $value = MISSING_AFTER_DCE; }
+try { new MissingAfterDce(); echo 'no throw'; } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "Undefined constant \"MISSING_AFTER_DCE\"");
+}
+
+/// A compiled `define()` keeps native storage readable when an unrelated eval exists.
+#[test]
+fn test_property_default_review_native_define_with_unrelated_eval() {
+    let out = crate::support::compile_and_run(r#"<?php
+function install() { define('NATIVE_WITH_EVAL', 7); }
+install();
+function unused_eval() { eval('return 1;'); }
+class NativeWithEval { public int $value = NATIVE_WITH_EVAL; }
+echo (new NativeWithEval())->value;
+"#);
+    assert_eq!(out, "7");
+}
+
+/// A compiled `define()` that never ran must not hide the value an `eval()` defined.
+#[test]
+fn test_property_default_review_unexecuted_native_define_falls_back_to_eval() {
+    let out = crate::support::compile_and_run(r#"<?php
+function never_installed() { define('EVAL_OVER_NATIVE', 7); }
+$code = $argc > 0 ? 'define("EVAL_OVER_NATIVE", 21);' : '';
+eval($code);
+class EvalOverNative { public int $value = EVAL_OVER_NATIVE; }
+echo (new EvalOverNative())->value;
+"#);
+    assert_eq!(out, "21");
+}
+
+/// A compiled `define()` that never ran must not pin an untyped default to its guessed type.
+#[test]
+fn test_property_default_review_untyped_native_define_falls_back_to_eval_type() {
+    let out = crate::support::compile_and_run(r#"<?php
+function never_installed() { define('EVAL_STRING_OVER_NATIVE', 7); }
+$code = $argc > 0 ? 'define("EVAL_STRING_OVER_NATIVE", "hello");' : '';
+eval($code);
+class EvalStringOverNative { public $value = EVAL_STRING_OVER_NATIVE; }
+echo (new EvalStringOverNative())->value;
+"#);
+    assert_eq!(out, "hello");
+}
+
+/// A named `define(constant_name: ...)` feeds property defaults in any argument order.
+#[test]
+fn test_property_default_review_named_define_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+define(constant_name: 'NAMED_DEFAULT', value: 7);
+define(value: 9, constant_name: 'REVERSED_DEFAULT');
+class Named { public int $value = NAMED_DEFAULT; }
+class Reversed { public int $value = REVERSED_DEFAULT; }
+echo (new Named())->value, '|', (new Reversed())->value;
+"#);
+    assert_eq!(out, "7|9");
+}
+
+/// A constant branch PHP folds away cannot report its dead arm as undefined.
+#[test]
+fn test_property_default_review_folded_constant_branch() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Switch_ { public const ON = true; }
+class Consumer { public int $value = Switch_::ON ? 1 : MISSING_DEFAULT; }
+echo (new Consumer())->value;
+"#);
+    assert_eq!(out, "1");
+}
+
+/// A literal unpack reaches `define()` as positional arguments, so its name is still static.
+#[test]
+fn test_property_default_review_unpacked_define_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+define(...["SPREAD_DEFAULT", 7]);
+define(...["constant_name" => "SPREAD_NAMED", "value" => 9]);
+class SpreadPositional { public int $value = SPREAD_DEFAULT; }
+class SpreadNamed { public int $value = SPREAD_NAMED; }
+echo (new SpreadPositional())->value, '|', (new SpreadNamed())->value;
+"#);
+    assert_eq!(out, "7|9");
+}
+
+/// Integer-like unpack keys follow array order, not a hard-coded key zero.
+#[test]
+fn test_property_default_review_unpacked_define_integer_key_order() {
+    let out = crate::support::compile_and_run(r#"<?php
+define(...[1 => "ORDERED_DEFAULT", 0 => 7]);
+class OrderedDefault { public int $value = ORDERED_DEFAULT; }
+echo (new OrderedDefault())->value;
+"#);
+    assert_eq!(out, "7");
+}
+
+/// A runtime condition must leave its unselected arm lazy instead of failing the class.
+#[test]
+fn test_property_default_review_runtime_branch_keeps_missing_constant_lazy() {
+    let out = crate::support::compile_and_run(r#"<?php
+define('RUNTIME_FLAG', true);
+class Skipped { public int $value = RUNTIME_FLAG ? 1 : MISSING_ARM; }
+echo (new Skipped())->value;
+"#);
+    assert_eq!(out, "1");
+}
+
+/// The same lazy arm still raises PHP's error when the runtime condition selects it.
+#[test]
+fn test_property_default_review_runtime_branch_throws_when_selected() {
+    let out = crate::support::compile_and_run(r#"<?php
+define('RUNTIME_FLAG_OFF', false);
+class Selected { public int $value = RUNTIME_FLAG_OFF ? 1 : MISSING_ARM_ON; }
+try { new Selected(); echo 'no throw'; } catch (Error $e) { echo $e->getMessage(); }
+"#);
+    assert_eq!(out, "Undefined constant \"MISSING_ARM_ON\"");
+}
+
+/// Property defaults resolve predefined catalog constants instead of deferring an error.
+#[test]
+fn test_property_default_review_predefined_constants() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Consumer {
+    public int $flags = E_ALL;
+    public string $version = PHP_VERSION;
+    public int $seek = SEEK_SET;
+    public mixed $stderr = STDERR;
+    public static int $staticFlags = E_ALL;
+}
+$consumer = new Consumer();
+echo $consumer->flags === E_ALL ? 'flags|' : 'bad|';
+echo $consumer->version === PHP_VERSION ? 'version|' : 'bad|';
+echo $consumer->seek, '|', is_resource($consumer->stderr) ? 'stderr|' : 'bad|';
+echo Consumer::$staticFlags === E_ALL ? 'static' : 'bad';
+"#);
+    assert_eq!(out, "flags|version|0|stderr|static");
+}
+
+/// `define()` is discovered in every statement condition, not only statement bodies.
+#[test]
+fn test_property_default_review_defines_in_control_expressions() {
+    let out = crate::support::compile_and_run(r#"<?php
+class IfDefault { public int $value = IF_DEFAULT; }
+class ForeachDefault { public int $value = FOREACH_DEFAULT; }
+class SwitchDefault { public int $value = SWITCH_DEFAULT; }
+class ForDefault { public int $value = FOR_DEFAULT; }
+class WhileDefault { public int $value = WHILE_DEFAULT; }
+class DoDefault { public int $value = DO_DEFAULT; }
+if (define('IF_DEFAULT', 7)) {}
+foreach ([define('FOREACH_DEFAULT', 3)] as $ignored) {}
+switch (define('SWITCH_DEFAULT', 5)) { default: break; }
+for (define('FOR_DEFAULT', 11); false; ) {}
+$i = 0;
+while ($i < 1 && define('WHILE_DEFAULT', 13)) { $i++; }
+do { $i++; } while (define('DO_DEFAULT', 17) && false);
+echo (new IfDefault())->value, '|', (new ForeachDefault())->value, '|';
+echo (new SwitchDefault())->value, '|', (new ForDefault())->value, '|';
+echo (new WhileDefault())->value, '|', (new DoDefault())->value;
+"#);
+    assert_eq!(out, "7|3|5|11|13|17");
 }

@@ -76,6 +76,8 @@ pub(super) fn lower_core_builtin(
         CoreBuiltinOp::TriggerError => handlers::lower_trigger_error(ctx, inst, None)?,
         CoreBuiltinOp::BuiltinDeprecated => handlers::lower_trigger_error(ctx, inst, Some(b"Deprecated: "))?,
         CoreBuiltinOp::BuiltinWarning => handlers::lower_trigger_error(ctx, inst, Some(b"Warning: "))?,
+        CoreBuiltinOp::BuiltinWarningAt => handlers::lower_trigger_error(ctx, inst, Some(b"Warning: "))?,
+        CoreBuiltinOp::BuiltinDeprecatedAt => handlers::lower_trigger_error(ctx, inst, Some(b"Deprecated: "))?,
         CoreBuiltinOp::DiagnosticCallerLine => backtrace::lower_diagnostic_caller_line(ctx),
         CoreBuiltinOp::DiagnosticCallerFile => backtrace::lower_diagnostic_caller_file(ctx),
         CoreBuiltinOp::DeprecatedOnceBegin => handlers::lower_deprecated_once_begin(ctx, inst)?,

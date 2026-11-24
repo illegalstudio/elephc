@@ -14,7 +14,37 @@ use std::path::PathBuf;
 use crate::parser::ast::{Program, StmtKind};
 use crate::span::Span;
 
-use super::{autoloaded_prelude_groups, Registry};
+use super::{autoloaded_preludes, AutoloadedFunctions, Registry};
+
+/// Runs the probe and keeps only the prelude groups.
+fn autoloaded_prelude_groups(
+    program: &Program,
+    base_dir: &std::path::Path,
+    registry: &Registry,
+    defines: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<&'static str> {
+    autoloaded_preludes(program, base_dir, registry, defines).groups
+}
+
+/// Runs the probe over `files` (path, source) added to the project, with `extra_autoload` merged
+/// into the Composer `autoload` object, and keeps the per-function facts.
+fn functions_for(
+    project: &ProbeProject,
+    extra_autoload: &str,
+    files: &[(&str, &str)],
+) -> AutoloadedFunctions {
+    fs::write(
+        project.0.join("composer.json"),
+        format!(r#"{{"autoload":{{"psr-4":{{"App\\":"src/"}}{extra_autoload}}}}}"#),
+    )
+    .unwrap();
+    for (path, source) in files {
+        fs::write(project.0.join(path), source).unwrap();
+    }
+    let defines = std::collections::HashSet::new();
+    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+    autoloaded_preludes(&program, &project.0, &registry, &defines).functions
+}
 
 /// Owns the small Composer project used to exercise a real probe and autoload pass.
 struct ProbeProject(PathBuf);
@@ -263,4 +293,106 @@ fn probe_detects_weak_references_in_autoloaded_classes() {
         let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
         assert!(groups.contains(group), "autoloaded {group} use was missed: {body}");
     }
+}
+
+/// Every per-function OPcache/INI and version prelude name an autoloaded class alone calls is
+/// reported, and only that one, so pay-for-use per function survives.
+#[test]
+fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let probed: Vec<&str> = super::PROBED_FUNCTIONS.iter().copied().flatten().copied().collect();
+    for name in &probed {
+        // Fully qualified, and unqualified through PHP's global fallback in a namespace.
+        for call in [format!("\\{name}"), name.to_string()] {
+            let source = format!(
+                "<?php namespace App; class Probe {{ public function read() {{ return {call}('x'); }} }}",
+            );
+            let functions = functions_for(&project, "", &[("src/Probe.php", &source)]);
+            let reported: Vec<&str> =
+                probed.iter().copied().filter(|n| functions.references(n)).collect();
+            assert_eq!(reported, [*name], "autoloaded {call}() call was not reported alone");
+            assert!(!functions.declares(name), "a call to {name}() is not a declaration");
+        }
+    }
+    // A callable string, and a literal eval fragment, still name the function, exactly as the
+    // entry-program detector says.
+    for body in [
+        "return \\function_exists('opcache_reset');",
+        "return eval('return \\\\opcache_reset();');",
+    ] {
+        let source = format!("<?php namespace App; class Probe {{ public function has() {{ {body} }} }}");
+        let functions = functions_for(&project, "", &[("src/Probe.php", &source)]);
+        assert!(functions.references("opcache_reset"), "{body} was missed");
+    }
+}
+
+/// A vendor's own namespaced `ini_get()`, declared and called in vendor code, is a different
+/// function: it does not pull in the global INI wrapper, and it is not a declaration of it.
+#[test]
+fn probe_ignores_namespaced_functions_that_share_a_prelude_name() {
+    let project = ProbeProject::new();
+    let functions = functions_for(
+        &project,
+        r#","files":["src/functions.php"]"#,
+        &[
+            (
+                "src/functions.php",
+                "<?php namespace Vendor\\Util; function ini_get($k) { return $k; }",
+            ),
+            (
+                "src/Probe.php",
+                "<?php namespace App; class Probe { public function read() { return \\Vendor\\Util\\ini_get('x'); } }",
+            ),
+        ],
+    );
+    assert!(!functions.references("ini_get"), "Vendor\\Util\\ini_get() was taken for ini_get()");
+    assert!(!functions.declares("ini_get"), "Vendor\\Util\\ini_get was taken for ini_get");
+}
+
+/// A global declaration in an `autoload.files` stub, plain or behind the usual
+/// `function_exists` polyfill guard, is reported so the prelude does not declare a duplicate.
+#[test]
+fn probe_reports_prelude_functions_the_autoload_closure_declares() {
+    let project = ProbeProject::new();
+    let functions = functions_for(
+        &project,
+        r#","files":["src/stubs.php"]"#,
+        &[
+            (
+                "src/stubs.php",
+                "<?php function php_sapi_name() { return 'stub'; }\n\
+                 if (!\\function_exists('opcache_get_status')) { function opcache_get_status() { return false; } }",
+            ),
+            (
+                "src/Probe.php",
+                "<?php namespace App; class Probe { public function run() { return [\\php_sapi_name(), \\opcache_get_status(), \\ini_get('x')]; } }",
+            ),
+        ],
+    );
+    assert!(functions.declares("php_sapi_name"));
+    assert!(functions.declares("opcache_get_status"));
+    assert!(!functions.declares("ini_get"));
+    assert!(functions.references("ini_get"));
+}
+
+/// An opaque `eval` in an autoloaded class is reported, so a configured binary still gets the
+/// OPcache declarations its interpreter-backed fragment may call.
+#[test]
+fn probe_reports_bridge_eval_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let opaque = functions_for(
+        &project,
+        "",
+        &[(
+            "src/Probe.php",
+            "<?php namespace App; class Probe { public function run(string $code) { return eval($code); } }",
+        )],
+    );
+    assert!(opaque.has_bridge_eval());
+    let none = functions_for(
+        &project,
+        "",
+        &[("src/Probe.php", "<?php namespace App; class Probe { public function run() { return 1; } }")],
+    );
+    assert!(!none.has_bridge_eval());
 }

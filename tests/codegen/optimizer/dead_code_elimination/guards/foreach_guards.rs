@@ -2,7 +2,7 @@
 //! End-to-end coverage for iterable-root guards in `foreach` bodies.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests dead_code_elimination::guards`.
+//! - `cargo test --test codegen_tests_core dead_code_elimination::guards`.
 //!
 //! Key details:
 //! - By-reference values may mutate their iterable root invisibly, while

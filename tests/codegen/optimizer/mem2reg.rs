@@ -2,7 +2,7 @@
 //! End-to-end regression coverage for scalar local promotion to EIR SSA.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::mem2reg`.
+//! - `cargo test --test codegen_tests_core optimizer::mem2reg`.
 //!
 //! Key details:
 //! - Textual EIR proves local traffic becomes block parameters on joins and back edges.

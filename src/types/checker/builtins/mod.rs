@@ -45,6 +45,17 @@ pub(crate) use callables::{
 impl Checker {
     /// Records an external link library required on every target.
     pub(crate) fn require_builtin_library(&mut self, library: &str) {
+        self.require_builtin_library_identity(library);
+        if !self.runtime_bridge_libraries.iter().any(|lib| lib == library) {
+            self.runtime_bridge_libraries.push(library.to_string());
+        }
+    }
+
+    /// Records a link library whose call site may lower natively without its runtime.
+    ///
+    /// The library still joins the link plan, so `extension_loaded()` reports its PHP
+    /// extension, but it is not listed as a bridge whose runtime this call reaches.
+    pub(crate) fn require_builtin_library_identity(&mut self, library: &str) {
         if !self.required_libraries.iter().any(|lib| lib == library) {
             self.required_libraries.push(library.to_string());
         }
@@ -86,18 +97,27 @@ impl Checker {
                 crate::builtins::semantics::BuiltinRequirement::Bridge(library)
                 | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library) => {
                     self.require_builtin_library(library);
+                    self.record_callable_builtin_library(library);
+                }
+                crate::builtins::semantics::BuiltinRequirement::BridgeIdentity(library) => {
+                    self.require_builtin_library_identity(library);
+                    self.record_callable_builtin_library(library);
                 }
                 crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                     self.require_macos_builtin_library(library);
+                    self.record_callable_builtin_library(library);
                 }
                 crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
             }
         }
     }
 
-    /// Returns whether a name is a language construct that the deprecation pass must skip.
-    fn is_lazy_construct_for_deprecation(name: &str) -> bool {
-        matches!(name, "isset" | "unset" | "empty" | "exit" | "die")
+    /// Records a library a callable builtin reference requires, so dead-code pruning, whose
+    /// usage scan sees only direct calls, never unlinks it.
+    fn record_callable_builtin_library(&mut self, library: &str) {
+        if !self.callable_builtin_libraries.iter().any(|lib| lib == library) {
+            self.callable_builtin_libraries.push(library.to_string());
+        }
     }
 
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
@@ -351,6 +371,9 @@ impl Checker {
                         )?;
                         self.record_boxed_reference_output(arg, &output, &actual, span, env, false)?;
                     }
+                    if let Some((_, param_ty)) = def.params.get(index) {
+                        self.widen_untyped_builtin_ref_property(arg, param_ty, env)?;
+                    }
                     continue;
                 }
                 let param_name = def
@@ -384,6 +407,9 @@ impl Checker {
                     crate::builtins::semantics::BuiltinRequirement::Bridge(library)
                     | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library) => {
                         self.require_builtin_library(library);
+                    }
+                    crate::builtins::semantics::BuiltinRequirement::BridgeIdentity(library) => {
+                        self.require_builtin_library_identity(library);
                     }
                     crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                         self.require_macos_builtin_library(library);

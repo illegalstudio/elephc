@@ -69,13 +69,39 @@ pub(super) fn runtime_cache_key_with_build_identity_and_boundary(
     let feature_bits = features.cache_key_bits()
         | ((library_boundary as u64) << 62)
         | ((pic as u64) << 63);
+    // `_heap_limit` is emitted into the cached object, so a different memory_limit must
+    // select a different runtime object even when the reservation is unchanged.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut identity = format!(
-        "{}:{php_version_id}:{heap_size}:{feature_bits}:",
+        "{}:{php_version_id}:{heap_size}:{memory_limit}:{feature_bits}:",
         target.as_str()
     )
     .into_bytes();
     identity.extend_from_slice(build_identity);
     runtime_bytes_hash(&identity)
+}
+
+/// Identifies a runtime object by the assembly it is built from.
+///
+/// The emission inputs above name a request; this names the result. After an edit that
+/// changes the build identity but not the runtime emitters, the regenerated assembly hashes
+/// to an object that is already assembled, so only generation is repaid, not assembly.
+pub(super) fn runtime_content_key(target: Target, runtime_asm: &str) -> u64 {
+    let mut identity = format!("content:{}:", target.as_str()).into_bytes();
+    identity.extend_from_slice(runtime_asm.as_bytes());
+    runtime_bytes_hash(&identity)
+}
+
+/// Builds the alias file name that maps one request key to a content-named object.
+pub(super) fn runtime_cache_alias_name(heap_size: usize, target: Target, request_key: u64) -> String {
+    format!(
+        "runtime-v{}-{}-rt{:016x}-heap{}.alias",
+        env!("CARGO_PKG_VERSION"),
+        target.as_str(),
+        request_key,
+        heap_size
+    )
 }
 
 /// Ensures the shared cache is not writable or readable by another local user.
@@ -138,7 +164,7 @@ pub(super) fn write_runtime_object_integrity(
 }
 
 /// Computes a 64-bit FNV-1a hash of arbitrary cache bytes.
-fn runtime_bytes_hash(bytes: &[u8]) -> u64 {
+pub(super) fn runtime_bytes_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for &byte in bytes {
         hash ^= byte as u64;

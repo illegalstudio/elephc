@@ -30,6 +30,53 @@ pub(crate) struct RouteWindow {
     /// script's run carries them from its exact capture.
     #[serde(default, skip_serializing_if = "Io::is_empty")]
     pub io: Io,
+    /// The peak memory of the requests measured in the window.
+    #[serde(default, skip_serializing_if = "Mem::is_empty")]
+    pub mem: Mem,
+    /// How the runs that ended in the window exited, `(exit code, runs)`: a script's run
+    /// reports its exact code, so the page says `exit 255`, not only that it failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exits: Vec<(i32, u64)>,
+}
+
+/// The peak memory of a route's measured requests over a window.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Mem {
+    /// Requests measured.
+    pub n: u64,
+    /// Their summed peak memory, bytes.
+    pub sum: u64,
+    /// `(bucket, requests)` for every non-empty memory bucket (`apm::mem_bucket_of`).
+    pub hist: Vec<(u8, u64)>,
+}
+
+impl Mem {
+    /// Nothing measured: no request, no bytes, no bucket. Every field counts: a request's
+    /// bytes and bucket are published before its count, and a window cut between the two
+    /// holds them with `n` at 0, which the next window takes as its baseline (review).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.n == 0 && self.sum == 0 && self.hist.is_empty()
+    }
+
+    /// The sparse form of a route row's memory words.
+    fn from_words(words: &[u64; apm::MEM_WORDS]) -> Self {
+        Self {
+            n: words[0],
+            sum: words[1],
+            hist: words[2..].iter().enumerate().filter(|(_, n)| **n > 0).map(|(b, n)| (b as u8, *n)).collect(),
+        }
+    }
+
+    /// Adds this window's memory into a route row's memory words, saturating.
+    fn add_to(&self, words: &mut [u64; apm::MEM_WORDS]) {
+        words[0] = words[0].saturating_add(self.n);
+        words[1] = words[1].saturating_add(self.sum);
+        for (bucket, n) in &self.hist {
+            if let Some(slot) = words.get_mut(2 + usize::from(*bucket)) {
+                *slot = slot.saturating_add(*n);
+            }
+        }
+    }
 }
 
 /// Database and outgoing-network work a transaction did.
@@ -81,6 +128,19 @@ impl RouteWindow {
                 net_ops: stats.io[apm::IO_NET_OPS],
                 net_wait_ns: stats.io[apm::IO_NET_WAIT],
             },
+            mem: Mem::from_words(&stats.mem),
+            exits: Vec::new(),
+        }
+    }
+
+    /// Counts one more run that exited with `code`.
+    pub(crate) fn add_exit(&mut self, code: i32, runs: u64) {
+        match self.exits.iter_mut().find(|(seen, _)| *seen == code) {
+            Some(row) => row.1 = row.1.saturating_add(runs),
+            None => {
+                self.exits.push((code, runs));
+                self.exits.sort_unstable();
+            }
         }
     }
 
@@ -97,6 +157,7 @@ impl RouteWindow {
                 *slot = slot.saturating_add(*n);
             }
         }
+        self.mem.add_to(&mut stats.mem);
     }
 }
 
@@ -123,6 +184,64 @@ pub(crate) struct Window {
     /// (never for a script's run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub res: Option<WindowRes>,
+    /// The errors failed transactions ended with over the window, grouped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<WindowError>,
+    /// The build the source was running, as its snapshots carry it (`<unix seconds> <label>`),
+    /// when it said: what the page groups an application's figures by version with.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub build: String,
+}
+
+/// How many failed transactions of one transaction ended with one error over a window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct WindowError {
+    /// The transaction's name, as its row in `routes`.
+    #[serde(rename = "r")]
+    pub route: String,
+    /// The exception's class.
+    #[serde(rename = "c")]
+    pub class: String,
+    /// Where it was thrown, `file:line`.
+    pub at: String,
+    /// How many times.
+    pub n: u64,
+    /// The W3C trace id of its last occurrence; empty without one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trace: String,
+}
+
+impl WindowError {
+    /// Copies a snapshot's grouped error into the stored window format.
+    fn from_stats(error: &apm::ErrorStats) -> Self {
+        Self {
+            route: error.route.clone(),
+            class: error.class.clone(),
+            at: error.location.clone(),
+            n: error.count,
+            trace: error.trace.clone(),
+        }
+    }
+}
+
+/// The errors of several windows added up, one row per transaction and error, most
+/// frequent first.
+pub(crate) fn merge_errors<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Vec<WindowError> {
+    let mut merged: Vec<WindowError> = Vec::new();
+    for error in windows.into_iter().flat_map(|w| &w.errors) {
+        match merged.iter_mut().find(|e| e.route == error.route && e.class == error.class && e.at == error.at) {
+            Some(existing) => {
+                existing.n = existing.n.saturating_add(error.n);
+                // Windows come oldest first: the later one's trace is the last occurrence's.
+                if !error.trace.is_empty() {
+                    existing.trace = error.trace.clone();
+                }
+            }
+            None => merged.push(error.clone()),
+        }
+    }
+    merged.sort_by(|a, b| b.n.cmp(&a.n).then_with(|| a.route.cmp(&b.route)));
+    merged
 }
 
 /// What the service's process tree used over one window.
@@ -169,6 +288,7 @@ impl Window {
         let res = current.resources.as_ref().map(|now| {
             WindowRes::between(previous.resources.as_ref().filter(|_| diff.is_some()), now)
         });
+        let same_run = diff.is_some();
         let (routes, span_ms) = match diff {
             Some(routes) => (routes, current.time_ms.saturating_sub(previous.time_ms)),
             None => (
@@ -176,7 +296,8 @@ impl Window {
                 current.time_ms.saturating_sub(current.epoch / 1_000_000),
             ),
         };
-        Self {
+        let mut window = Self {
+            build: current.build.clone().unwrap_or_default(),
             t: current.time_ms,
             span_ms,
             epoch: current.epoch,
@@ -187,12 +308,16 @@ impl Window {
                 .map(RouteWindow::from_stats)
                 .collect(),
             res,
-        }
+            errors: current.errors_since(previous).iter().map(WindowError::from_stats).collect(),
+        };
+        window.attach_exits(same_run.then_some(previous), current);
+        window
     }
 
     /// Everything a snapshot counted since its service started.
     pub(crate) fn since_start(snapshot: &Snapshot) -> Self {
-        Self {
+        let mut window = Self {
+            build: snapshot.build.clone().unwrap_or_default(),
             t: snapshot.time_ms,
             span_ms: snapshot.time_ms.saturating_sub(snapshot.epoch / 1_000_000),
             epoch: snapshot.epoch,
@@ -204,6 +329,28 @@ impl Window {
                 .map(RouteWindow::from_stats)
                 .collect(),
             res: snapshot.resources.as_ref().map(|now| WindowRes::between(None, now)),
+            errors: snapshot.errors.iter().map(WindowError::from_stats).collect(),
+        };
+        window.attach_exits(None, snapshot);
+        window
+    }
+
+    /// Counts the runs `current` reports ended that `previous` did not (all of them
+    /// after a restart) against their transactions' rows, by exit code. A snapshot
+    /// repeats every run its process ended, so only the new ones belong here.
+    fn attach_exits(&mut self, previous: Option<&Snapshot>, current: &Snapshot) {
+        let mut seen: std::collections::HashMap<(&str, i32), usize> = std::collections::HashMap::new();
+        for (route, code) in previous.map_or(&[][..], |p| p.exits.as_slice()) {
+            *seen.entry((route.as_str(), *code)).or_default() += 1;
+        }
+        for (route, code) in &current.exits {
+            if let Some(left) = seen.get_mut(&(route.as_str(), *code)).filter(|left| **left > 0) {
+                *left -= 1;
+                continue;
+            }
+            if let Some(row) = self.routes.iter_mut().find(|row| row.route == *route) {
+                row.add_exit(*code, 1);
+            }
         }
     }
 }
@@ -213,8 +360,9 @@ impl Window {
 ///
 /// Every part matters, because the next window is measured from the snapshot
 /// that held it, so a dropped row loses what it held for good:
-/// - a slow route's queries are counted while its request runs, so the poll
-///   that sees them can come before the one that sees the request end;
+/// - a request's queries are published just before its count, so a poll can
+///   see them before it sees the request end (and work outside any transaction
+///   is counted as it happens);
 /// - a request's count is written last and read first, so a poll can hold its
 ///   status, time and latency bucket but not its count (review).
 fn has_activity(route: &RouteStats) -> bool {
@@ -223,6 +371,9 @@ fn has_activity(route: &RouteStats) -> bool {
         || route.status.iter().any(|value| *value > 0)
         || route.hist.iter().any(|value| *value > 0)
         || route.io.iter().any(|value| *value > 0)
+        // Memory too: it is published before the count, and a window that dropped a
+        // memory-only change lost that measurement for good (review).
+        || route.mem.iter().any(|value| *value > 0)
 }
 
 /// Whether a window is a script's run rather than a service's stretch of time.
@@ -321,9 +472,13 @@ pub(crate) fn coalesce(windows: &[Window]) -> Option<Window> {
     let routes = merge_routes(windows.iter())
         .iter()
         .filter(|row| has_activity(row) || io.contains_key(&row.name))
-        .map(|row| RouteWindow {
-            io: io.get(&row.name).copied().unwrap_or_default(),
-            ..RouteWindow::from_stats(row)
+        .map(|row| {
+            let mut window = RouteWindow { io: io.get(&row.name).copied().unwrap_or_default(), ..RouteWindow::from_stats(row) };
+            // The runs' exit codes add up, code by code.
+            for exit in windows.iter().flat_map(|w| &w.routes).filter(|r| r.route == row.name).flat_map(|r| &r.exits) {
+                window.add_exit(exit.0, exit.1);
+            }
+            window
         })
         .collect();
     // CPU adds up; memory and processes keep the stretch's highest, so a
@@ -335,12 +490,15 @@ pub(crate) fn coalesce(windows: &[Window]) -> Option<Window> {
         cores: a.cores.max(b.cores),
     });
     Some(Window {
+        // The newest window's build: a stretch that spans a deploy is the new build's.
+        build: last.build.clone(),
         t: last.t,
         span_ms,
         epoch: last.epoch,
         source: last.source.clone(),
         routes,
         res,
+        errors: merge_errors(windows.iter()),
     })
 }
 
@@ -425,6 +583,9 @@ pub(crate) fn label_sources(windows: &mut [Window]) {
         let source = window.source.clone();
         for route in &mut window.routes {
             route.route = format!("{source} · {}", route.route);
+        }
+        for error in &mut window.errors {
+            error.route = format!("{source} · {}", error.route);
         }
     }
 }

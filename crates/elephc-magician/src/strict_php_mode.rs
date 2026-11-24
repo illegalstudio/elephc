@@ -1,6 +1,6 @@
 //! Purpose:
 //! Owns the strict-PHP mode state for runtime eval: binaries compiled with
-//! `elephc --strict-php` hide elephc-extension builtins from eval dispatch and
+//! `elephc build --strict-php` hide elephc-extension builtins from eval dispatch and
 //! introspection so eval'd code behaves like the PHP interpreter.
 //!
 //! Called from:

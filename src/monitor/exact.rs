@@ -275,6 +275,8 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut raw_edges: Vec<(String, String, u64, u64)> = Vec::new();
     let mut queries: Vec<(String, u64)> = Vec::new();
+    let mut query_callers: std::collections::BTreeMap<String, Vec<crate::call_graph::QueryCaller>> =
+        std::collections::BTreeMap::new();
     let mut trace: Option<crate::call_graph::TraceContext> = None;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("elephc-instr-trace: ") {
@@ -303,6 +305,20 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
             if let Some((count, sql)) = rest.split_once(' ') {
                 if let Ok(count) = count.parse::<u64>() {
                     queries.push((sql.to_string(), count));
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("elephc-instr-query-from: ") {
+            // "<executions>\t<path:line or ->\t<function>", for the query line above.
+            let mut fields = rest.splitn(3, '\t');
+            if let (Some(n), Some(location), Some(function), Some((sql, _))) =
+                (fields.next(), fields.next(), fields.next(), queries.last())
+            {
+                if let Ok(executions) = n.parse::<u64>() {
+                    query_callers.entry(sql.clone()).or_default().push(crate::call_graph::QueryCaller {
+                        function: function.to_string(),
+                        location: if location == "-" { String::new() } else { location.to_string() },
+                        executions,
+                    });
                 }
             }
         } else if let Some(rest) = line.strip_prefix("elephc-instr-edge: ") {
@@ -391,13 +407,46 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
             })
         })
         .collect();
+    point_callers_at_declarations(&mut query_callers);
     CallGraph {
         nodes,
         edges,
         total,
         queries,
+        query_callers,
         lines: None,
         trace,
+    }
+}
+
+/// Moves each query caller's `path:line` from the first line of its body, which
+/// is what the compiler knows, to the line its function is declared on: the
+/// innermost declaration in that file that holds the line. A file that cannot
+/// be read keeps the line it has.
+fn point_callers_at_declarations(
+    callers: &mut std::collections::BTreeMap<String, Vec<crate::call_graph::QueryCaller>>,
+) {
+    let mut ranges_by_file: std::collections::HashMap<String, Vec<super::DeclRange>> =
+        std::collections::HashMap::new();
+    for caller in callers.values_mut().flatten() {
+        let Some((path, line)) = caller.location.rsplit_once(':') else {
+            continue;
+        };
+        let Ok(line) = line.parse::<u32>() else {
+            continue;
+        };
+        let ranges = ranges_by_file.entry(path.to_string()).or_insert_with(|| {
+            std::fs::read_to_string(path)
+                .map(|text| php_decl_ranges(&text))
+                .unwrap_or_default()
+        });
+        if let Some(range) = ranges
+            .iter()
+            .filter(|r| r.start <= line && line <= r.end)
+            .min_by_key(|r| r.end - r.start)
+        {
+            caller.location = format!("{path}:{}", range.start);
+        }
     }
 }
 

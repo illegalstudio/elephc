@@ -119,6 +119,10 @@ pub struct Module {
     /// `--apm-collector host:port`: where a `--with-apm` build sends its
     /// transaction counters, embedded for `elephc_probe_apm_init`.
     pub apm_collector: Option<String>,
+    /// What the probe reads at start, one item per line: the `[apm] include` / `exclude`
+    /// patterns of the project's `elephc.toml` (`+pattern`, `-pattern`) and the build's
+    /// identity (`@<unix seconds> <label>`). `None` when the probe is not linked.
+    pub apm_rules: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -234,6 +238,7 @@ impl Module {
             included_files: Vec::new(),
             probe_key: None,
             apm_collector: None,
+            apm_rules: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),

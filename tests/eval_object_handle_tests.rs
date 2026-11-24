@@ -5,7 +5,7 @@
 //! allocator cleanliness for a loop that evals repeatedly.
 //!
 //! Called from:
-//! - `cargo test --test eval_object_handle_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_object_handle_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - IDENTITY IS ASSERTED BEFORE HANDLES, DELIBERATELY. The question these tests
@@ -109,7 +109,9 @@ fn compile_php(stem: &str, source: &str, flags: &[&str]) -> PathBuf {
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, &dir);
     cmd.current_dir(&dir);
     cmd.arg(&php);

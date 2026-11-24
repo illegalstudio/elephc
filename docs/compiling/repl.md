@@ -30,9 +30,10 @@ int(20)
 
 ## Input and results
 
-Enter PHP fragments without an opening `<?php` tag. Magician's lexer and parser
-recognize incomplete expressions, blocks, strings, and comments and request another
-line at the `...` prompt. Complete statements execute immediately. Paste a whole
+Enter PHP fragments without an opening `<?php` tag. The REPL uses Chopper's scanner
+and parser to recognize incomplete expressions, blocks, strings, and comments.
+Magician requests another line at the `...` prompt and lowers complete input to
+EvalIR for immediate execution. Paste a whole
 `if`/`else` or `try`/`catch` statement together when its first block could stand alone.
 
 Supported expressions and simple variable assignments display their results using

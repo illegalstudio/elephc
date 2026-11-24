@@ -1,11 +1,12 @@
 //! Purpose:
-//! Integration coverage for top-level compile/native dispatch and compiler output modes.
+//! Integration coverage for top-level build/native dispatch and compiler output modes.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
 //! - Native help and managed-PCRE2 recovery diagnostics are exercised through subprocesses.
+//! - Explicit build must produce an executable and reject a missing source path.
 //! - Non-link modes must remain independent of installed native artifacts.
 
 use crate::support::*;
@@ -21,7 +22,7 @@ fn test_cli_monitor_profiles_a_top_level_only_program() {
     )
     .expect("failed to write the top-level monitoring fixture");
 
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args([
             "monitor",
             "top.php",
@@ -91,7 +92,7 @@ fn test_cli_monitor_writes_php_level_speedscope_profile() {
     )
     .expect("failed to write the monitor fixture");
 
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args([
             "monitor",
             "busy.php",
@@ -200,7 +201,7 @@ echo "profiled\n";
     )
     .expect("failed to write the shutdown monitoring fixture");
 
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args([
             "monitor",
             "shutdown.php",
@@ -260,7 +261,7 @@ fn assert_clean_language_exit_profile(tag: &str, source: &str) {
     )
     .expect("failed to write the clean-exit monitoring fixture");
 
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args([
             "monitor",
             "exit.php",
@@ -356,7 +357,7 @@ fail_uncaught($argc);
     )
     .expect("failed to write the uncaught-error monitoring fixture");
 
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args([
             "monitor",
             "uncaught.php",
@@ -403,7 +404,7 @@ fn test_cli_version_flags_report_package_version() {
     let expected = format!("elephc {}\n", env!("CARGO_PKG_VERSION"));
 
     for flag in ["--version", "-V"] {
-        let output = elephc_cli_command(&dir)
+        let output = elephc_root_command(&dir)
             .arg(flag)
             .output()
             .unwrap_or_else(|error| panic!("failed to run elephc {flag}: {error}"));
@@ -412,7 +413,7 @@ fn test_cli_version_flags_report_package_version() {
         assert!(output.stderr.is_empty(), "elephc {flag} should not write stderr");
     }
 
-    let help = elephc_cli_command(&dir)
+    let help = elephc_root_command(&dir)
         .arg("--help")
         .output()
         .expect("failed to run elephc --help");
@@ -430,7 +431,7 @@ fn test_cli_version_flags_report_package_version() {
 fn test_cli_native_help_and_bare_usage() {
     let dir = make_cli_test_dir("elephc_cli_native_help");
 
-    let help = elephc_cli_command(&dir)
+    let help = elephc_root_command(&dir)
         .args(["native", "--help"])
         .output()
         .expect("failed to run elephc native --help");
@@ -444,7 +445,7 @@ fn test_cli_native_help_and_bare_usage() {
         "native help should include explicit cache pruning"
     );
 
-    let bare = elephc_cli_command(&dir)
+    let bare = elephc_root_command(&dir)
         .arg("native")
         .output()
         .expect("failed to run bare elephc native");
@@ -456,13 +457,101 @@ fn test_cli_native_help_and_bare_usage() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// An explicit build compiles a source, while bare `build` reports missing input.
+#[test]
+fn test_cli_build_produces_executable_and_requires_source() {
+    let dir = make_cli_test_dir("elephc_cli_build");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'built';\n").unwrap();
+
+    let built = elephc_root_command(&dir)
+        .args(["build", "--quiet"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc build");
+    assert!(
+        built.status.success(),
+        "elephc build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let executable = dir.join("main");
+    assert!(executable.exists(), "build should produce a native executable");
+    let run = Command::new(&executable).output().expect("failed to run built executable");
+    assert!(run.status.success());
+    assert_eq!(run.stdout, b"built");
+
+    let bare = elephc_root_command(&dir)
+        .arg("build")
+        .output()
+        .expect("failed to run bare elephc build");
+    assert!(!bare.status.success(), "bare build should be a usage error");
+    assert!(
+        String::from_utf8_lossy(&bare.stderr).contains("no source file given"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+
+    let legacy = elephc_root_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run legacy source invocation");
+    assert!(!legacy.status.success(), "source without build should fail");
+    assert!(
+        String::from_utf8_lossy(&legacy.stderr).contains("did you mean `elephc build "),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&legacy.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `check` analyzes without codegen, legacy option-first invocations get the rewritten
+/// command, and `--help` still wins in any position.
+#[test]
+fn test_cli_check_command_legacy_hint_and_help_anywhere() {
+    let dir = make_cli_test_dir("elephc_cli_check");
+    fs::write(dir.join("app.php"), "<?php echo 'checked';\n").unwrap();
+
+    let checked = elephc_root_command(&dir)
+        .args(["check", "app.php"])
+        .output()
+        .expect("failed to run elephc check");
+    assert!(checked.status.success(), "elephc check failed: {}", String::from_utf8_lossy(&checked.stderr));
+    assert!(!dir.join("app").exists(), "check must not produce an executable");
+
+    let build_check = elephc_root_command(&dir)
+        .args(["build", "--check", "app.php"])
+        .output()
+        .expect("failed to run elephc build --check");
+    assert!(build_check.status.success(), "{}", String::from_utf8_lossy(&build_check.stderr));
+    assert!(!dir.join("app").exists(), "build --check must not produce an executable");
+
+    let legacy = elephc_root_command(&dir)
+        .args(["--check", "app.php"])
+        .output()
+        .expect("failed to run legacy option-first invocation");
+    assert!(!legacy.status.success(), "an option without a command should fail");
+    let stderr = String::from_utf8_lossy(&legacy.stderr);
+    assert!(stderr.contains("did you mean `elephc build --check app.php`?"), "unexpected stderr: {stderr}");
+
+    let help = elephc_root_command(&dir)
+        .args(["--check", "--help", "app.php"])
+        .output()
+        .expect("failed to run elephc --check --help");
+    assert!(help.status.success(), "help must win in any position");
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("check <source-file>"), "{stdout}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies read-only native commands preserve their captured stdout and health exit status.
 #[test]
 fn test_cli_native_read_only_commands_map_output_and_status() {
     let dir = make_cli_test_dir("elephc_cli_native_read_only");
     let cache = dir.join("native-cache-must-not-exist");
 
-    let list = elephc_cli_command(&dir)
+    let list = elephc_root_command(&dir)
         .args(["native", "list"])
         .env("ELEPHC_NATIVE_CACHE", &cache)
         .output()
@@ -474,7 +563,7 @@ fn test_cli_native_read_only_commands_map_output_and_status() {
         String::from_utf8_lossy(&list.stdout)
     );
 
-    let doctor = elephc_cli_command(&dir)
+    let doctor = elephc_root_command(&dir)
         .args(["native", "doctor"])
         .env("ELEPHC_NATIVE_CACHE", &cache)
         .output()
@@ -497,7 +586,7 @@ fn test_cli_native_read_only_commands_map_output_and_status() {
 fn test_cli_native_prune_empty_cache_is_noop() {
     let dir = make_cli_test_dir("elephc_cli_native_prune_empty");
     let cache = dir.join("native-cache-must-not-exist");
-    let prune = elephc_cli_command(&dir)
+    let prune = elephc_root_command(&dir)
         .args(["native", "prune"])
         .env("ELEPHC_NATIVE_CACHE", &cache)
         .output()
@@ -703,7 +792,7 @@ echo "ok";
 
     assert!(
         output.status.success(),
-        "elephc --check failed: {}",
+        "elephc build --check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
@@ -749,7 +838,7 @@ echo "ok";
 
     assert!(
         output.status.success(),
-        "elephc --emit-asm failed: {}",
+        "elephc build --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
@@ -865,7 +954,7 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
 
     assert!(
         output.status.success(),
-        "cross-target elephc --emit-asm failed: {}",
+        "cross-target elephc build --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -915,7 +1004,7 @@ fn test_cli_web_prunes_unused_session_surface_from_assembly() {
         .expect("failed to compile pruned web program");
     assert!(
         output.status.success(),
-        "elephc --web failed: {}",
+        "elephc build --web failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1089,7 +1178,7 @@ fn test_with_pdo_keeps_unreferenced_pdo_function() {
         .expect("failed to compile forced PDO assembly");
     assert!(
         output.status.success(),
-        "elephc --with-pdo --emit-asm failed: {}",
+        "elephc build --with-pdo --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1118,7 +1207,7 @@ fn test_with_crypto_does_not_force_hash_prelude() {
         .expect("failed to compile forced crypto assembly");
     assert!(
         output.status.success(),
-        "elephc --with-crypto --emit-asm failed: {}",
+        "elephc build --with-crypto --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1151,7 +1240,7 @@ fn test_with_eval_keeps_unreferenced_user_declaration() {
         .expect("failed to compile forced eval assembly");
     assert!(
         output.status.success(),
-        "elephc --with-eval --emit-asm failed: {}",
+        "elephc build --with-eval --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1243,7 +1332,7 @@ echo greet();
 
     assert!(
         output.status.success(),
-        "elephc --emit-ir failed: stderr={}",
+        "elephc build --emit-ir failed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1342,7 +1431,7 @@ fn test_cli_timings_reports_check_phases() {
 
     assert!(
         output.status.success(),
-        "elephc --timings --check failed: {}",
+        "elephc build --timings --check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1384,7 +1473,7 @@ fn test_cli_timings_reports_assemble_and_link() {
 
     assert!(
         output.status.success(),
-        "elephc --timings failed: {}",
+        "elephc build --timings failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1417,6 +1506,7 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     fs::write(&php_path, "<?php echo 1;").unwrap();
 
     let first = Command::new(elephc_cli_bin())
+        .arg("build")
         .arg("--timings")
         .arg(&php_path)
         .env("XDG_CACHE_HOME", &cache_root)
@@ -1452,6 +1542,7 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     );
 
     let second = Command::new(elephc_cli_bin())
+        .arg("build")
         .arg("--timings")
         .arg(&php_path)
         .env("XDG_CACHE_HOME", &cache_root)
@@ -1503,7 +1594,7 @@ echo foo(1);
 
     assert!(
         output.status.success(),
-        "elephc --source-map failed: {}",
+        "elephc build --source-map failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1589,7 +1680,7 @@ echo 1 + 2;
 
     assert!(
         output.status.success(),
-        "elephc --debug-info failed: {}",
+        "elephc build --debug-info failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1661,7 +1752,7 @@ greet();
         .expect("failed to run elephc CLI with --debug-info");
     assert!(
         output.status.success(),
-        "elephc --debug-info failed: {}",
+        "elephc build --debug-info failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let binary = dir.join("main");
@@ -1740,7 +1831,7 @@ greet();
 
     assert!(
         output.status.success(),
-        "elephc --debug-info failed for a path with `\\` and `\"`: {}",
+        "elephc build --debug-info failed for a path with `\\` and `\"`: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -1863,7 +1954,7 @@ fn test_cli_executables_strip_symbols_by_default_and_keep_symbols_retains_them()
         .arg("--keep-symbols")
         .arg(&php_path)
         .output()
-        .expect("failed to run elephc --keep-symbols");
+        .expect("failed to run elephc build --keep-symbols");
     assert!(
         kept_build.status.success(),
         "--keep-symbols build failed: {}",
@@ -1930,12 +2021,10 @@ fn exact_incl_percent(report: &str, name: &str) -> f64 {
 /// milliseconds — so anything under 10% passes and every shape of the defect
 /// lands far above it.
 ///
-/// `heavy` runs 12,000,000 rounds per call so its work keeps dominating the fixed
-/// drain and dispatch overhead and any scheduler time the runner charges inside a
-/// coroutine switch: at 120,000 rounds a faster loop left it at about 4 ms in
-/// total, and at 1,200,000 rounds loaded runners still measured 87-89% with a
-/// `yield`/`yield from` pair charging 9.7%. The larger loop keeps the >90% control
-/// and the <10% coroutine shares meaningful without weakening either threshold.
+/// `heavy` runs 24,000,000 rounds per call so its work keeps dominating both the fixed
+/// drain and dispatch overhead and a few milliseconds lost inside `{main}`. At 1,200,000
+/// rounds it took about 4 ms in total, so 2.9 ms charged to `{main}` on a CI runner left
+/// it at 63-66%, failing the >90% control while the coroutines stayed far below 10%.
 #[test]
 fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
     let dir = make_cli_test_dir("elephc_cli_monitor_coroutine");
@@ -1948,10 +2037,10 @@ fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
          function body(): int { Fiber::suspend(1); return 7; }\n\
          function drain(): int {\n\
          $t = 0;\n\
-         foreach (outer() as $v) { $t += heavy(12000000); }\n\
+         foreach (outer() as $v) { $t += heavy(24000000); }\n\
          $f = new Fiber('body');\n\
          $f->start();\n\
-         $t += heavy(12000000);\n\
+         $t += heavy(24000000);\n\
          $f->resume(0);\n\
          return $t + $f->getReturn();\n\
          }\n\
@@ -1970,7 +2059,7 @@ fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let watched = elephc_cli_command(&dir)
+    let watched = elephc_root_command(&dir)
         .args(["monitor", "./coro", "--dot", "coro.dot"])
         .output()
         .expect("failed to run elephc monitor");
@@ -2066,7 +2155,7 @@ fn test_cli_monitor_restores_a_coroutine_resumed_into_a_throw() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let watched = elephc_cli_command(&dir)
+    let watched = elephc_root_command(&dir)
         .args(["monitor", "./ft", "--dot", "ft.dot"])
         .output()
         .expect("failed to run elephc monitor");
@@ -2156,7 +2245,7 @@ fn test_cli_monitor_live_needs_no_external_sampler() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let watched = elephc_cli_command(&dir)
+    let watched = elephc_root_command(&dir)
         .args(["monitor", "./hot", "--live", "--duration", "1"])
         .output()
         .expect("failed to run elephc monitor --live");
@@ -2217,7 +2306,7 @@ fn test_cli_monitor_live_compiles_the_source_with_the_probe() {
     .expect("failed to write the live source fixture");
 
     // No `--with-monitoring` step. That is the point of the test.
-    let watched = elephc_cli_command(&dir)
+    let watched = elephc_root_command(&dir)
         .args(["monitor", "hot.php", "--live", "--duration", "1"])
         .output()
         .expect("failed to run elephc monitor hot.php --live");
@@ -2265,7 +2354,7 @@ fn test_cli_probe_embeds_in_process_sampler() {
     let compile = elephc_cli_command(&dir)
         .args(["--with-monitoring", "burn.php"])
         .output()
-        .expect("failed to run elephc --probe");
+        .expect("failed to run elephc build --with-monitoring");
     assert!(
         compile.status.success(),
         "probe compile failed\nstdout: {}\nstderr: {}",
@@ -2286,7 +2375,7 @@ fn test_cli_probe_embeds_in_process_sampler() {
     );
 
     // Run through `monitor`, which asks over the control channel.
-    let watched = elephc_cli_command(&dir)
+    let watched = elephc_root_command(&dir)
         .args(["monitor", "./burn"])
         .output()
         .expect("failed to run elephc monitor");
@@ -2330,7 +2419,7 @@ fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
         .env("ELEPHC_WEB_LIB_DIR", &empty)
         .args(["-q", "--web", "main.php"])
         .output()
-        .expect("failed to run elephc --web");
+        .expect("failed to run elephc build --web");
 
     assert!(
         !output.status.success(),
@@ -2373,7 +2462,7 @@ fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
     let recovered = elephc_cli_command(&dir)
         .args(["-q", "--web", "main.php"])
         .output()
-        .expect("failed to re-run elephc --web");
+        .expect("failed to re-run elephc build --web");
     assert!(
         recovered.status.success(),
         "the same build must succeed without the override:\nstdout: {}\nstderr: {}",
@@ -2407,7 +2496,7 @@ fn test_cli_source_map_keeps_long_included_line_ends() {
             .expect("failed to run elephc CLI with --source-map");
         assert!(
             output.status.success(),
-            "{label}: elephc --source-map failed: {}",
+            "{label}: elephc build --source-map failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let raw = fs::read_to_string(dir.join("main.map")).expect("failed to read source map");
@@ -2475,7 +2564,7 @@ fn test_cli_monitor_apm_records_script_runs() {
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let store = dir.join("apm-store");
     let run = |args: &[&str]| {
-        let output = elephc_cli_command(&dir)
+        let output = elephc_root_command(&dir)
             .args(["monitor", "./console", "--apm", "--store"])
             .arg(&store)
             .arg("--")
@@ -2504,7 +2593,7 @@ fn test_cli_monitor_apm_records_script_runs() {
     // A budget that fails too does not hide the script's own failure; for a
     // script that succeeded, the failed budget is the code (review).
     let budget = |args: &[&str]| {
-        elephc_cli_command(&dir)
+        elephc_root_command(&dir)
             .args(["monitor", "./console", "--apm", "--assert", "calls:main<=0", "--"])
             .args(args)
             .output()
@@ -2517,13 +2606,26 @@ fn test_cli_monitor_apm_records_script_runs() {
 
     // One line per run, across however many day files the runs straddled
     // (a run at 23:59:59 UTC and the next at 00:00:01 land in two).
-    let lines: usize = fs::read_dir(&store)
+    let day_files = |prefix: &str| -> usize {
+        fs::read_dir(&store)
+            .expect("the store exists")
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(prefix) && !name.starts_with("apm-captures-") && name.ends_with(".jsonl")
+            })
+            .map(|entry| fs::read_to_string(entry.path()).expect("a day file is readable").lines().count())
+            .sum()
+    };
+    assert_eq!(day_files("apm-"), 3, "one stored window per run");
+    // Each run's exact profile is kept beside it, dated, for the page to find by period.
+    let captures: usize = fs::read_dir(&store)
         .expect("the store exists")
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-"))
-        .map(|entry| fs::read_to_string(entry.path()).expect("a day file is readable").lines().count())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-captures-"))
+        .map(|entry| fs::read_to_string(entry.path().join("index.jsonl")).unwrap_or_default().lines().count())
         .sum();
-    assert_eq!(lines, 3, "one stored window per run");
+    assert_eq!(captures, 3, "one stored profile per run");
     // A wrapped cron run leaves nothing next to the script: the Speedscope
     // export is written only when --out asks for it (review).
     assert!(

@@ -232,7 +232,7 @@ fn handle(mut stream: TcpStream, shared: &Shared, local: SocketAddr) -> std::io:
             respond(&mut stream, "200 OK", "application/json", body.as_bytes())
         }
         "/api/traces" => {
-            let body = traces_json(shared).to_string();
+            let body = traces_json(shared, query).to_string();
             respond(&mut stream, "200 OK", "application/json", body.as_bytes())
         }
         "/metrics" => {
@@ -267,10 +267,31 @@ fn capture_profile(shared: &Shared) -> Result<(), String> {
         return Err("no samples yet: the sampler starts when asked, so capture again — if it stays empty, the service is idle".to_string());
     }
     let graph = super::super::build_call_graph(&display);
+    let t_ms = super::super::epoch_millis();
     let mut history = shared.0.lock().unwrap_or_else(|e| e.into_inner());
-    history.profiles.push_back((super::super::epoch_millis(), graph));
+    history.profiles.push_back((t_ms, graph.clone()));
     while history.profiles.len() > 10 {
         history.profiles.pop_front();
+    }
+    // Dated in the store too, so it is found again by its period after the page's ten
+    // newest have moved on. Written after the lock is let go.
+    let store = history.store.clone();
+    let service = history.target.clone();
+    drop(history);
+    if let Some(store) = store {
+        let t = t_ms as u64;
+        let record = super::captures::CaptureRecord {
+            id: super::captures::next_capture_id(t),
+            source: service.clone(),
+            t,
+            kind: "profile".to_string(),
+            route: format!("sampled profile of {service}"),
+            status: None,
+            duration_ns: CAPTURE_SAMPLING.as_nanos() as u64,
+            functions: graph.nodes.len(),
+            queries: graph.queries.iter().map(|(_, n)| n).sum(),
+        };
+        store.append_capture(&record, &graph)?;
     }
     Ok(())
 }

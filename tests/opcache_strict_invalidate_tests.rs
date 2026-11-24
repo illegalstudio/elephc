@@ -23,7 +23,7 @@
 //! single un-honorable request is what keeps the flag from being a blunt "reject opcache" switch.
 //!
 //! Called from:
-//! - `cargo test --test opcache_strict_invalidate_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_strict_invalidate_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - THE DEFAULT MUST NOT MOVE. Every assertion here is paired: the same probe is compiled with
@@ -90,7 +90,9 @@ fn compile(dir: &Path, stem: &str, source: &str, extra: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.args(extra);
     for assignment in ENABLED_INI {
@@ -201,8 +203,9 @@ echo var_export(opcache_invalidate(__FILE__, true), true), "\n";
     let dir = make_test_dir("opcache_strict_disabled");
     let php = dir.join("app.php");
     fs::write(&php, source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg("--strict-opcache")
         .arg("--ini")

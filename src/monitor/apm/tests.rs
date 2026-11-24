@@ -30,7 +30,7 @@ fn route(name: &str, requests: &[(u64, u16)]) -> RouteStats {
 
 /// A snapshot of `routes` taken at `time_ms` by the service run `epoch`.
 fn snapshot(epoch: u64, time_ms: u64, routes: Vec<RouteStats>) -> Snapshot {
-    Snapshot { epoch, time_ms, routes, resources: None }
+    Snapshot { epoch, time_ms, routes, resources: None, build: None, errors: Vec::new(), exits: Vec::new() }
 }
 
 /// Held by the tests that spawn a process and by those that need a file lock
@@ -44,6 +44,26 @@ fn scratch(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("elephc-apm-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
+}
+
+/// Pins `store::now_ms` on this thread to noon UTC of today until the guard is
+/// dropped, and returns the guard with that time: windows placed a minute or
+/// an hour before it then fall on today whatever time the test runs (#2513).
+fn pin_noon_today() -> (PinnedNow, u64) {
+    let day = 86_400_000u64;
+    let noon = store::now_ms() / day * day + day / 2;
+    store::PINNED_NOW_MS.with(|now| now.set(Some(noon)));
+    (PinnedNow, noon)
+}
+
+/// Unpins `store::now_ms` when dropped, a failed assertion included.
+struct PinnedNow;
+
+impl Drop for PinnedNow {
+    /// Gives this thread back the wall clock.
+    fn drop(&mut self) {
+        store::PINNED_NOW_MS.with(|now| now.set(None));
+    }
 }
 
 /// Two snapshots of one run make the window between them; a restart makes the
@@ -152,12 +172,12 @@ fn the_store_round_trips_and_prunes_by_day() {
         .as_millis() as u64
         / day
         * day;
-    let window = |t: u64, n: u64| Window { res: None,
+    let window = |t: u64, n: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 10_000,
         epoch: 7,
         source: String::new(),
-        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n * 1_000, hist: vec![(3, n)], io: Io::default() }],
+        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n * 1_000, hist: vec![(3, n)], io: Io::default(), mem: Mem::default(), exits: Vec::new() }],
     };
     store.append(&window(today - day + 5_000, 1)).unwrap();
     store.append(&window(today + 5_000, 2)).unwrap();
@@ -195,12 +215,12 @@ fn history_joins_the_store_and_memory_without_double_counting() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    let window = |t: u64| Window { res: None,
+    let window = |t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
         source: String::new(),
-        routes: vec![RouteWindow { route: "GET /".into(), n: 1, status: [0, 1, 0, 0, 0], sum_ns: 1, hist: vec![(0, 1)], io: Io::default() }],
+        routes: vec![RouteWindow { route: "GET /".into(), n: 1, status: [0, 1, 0, 0, 0], sum_ns: 1, hist: vec![(0, 1)], io: Io::default(), mem: Mem::default(), exits: Vec::new() }],
     };
     for offset in (10..=40).rev() {
         store.append(&window(now - offset * 1_000)).unwrap();
@@ -223,13 +243,13 @@ fn history_joins_the_store_and_memory_without_double_counting() {
 
 /// The newest stored window is found in a long day file whose lines are not in
 /// time order, and later appends are picked up — each call reading only what
-/// was appended since the last (review G6).
+/// was appended since the last.
 #[test]
 fn the_newest_stored_window_follows_appends() {
     let dir = scratch("newest-tail");
     let store = Store::open(dir.to_str().unwrap(), 30).unwrap();
     let base = store::now_ms() - 3_600_000;
-    let window = |t: u64, routes: usize| Window { res: None,
+    let window = |t: u64, routes: usize| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -265,7 +285,7 @@ fn the_newest_stored_window_follows_appends() {
 /// A script run sharing the collector's store does not hide the service's
 /// recent windows: a two-hour job ending inside memory once set the cut after
 /// which memory joined, and the last hour of requests vanished from a long
-/// view (review G10). Runs come from the store over the whole range, so a run
+/// view. Runs come from the store over the whole range, so a run
 /// that ended in the last hour shows on a short view too, and reading them
 /// again costs only what was appended.
 #[test]
@@ -273,7 +293,7 @@ fn script_runs_neither_hide_nor_miss_recent_service_windows() {
     let dir = scratch("history-runs");
     let store = Store::open(dir.to_str().unwrap(), 30).unwrap();
     let now = store::now_ms();
-    let service = |t: u64| Window { res: None,
+    let service = |t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 7,
@@ -289,7 +309,7 @@ fn script_runs_neither_hide_nor_miss_recent_service_windows() {
         history.push(service(now - second * 1_000));
     }
     // A two-hour job that ended 10 s ago, recorded by `monitor job.php --apm`.
-    let job = cli_run_window("CLI job.php", true, 7_200_000_000_000, Io::default(), now - 10_000);
+    let job = cli_run_window("CLI job.php", 0, 7_200_000_000_000, Io::default(), now - 10_000);
     store.append(&job).unwrap();
 
     let long = history.windows_in(now - 401_000, now);
@@ -308,13 +328,13 @@ fn script_runs_neither_hide_nor_miss_recent_service_windows() {
 /// The stored window memory begins inside is read whole: with ten-second
 /// stored windows and one-second memory ones, the oldest memory window starts
 /// mid-window, and cutting the store there lost that window's earlier
-/// requests (review G4). One request a second, every second, once.
+/// requests. One request a second, every second, once.
 #[test]
 fn history_reads_the_stored_window_memory_begins_inside() {
     let dir = scratch("history-boundary");
     let store = Store::open(dir.to_str().unwrap(), 30).unwrap();
     let base = store::now_ms() - 120_000;
-    let window = |t: u64, span_ms: u64| Window { res: None,
+    let window = |t: u64, span_ms: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms,
         epoch: 1,
@@ -355,7 +375,7 @@ fn the_series_has_gaps_steps_and_a_route_filter() {
     let from = 1_000_000u64;
     let windows: Vec<Window> = [10_000u64, 11_000, 50_000]
         .iter()
-        .map(|offset| Window { res: None,
+        .map(|offset| Window { build: String::new(), res: None, errors: Vec::new(),
             t: from + offset,
             span_ms: 1_000,
             epoch: 1,
@@ -391,7 +411,7 @@ fn the_series_has_gaps_steps_and_a_route_filter() {
     // Stored history at a coarser resolution sets the step, so it draws as a
     // line rather than one point per window with empty steps between.
     let stored: Vec<Window> = (1..=10u64)
-        .map(|k| Window { res: None, t: from + k * 5_000, span_ms: 5_000, epoch: 1, source: String::new(), routes: windows[0].routes.clone() })
+        .map(|k| Window { build: String::new(), res: None, errors: Vec::new(), t: from + k * 5_000, span_ms: 5_000, epoch: 1, source: String::new(), routes: windows[0].routes.clone() })
         .collect();
     let coarse = build_series(&stored, from, from + 60_000, None, "svc", true, None);
     assert_eq!(coarse["step_ms"], 5_000);
@@ -469,7 +489,7 @@ fn the_dashboard_serves_its_page_data_and_metrics() {
 
 /// The dashboard refuses what a page on another site could make a browser
 /// send: a rebinding Host, a capture by GET, a cross-origin capture POST; and
-/// it bounds what it reads (review R7, R11).
+/// it bounds what it reads.
 #[test]
 fn the_dashboard_refuses_foreign_requests_and_bounds_its_input() {
     let shared: Shared = Arc::new((Mutex::new(History::new("svc:1", None, true)), Condvar::new()));
@@ -535,9 +555,16 @@ fn apm_arguments_are_validated() {
     let cmd = parse_monitor_args(&args(&["h:1", "--apm", "--live", "--store", "/tmp/x", "--retention", "30", "--resolution", "60"])).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((cmd.apm_retention_days, cmd.apm_resolution_secs, cmd.live), (30, 60, true));
     assert!(cmd.apm_retention_explicit);
+    assert_eq!((cmd.apm_full_days, cmd.apm_minute_days), (DEFAULT_FULL_DAYS, DEFAULT_MINUTE_DAYS));
+    let cmd = parse_monitor_args(&args(&["h:1", "--apm", "--store", "/tmp/x", "--retention-full", "3", "--retention-minute", "30"]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((cmd.apm_full_days, cmd.apm_minute_days), (3, 30));
     // Store settings with no store, and collection flags while browsing, are refused.
     for bad in [
         vec!["h:1", "--apm", "--retention", "30"],
+        vec!["h:1", "--apm", "--retention-full", "3"],
+        vec!["--apm", "--store", "/tmp/x", "--retention-minute", "30"],
+        vec!["h:1", "--apm", "--store", "/tmp/x", "--retention-full", "soon"],
         vec!["h:1", "--apm", "--resolution", "60"],
         vec!["--apm", "--store", "/tmp/x", "--live"],
         vec!["--apm", "--store", "/tmp/x", "--alert", "p95:*<=1"],
@@ -602,11 +629,11 @@ fn a_cli_run_is_named_by_script_and_command() {
 #[test]
 fn a_cli_run_window_carries_status_time_and_io() {
     let io = Io { db_ops: 12, db_wait_ns: 30_000_000, net_ops: 1, net_wait_ns: 10_000_000 };
-    let ok = cli_run_window("CLI x", true, 200_000_000, io, 5_000);
+    let ok = cli_run_window("CLI x", 0, 200_000_000, io, 5_000);
     assert_eq!(ok.routes[0].status, [0, 1, 0, 0, 0]);
     assert_eq!((ok.t, ok.span_ms), (5_000, 200));
     assert_eq!(ok.routes[0].io, io);
-    let failed = cli_run_window("CLI x", false, 100_000_000, Io::default(), 6_000);
+    let failed = cli_run_window("CLI x", 1, 100_000_000, Io::default(), 6_000);
     assert_eq!(failed.routes[0].status, [0, 0, 0, 0, 1]);
     let table = render_runs("CLI x", &[ok, failed]);
     assert!(table.contains("CLI x — 2 runs"), "{table}");
@@ -617,12 +644,205 @@ fn a_cli_run_window_carries_status_time_and_io() {
     assert!(table.contains("13.3%"), "40 ms of 300 ms spent waiting: {table}");
 }
 
+/// The page's Scripts section gets each script's runs, oldest first, with each
+/// run's duration, failure and statements; a service's routes are not runs.
+#[test]
+fn the_series_lists_each_scripts_runs() {
+    let io = Io { db_ops: 4, ..Io::default() };
+    let windows = vec![
+        cli_run_window("CLI import", 255, 300_000_000, Io::default(), 1_020_000),
+        cli_run_window("CLI import", 0, 200_000_000, io, 1_010_000),
+        cli_run_window("CLI mailer", 0, 50_000_000, Io::default(), 1_030_000),
+        Window {
+            build: String::new(),
+            res: None,
+            errors: Vec::new(),
+            t: 1_040_000,
+            span_ms: 1_000,
+            epoch: 7,
+            source: "svc:1".into(),
+            routes: vec![RouteWindow::from_stats(&route("GET /", &[(100, 200)]))],
+        },
+    ];
+    let series = build_series(&windows, 1_000_000, 1_060_000, None, "svc", true, None);
+    let scripts = series["runs"].as_array().unwrap();
+    assert_eq!(scripts.len(), 2, "two scripts, and the route is not one: {scripts:?}");
+    assert_eq!(scripts[0]["name"], "CLI import");
+    let runs = scripts[0]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!((runs[0]["t"].as_u64(), runs[0]["mean"].as_u64()), (Some(1_010_000), Some(200_000_000)), "oldest first");
+    assert_eq!((runs[0]["failed"].as_u64(), runs[0]["q"].as_u64()), (Some(0), Some(4)));
+    assert_eq!(runs[1]["failed"].as_u64(), Some(1), "the later run failed");
+    assert_eq!(runs[1]["exits"], serde_json::json!([[255, 1]]), "with its exact code");
+    assert_eq!(runs[0]["exits"], serde_json::json!([]), "a run that succeeded lists none");
+    assert_eq!((scripts[0]["total"].as_u64(), scripts[0]["failed"].as_u64()), (Some(2), Some(1)), "the totals count every run");
+    assert!(scripts[0]["p95"].as_u64().unwrap() >= 200_000_000, "the p95 of the runs' durations");
+    assert_eq!(scripts[1]["name"], "CLI mailer");
+}
+
+/// A period with more runs than the page draws still counts them all: an early
+/// failure, cut from the drawn list, stays in the script's failures (review).
+#[test]
+fn a_scripts_totals_cover_the_runs_it_does_not_draw() {
+    let windows: Vec<Window> = (0..300u64).map(|i| cli_run_window("CLI job", i32::from(i == 0), 1_000_000, Io::default(), 1_000_000 + i)).collect();
+    let series = build_series(&windows, 1_000_000, 1_060_000, None, "svc", true, None);
+    let script = &series["runs"][0];
+    assert_eq!(script["runs"].as_array().unwrap().len(), 240, "the last runs drawn");
+    assert_eq!((script["total"].as_u64(), script["failed"].as_u64()), (Some(300), Some(1)), "the first run failed");
+}
+
+/// Runs that programs sent read `<instance> · CLI <script>` once several sources
+/// share the page: the Scripts section still lists them under their script.
+#[test]
+fn the_series_lists_the_runs_programs_sent_under_their_script() {
+    let sent = |source: &str, code: i32, t: u64| Window { source: source.into(), epoch: 3, ..cli_run_window("CLI shopkit", code, 1_000_000, Io::default(), t) };
+    let mut windows = vec![sent("shopkit@10.0.0.1 pid 1", 0, 1_010_000), sent("shopkit@10.0.0.2 pid 2", 3, 1_020_000)];
+    label_sources(&mut windows);
+    assert!(windows[0].routes[0].route.ends_with(" · CLI shopkit"), "labelled: {:?}", windows[0].routes[0].route);
+    let series = build_series(&windows, 1_000_000, 1_060_000, None, "listen", true, None);
+    let scripts = series["runs"].as_array().unwrap();
+    assert_eq!(scripts.len(), 1, "one script, two instances: {scripts:?}");
+    assert_eq!(scripts[0]["name"], "CLI shopkit");
+    assert_eq!(scripts[0]["runs"][1]["exits"], serde_json::json!([[3, 1]]));
+}
+
+/// A program sending to a collector repeats in every snapshot the runs it ended,
+/// each with its exact exit code: a window counts the new ones only, and a
+/// stored minute adds them up code by code.
+#[test]
+fn a_window_counts_the_exit_codes_of_the_runs_that_ended_in_it() {
+    let cli = |n: u64| RouteStats { count: n, status: [0, 0, 0, 0, n], sum_ns: n * 1_000, ..RouteStats::empty("CLI import") };
+    let mut before = snapshot(9, 1_000, vec![cli(1)]);
+    before.exits = vec![("CLI import".into(), 255)];
+    let mut after = snapshot(9, 2_000, vec![cli(3)]);
+    after.exits = vec![("CLI import".into(), 255), ("CLI import".into(), 255), ("CLI import".into(), 1)];
+    let window = Window::between(&before, &after);
+    assert_eq!(window.routes[0].exits, vec![(1, 1), (255, 1)], "the first 255 was counted before");
+    assert_eq!(Window::since_start(&before).routes[0].exits, vec![(255, 1)]);
+    let minute = coalesce(&[Window::since_start(&before), window]).unwrap();
+    assert_eq!(minute.routes[0].exits, vec![(1, 1), (255, 2)]);
+}
+
+/// The page's Apps section gets each instance of a pushing program with its
+/// build and whether it is sending, silent or gone, and the program's figures
+/// per build; a polled service is not an app.
+#[test]
+fn the_series_lists_apps_by_instance_and_version() {
+    // `ok` calls answered 200 and `failed` ones 500, a millisecond each.
+    let pushed = |source: &str, build: &str, t: u64, ok: usize, failed: usize| Window {
+        build: build.to_string(),
+        res: None,
+        errors: Vec::new(),
+        t,
+        span_ms: 5_000,
+        epoch: 7,
+        source: source.into(),
+        routes: vec![RouteWindow::from_stats(&route(
+            "CALL render",
+            &[vec![(1_000_000u64, 200u16); ok], vec![(1_000_000u64, 500u16); failed]].concat(),
+        ))],
+    };
+    let now = 10_000_000;
+    let windows = vec![
+        pushed("shop@10.0.0.7 pid 812 #3fa2c1d0", "1700000000 v2.3.0", now - 2_000, 8, 2),
+        pushed("shop@10.0.0.8 pid 77 #0be9d114", "1700000000 v2.2.1", now - 30_000, 10, 0),
+        pushed("shop@10.0.0.9 pid 95 #5d10fe31", "1700000000 v2.2.1", now - 900_000, 5, 0),
+        Window {
+            build: String::new(),
+            res: None,
+            errors: Vec::new(),
+            t: now - 1_000,
+            span_ms: 1_000,
+            epoch: 3,
+            source: "127.0.0.1:9411".into(),
+            routes: vec![RouteWindow::from_stats(&route("GET /", &[(200, 3)]))],
+        },
+    ];
+    let series = build_series(&windows, now - 3_600_000, now, None, "listen", true, None);
+    let apps = &series["apps"];
+    let instances = apps["instances"].as_array().unwrap();
+    assert_eq!(instances.len(), 3, "the polled service is not an app: {instances:?}");
+    let state_of = |pid: &str| instances.iter().find(|i| i["source"].as_str().unwrap().contains(pid)).unwrap()["state"].clone();
+    assert_eq!(state_of("pid 812"), "sending");
+    assert_eq!(state_of("pid 77"), "silent");
+    assert_eq!(state_of("pid 95"), "gone");
+    let versions = apps["versions"].as_array().unwrap();
+    let of = |build: &str| versions.iter().find(|v| v["build"] == build).unwrap().clone();
+    assert_eq!(of("v2.3.0")["n"], 10);
+    assert_eq!(of("v2.3.0")["errors"].as_f64(), Some(20.0), "2 of 10 calls failed");
+    // The chart's slices hold the same calls and failures, over the span.
+    let slices = of("v2.3.0")["slices"].as_array().unwrap().clone();
+    assert_eq!(slices.len(), 60);
+    let sum = |k: usize| slices.iter().map(|s| s[k].as_u64().unwrap()).sum::<u64>();
+    assert_eq!((sum(0), sum(1)), (10, 2));
+    assert_eq!(of("v2.2.1")["n"], 15);
+    assert_eq!(of("v2.2.1")["instances"], 2, "both v2.2.1 instances, the gone one included");
+    assert_eq!(of("v2.2.1")["program"], "shop");
+    assert!(build_series(&windows[3..], now - 3_600_000, now, None, "svc", true, None)["apps"].is_null());
+    // Two builds without a label differ by their build time: two rows, not one (review).
+    let unlabelled = vec![
+        pushed("tool@10.0.0.1 pid 1 #aaaaaaaa", "1700000000", now - 2_000, 4, 0),
+        pushed("tool@10.0.0.2 pid 2 #bbbbbbbb", "1700086400", now - 2_000, 4, 4),
+    ];
+    let apps = build_series(&unlabelled, now - 3_600_000, now, None, "listen", true, None)["apps"].clone();
+    let builts: Vec<u64> = apps["versions"].as_array().unwrap().iter().map(|v| v["built"].as_u64().unwrap()).collect();
+    assert_eq!(builts.len(), 2, "{apps}");
+    assert!(builts.contains(&1_700_000_000) && builts.contains(&1_700_086_400));
+}
+
+/// A live page's recent range reads each instance against the clock, not against its newest
+/// window, which stops moving once every program stops; and a script the Scripts section
+/// groups answers to its name when picked, every instance's runs included (review).
+#[test]
+fn a_live_page_reads_app_states_against_the_clock_and_picks_grouped_scripts() {
+    let dir = scratch("apps-clock");
+    let store = Store::open(dir.to_str().unwrap(), 2).unwrap();
+    let now = store::now_ms();
+    for (source, code) in [("job@10.0.0.1 pid 1 #11111111", 0), ("job@10.0.0.2 pid 2 #22222222", 3)] {
+        let window = Window { source: source.into(), epoch: 5, ..cli_run_window("CLI job", code, 1_000_000, Io::default(), now - 120_000) };
+        store.append(&window).unwrap();
+    }
+    let mut history = History::new("listening on 127.0.0.1:9475", Some(store), true);
+    history.pushed = true;
+    let shared: Shared = Arc::new((Mutex::new(history), Condvar::new()));
+    let series = api::series_json(&shared, "range=900");
+    let states: Vec<&str> = series["apps"]["instances"].as_array().unwrap().iter().map(|i| i["state"].as_str().unwrap()).collect();
+    assert_eq!(states, vec!["silent", "silent"], "two minutes without a send");
+    let picked = api::series_json(&shared, "range=900&route=CLI%20job");
+    let n: u64 = picked["points"].as_array().unwrap().iter().filter_map(|p| p["n"].as_u64()).sum();
+    assert_eq!(n, 2, "both instances' runs: {}", picked["points"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The exported page builds its views with `build_series` alone: the grouped errors come
+/// with it, or its Errors section stayed hidden (review).
+#[test]
+fn the_shared_series_carries_the_grouped_errors() {
+    let error = WindowError { route: "GET /pay".into(), class: "App\\Declined".into(), at: "/app/Pay.php:9".into(), n: 2, trace: String::new() };
+    let window = Window { build: String::new(), res: None, errors: vec![error], t: 1_030_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![RouteWindow::from_stats(&route("GET /pay", &[(1, 500), (1, 500)]))] };
+    let series = build_series(&[window], 1_000_000, 1_060_000, None, "svc", false, None);
+    assert_eq!(series["errors"]["total"], 2, "{}", series["errors"]);
+}
+
+/// A memory reading cut between its bytes and its count is data, not nothing: the stored
+/// window keeps it, since the next one takes it as its baseline (review).
+#[test]
+fn a_partial_memory_reading_is_stored() {
+    let partial = Mem { n: 0, sum: 4 << 20, hist: vec![(5, 1)] };
+    assert!(!partial.is_empty());
+    assert!(Mem::default().is_empty());
+    let window = Window { build: String::new(), res: None, errors: Vec::new(), t: 1_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![RouteWindow { mem: partial.clone(), ..RouteWindow::from_stats(&route("GET /", &[(1, 200)])) }] };
+    let line = serde_json::to_string(&window).unwrap();
+    let back: Window = serde_json::from_str(&line).unwrap();
+    assert_eq!(back.routes[0].mem, partial, "{line}");
+}
+
 /// Database and network work survives coalescing for the store.
 #[test]
 fn io_survives_coalescing() {
     let io = Io { db_ops: 2, db_wait_ns: 5, net_ops: 0, net_wait_ns: 0 };
-    let a = cli_run_window("CLI x", true, 1_000_000, io, 1_000);
-    let b = cli_run_window("CLI x", true, 1_000_000, io, 2_000);
+    let a = cli_run_window("CLI x", 0, 1_000_000, io, 1_000);
+    let b = cli_run_window("CLI x", 0, 1_000_000, io, 2_000);
     let record = coalesce(&[a, b]).unwrap();
     assert_eq!(record.routes[0].io.db_ops, 4);
     assert_eq!(record.routes[0].io.db_wait_ns, 10);
@@ -634,7 +854,7 @@ fn io_survives_coalescing() {
 fn trends_scale_and_keep_gaps() {
     assert_eq!(terminal::sparkline(&[Some(0.0), Some(5.0), Some(10.0), None]), "▁▅█ ");
     assert_eq!(terminal::sparkline(&[Some(0.0), Some(0.0)]), "▁▁");
-    let window = |t: u64, n: usize| Window { res: None,
+    let window = |t: u64, n: usize| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -673,7 +893,7 @@ fn the_histogram_counts_every_request_once() {
 #[test]
 fn the_run_trend_marks_failures() {
     let runs: Vec<Window> = (0..4u64)
-        .map(|i| cli_run_window("CLI job", i != 2, (i + 1) * 100_000_000, Io::default(), 1_000 * (i + 1)))
+        .map(|i| cli_run_window("CLI job", i32::from(i == 2), (i + 1) * 100_000_000, Io::default(), 1_000 * (i + 1)))
         .collect();
     let text = terminal::render_run_trend(&runs, "CLI job");
     assert!(text.contains("last 4 runs"), "{text}");
@@ -686,7 +906,7 @@ fn the_run_trend_marks_failures() {
 /// and the heading counts runs, not minutes (review).
 #[test]
 fn the_run_trend_reads_folded_minutes_as_mean_runs() {
-    let run = |ms: u64, t: u64| cli_run_window("CLI job", true, ms * 1_000_000, Io::default(), t);
+    let run = |ms: u64, t: u64| cli_run_window("CLI job", 0, ms * 1_000_000, Io::default(), t);
     let sixty_fast = coalesce(&(0..60).map(|i| run(10, 60_000 + i)).collect::<Vec<_>>()).expect("a minute");
     let one_fast = run(10, 120_000);
     let one_slow = run(600, 180_000);
@@ -732,9 +952,9 @@ fn an_export_embeds_the_stored_transactions() {
     let store = Store::open(dir.to_str().unwrap(), 2).unwrap();
     let now = store::now_ms();
     for (i, ok) in [true, false, true].iter().enumerate() {
-        store.append(&cli_run_window("CLI job", *ok, 100_000_000, Io::default(), now - 60_000 + i as u64 * 10_000)).unwrap();
+        store.append(&cli_run_window("CLI job", i32::from(!*ok), 100_000_000, Io::default(), now - 60_000 + i as u64 * 10_000)).unwrap();
     }
-    store.append(&Window { res: None, t: now - 5_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![RouteWindow::from_stats(&route("GET /", &[(100, 200)]))] }).unwrap();
+    store.append(&Window { build: String::new(), res: None, errors: Vec::new(), t: now - 5_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![RouteWindow::from_stats(&route("GET /", &[(100, 200)]))] }).unwrap();
     let cmd = parse_monitor_args(&args(&["job.php", "--apm", "--store", dir.to_str().unwrap()])).unwrap();
     let view = static_view(&cmd, None);
     assert_eq!(view.data["mode"], "static");
@@ -754,7 +974,7 @@ fn an_export_embeds_the_stored_transactions() {
 #[test]
 fn runs_are_rated_over_the_time_they_spread_over() {
     let runs: Vec<Window> = (0..9u64)
-        .map(|i| cli_run_window("CLI job", true, 160_000_000, Io::default(), 1_000_000 + i * 450_000))
+        .map(|i| cli_run_window("CLI job", 0, 160_000_000, Io::default(), 1_000_000 + i * 450_000))
         .collect();
     let refs: Vec<&Window> = runs.iter().collect();
     let measured = measured_ms(&refs);
@@ -762,8 +982,8 @@ fn runs_are_rated_over_the_time_they_spread_over() {
     let (_, total) = summaries(&refs, measured);
     assert!(total.rps < 0.01, "nine runs in an hour: {}", total.rps);
     let service = [
-        Window { res: None, t: 5_000, span_ms: 1_000, epoch: 7, source: String::new(), routes: vec![] },
-        Window { res: None, t: 6_000, span_ms: 1_000, epoch: 7, source: String::new(), routes: vec![] },
+        Window { build: String::new(), res: None, errors: Vec::new(), t: 5_000, span_ms: 1_000, epoch: 7, source: String::new(), routes: vec![] },
+        Window { build: String::new(), res: None, errors: Vec::new(), t: 6_000, span_ms: 1_000, epoch: 7, source: String::new(), routes: vec![] },
     ];
     let service_refs: Vec<&Window> = service.iter().collect();
     assert_eq!(measured_ms(&service_refs), 2_000);
@@ -815,7 +1035,7 @@ fn the_trace_book_keeps_the_slowest_and_the_failures() {
 }
 
 /// A slow failure is among its route's slowest too: five newer, faster
-/// failures do not push out the slowest request the route served (review G5).
+/// failures do not push out the slowest request the route served.
 #[test]
 fn the_slowest_capture_survives_newer_faster_failures() {
     let mut book = traces::TraceBook::default();
@@ -866,7 +1086,7 @@ fn alert_rules_parse_like_assertions() {
 /// where no request is the measurement and a floor fires on it.
 #[test]
 fn alerts_fire_resolve_and_hold_through_silence() {
-    let window = |t: u64, requests: &[(u64, u16)]| Window { res: None,
+    let window = |t: u64, requests: &[(u64, u16)]| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -889,7 +1109,7 @@ fn alerts_fire_resolve_and_hold_through_silence() {
     assert!(changes.iter().all(|c| c.firing));
     assert!(changes[0].value > 10.0 && changes[0].unit == "ms");
     // No traffic at all: latency and errors stay broken, nothing resolves.
-    let silent = Window { res: None, t: 3_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![] };
+    let silent = Window { build: String::new(), res: None, errors: Vec::new(), t: 3_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![] };
     assert!(state.check(&[&silent], 3).is_empty());
     assert!(state.alerts.iter().all(|alert| alert.firing));
     let changes = state.check(&[&fast], 4);
@@ -927,9 +1147,9 @@ fn the_alert_hook_receives_the_transition() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A slow route's queries are counted while its request runs, so a poll can
-/// see the work before it sees the request end. That window must keep the
-/// work, and so must the record the store folds it into (review R2).
+/// A request's queries are published just before its count, so a poll can see
+/// the work before it sees the request end. That window must keep the work, and
+/// so must the record the store folds it into.
 #[test]
 fn a_window_keeps_work_for_a_request_still_in_flight() {
     let before = snapshot(9, 1_000, vec![RouteStats::empty("GET /slow")]);
@@ -950,7 +1170,7 @@ fn a_window_keeps_work_for_a_request_still_in_flight() {
     assert_eq!(rows[0].queries_per_txn, 30.0, "all thirty statements belong to the one request");
 }
 
-/// Opening a store deletes nothing; only an explicit prune does (review R4).
+/// Opening a store deletes nothing; only an explicit prune does.
 #[test]
 fn opening_a_store_never_prunes_it() {
     let dir = scratch("noprune");
@@ -976,12 +1196,14 @@ fn only_a_collectors_window_prunes_at_midnight() {
     let store = Store::open(dir.to_str().unwrap(), 1).unwrap();
     let midnight = store::now_ms() / 86_400_000 * 86_400_000;
     let crossing = Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t: midnight + 1_000,
         span_ms: 5_000,
         epoch: 7,
         source: String::new(),
-        routes: vec![RouteWindow { route: "CLI job.php".into(), n: 1, status: [0, 1, 0, 0, 0], sum_ns: 1_000, hist: vec![(3, 1)], io: Io::default() }],
+        routes: vec![RouteWindow { route: "CLI job.php".into(), n: 1, status: [0, 1, 0, 0, 0], sum_ns: 1_000, hist: vec![(3, 1)], io: Io::default(), mem: Mem::default(), exits: Vec::new() }],
     };
     std::fs::write(&old, "").unwrap();
     store.append(&crossing).unwrap();
@@ -992,10 +1214,10 @@ fn only_a_collectors_window_prunes_at_midnight() {
 }
 
 /// Two services in one store over the same minute measured one minute, and
-/// their same-named routes stay apart once labelled (review R5).
+/// their same-named routes stay apart once labelled.
 #[test]
 fn a_shared_store_rates_and_names_each_service() {
-    let window = |source: &str, t: u64| Window { res: None,
+    let window = |source: &str, t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -1022,14 +1244,13 @@ fn a_shared_store_rates_and_names_each_service() {
 
 /// A page over a store two services write to keeps their `GET /` apart, and
 /// its chart points and terminal trends count the seconds both covered once:
-/// each service's 10 requests a second read 10/s, and both together 20/s
-/// (review G2, G3).
+/// each service's 10 requests a second read 10/s, and both together 20/s.
 #[test]
 fn a_shared_store_page_and_trends_rate_each_service() {
     let dir = scratch("shared-page");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 2).unwrap();
-    let now = store::now_ms();
-    let window = |source: &str, t: u64| Window { res: None,
+    let window = |source: &str, t: u64| Window { build: String::new(), res: None, errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -1072,7 +1293,7 @@ fn a_live_history_reads_only_its_own_service_from_the_store() {
     let now = store::now_ms();
     for (source, t) in [("a:1", now - 60_000), ("b:1", now - 60_000), ("a:1", now - 50_000)] {
         store
-            .append(&Window { res: None, t, span_ms: 1_000, epoch: 1, source: source.into(), routes: vec![RouteWindow::from_stats(&route("GET /", &[(1, 200)]))] })
+            .append(&Window { build: String::new(), res: None, errors: Vec::new(), t, span_ms: 1_000, epoch: 1, source: source.into(), routes: vec![RouteWindow::from_stats(&route("GET /", &[(1, 200)]))] })
             .unwrap();
     }
     let history = History::new("a:1", Some(store), true);
@@ -1083,18 +1304,18 @@ fn a_live_history_reads_only_its_own_service_from_the_store() {
 }
 
 /// One long window — a stretch the collector could not reach — does not turn
-/// the chart around it into a handful of points (review R13).
+/// the chart around it into a handful of points.
 #[test]
 fn one_long_window_does_not_coarsen_the_chart() {
     let mut windows: Vec<Window> = (1..=300u64)
-        .map(|second| Window { res: None, t: 1_000_000 + second * 1_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![] })
+        .map(|second| Window { build: String::new(), res: None, errors: Vec::new(), t: 1_000_000 + second * 1_000, span_ms: 1_000, epoch: 1, source: String::new(), routes: vec![] })
         .collect();
-    windows.push(Window { res: None, t: 1_000_000 + 900_000, span_ms: 600_000, epoch: 1, source: String::new(), routes: vec![] });
+    windows.push(Window { build: String::new(), res: None, errors: Vec::new(), t: 1_000_000 + 900_000, span_ms: 600_000, epoch: 1, source: String::new(), routes: vec![] });
     let series = api::build_series(&windows, 1_000_000, 1_000_000 + 900_000, None, "svc", true, None);
     assert_eq!(series["step_ms"], 5_000, "the typical one-second window sets the step");
 }
 
-/// Route labels carrying `<` and `>` parse with strict operators (review R17).
+/// Route labels carrying `<` and `>` parse with strict operators.
 #[test]
 fn synthetic_route_labels_parse_in_alerts() {
     let rule = alerts::parse_rule("error_pct:<other><5").unwrap();
@@ -1104,11 +1325,11 @@ fn synthetic_route_labels_parse_in_alerts() {
     assert!(alerts::parse_rule("p95:GET /<=").is_err());
 }
 
-/// An exported page of a single run without a store shows that run (review R8).
+/// An exported page of a single run without a store shows that run.
 #[test]
 fn an_export_without_a_store_shows_the_run() {
     let cmd = parse_monitor_args(&args(&["job.php", "--apm"])).unwrap();
-    let run = cli_run_window("CLI job", true, 1_000_000, Io::default(), store::now_ms());
+    let run = cli_run_window("CLI job", 0, 1_000_000, Io::default(), store::now_ms());
     let view = static_view(&cmd, Some(&run));
     assert_eq!(view.data["all"]["total"]["n"], 1);
 }
@@ -1134,12 +1355,12 @@ fn windows_carry_the_services_cpu_and_memory() {
     let restarted = measured(8, 3_000, 300_000_000, 90 << 20);
     assert_eq!(Window::between(&second, &restarted).res.map(|res| res.cpu_ns), Some(300_000_000));
     assert_eq!(Window::between(&snapshot(7, 1_000, vec![]), &second).res.map(|res| res.cpu_ns), Some(2_500_000_000));
-    let record = coalesce(&[window.clone(), Window { res: Some(WindowRes { cpu_ns: 100, memory_bytes: 80 << 20, processes: 2, cores: 10 }), ..window.clone() }]).unwrap();
+    let record = coalesce(&[window.clone(), Window { build: String::new(), res: Some(WindowRes { cpu_ns: 100, memory_bytes: 80 << 20, processes: 2, cores: 10 }), ..window.clone() }]).unwrap();
     assert_eq!(record.res, Some(WindowRes { cpu_ns: 500_000_100, memory_bytes: 120 << 20, processes: 3, cores: 10 }));
     let line = serde_json::to_string(&window).unwrap();
     assert!(line.contains("\"res\":{\"cpu_ns\":500000000,\"mem\":125829120,\"procs\":3,\"cores\":10}"), "{line}");
     assert_eq!(serde_json::from_str::<Window>(&line).unwrap(), window);
-    let bare = Window { res: None, ..window };
+    let bare = Window { build: String::new(), res: None, errors: Vec::new(), ..window };
     assert!(!serde_json::to_string(&bare).unwrap().contains("res"), "nothing measured, nothing stored");
 }
 
@@ -1150,12 +1371,14 @@ fn windows_carry_the_services_cpu_and_memory() {
 #[test]
 fn resources_add_up_across_services_and_reach_every_view() {
     let window = |source: &str, t: u64, memory: u64| Window {
+        build: String::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
         source: source.to_string(),
         routes: vec![],
         res: Some(WindowRes { cpu_ns: 500_000_000, memory_bytes: memory, processes: 2, cores: 4 }),
+        errors: Vec::new(),
     };
     let windows: Vec<Window> = (1..=60u64)
         .flat_map(|second| [window("a:1", 1_000_000 + second * 1_000, (100 + second) << 20), window("b:1", 1_000_000 + second * 1_000, 50 << 20)])
@@ -1175,7 +1398,7 @@ fn resources_add_up_across_services_and_reach_every_view() {
     assert_eq!(series["resources"]["memory_bytes"], (160u64 << 20) + (50 << 20));
     let table = render_table("t", &refs, measured_ms(&refs));
     assert!(table.contains("service: CPU 12.5% of 8 cores (1.00 busy) · memory 210.0 MB · 4 processes"), "{table}");
-    assert!(resources_of(&[&cli_run_window("CLI job", true, 1, Io::default(), 1)]).is_none(), "a run has none");
+    assert!(resources_of(&[&cli_run_window("CLI job", 0, 1, Io::default(), 1)]).is_none(), "a run has none");
 
     let shared: Shared = Arc::new((Mutex::new(History::new("svc", None, true)), Condvar::new()));
     shared.0.lock().unwrap().latest = Some(measured(1, 1_000, 12_500_000_000, 64 << 20));
@@ -1210,8 +1433,7 @@ fn the_alerts_json_carries_each_rules_parts() {
 }
 
 /// Retention deletes a day's file; the runs the store had read from it are
-/// dropped with it, so a page open for weeks keeps only the days on disk
-/// (review G14).
+/// dropped with it, so a page open for weeks keeps only the days on disk.
 #[test]
 fn a_pruned_day_leaves_the_read_cache() {
     let dir = scratch("cache-prune");
@@ -1219,7 +1441,7 @@ fn a_pruned_day_leaves_the_read_cache() {
     let day = 86_400_000u64;
     let today = store::now_ms() / day * day;
     for t in [today - 2 * day + 5_000, today - day + 5_000, today + 5_000] {
-        store.append(&cli_run_window("CLI job.php", true, 1_000_000, Io::default(), t)).unwrap();
+        store.append(&cli_run_window("CLI job.php", 0, 1_000_000, Io::default(), t)).unwrap();
     }
     assert_eq!(store.runs_in(today - 3 * day, today + day).len(), 3);
     assert_eq!(store.cached_days(), 3);
@@ -1278,7 +1500,7 @@ fn a_request_read_between_its_counters_keeps_its_status_and_latency() {
 #[test]
 fn an_alert_window_leaves_out_what_started_before_it() {
     let now = 10_000_000u64;
-    let window = |t: u64, span_ms: u64| Window { res: None, t, span_ms, epoch: 1, source: "s".into(), routes: Vec::new() };
+    let window = |t: u64, span_ms: u64| Window { build: String::new(), res: None, errors: Vec::new(), t, span_ms, epoch: 1, source: "s".into(), routes: Vec::new() };
     let windows = [window(now - 2_000, 1_000), window(now - 1_000, 600_000), window(now, 1_000)];
     let kept: Vec<u64> = super::collector::alert_windows(windows.iter(), now, 60_000).iter().map(|w| w.t).collect();
     assert_eq!(kept, vec![now - 2_000, now], "the ten-minute window is not the last minute");
@@ -1307,7 +1529,9 @@ fn a_dead_service_breaks_a_throughput_floor() {
     let start = 50_000_000u64;
     for second in 1..=10 {
         history.push(Window {
+            build: String::new(),
             res: None,
+            errors: Vec::new(),
             t: start + second * 1_000,
             span_ms: 1_000,
             epoch: 7,
@@ -1382,12 +1606,14 @@ fn collectors_of_lookalike_targets_do_not_share_a_lock() {
 #[test]
 fn stored_ranges_read_only_what_was_appended() {
     let dir = scratch("ranges");
+    let (_pinned, now) = pin_noon_today();
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
-    let now = store::now_ms();
     let day = 86_400_000u64;
     let yesterday_noon = (now / day - 1) * day + day / 2;
     let service = |t: u64| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 10_000,
         epoch: 3,
@@ -1401,7 +1627,7 @@ fn stored_ranges_read_only_what_was_appended() {
         store.append(&service(now - 50_000 + index * 10_000)).unwrap();
     }
     for index in 0..40u64 {
-        let run = runs::cli_run_window("CLI job", index % 4 != 0, 1_000_000, Io::default(), yesterday_noon + 500 * index);
+        let run = runs::cli_run_window("CLI job", if index % 4 != 0 { 0 } else { 1 }, 1_000_000, Io::default(), yesterday_noon + 500 * index);
         store.append(&run).unwrap();
     }
     store::DAY_BYTES_READ.with(|count| count.set(0));
@@ -1543,12 +1769,14 @@ fn a_rewritten_day_file_is_read_again() {
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
     let now = store::now_ms() / 86_400_000 * 86_400_000 + 43_200_000; // noon today: one day file whenever it runs
     let window = |t: u64, n: u64| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
         source: "a:1".into(),
-        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n, hist: vec![(0, n)], io: Io::default() }],
+        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n, hist: vec![(0, n)], io: Io::default(), mem: Mem::default(), exits: Vec::new() }],
     };
     store.append(&window(now - 1_000, 1)).unwrap();
     assert_eq!(store.load(now - 10_000, now).len(), 1);
@@ -1572,12 +1800,14 @@ fn a_day_file_rewritten_under_the_same_inode_is_read_again() {
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
     let now = store::now_ms() / 86_400_000 * 86_400_000 + 43_200_000; // noon today: one day file whenever it runs
     let window = |t: u64, n: u64| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
         source: "a:1".into(),
-        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n, hist: vec![(0, n)], io: Io::default() }],
+        routes: vec![RouteWindow { route: "GET /".into(), n, status: [0, n, 0, 0, 0], sum_ns: n, hist: vec![(0, n)], io: Io::default(), mem: Mem::default(), exits: Vec::new() }],
     };
     store.append(&window(now - 1_000, 1)).unwrap();
     assert_eq!(store.load(now - 10_000, now).len(), 1);
@@ -1659,6 +1889,12 @@ fn pushed_sources_are_recognised() {
         collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0000),
         collector::source_name("worker", "10.0.0.7", 1, 0x3333_4444_0000_0000),
     );
+    // Two instances sharing their high half, as a clock-seeded one started in the same few
+    // seconds does, stay apart too (#2499).
+    assert_ne!(
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0001),
+        collector::source_name("worker", "10.0.0.7", 1, 0x1111_2222_0000_0002),
+    );
     for service in ["127.0.0.1:9411", "/tmp/shop.sock", "", "a@b pid x", "user@host"] {
         assert!(!collector::is_pushed_source(service), "{service}");
     }
@@ -1709,7 +1945,9 @@ fn pushed_programs_join_the_store_each_on_their_own() {
     let base = store::now_ms() - 120_000;
     let (a, b) = (collector::source_name("a", "h", 1, 1 << 40), collector::source_name("b", "h", 2, 2 << 40));
     let window = |source: &str, t: u64, span_ms: u64, requests: usize| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms,
         epoch: 1,
@@ -1756,7 +1994,9 @@ fn memory_keeps_an_hour_of_every_pushed_program() {
     let mut history = History::new("listen", None, false);
     let base = 1_000_000_000u64;
     let window = |t: u64, source: usize| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 5_000,
         epoch: 1,
@@ -1799,7 +2039,9 @@ fn an_hour_long_budget_survives_many_short_lived_jobs() {
     let fine = route("CLI job.php", &[(1_000, 200)]);
     let start = 50_000_000u64;
     let job = |t: u64, pid: u64, stats: &RouteStats| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 200,
         epoch: 1,
@@ -1839,7 +2081,9 @@ fn folding_keeps_the_gaps_between_short_jobs() {
     let one = route("CLI job.php", &[(1_000, 200)]);
     let start = 50_000_000u64;
     let job = |t: u64, pid: u64| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 100,
         epoch: 1,
@@ -1864,7 +2108,7 @@ fn a_future_day_file_does_not_anchor_the_store() {
     let dir = scratch("future-day");
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
     let now = store::now_ms();
-    let window = |t: u64| Window { res: None, t, span_ms: 1_000, epoch: 1, source: String::new(), routes: Vec::new() };
+    let window = |t: u64| Window { build: String::new(), res: None, errors: Vec::new(), t, span_ms: 1_000, epoch: 1, source: String::new(), routes: Vec::new() };
     store.append(&window(now - 5_000)).unwrap();
     store.append(&window(now + 400 * 86_400_000)).unwrap();
     assert_eq!(store.newest_ms(), Some(now - 5_000));
@@ -1886,7 +2130,9 @@ fn todays_past_hours_fold_once_the_cache_is_large() {
     }
     let one = route("GET /", &[(1_000, 200)]);
     let window = |t: u64| Window {
+        build: String::new(),
         res: None,
+        errors: Vec::new(),
         t,
         span_ms: 1_000,
         epoch: 1,
@@ -1931,6 +2177,41 @@ fn a_prune_keeps_a_live_collectors_longer_retention() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A collector's roll-ups keep the finest resolution another live collector of the store
+/// asked for, and only one collector at a time rewrites the store (review).
+#[test]
+fn roll_ups_keep_a_live_collectors_finer_tiers() {
+    let dir = scratch("shared-tiers");
+    let fine = Store::open(dir.to_str().unwrap(), 30).unwrap().with_tiers(30, 30);
+    let coarse = Store::open(dir.to_str().unwrap(), 30).unwrap().with_tiers(2, 7);
+    let today = store::now_ms() / 86_400_000;
+    let day = today - 10;
+    let window = |t: u64| Window { build: String::new(), res: None, errors: Vec::new(), t, span_ms: 1_000, epoch: 1, source: "a:1".into(), routes: vec![RouteWindow::from_stats(&route("GET /", &[(1, 200)]))] };
+    for second in 0..30u64 {
+        coarse.append(&window(day * 86_400_000 + 3_600_000 + second * 1_000)).unwrap();
+    }
+    let lines = || std::fs::read_to_string(dir.join(file_name(day))).unwrap().lines().count();
+    let claim = fine.claim_collector("127.0.0.1:9411").unwrap();
+    let busy = coarse.maintenance_lock_for_test().expect("free");
+    coarse.prune_now();
+    assert_eq!(lines(), 30, "busy: another collector is at it");
+    drop(busy);
+    coarse.prune_now();
+    assert_eq!(lines(), 30, "the live collector keeps thirty days at full resolution");
+    drop(claim);
+    // The lock files go too: a test elsewhere in this binary that forks without exec
+    // inherits their locks, which then outlive the drops and made this flaky.
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        if entry.file_name().to_string_lossy().ends_with(".lock") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let _ = std::fs::remove_file(dir.join("rollups.json"));
+    coarse.prune_now();
+    assert_eq!(lines(), 1, "its claim gone, the day folds by the hour");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A line a crash cut short costs only itself: the next window appended
 /// starts on a line of its own instead of being read as part of the damaged
 /// one and lost with it (review).
@@ -1939,7 +2220,7 @@ fn a_torn_line_loses_only_itself() {
     let dir = scratch("torn-tail");
     let store = Store::open(dir.to_str().unwrap(), 7).unwrap();
     let now = store::now_ms();
-    let window = |t: u64| Window { res: None, t, span_ms: 1_000, epoch: 1, source: String::new(), routes: Vec::new() };
+    let window = |t: u64| Window { build: String::new(), res: None, errors: Vec::new(), t, span_ms: 1_000, epoch: 1, source: String::new(), routes: Vec::new() };
     store.append(&window(now - 3_000)).unwrap();
     let file = dir.join(file_name(now / 86_400_000));
     let mut text = std::fs::read_to_string(&file).unwrap();
@@ -1948,5 +2229,125 @@ fn a_torn_line_loses_only_itself() {
     store.append(&window(now - 1_000)).unwrap();
     let times: Vec<u64> = store.load(now - 10_000, now).iter().map(|w| w.t).collect();
     assert_eq!(times, vec![now - 3_000, now - 1_000], "only the torn line is lost");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A call graph with one function, for the capture tests.
+fn capture_graph(name: &str) -> crate::call_graph::CallGraph {
+    crate::monitor::build_call_graph(&[(vec![(name.to_string(), crate::monitor::Kind::Php)], 3)])
+}
+
+/// Each route keeps its slowest and failed captures per hour, so any period has examples;
+/// an hour that is over is handed to the store once, and a stop hands the rest.
+#[test]
+fn captures_are_kept_per_hour_and_stored_once_the_hour_is_over() {
+    let mut book = traces::TraceBook::default();
+    let hour = 3_600_000u64;
+    let base = 500_000 * hour;
+    // A bad first hour: six slow requests.
+    for i in 0..6u64 {
+        book.offer("GET /a".into(), Some(200), (100 + i) * 1_000_000_000, capture_graph("slow"), base + i);
+    }
+    // A quiet second hour: fast ones, still kept, since they are that hour's slowest.
+    assert!(book.offer("GET /a".into(), Some(200), 1_000_000, capture_graph("fast"), base + hour + 1));
+    let per_hour = |book: &traces::TraceBook, from: u64| {
+        book.list().iter().filter(|t| t.t_ms >= from && t.t_ms < from + hour).count()
+    };
+    assert_eq!(per_hour(&book, base), 5, "five slowest of the first hour");
+    assert_eq!(per_hour(&book, base + hour), 1, "the second hour keeps its own");
+    let due: Vec<u64> = book.unwritten_hours(base + hour + 10).iter().map(|t| t.t_ms).collect();
+    assert_eq!(due.len(), 5, "the first hour is over");
+    assert!(book.unwritten_hours(base + hour + 20).is_empty(), "and handed over once");
+    assert_eq!(book.unwritten_hours(u64::MAX).len(), 1, "a stop hands the current hour too");
+}
+
+/// With a store, the cap drops only captures it saved: forty-one routes of five captures
+/// each pass it within one hour, before that hour is saved (review). A save that failed is
+/// handed over again.
+#[test]
+fn the_cap_keeps_unsaved_captures_and_a_failed_save_retries() {
+    let mut book = traces::TraceBook::stored(true);
+    let base = 500_000 * 3_600_000u64;
+    for route in 0..41u64 {
+        for i in 0..5u64 {
+            book.offer(format!("GET /{route}"), Some(200), 1_000_000 + i, capture_graph("x"), base + route * 10 + i);
+        }
+    }
+    assert_eq!(book.list().len(), 205, "none unsaved is dropped");
+    let due: Vec<u64> = book.unwritten_hours(u64::MAX).iter().map(|t| t.id).collect();
+    assert_eq!(due.len(), 205);
+    book.unsaved(&due[..1]);
+    assert_eq!(book.unwritten_hours(u64::MAX).len(), 1, "the failed save is retried");
+    book.offer("GET /late".into(), Some(200), 1, capture_graph("x"), base + 9_999);
+    assert!(book.list().len() <= 201, "saved ones make room: {}", book.list().len());
+    let mut memory = traces::TraceBook::default();
+    for route in 0..41u64 {
+        for i in 0..5u64 {
+            memory.offer(format!("GET /{route}"), Some(200), 1_000_000 + i, capture_graph("x"), base + route * 10 + i);
+        }
+    }
+    assert_eq!(memory.list().len(), 200, "without a store, memory stays bounded");
+    // A store that keeps failing: the unsaved stay bounded too (review).
+    let mut failing = traces::TraceBook::stored(true);
+    for route in 0..230u64 {
+        for i in 0..5u64 {
+            failing.offer(format!("GET /{route}"), Some(200), 1_000_000 + i, capture_graph("x"), base + route * 10 + i);
+        }
+    }
+    assert_eq!(failing.list().len(), 1_000, "at most a thousand unsaved");
+}
+
+/// A period picked on the page is absolute and kept within the longest range; without one,
+/// the span is the last `range` seconds.
+#[test]
+fn a_requested_span_is_absolute_or_relative() {
+    assert_eq!(api::requested_span("range=300", 1_000_000), (700_000, 1_000_000));
+    assert_eq!(api::requested_span("from=5000&to=9000", 1_000_000), (5_000, 9_000));
+    assert_eq!(api::requested_span("from=9000&to=5000", 1_000_000), (5_000, 9_000), "put in order");
+    let (from, to) = api::requested_span("from=0&to=10000000000000", 1);
+    assert_eq!(to - from, 90 * 86_400_000, "kept within the longest range");
+}
+
+/// The captures of a period come from memory and from the store, each once, slowest first,
+/// and a stored capture's page opens from the store when memory no longer holds it.
+#[test]
+fn captures_of_a_period_come_from_memory_and_the_store() {
+    let dir = scratch("captures-period");
+    let store = Store::open(dir.to_str().unwrap(), 30).unwrap();
+    let now = store::now_ms();
+    let day = 86_400_000u64;
+    let old = captures::CaptureRecord {
+        id: captures::capture_id(now - 3 * day, 1),
+        t: now - 3 * day,
+        kind: "trace".into(),
+        route: "GET /orders/{id}".into(),
+        status: Some(500),
+        duration_ns: 9_000_000_000,
+        functions: 1,
+        queries: 4,
+        source: String::new(),
+    };
+    store.append_capture(&old, &capture_graph("checkout_three_days_ago")).unwrap();
+    // Another service sharing the store: its capture is not this page's (review).
+    let theirs = captures::CaptureRecord { id: captures::capture_id(now - 3 * day + 5, 1), source: "10.0.0.9:9411".into(), ..old.clone() };
+    store.append_capture(&theirs, &capture_graph("their_checkout")).unwrap();
+    let mut history = History::new("127.0.0.1:9411", Some(store), true);
+    assert!(history.traces.offer("GET /".into(), Some(200), 1_000_000, capture_graph("home"), now - 1_000));
+    let shared: Shared = Arc::new((Mutex::new(history), Condvar::new()));
+    let span = |from: u64, to: u64| -> Vec<u64> {
+        api::traces_json(&shared, &format!("from={from}&to={to}"))["traces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|trace| trace["id"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(span(now - 4 * day, now - 2 * day), vec![old.id], "the stored one, by date");
+    let both = span(now - 4 * day, now);
+    assert_eq!(both.len(), 2, "{both:?}");
+    assert_eq!(both[0], old.id, "slowest first");
+    let page = api::page_html(&shared, Some(old.id));
+    assert!(page.contains("checkout_three_days_ago"), "its graph opens from the store");
+    assert!(!api::page_html(&shared, Some(theirs.id)).contains("their_checkout"), "nor does theirs open here");
     let _ = std::fs::remove_dir_all(&dir);
 }

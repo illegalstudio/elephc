@@ -519,6 +519,11 @@ fn audit_exprs(exprs: &[Expr], errors: &mut Vec<CompileError>) {
 fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
     let span = expr.span;
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                audit_expr(value, errors);
+            }
+        },
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -647,6 +652,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             by_ref_return: _,
             captures: _,
             capture_refs: _,
+            ..
         } => {
             audit_params(params, span, errors);
             if let Some(variadic_type) = variadic_type {

@@ -401,6 +401,7 @@ fn packed_field_refs_tidy(field: &PackedField) -> bool {
 /// The `match` is exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_tidy(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_tidy),
         // A literal naming a tidy function can become a runtime callable
         // (`$f = 'tidy_parse_string'; $f()`). Bare class-name literals are deliberately
         // NOT triggers: `'tidy'` is ordinary English data and `'tidyNode'` is too close to

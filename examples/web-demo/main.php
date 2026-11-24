@@ -1,7 +1,7 @@
 <?php
 // elephc-web demo — a standalone, compiled HTTP server.
 //
-// Compile:  cargo run -- --web examples/web-demo/main.php
+// Compile:  cargo run -- build --web examples/web-demo/main.php
 // Run:      ./examples/web-demo/main --listen 127.0.0.1:8080 --workers 4
 // Request:  curl http://127.0.0.1:8080/
 //

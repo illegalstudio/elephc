@@ -58,7 +58,7 @@ if (preg_match('/order-(\d+)/', $subject, $matches)) {
 Compile and run it like any other project source:
 
 ```bash
-elephc path/to/program.php
+elephc build path/to/program.php
 ./path/to/program
 ```
 
@@ -77,7 +77,7 @@ regex functions:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex path/to/program.php
+elephc build --with-regex path/to/program.php
 ```
 
 Without `--with-regex` or another statically visible regex use, the program
@@ -90,11 +90,11 @@ for a complete project.
 
 | Function | Signature | Description |
 |---|---|---|
-| `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int\|false` | Test regex match (`1` or `0`). Returns `false` for an invalid pattern or the removed `/e` modifier, and then leaves a supplied `$matches` variable unchanged. A completed search writes the full match and capture groups |
-| `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0): int\|false` | PHP returns the match count, or `false` for an invalid pattern or the removed `/e` modifier. elephc's type checker currently types the result as `mixed`. Optional `$matches` receives numbered groups |
+| `preg_match()` | `preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int\|false` | Test regex match (`1` or `0`). Returns `false` for an invalid pattern or the removed `/e` modifier, and then leaves a supplied `$matches` variable unchanged. A completed search writes the full match and capture groups |
+| `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0, $offset = 0): int\|false` | PHP returns the match count, or `false` for an invalid pattern or the removed `/e` modifier. elephc's type checker currently types the result as `mixed`. Optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string\|array\|null` | PHP returns the replaced value, or `null` on failure. elephc's type checker currently types the result as `mixed`. `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
-| `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
+| `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and limits. As in PHP, only returned pieces count toward `$limit`, `-1` and `0` mean no limit, and any other limit below 2 returns the subject as one piece |
 | `preg_grep()` | `preg_grep($pattern, $array, $flags = 0): array\|false` | Return the entries whose string value matches, keeping their keys; `PREG_GREP_INVERT` keeps the others. An invalid pattern returns `false` |
 | `preg_last_error()` | `preg_last_error(): int` | The `PREG_*_ERROR` code of the last `preg_*` call |
 | `preg_last_error_msg()` | `preg_last_error_msg(): string` | PHP's message for that code |
@@ -105,9 +105,14 @@ Capture output supports ordinary locals and native references whose payload is a
 ## Pattern syntax
 
 PCRE syntax is passed to PCRE2, so lookahead, lookbehind, lazy quantifiers,
-shorthand classes, and Unicode property escapes are available. PHP-style
-slash-delimited patterns are supported, and elephc maps these trailing modifiers
-to PCRE2 wrapper flags:
+shorthand classes, and Unicode property escapes are available. Delimiters follow
+PHP: leading whitespace is skipped, the delimiter is any byte other than a
+letter, a digit, a backslash or NUL, `(`, `[`, `{` and `<` close with their
+bracket pair (nested pairs are counted), and the first closing delimiter no
+backslash escapes ends the pattern. An empty pattern, an invalid or missing
+delimiter, and an unknown modifier make the call fail like PHP (`false`, or
+`null` for the replace functions) without a warning. elephc maps these trailing
+modifiers to PCRE2 compile options:
 
 | Modifier | Meaning |
 |---|---|
@@ -117,8 +122,19 @@ to PCRE2 wrapper flags:
 | `u` | UTF-8 and Unicode-property matching |
 | `U` | Ungreedy matching |
 | `x` | Extended mode: unescaped whitespace and `#` comments in the pattern are ignored; whitespace inside a character class still matches |
+| `A` | Anchored: a match must start at the search offset |
+| `D` | Dollar end-only: `$` does not match before a final newline |
+| `n` | No auto-capture: plain `(...)` groups do not capture |
+| `J` | Duplicate subpattern names are allowed |
+| `r` | Caseless restrict: under `i`, ASCII and non-ASCII letters do not match each other |
 
-Space, newline, and carriage return in the modifier suffix are ignored. Other trailing modifiers are currently not mapped to PCRE2 flags. Every `preg_*` function rejects the removed `/e` modifier before compilation.
+`S` and `X` are accepted with no effect, as in PHP 8. Space, newline, and carriage return in the modifier suffix are ignored. Every `preg_*` function rejects the removed `/e` modifier before compilation.
+
+The global functions (`preg_match_all()`, `preg_replace()`,
+`preg_replace_callback()`, `preg_split()`) step through the subject like PHP:
+after an empty match the next search starts at the same offset but may not
+match empty there, an empty match at the end of the subject is found, and `^`,
+`\b` and lookbehind always see the whole subject.
 
 ## Captures and replacements
 
@@ -128,6 +144,21 @@ groups. Unmatched interior captures are empty strings; trailing unmatched groups
 are omitted. A search that does not match replaces `$matches` with an empty
 array. An invalid pattern, or a pattern that uses the removed `/e` modifier,
 returns `false` and does not replace `$matches`.
+
+`preg_match()` also accepts `$flags` and `$offset`. `PREG_OFFSET_CAPTURE` makes
+each entry a `[value, byte_offset]` pair, and `PREG_UNMATCHED_AS_NULL` reports
+unmatched groups as `null` and keeps trailing ones. An order flag
+(`PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, or any other bit in the low byte) throws
+PHP's `ValueError`; other unknown bits are ignored, as in PHP. A call that passes
+`$flags` or `$offset` stores `$matches` as `array<mixed>` instead of
+`array<string>`.
+
+`$offset` (for both `preg_match()` and `preg_match_all()`) starts the search at
+that byte offset while anchors, `\G`, and lookbehind still see the whole
+subject. A negative offset counts back from the end and stops at the start. An
+offset past the end returns `false`, sets `$matches` to `[]` and records
+`PREG_INTERNAL_ERROR`, like PHP; an offset inside a multibyte character under `/u`
+returns `false` with `PREG_BAD_UTF8_OFFSET_ERROR`.
 
 `preg_match_all()` supports the same by-reference `$matches` parameter and the
 PHP flags Termwind uses for width and trim styling. PHP's return type is
@@ -140,6 +171,9 @@ function declared to return `int` can still return `preg_match_all(...)`.
 | `PREG_SET_ORDER` | `$matches[match][group]` |
 | `PREG_OFFSET_CAPTURE` | Each cell is `[value, offset]` |
 | `PREG_UNMATCHED_AS_NULL` | Unmatched groups are `null` (offset `-1` with offset capture) |
+
+Like PHP, each `PREG_SET_ORDER` row ends at its highest matched group unless
+`PREG_UNMATCHED_AS_NULL` is set.
 
 A successful compile with zero matches still materializes one empty row per
 compiled numbered group under `PREG_PATTERN_ORDER`. Named capture keys are not
@@ -201,6 +235,10 @@ limit or memory `PREG_INTERNAL_ERROR`, like PHP without JIT. The managed PCRE2
 has no JIT, so `PREG_JIT_STACKLIMIT_ERROR` never occurs. As in
 PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
 callback stays visible to `preg_last_error()` without failing the outer call.
+`preg_grep()` compiles its pattern once and resets the state once per call, not
+before each entry, so an error a `preg_*` call records inside an entry's
+`__toString()` is still reported after the call (and from PHP 8.6 makes it return
+`false`), unless a later entry's nested `preg_*` call succeeds and clears it.
 
 eval() and compiled code share one error state, as PHP has one: an error recorded
 inside eval() is what compiled code's `preg_last_error()` reports next, and the
@@ -214,7 +252,8 @@ managed PCRE2 package (10.47), not the PHP build's library.
 - Regex runtime detection is conservative around dynamic `instanceof`: programs
   that can dynamically reference emitted SPL regex classes may link PCRE2 even
   when they do not call `preg_*` directly.
-- Only the pattern modifiers listed above are mapped to PCRE2 flags today.
+- A malformed pattern or an unknown modifier fails silently: PHP's warnings
+  ("Unknown modifier", "No ending delimiter", ...) are not emitted.
 - PCRE2's own default match limit (10,000,000) applies instead of PHP's
   `pcre.backtrack_limit` (1,000,000).
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
@@ -231,8 +270,8 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`preg_grep()`](./builtins/regex/preg_grep.md) | `(string $pattern, array $array, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 | [`preg_last_error()`](./builtins/regex/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
 | [`preg_last_error_msg()`](./builtins/regex/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |

@@ -3,7 +3,7 @@
 //! owned storage, and incremental encoders must fail closed instead of writing past the arena.
 //!
 //! Called from:
-//! - `cargo test --test runtime_string_capacity_tests` through Rust's test harness.
+//! - `cargo test --test integration runtime_string_capacity_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture runs in an isolated temporary directory and spawns the compiler binary.
@@ -92,8 +92,9 @@ fn make_test_dir(name: &str) -> FixtureDir {
 fn compile(dir: &Path, source: &str) -> std::process::Output {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write string-capacity fixture");
-    Command::new(elephc_bin())
+    Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg("-q")
         .arg(&php)
         .output()
@@ -109,6 +110,7 @@ fn compile_with_managed_pcre2(dir: &Path, source: &str) -> std::process::Output 
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write string-capacity fixture");
     let mut command = Command::new(elephc_bin());
+    command.arg("build");
     command
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .current_dir(dir)
@@ -159,8 +161,10 @@ fn compile_with_heap_debug_and_size(
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write string-capacity fixture");
     let mut command = Command::new(elephc_bin());
+    command.arg("build");
     command
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .args(["-q", "--heap-debug"]);
     if let Some(size) = heap_size {
         command.arg(format!("--heap-size={size}"));
@@ -432,8 +436,9 @@ fn output_beyond_the_configured_budget_fails_closed() {
     let source = "<?php\n$s = str_repeat(chr(1), 12000);\necho json_encode($s);\n";
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write configured-budget fixture");
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()
@@ -627,8 +632,9 @@ echo str_repeat("x", 62000), json_encode([1, 2, 3]), "|", json_encode(["k" => 1]
 "#,
     )
     .expect("write json-headroom fixture");
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()
@@ -660,8 +666,9 @@ echo str_repeat("x", 65500), "|", serialize(1);
 "#,
     )
     .expect("write serialize-headroom fixture");
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()

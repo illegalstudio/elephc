@@ -18,22 +18,11 @@ use crate::synthetic_class::*;
 /// Builds one URI prelude declaration.
 pub(super) fn rfc3986_declaration() -> Stmt {
     s_namespace("Uri\\Rfc3986", vec![
-        enum_declaration("UriType", &[
-            "AbsolutePathReference",
-            "RelativePathReference",
-            "NetworkPathReference",
-            "Uri",
-        ]),
-        enum_declaration("UriHostType", &[
-            "IpV4",
-            "IpV6",
-            "IpVFuture",
-            "RegisteredName",
-        ]),
         class("Uri").span(Span::new(1, 1))
             .final_()
             .private_prop("__elephc_uri_handle", t_nullable(TypeExpr::Int), Some(e_null()))
             .private_static_prop("__elephc_charge", t_array(), Some(e_array(vec![])))
+            .private_static_prop("__elephc_handle_owner", t_array(), Some(e_array(vec![])))
             .method(
                 method("parse")
                     .static_()
@@ -41,6 +30,12 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     .param_default("baseUrl", t_mixed(), e_null())
                     .returns(t_nullable(t_class("static")))
                     .body(vec![
+                        super::s_reject_wrong_uri_instance(
+                            "baseUrl",
+                            "\\Uri\\Rfc3986\\Uri",
+                            "Uri\\Rfc3986\\Uri::parse(): Argument #2 ($baseUrl) must be of type ?Uri\\Rfc3986\\Uri, ",
+                            true,
+                        ),
                         s_try(vec![
                             s_return(e_new_self(vec![e_var("uri"), e_var("baseUrl")])),
                         ], vec![
@@ -67,13 +62,11 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                         s_if(
                             e_binop(e_var("baseUrl"), BinOp::StrictNotEq, e_null()),
                             vec![
-                                s_if(
-                                    e_not(e_instance_of(e_var("baseUrl"), "\\Uri\\Rfc3986\\Uri")),
-                                    vec![
-                                        s_throw(e_new_fq("TypeError", vec![e_str("Uri\\Rfc3986\\Uri::__construct(): Argument #2 ($baseUrl) must be of type ?Uri\\Rfc3986\\Uri")])),
-                                    ],
-                                    vec![],
-                                    None,
+                                super::s_reject_wrong_uri_instance(
+                                    "baseUrl",
+                                    "\\Uri\\Rfc3986\\Uri",
+                                    "Uri\\Rfc3986\\Uri::__construct(): Argument #2 ($baseUrl) must be of type ?Uri\\Rfc3986\\Uri, ",
+                                    true,
                                 ),
                                 s_assign("base", e_null_coalesce(e_prop(e_var("baseUrl"), "__elephc_uri_handle"), e_int(0))),
                             ],
@@ -95,6 +88,7 @@ pub(super) fn rfc3986_declaration() -> Stmt {
             )
             .method(
                 method("__destruct")
+                    .private()
                     .body(vec![
                         s_if(
                             e_binop(e_this_prop("__elephc_uri_handle"), BinOp::StrictNotEq, e_null()),
@@ -114,25 +108,31 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                         s_if(
                             e_binop(e_this_prop("__elephc_uri_handle"), BinOp::StrictNotEq, e_null()),
                             vec![
-                                s_prop_assign(e_this(), "__elephc_uri_handle", e_call("\\elephc_uri_clone", vec![e_this_prop("__elephc_uri_handle")])),
+                                // PHP does not expose the engine's `__clone` hook as a callable
+                                // method. The clone operator invokes it on a NEW object id; a
+                                // direct call still carries the original object's owner entry.
+                                s_if(
+                                    e_binop(
+                                        e_null_coalesce(
+                                            e_index(
+                                                e_self_static_prop("__elephc_handle_owner"),
+                                                e_cast(CastType::String, e_call("\\spl_object_id", vec![e_this()])),
+                                            ),
+                                            e_null(),
+                                        ),
+                                        BinOp::StrictEq,
+                                        e_this_prop("__elephc_uri_handle"),
+                                    ),
+                                    vec![s_throw(e_new_fq("Error", vec![e_binop(e_str("Call to undefined method "), BinOp::Concat, e_binop(e_self_class(), BinOp::Concat, e_str("::__clone()"))) ]))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "__elephc_uri_handle", e_call("\\elephc_uri_clone", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
                                 s_expr(e_self_call("__elephc_set_charge", vec![e_this(), e_this_prop("__elephc_uri_handle")])),
                             ],
                             vec![],
                             None,
                         ),
-                    ]),
-            )
-            .method(
-                method("getUriType")
-                    .returns(t_nullable(t_class("\\Uri\\Rfc3986\\UriType")))
-                    .body(vec![
-                        s_assign("type", e_call("\\elephc_uri_uri_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
-                        s_return(e_match(e_var("type"), vec![
-                            (vec![e_int(0)], e_class_const("\\Uri\\Rfc3986\\UriType", "AbsolutePathReference")),
-                            (vec![e_int(1)], e_class_const("\\Uri\\Rfc3986\\UriType", "RelativePathReference")),
-                            (vec![e_int(2)], e_class_const("\\Uri\\Rfc3986\\UriType", "NetworkPathReference")),
-                            (vec![e_int(3)], e_class_const("\\Uri\\Rfc3986\\UriType", "Uri")),
-                        ], Some(e_null()))),
                     ]),
             )
             .method(
@@ -230,19 +230,6 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     ]),
             )
             .method(
-                method("getHostType")
-                    .returns(t_nullable(t_class("\\Uri\\Rfc3986\\UriHostType")))
-                    .body(vec![
-                        s_assign("type", e_call("\\elephc_uri_host_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
-                        s_return(e_match(e_var("type"), vec![
-                            (vec![e_int(0)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpV4")),
-                            (vec![e_int(1)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpV6")),
-                            (vec![e_int(2)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpVFuture")),
-                            (vec![e_int(3)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "RegisteredName")),
-                        ], Some(e_null()))),
-                    ]),
-            )
-            .method(
                 method("getPort")
                     .returns(t_nullable(TypeExpr::Int))
                     .body(vec![
@@ -255,16 +242,29 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     .param("port", t_nullable(TypeExpr::Int))
                     .returns(t_class("static"))
                     .body(vec![
+                        // Clone before the native copy. The receiver keeps its handle, so a
+                        // failed allocation cannot leave it cleared; the new native URL does
+                        // not exist yet, so it cannot leak across the clone either.
+                        s_assign("copy", e_clone(e_this())),
                         s_assign("handle", e_call("\\elephc_uri_with_port", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_ternary(e_binop(e_var("port"), BinOp::StrictEq, e_null()), e_int(0), e_var("port")), e_ternary(e_binop(e_var("port"), BinOp::StrictEq, e_null()), e_int(1), e_int(0))])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
                             vec![
+                                s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_prop(e_var("copy"), "__elephc_uri_handle"), e_int(0))])),
+                                s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_null()),
+                                s_expr(e_self_call("__elephc_drop_charge", vec![e_var("copy")])),
                                 s_throw(e_new_fq("Uri\\InvalidUriException", vec![e_self_call("__elephc_message", vec![])])),
                             ],
                             vec![],
                             None,
                         ),
-                        s_return(e_method_call(e_this(), "__elephc_rebind", vec![e_var("handle")])),
+                        // The clone owns a duplicate of the old native URL; replace it with the
+                        // new handle and release the duplicate before charging the copy.
+                        s_assign("previous", e_prop(e_var("copy"), "__elephc_uri_handle")),
+                        s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_var("handle")),
+                        s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_var("previous"), e_int(0))])),
+                        s_expr(e_self_call("__elephc_set_charge", vec![e_var("copy"), e_var("handle")])),
+                        s_return(e_var("copy")),
                     ]),
             )
             .method(
@@ -339,13 +339,11 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     .param_default("comparisonMode", t_class("\\Uri\\UriComparisonMode"), e_class_const("\\Uri\\UriComparisonMode", "ExcludeFragment"))
                     .returns(TypeExpr::Bool)
                     .body(vec![
-                        s_if(
-                            e_not(e_instance_of(e_var("uri"), "\\Uri\\Rfc3986\\Uri")),
-                            vec![
-                                s_throw(e_new_fq("TypeError", vec![e_str("Uri\\Rfc3986\\Uri::equals(): Argument #1 ($uri) must be of type Uri\\Rfc3986\\Uri")])),
-                            ],
-                            vec![],
-                            None,
+                        super::s_reject_wrong_uri_instance(
+                            "uri",
+                            "\\Uri\\Rfc3986\\Uri",
+                            "Uri\\Rfc3986\\Uri::equals(): Argument #1 ($uri) must be of type Uri\\Rfc3986\\Uri, ",
+                            false,
                         ),
                         s_assign("result", e_call("\\elephc_uri_equals", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_null_coalesce(e_prop(e_var("uri"), "__elephc_uri_handle"), e_int(0)), e_ternary(e_binop(e_var("comparisonMode"), BinOp::StrictEq, e_class_const("\\Uri\\UriComparisonMode", "IncludeFragment")), e_int(1), e_int(0))])),
                         s_return(e_binop(e_var("result"), BinOp::StrictNotEq, e_int(0))),
@@ -458,33 +456,27 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     .param("value", t_nullable(TypeExpr::Str))
                     .returns(t_class("static"))
                     .body(vec![
+                        // Clone before the native copy. The receiver keeps its handle, so a
+                        // failed allocation cannot leave it cleared; the new native URL does
+                        // not exist yet, so it cannot leak across the clone either.
+                        s_assign("copy", e_clone(e_this())),
                         s_assign("handle", e_call("\\elephc_uri_with", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_var("component"), e_ternary(e_binop(e_var("value"), BinOp::StrictEq, e_null()), e_str(""), e_call("\\bin2hex", vec![e_var("value")])), e_ternary(e_binop(e_var("value"), BinOp::StrictEq, e_null()), e_int(1), e_int(0))])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
                             vec![
+                                s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_prop(e_var("copy"), "__elephc_uri_handle"), e_int(0))])),
+                                s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_null()),
+                                s_expr(e_self_call("__elephc_drop_charge", vec![e_var("copy")])),
                                 s_throw(e_new_fq("Uri\\InvalidUriException", vec![e_self_call("__elephc_message", vec![])])),
                             ],
                             vec![],
                             None,
                         ),
-                        s_return(e_method_call(e_this(), "__elephc_rebind", vec![e_var("handle")])),
-                    ]),
-            )
-            .method(
-                method("__elephc_rebind")
-                    .private()
-                    .param("handle", TypeExpr::Int)
-                    .returns(t_class("static"))
-                    .body(vec![
-                        // Clear the handle before cloning: `__clone()` then has nothing to
-                        // duplicate, and the clone receives the new handle directly below.
-                        // The class is final and `__clone()` runs no user code, so restoring the
-                        // original handle immediately after the clone cannot be observed.
-                        s_assign("saved", e_this_prop("__elephc_uri_handle")),
-                        s_prop_assign(e_this(), "__elephc_uri_handle", e_null()),
-                        s_assign("copy", e_clone(e_this())),
-                        s_prop_assign(e_this(), "__elephc_uri_handle", e_var("saved")),
+                        // The clone owns a duplicate of the old native URL; replace it with the
+                        // new handle and release the duplicate before charging the copy.
+                        s_assign("previous", e_prop(e_var("copy"), "__elephc_uri_handle")),
                         s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_var("handle")),
+                        s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_var("previous"), e_int(0))])),
                         s_expr(e_self_call("__elephc_set_charge", vec![e_var("copy"), e_var("handle")])),
                         s_return(e_var("copy")),
                     ]),
@@ -538,6 +530,11 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                             e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
                             e_call("\\array_fill", vec![e_int(0), e_var("units"), e_int(0)]),
                         ),
+                        s_self_static_prop_array_assign(
+                            "__elephc_handle_owner",
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                            e_var("handle"),
+                        ),
                     ]),
             )
             .method(
@@ -547,36 +544,19 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                     .param("object", t_class("object"))
                     .returns(TypeExpr::Void)
                     .body(vec![
-                        s_typed_assign(t_array(), "map", e_self_static_prop("__elephc_charge")),
-                        s_expr(e_call("unset", vec![e_index(e_var("map"), e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])))])),
-                        s_self_static_prop_assign("__elephc_charge", e_var("map")),
+                        // Remove the entry in place. Copying the map out, unsetting, and storing it
+                        // back would COW-duplicate every live entry on each destruction, turning
+                        // teardown of N URI objects into O(N^2) work.
+                        s_expr(e_call("unset", vec![e_index(
+                            e_self_static_prop("__elephc_charge"),
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                        )])),
+                        s_expr(e_call("unset", vec![e_index(
+                            e_self_static_prop("__elephc_handle_owner"),
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                        )])),
                     ]),
             )
             .build()
     ])
-}
-
-/// Builds one unit-enum declaration with the given case names.
-fn enum_declaration(name: &str, cases: &[&str]) -> Stmt {
-    Stmt::new(
-        crate::parser::ast::StmtKind::EnumDecl {
-            name: name.to_string(),
-            generics: None,
-            backing_type: None,
-            cases: cases
-                .iter()
-                .map(|case| crate::parser::ast::EnumCaseDecl {
-                    name: (*case).to_string(),
-                    value: None,
-                    span: Span::dummy(),
-                    attributes: Vec::new(),
-                })
-                .collect(),
-            implements: Vec::new(),
-            trait_uses: Vec::new(),
-            methods: Vec::new(),
-            constants: Vec::new(),
-        },
-        Span::dummy(),
-    )
 }

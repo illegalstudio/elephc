@@ -4,7 +4,7 @@
 //! through autoload needs.
 //!
 //! Called from:
-//! - `cargo test --test autoload_diagnostics_tests` through Rust's test harness.
+//! - `cargo test --test integration autoload_diagnostics_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Autoloaded class files are loaded after name resolution, long after the entry file was
@@ -55,10 +55,11 @@ fn elephc_bin() -> String {
     })
 }
 
-/// Runs `elephc --check` on `<dir>/main.php`.
+/// Runs `elephc build --check` on `<dir>/main.php`.
 fn check(dir: &Path) -> Output {
-    Command::new(elephc_bin())
+    Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)
         .arg("--check")
         .arg(dir.join("main.php"))

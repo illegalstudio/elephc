@@ -16,7 +16,7 @@
 //! - Malformed simple offsets are PHP parse errors (measured against PHP 8.5.6) and are
 //!   pinned as refusals so a future rewrite cannot start silently accepting them.
 
-use super::scan::tokenize;
+use super::tokenize;
 use super::TokenKind;
 use crate::errors::EvalParseError;
 
@@ -73,6 +73,25 @@ fn single_quoted_literal_never_interpolates() {
     assert_eq!(
         kinds(r#"'$v and {$v}';"#),
         vec![string("$v and {$v}"), TokenKind::Semicolon, TokenKind::Eof]
+    );
+}
+
+/// Shared operator recognition preserves token boundaries expected by the eval grammar.
+#[test]
+fn shared_operator_scan_preserves_eval_token_shapes() {
+    assert_eq!(
+        kinds("??= >>= <=> <> |>"),
+        vec![
+            TokenKind::QuestionQuestion,
+            TokenKind::Equal,
+            TokenKind::GreaterGreaterEqual,
+            TokenKind::Spaceship,
+            TokenKind::Less,
+            TokenKind::Greater,
+            TokenKind::Pipe,
+            TokenKind::Greater,
+            TokenKind::Eof,
+        ],
     );
 }
 
@@ -566,6 +585,16 @@ fn a_comment_inside_a_complex_interpolation_is_inert() {
     ] {
         assert_eq!(kinds(source), plain, "{source}");
     }
+}
+
+/// Shared scans count newlines before handing the lexer back to the next token.
+#[test]
+fn shared_string_scans_preserve_following_token_lines() {
+    let source = "'a\nb';\n\"{$a[/* a\nb */ 'k']}\";\n__LINE__;";
+    let tokens = tokenize(source).expect("multiline strings should tokenize");
+    assert!(matches!(tokens[0].kind(), TokenKind::String(value) if value == "a\nb"));
+    assert_eq!(tokens[1].line(), 2);
+    assert_eq!(tokens[tokens.len() - 3].line(), 5);
 }
 
 /// Retains generic PHPDoc comments while ordinary block and line comments remain trivia.

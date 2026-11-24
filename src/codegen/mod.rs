@@ -471,8 +471,27 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
-    if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
-        lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
+    // Shared boxed-callable selectors the bodies requested, and the argument normalizer.
+    // Emitting either can reach a builtin wrapper that requests another selector or raises
+    // the normalizer flag, so both are drained until neither makes progress.
+    let mut normalizer_emitted = false;
+    loop {
+        let mut progressed = lower_inst::callables::emit_pending_callable_selectors(
+            module,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+        )?;
+        if !normalizer_emitted
+            && (shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed)
+        {
+            lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
+            normalizer_emitted = true;
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
     }
     // The eval status dispatch is the same at every call site, so it is one
     // module-level helper too. Emitted OUTSIDE the bridge gate: a literal-eval
@@ -529,6 +548,7 @@ fn finalize_user_asm(
             // `--with-apm`: the library counts its export calls.
             let apm = shared.apm_only.then_some(crate::codegen::cdylib::LibraryApm {
                 collector: shared.apm_collector,
+                rules: shared.apm_rules,
             });
             crate::codegen::cdylib::emit_cdylib_exports(
                 &mut emitter,

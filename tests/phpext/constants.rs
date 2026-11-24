@@ -17,6 +17,7 @@ fn phpext_constants_reject_missing_selection_before_sdk() {
     fs::write(&source, "<?php const PRESENT = 42;").unwrap();
     for mode in [Some("--check"), Some("--emit-ir"), None] {
         let mut command = Command::new(compiler_binary());
+        command.arg("build");
         command.args(["--emit", "phpext", "--export-constant=MISSING"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
@@ -31,7 +32,7 @@ fn phpext_constants_reject_missing_selection_before_sdk() {
 /// Refuses the producer-only option in executable mode before processing source.
 #[test]
 fn phpext_constants_reject_non_php_emit() {
-    let output = Command::new(compiler_binary())
+    let output = Command::new(compiler_binary()).arg("build")
         .args(["--export-constant=VERSION", "missing.php"]).output().unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--export-constant requires --emit phpext"));

@@ -4,11 +4,11 @@
 //! serialization, and the `extension_loaded("uri")` surface.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests uri_` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext uri_` through Rust's test harness.
 //!
 //! Key details:
 //! - Expected outputs were measured on PHP 8.5.10 with the bundled `uri` extension.
-//! - The exhaustive php-src PHPT matrix lives in `tests/codegen/uri_php_src.rs`; these
+//! - The exhaustive php-src case table lives in `tests/codegen/uri_php_src.rs`; these
 //!   fixtures are the fast regression subset for day-to-day work.
 
 use crate::support::*;
@@ -68,95 +68,8 @@ try { new Uri\WhatWg\Url("http://localhost:99999"); } catch (Uri\WhatWg\InvalidU
             "  [1]=>\n",
             "  string(29) \"FileInvalidWindowsDriveLetter\"\n",
             "}\n",
-            "/zz\n",
+            "/c:/x\n",
             "The specified URI is malformed (PortOutOfRange)|1|PortOutOfRange\n",
-        )
-    );
-}
-
-/// Verifies `array_map()` over an exception's `errors` property reads the list of validation
-/// objects instead of interpreting the property's hash storage as packed element slots.
-///
-/// The exception constructor receives an `array<mixed>` parameter from an `array_merge()`
-/// result. That value is boxed, and unboxing it used to preserve its hash layout while the
-/// declared parameter type promised packed Mixed slots, so `array_map()` read the hash header
-/// as an element stride and dereferenced a null first element.
-#[test]
-fn test_uri_builder_exception_errors_array_map() {
-    let out = compile_and_run(
-        r#"<?php
-$builder = new Uri\WhatWg\UrlBuilder();
-$builder->setScheme("ht\ttps");
-$builder->setHost(null);
-$softErrors = ["previous error"];
-try {
-    $builder->build(softErrors: $softErrors);
-} catch (Uri\WhatWg\InvalidUrlException $e) {
-    echo $e->getMessage(), "\n";
-    var_dump(array_map(static fn($error) => $error->type, $e->errors));
-}
-var_dump($softErrors);
-"#,
-    );
-    assert_eq!(
-        out,
-        concat!(
-            "The specified host is malformed (HostMissing)\n",
-            "array(2) {\n",
-            "  [0]=>\n",
-            "  enum(Uri\\WhatWg\\UrlValidationErrorType::InvalidUrlUnit)\n",
-            "  [1]=>\n",
-            "  enum(Uri\\WhatWg\\UrlValidationErrorType::HostMissing)\n",
-            "}\n",
-            "array(0) {\n",
-            "}\n",
-        )
-    );
-}
-
-/// Verifies the WHATWG builder keeps raw opaque-path spaces, serializes the trailing space
-/// before a query or fragment as `%20`, and reports one `InvalidUrlUnit` warning per space in
-/// left-to-right order with lexbor's context.
-#[test]
-fn test_uri_builder_opaque_path_spaces() {
-    let out = compile_and_run(
-        r#"<?php
-$builder = new Uri\WhatWg\UrlBuilder();
-$builder->setScheme("foo");
-$builder->setPath("  abc ");
-$softErrors = [];
-$url = $builder->build(softErrors: $softErrors);
-echo $url->toAsciiString(), "\n";
-foreach ($softErrors as $error) {
-    echo "[", $error->context, "]\n";
-}
-var_dump($url->equals(new Uri\WhatWg\Url($url->toAsciiString())));
-
-$builder = new Uri\WhatWg\UrlBuilder();
-$builder->setScheme("foo");
-$builder->setPath("abc  ");
-$builder->setFragment("f");
-$softErrors = [];
-$url = $builder->build(softErrors: $softErrors);
-echo $url->toAsciiString(), "\n";
-echo $url->getPath(), "\n";
-foreach ($softErrors as $error) {
-    echo "[", $error->context, "]\n";
-}
-"#,
-    );
-    assert_eq!(
-        out,
-        concat!(
-            "foo:  abc \n",
-            "[  abc ]\n",
-            "[ abc ]\n",
-            "[ ]\n",
-            "bool(false)\n",
-            "foo:abc %20#f\n",
-            "abc %20\n",
-            "[  #]\n",
-            "[ #]\n",
         )
     );
 }
@@ -208,7 +121,7 @@ echo $v->toString(), "|", $v->getHost(), "\n";
 }
 
 /// Verifies `?Class::class` is accepted for a nullable object value (php-src ext/uri relies
-/// Verifies a nullable object return value still supports `::class`.
+/// on it for `getPrevious()::class`).
 #[test]
 fn test_nullable_object_class_name() {
     let out = compile_and_run(
@@ -232,6 +145,19 @@ var_dump(extension_loaded("uri"));
 "#,
     );
     assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
+/// Verifies `--with-uri` keeps the complete class surface even when the program never names
+/// a URI class directly, so declaration reachability cannot erase the forced prelude.
+#[test]
+fn test_uri_with_flag_keeps_the_forced_surface() {
+    let out = compile_cli_file_and_run_with_flags(
+        r#"<?php
+var_dump(class_exists("Uri\\Rfc3986\\Uri"), class_exists("Uri\\WhatWg\\Url"), extension_loaded("uri"));
+"#,
+        &["--with-uri"],
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
 }
 
 /// Verifies `ext/uri` is declared for the PHP 8.5 profile and absent for 8.4.
@@ -289,6 +215,37 @@ foreach ($cases as $case) {
             "\"http:\\/\\/x.test\\/a\\tb\": http://x.test/ab\n",
             "  InvalidUrlUnit \"\\tb\" false\n",
         )
+    );
+}
+
+/// Verifies a network-relative reference inherits the base scheme for lexbor's host
+/// warnings: credentials and IPv4 non-decimal parts are reported even though the reference
+/// text has no scheme of its own.
+#[test]
+fn test_uri_whatwg_network_relative_warnings_use_the_base_scheme() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("https://example.com/base");
+foreach (["//user@example.com/", "//01.02.03.04/"] as $case) {
+    $errors = [];
+    $url = new Uri\WhatWg\Url($case, $base, $errors);
+    echo json_encode($case), " => ", $url->toAsciiString(), "\n";
+    foreach ($errors as $error) {
+        echo "  ", $error->type->name, " ", var_export($error->failure, true), " ", json_encode($error->context), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""\/\/user@example.com\/" => https://user@example.com/
+  InvalidCredentials false "@example.com\/"
+"\/\/01.02.03.04\/" => https://1.2.3.4/
+  Ipv4NonDecimalPart false "04"
+  Ipv4NonDecimalPart false "03.04"
+  Ipv4NonDecimalPart false "02.03.04"
+  Ipv4NonDecimalPart false "\/"
+"#
     );
 }
 
@@ -392,7 +349,7 @@ echo serialize($value), "\n";
 }
 
 /// Verifies opaque paths keep interior spaces and `^` literal, while the trailing space before
-/// a query is the lexbor `%20` case pinned by the vendored fixture.
+/// a query is the lexbor `%20` case pinned by the embedded case table.
 #[test]
 fn test_uri_whatwg_opaque_path_encoding() {
     let out = compile_and_run(
@@ -414,7 +371,7 @@ foreach (["urn:a b", "urn:x^y", "foo:a b ?c"] as $case) {
             "  InvalidUrlUnit \" b\"\n",
             "\"urn:x^y\" => urn:x^y path=\"x^y\"\n",
             "  InvalidUrlUnit \"^y\"\n",
-            "\"foo:a b ?c\" => foo:a b%20?c path=\"a b%20\"\n",
+            "\"foo:a b ?c\" => foo:a b ?c path=\"a b \"\n",
             "  InvalidUrlUnit \" ?c\"\n",
             "  InvalidUrlUnit \" b ?c\"\n",
         )
@@ -582,6 +539,45 @@ var_dump(property_exists(new UserPropertyExists(), "__elephc_uri_handle"));
     assert_eq!(out, "bool(false)\nbool(true)\n");
 }
 
+/// Verifies the internal readonly URI classes compile an undeclared write but raise php-src's
+/// exact `Cannot create dynamic property` error at runtime, and that a later read warns and
+/// answers null instead of creating storage.
+#[test]
+fn test_uri_dynamic_property_writes_raise_the_engine_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rfc = new Uri\Rfc3986\Uri("https://example.com/");
+try {
+    $rfc->foo = 1;
+    echo "stored\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$whatwg = new Uri\WhatWg\Url("https://example.com/");
+try {
+    $whatwg->foo = 1;
+    echo "stored\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($rfc->foo);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Cannot create dynamic property Uri\\Rfc3986\\Uri::$foo\n\
+Cannot create dynamic property Uri\\WhatWg\\Url::$foo\nNULL\n",
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("Warning: Undefined property: Uri\\Rfc3986\\Uri::$foo"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies Reflection reports the engine shape of both URI classes: internal, readonly,
 /// final, and the php-src modifiers bitmask.
 #[test]
@@ -644,6 +640,392 @@ foreach (["http://0x7f.1/", "http://0xffffffff/", "http://0x7f.0x1/", "http://0x
     );
 }
 
+/// Verifies each of the host, query, and fragment native strings is charged against the PHP
+/// memory budget, not only the path-segment footprint. Each case keeps the input string alive
+/// before the measurement, so the delta is the URI object's own charge.
+#[test]
+fn test_uri_bridge_charges_host_query_fragment_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function measure_rfc(string $uri): int {
+    $before = memory_get_usage();
+    $object = new Uri\Rfc3986\Uri($uri);
+    $after = memory_get_usage();
+    unset($object);
+    return $after - $before;
+}
+function measure_whatwg(string $uri): int {
+    $before = memory_get_usage();
+    $object = Uri\WhatWg\Url::parse($uri);
+    $after = memory_get_usage();
+    unset($object);
+    return $after - $before;
+}
+$host = str_repeat("a.", 50000) . "com";
+$query = str_repeat("q", 100000);
+$fragment = str_repeat("f", 100000);
+foreach ([
+    "host" => "https://$host/",
+    "query" => "https://example.com/?$query",
+    "fragment" => "https://example.com/#$fragment",
+] as $name => $uri) {
+    $rfc = measure_rfc($uri);
+    $whatwg = measure_whatwg($uri);
+    echo $name, ": ", $rfc >= 100000 ? "rfc" : "rfc-missing", " ",
+        $whatwg >= 100000 ? "whatwg" : "whatwg-missing", "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "host: rfc whatwg\nquery: rfc whatwg\nfragment: rfc whatwg\n"
+    );
+}
+
+/// Verifies the native charge follows the URI object's whole lifecycle: clone, component
+/// writes, host writes, and `unserialize()` all publish a fresh charge for the new handle.
+#[test]
+fn test_uri_bridge_charge_lifecycle_covers_clone_writes_and_unserialize() {
+    let out = compile_and_run(
+        r#"<?php
+function measure_clone(Uri\WhatWg\Url $base): int {
+    $before = memory_get_usage();
+    $copy = clone $base;
+    $after = memory_get_usage();
+    unset($copy);
+    return $after - $before;
+}
+function measure_with(Uri\WhatWg\Url $base, int $component, string $value): int {
+    $before = memory_get_usage();
+    $changed = $component === 0 ? $base->withQuery($value) : $base->withFragment($value);
+    $after = memory_get_usage();
+    unset($changed);
+    return $after - $before;
+}
+function measure_host(Uri\WhatWg\Url $base, string $host): int {
+    $before = memory_get_usage();
+    $changed = $base->withHost($host);
+    $after = memory_get_usage();
+    unset($changed);
+    return $after - $before;
+}
+function measure_unserialize(string $serialized): int {
+    $before = memory_get_usage();
+    $restored = unserialize($serialized);
+    $after = memory_get_usage();
+    unset($restored);
+    return $after - $before;
+}
+$query = str_repeat("q", 100000);
+$host = str_repeat("a.", 50000) . "com";
+$base = new Uri\WhatWg\Url("https://example.com/x?$query");
+$serialized = serialize($base);
+foreach ([
+    "clone" => measure_clone($base),
+    "query" => measure_with($base, 0, $query),
+    "fragment" => measure_with($base, 1, $query),
+    "host" => measure_host($base, $host),
+    "unserialize" => measure_unserialize($serialized),
+] as $name => $delta) {
+    echo $name, "=", $delta >= 100000 ? "ok" : "missing", "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "clone=ok\nquery=ok\nfragment=ok\nhost=ok\nunserialize=ok\n"
+    );
+}
+
+/// A scheme write does not turn a schemed colon path into a `./`-prefixed one; removing the
+/// scheme is the case that needs the disambiguating prefix.
+#[test]
+fn test_uri_rfc3986_scheme_and_path_writes_preserve_schemed_colon_paths() {
+    let out = compile_and_run(
+        r#"<?php
+$uri = new Uri\Rfc3986\Uri("mailto:a:b");
+echo $uri->toString(), "|", $uri->getRawPath(), "\n";
+$sameScheme = $uri->withScheme("mailto");
+echo $sameScheme->toString(), "|", $sameScheme->getRawPath(), "\n";
+$samePath = $uri->withPath("a:b");
+echo $samePath->toString(), "|", $samePath->getRawPath(), "\n";
+$noScheme = $uri->withScheme(null);
+echo $noScheme->toString(), "|", $noScheme->getRawPath(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "mailto:a:b|a:b\nmailto:a:b|a:b\nmailto:a:b|a:b\n./a:b|./a:b\n"
+    );
+}
+
+/// A direct destructor call is rejected with a catchable `Error` and leaves the native handle
+/// intact; automatic cleanup still releases it.
+#[test]
+fn test_uri_direct_destructor_call_is_rejected_without_freeing_the_handle() {
+    let out = compile_and_run(
+        r#"<?php
+$rfc = new Uri\Rfc3986\Uri("https://example.com/a");
+try {
+    $rfc->__destruct();
+    echo "freed\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $rfc->toString(), "\n";
+$whatwg = new Uri\WhatWg\Url("https://example.com/a");
+try {
+    $whatwg->__destruct();
+    echo "freed\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $whatwg->toAsciiString(), "\n";
+unset($rfc, $whatwg);
+echo "ok\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Call to undefined method Uri\\Rfc3986\\Uri::__destruct()\nhttps://example.com/a\nCall to undefined method Uri\\WhatWg\\Url::__destruct()\nhttps://example.com/a\nok\n"
+    );
+}
+
+/// Verifies lexbor-style Punycode recovery for `xn--` labels the strict `idna` crate rejects.
+#[test]
+fn test_uri_whatwg_relaxed_alabel_normalization() {
+    let out = compile_and_run(
+        r#"<?php
+$issueErrors = [];
+$issue = Uri\WhatWg\Url::parse("https://xn--a-.com", null, $issueErrors);
+echo $issue === null ? "null" : $issue->toAsciiString(), "|", count($issueErrors), "\n";
+
+foreach ([
+    "https://xn--a-.com",
+    "https://xn--a-.com.",
+    "https://xn--a-..com/",
+    "https://xn--./",
+    "https://xn--9ca-.com",
+    "https://xn--bcher-kva-.com",
+    "https://xn--a",
+    "https://xn--a.com",
+    "https://xn--0x7f-.1/",
+    "https://xn--0x100-.1/",
+] as $case) {
+    $url = Uri\WhatWg\Url::parse($case);
+    echo $url === null ? "null" : $url->toAsciiString(), "\n";
+}
+
+$base = new Uri\WhatWg\Url("https://example.com/");
+foreach (["https://xn--a-.com/", "https://xn--9ca-.com/"] as $case) {
+    $parsed = Uri\WhatWg\Url::parse($case, $base);
+    $resolved = $base->resolve($case);
+    echo $parsed->toAsciiString(), "|", $resolved->toAsciiString(), "\n";
+}
+
+$errors = [];
+$repaired = Uri\WhatWg\Url::parse("https://xn--a-.com/a^b", $base, $errors);
+echo $repaired->toAsciiString(), "|", $repaired->getPath(), "\n";
+foreach ($errors as $error) {
+    echo "  ", $error->type->name, " ", json_encode($error->context), "\n";
+}
+
+$network = $base->resolve("//xn--a-.com/a^b");
+echo $network->toAsciiString(), "|", $network->getPath(), "\n";
+
+$hosted = (new Uri\WhatWg\Url("https://example.com/a?q#f"))->withHost("xn--a-.com");
+echo $hosted->toAsciiString(), "|", $hosted->getAsciiHost(), "\n";
+
+$invalid = new Uri\WhatWg\Url("https://example.com/");
+try {
+    $invalid->withHost("EXAMPLE bücher.example");
+    echo "accepted\n";
+} catch (Uri\WhatWg\InvalidUrlException $error) {
+    echo $error->getMessage(), "|", count($error->errors), "|", $error->errors[0]->type->name, "\n";
+}
+
+$backslashed = $base->resolve("\\\\xn--a-.com/p?q\\z#f\\g");
+echo $backslashed->toAsciiString(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "https://a.com/|0\n",
+            "https://a.com/\n",
+            "https://a.com./\n",
+            "https://a..com/\n",
+            "https://./\n",
+            "https://9ca.com/\n",
+            "https://bcher-kva.com/\n",
+            "null\n",
+            "null\n",
+            "https://127.0.0.1/\n",
+            "null\n",
+            "https://a.com/|https://a.com/\n",
+            "https://9ca.com/|https://9ca.com/\n",
+            "https://a.com/a%5Eb|/a%5Eb\n",
+            "  InvalidUrlUnit \"^b\"\n",
+            "https://a.com/a%5Eb|/a%5Eb\n",
+            "https://a.com/a?q#f|a.com\n",
+            "The specified host is malformed (DomainInvalidCodePoint)|1|DomainInvalidCodePoint\n",
+            "https://a.com/p?q\\z#f\\g\n",
+        )
+    );
+}
+
+/// Verifies php-src's reflected URI parameter types and the exact runtime `TypeError` wording.
+#[test]
+fn test_uri_signatures_and_runtime_type_errors_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+function badUri(): mixed { return "not a uri"; }
+$parse = new ReflectionMethod(Uri\Rfc3986\Uri::class, "parse");
+foreach ($parse->getParameters() as $parameter) {
+    echo $parameter->getName(), ":", $parameter->getType(), "\n";
+}
+$equals = new ReflectionMethod(Uri\WhatWg\Url::class, "equals");
+foreach ($equals->getParameters() as $parameter) {
+    echo $parameter->getName(), ":", $parameter->getType(), "\n";
+}
+$whatwgParse = new ReflectionMethod(Uri\WhatWg\Url::class, "parse");
+foreach ($whatwgParse->getParameters() as $parameter) {
+    echo $parameter->getName(), ":", $parameter->hasType() ? $parameter->getType() : "none", "\n";
+}
+$rfcEquals = new ReflectionMethod(Uri\Rfc3986\Uri::class, "equals");
+foreach ($rfcEquals->getParameters() as $parameter) {
+    echo $parameter->getName(), ":", $parameter->getType(), "\n";
+}
+$bad = badUri();
+$base = Uri\Rfc3986\Uri::parse("https://example.com/base");
+$whatwgBase = new Uri\WhatWg\Url("https://example.com");
+echo Uri\Rfc3986\Uri::parse("child", $base)->toString(), "\n";
+try {
+    $base->equals($bad);
+} catch (Throwable $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+try {
+    new Uri\WhatWg\Url("https://example.com", $bad);
+} catch (Throwable $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+try {
+    Uri\WhatWg\Url::parse("child", $bad);
+} catch (Throwable $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+try {
+    $whatwgBase->equals($bad);
+} catch (Throwable $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "uri:string\n",
+            "baseUrl:?Uri\\Rfc3986\\Uri\n",
+            "url:Uri\\WhatWg\\Url\n",
+            "comparisonMode:Uri\\UriComparisonMode\n",
+            "uri:string\n",
+            "baseUrl:?Uri\\WhatWg\\Url\n",
+            "errors:none\n",
+            "uri:Uri\\Rfc3986\\Uri\n",
+            "comparisonMode:Uri\\UriComparisonMode\n",
+            "https://example.com/child\n",
+            "TypeError: Uri\\Rfc3986\\Uri::equals(): Argument #1 ($uri) must be of type Uri\\Rfc3986\\Uri, string given\n",
+            "TypeError: Uri\\WhatWg\\Url::__construct(): Argument #2 ($baseUrl) must be of type ?Uri\\WhatWg\\Url, string given\n",
+            "TypeError: Uri\\WhatWg\\Url::parse(): Argument #2 ($baseUrl) must be of type ?Uri\\WhatWg\\Url, string given\n",
+            "TypeError: Uri\\WhatWg\\Url::equals(): Argument #1 ($url) must be of type Uri\\WhatWg\\Url, string given\n",
+        )
+    );
+}
+
+/// Verifies WHATWG fatal validation entries carry php-src's exact error kind and context
+/// suffix, plus the soft warnings lexbor emits for extra solidi and an empty IPv4 final part.
+#[test]
+fn test_uri_whatwg_failure_contexts_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "https://[::1:2:3:4:5:6:7:8]/",
+    "https://[::1.2.3.256]/",
+    "https://[1:2:3]/",
+    "https://1.2.3.256/",
+    "https://1.2.3.4.5/",
+    "https://example.com:99999/",
+    "https://example.com:99a/",
+    "https://:80/",
+    "https://user@:80/",
+    "https://exa mple.com/",
+    "https://exa%23mple.org/",
+    "https://exa<mple.com/",
+    "foo://exa[mple.org/",
+    "https:///path",
+    "https:////path",
+    "http:///",
+    "file://c:/x",
+    "https://xn--",
+    "https://1.2.3./",
+];
+foreach ($cases as $case) {
+    $errors = [];
+    $url = Uri\WhatWg\Url::parse($case, null, $errors);
+    echo json_encode($case), " => ", $url === null ? "null" : $url->toAsciiString(), "\n";
+    foreach ($errors as $error) {
+        echo "  ", $error->type->name, " ", var_export($error->failure, true), " ", json_encode($error->context), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r##""https:\/\/[::1:2:3:4:5:6:7:8]\/" => null
+  Ipv6TooManyPieces true "8]\/"
+"https:\/\/[::1.2.3.256]\/" => null
+  Ipv4InIpv6OutOfRangePart true "6]\/"
+"https:\/\/[1:2:3]\/" => null
+  Ipv6TooFewPieces true "]\/"
+"https:\/\/1.2.3.256\/" => null
+  Ipv4OutOfRangePart true "256"
+"https:\/\/1.2.3.4.5\/" => null
+  Ipv4TooManyParts true "5"
+"https:\/\/example.com:99999\/" => null
+  PortOutOfRange true "\/"
+"https:\/\/example.com:99a\/" => null
+  PortInvalid true "a\/"
+"https:\/\/:80\/" => null
+  HostMissing true ":80\/"
+"https:\/\/user@:80\/" => null
+  HostMissing true ":80\/"
+  InvalidCredentials false "@:80\/"
+"https:\/\/exa mple.com\/" => null
+  DomainInvalidCodePoint true " mple.com"
+"https:\/\/exa%23mple.org\/" => null
+  DomainInvalidCodePoint true "#mple.org"
+"https:\/\/exa<mple.com\/" => null
+  DomainInvalidCodePoint true "<mple.com"
+"foo:\/\/exa[mple.org\/" => null
+  HostInvalidCodePoint true "[mple.org\/"
+"https:\/\/\/path" => https://path/
+  SpecialSchemeMissingFollowingSolidus false "\/path"
+"https:\/\/\/\/path" => https://path/
+  SpecialSchemeMissingFollowingSolidus false "\/path"
+  SpecialSchemeMissingFollowingSolidus false "\/\/path"
+"http:\/\/\/" => null
+  HostMissing true ""
+  SpecialSchemeMissingFollowingSolidus false "\/"
+"file:\/\/c:\/x" => file:///c:/x
+  FileInvalidWindowsDriveLetterHost false "c:\/x"
+"https:\/\/xn--" => null
+"https:\/\/1.2.3.\/" => https://1.2.0.3/
+  Ipv4EmptyPart false ""
+"##
+    );
+}
+
 /// Verifies lexbor's special-scheme solidus diagnostics for repeated backslash/slash runs,
 /// including the duplicated full-run entry and the file-scheme reverse-solidus pair.
 #[test]
@@ -696,12 +1078,14 @@ echo "not reached\n";
     assert!(!output.success, "the program should abort on heap exhaustion");
     assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
     assert!(
-        output.stderr.starts_with("Fatal error:"),
+        output
+            .stderr
+            .starts_with("Fatal error: Allowed memory size of 8388608 bytes exhausted "),
         "stderr: {}",
         output.stderr
     );
     assert!(
-        output.stderr.contains("heap memory exhausted"),
+        output.stderr.contains("(tried to allocate "),
         "stderr: {}",
         output.stderr
     );
@@ -753,119 +1137,919 @@ echo "ok\n";
     );
 }
 
-/// Verifies the PHP 8.6 WHATWG percent-encoding function across every encoding-set mode.
+/// Verifies a resolved WHATWG reference inherits the base's saved host and file-path forms.
 #[test]
-fn test_uri_whatwg_url_percent_encode_php86() {
-    let out = compile_and_run_with_php_version(
-        r#"<?php
-use Uri\WhatWg\UrlPercentEncodingMode as Mode;
-use function Uri\WhatWg\url_percent_encode;
+fn test_uri_whatwg_resolution_preserves_base_overrides() {
+    let out = compile_and_run(
+        r##"<?php
+$base = new Uri\WhatWg\Url("https://xn--a-.com/");
+$resolved = $base->resolve("child");
+echo $resolved->toAsciiString(), "|", $resolved->getAsciiHost(), "\n";
 
-$input = "a b/c?d#e@f:g'h+i";
-foreach ([
-    Mode::Username,
-    Mode::Password,
-    Mode::OpaqueHost,
-    Mode::Path,
-    Mode::OpaquePath,
-    Mode::PathSegment,
-    Mode::Query,
-    Mode::SpecialQuery,
-    Mode::FormQuery,
-    Mode::Fragment,
-] as $mode) {
-    echo $mode->name, '=', url_percent_encode($input, $mode), "\n";
+$file = new Uri\WhatWg\Url("file:////x/");
+foreach (["child", "../y", "/z", "?q", "#f", ""] as $reference) {
+    $url = $file->resolve($reference);
+    echo "[", $reference, "] => ", $url->toAsciiString(), "|", $url->getPath(), "\n";
 }
-echo url_percent_encode("é", Mode::Path), "\n";
-echo url_percent_encode("", Mode::Path), "\n";
-"#,
-        elephc::php_version::PhpVersion::Php86,
+
+$hosted = (new Uri\WhatWg\Url("file:////x/"))->withHost("example.com")->withScheme("https");
+foreach (["child", "../y", "/z", "?q", "#f", ""] as $reference) {
+    $url = $hosted->resolve($reference);
+    echo "hosted[", $reference, "] => ", $url->toAsciiString(), "|", $url->getPath(), "\n";
+}
+"##,
     );
     assert_eq!(
         out,
-        "Username=a%20b%2Fc%3Fd%23e%40f%3Ag'h+i\n\
-Password=a%20b%2Fc%3Fd%23e%40f%3Ag'h+i\n\
-OpaqueHost=a b/c?d#e@f:g'h+i\n\
-Path=a%20b/c%3Fd%23e@f:g'h+i\n\
-OpaquePath=a b/c?d#e@f:g'h+i\n\
-PathSegment=a%20b%2Fc%3Fd%23e@f:g'h+i\n\
-Query=a%20b/c?d%23e@f:g'h+i\n\
-SpecialQuery=a%20b/c?d%23e@f:g%27h+i\n\
-FormQuery=a+b%2Fc%3Fd%23e%40f%3Ag%27h%2Bi\n\
-Fragment=a%20b/c?d#e@f:g'h+i\n\
-%C3%A9\n\n"
+        concat!(
+            "https://a.com/child|a.com\n",
+            "[child] => file:////x/child|//x/child\n",
+            "[../y] => file:////y|//y\n",
+            "[/z] => file:///z|/z\n",
+            "[?q] => file:////x/?q|//x/\n",
+            "[#f] => file:////x/#f|//x/\n",
+            "[] => file:////x/|//x/\n",
+            "hosted[child] => https://example.com//x/child|//x/child\n",
+            "hosted[../y] => https://example.com//y|//y\n",
+            "hosted[/z] => https://example.com/z|/z\n",
+            "hosted[?q] => https://example.com//x/?q|//x/\n",
+            "hosted[#f] => https://example.com//x/#f|//x/\n",
+            "hosted[] => https://example.com//x/|//x/\n",
+        )
     );
 }
 
-/// Verifies the PHP 8.6 builder classes, URI/host type enums, and host-type getters.
+/// Verifies unrelated WHATWG component writes keep the saved file path, and host/scheme
+/// changes preserve php-src's path component.
 #[test]
-fn test_uri_php86_builders_and_types() {
-    let out = compile_and_run_with_php_version(
+fn test_uri_whatwg_unrelated_writes_preserve_file_path() {
+    let out = compile_and_run(
         r#"<?php
-$uri = new Uri\Rfc3986\UriBuilder()
-    ->setScheme("https")
-    ->setUserInfo("user:pass")
-    ->setHost("example.com")
-    ->setPort(443)
-    ->setPath("/a/b")
-    ->setQuery("x=1")
-    ->setFragment("frag")
-    ->build();
-echo $uri->toRawString(), "\n";
-echo $uri->getUriType()->name, "\n";
-echo $uri->getHostType()->name, "\n";
-$builder = new Uri\Rfc3986\UriBuilder();
-echo $builder->setPath("/next")->build(new Uri\Rfc3986\Uri("https://example.com/base"))->toRawString(), "\n";
-
-$url = new Uri\WhatWg\UrlBuilder()
-    ->setScheme("https")
-    ->setUsername("user")
-    ->setPassword("pass")
-    ->setHost("example.com")
-    ->setPort(444)
-    ->setPath("/a/b")
-    ->setQuery("x=1")
-    ->setFragment("frag")
-    ->build();
-echo $url->toAsciiString(), "\n";
-echo $url->getHostType()->name, "\n";
-echo $url->isSpecialScheme() ? "special" : "opaque", "\n";
+$url = new Uri\WhatWg\Url("file:////x");
+echo $url->withScheme("file")->toAsciiString(), "|", $url->getPath(), "\n";
+echo $url->withHost("")->toAsciiString(), "|", $url->getPath(), "\n";
+$hosted = $url->withHost("example.com");
+echo $hosted->toAsciiString(), "|", $hosted->getPath(), "\n";
+echo $hosted->withScheme("https")->toAsciiString(), "|", $hosted->getPath(), "\n";
+echo $url->withPath("/y")->toAsciiString(), "|", $url->withPath("/y")->getPath(), "\n";
 "#,
-        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(
         out,
-        "https://user:pass@example.com:443/a/b?x=1#frag\n\
-Uri\n\
-RegisteredName\n\
-https://example.com/next\n\
-https://user:pass@example.com:444/a/b?x=1#frag\n\
-Domain\n\
-special\n"
+        concat!(
+            "file:////x|//x\n",
+            "file:////x|//x\n",
+            "file://example.com//x|//x\n",
+            "https://example.com//x|//x\n",
+            "file:///y|/y\n",
+        )
     );
 }
 
-/// Verifies PHP 8.6 resets `$softErrors` when the WHATWG constructor throws.
+/// Verifies a long single path segment is charged by its retained byte length, so the
+/// native path cannot hide behind the per-segment node estimate.
 #[test]
-fn test_uri_whatwg_soft_errors_reset_php86() {
-    let source = r#"<?php
-$soft = ["kept"];
+fn test_uri_bridge_charges_path_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+$before = memory_get_usage();
+$rfc = new Uri\Rfc3986\Uri("https://example.com/" . str_repeat("a", 100000));
+$afterRfc = memory_get_usage();
+$whatwg = Uri\WhatWg\Url::parse("https://example.com/" . str_repeat("a", 100000));
+$afterWhatwg = memory_get_usage();
+echo ($afterRfc - $before) >= 100000 ? "rfc\n" : "rfc-missing\n";
+echo ($afterWhatwg - $afterRfc) >= 100000 ? "whatwg\n" : "whatwg-missing\n";
+"#,
+    );
+    assert_eq!(out, "rfc\nwhatwg\n");
+}
+
+/// Verifies a dynamic/null-safe `ReflectionClass::newInstanceWithoutConstructor()` still
+/// refuses the internal-final URI classes with php-src's exact `ReflectionException`.
+#[test]
+fn test_uri_reflection_constructorless_refusal_survives_dynamic_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+$reflection = new ReflectionClass(Uri\Rfc3986\Uri::class);
 try {
-    new Uri\WhatWg\Url("http://exa mple.com", null, $soft);
-    echo "parsed";
-} catch (Uri\WhatWg\InvalidUrlException $e) {
-    echo "threw:", count($e->errors), "|";
+    $reflection?->newInstanceWithoutConstructor();
+    echo "created\n";
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
 }
-echo json_encode($soft);
-"#;
-    assert_eq!(
-        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php86),
-        "threw:1|[]",
-        "PHP 8.6 resets the caller's softErrors"
+"#,
     );
     assert_eq!(
-        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
-        "threw:1|[\"kept\"]",
-        "PHP 8.5 preserves the caller's softErrors"
+        out,
+        "Class Uri\\Rfc3986\\Uri is an internal class marked as final that cannot be instantiated without invoking its constructor\n"
+    );
+}
+
+/// Verifies a direct `__clone()` call cannot replace and leak the original native handle,
+/// while the `clone` operator still produces an independent native value.
+#[test]
+fn test_uri_direct_clone_call_does_not_leak_the_native_handle() {
+    let out = compile_and_run(
+        r#"<?php
+$rfc = new Uri\Rfc3986\Uri("https://example.com/a");
+try {
+    $rfc->__clone();
+    echo "bad\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$rfcCopy = clone $rfc;
+echo $rfc->toString(), "|", $rfcCopy->toString(), "\n";
+
+$url = new Uri\WhatWg\Url("https://example.com/a");
+try {
+    $url->__clone();
+    echo "bad\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$urlCopy = clone $url;
+echo $url->toAsciiString(), "|", $urlCopy->toAsciiString(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Call to undefined method Uri\\Rfc3986\\Uri::__clone()\n",
+            "https://example.com/a|https://example.com/a\n",
+            "Call to undefined method Uri\\WhatWg\\Url::__clone()\n",
+            "https://example.com/a|https://example.com/a\n",
+        )
+    );
+}
+
+/// Verifies resolving a relative reference still reports lexbor's component warnings, using
+/// the base scheme to distinguish path reverse solidi from query/fragment invalid units.
+#[test]
+fn test_uri_whatwg_relative_reference_warnings() {
+    let out = compile_and_run(
+        r##"<?php
+$base = new Uri\WhatWg\Url("https://example.com/base");
+foreach (["/a b", "/a%", "a b", "a%", "?a b", "#a%", "a\b"] as $reference) {
+    $errors = [];
+    $url = $base->resolve($reference, $errors);
+    echo "[", $reference, "] => ", $url->toAsciiString(), "\n";
+    foreach ($errors as $error) {
+        echo "  ", $error->type->name, " ", json_encode($error->context), "\n";
+    }
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[/a b] => https://example.com/a%20b\n",
+            "  InvalidUrlUnit \" b\"\n",
+            "[/a%] => https://example.com/a%\n",
+            "  InvalidUrlUnit \"%\"\n",
+            "[a b] => https://example.com/a%20b\n",
+            "  InvalidUrlUnit \" b\"\n",
+            "[a%] => https://example.com/a%\n",
+            "  InvalidUrlUnit \"%\"\n",
+            "[?a b] => https://example.com/base?a%20b\n",
+            "  InvalidUrlUnit \" b\"\n",
+            "[#a%] => https://example.com/base#a%\n",
+            "  InvalidUrlUnit \"%\"\n",
+            "[a\\b] => https://example.com/a/b\n",
+            "  InvalidReverseSoldius \"\\\\b\"\n",
+        )
+    );
+}
+
+/// Verifies `--with-uri` is rejected on a PHP 8.4 profile instead of exposing a misleading
+/// `extension_loaded('uri')` while every URI class stays undeclared.
+#[test]
+fn test_uri_with_flag_rejects_php_84_profile() {
+    let stderr = compile_cli_file_with_flags_expect_failure(
+        "<?php echo 1;",
+        &["--php-version", "8.4", "--with-uri"],
+    );
+    assert!(
+        stderr.contains("--with-uri requires --php-version 8.5 or later"),
+        "unexpected diagnostic: {stderr}"
+    );
+}
+
+/// Verifies a hostile WHATWG input with thousands of forbidden units parses without
+/// materializing a quadratic soft-error list when the caller passes no by-reference slot.
+#[test]
+fn test_uri_whatwg_hostile_input_stays_linear_without_soft_errors() {
+    let out = compile_and_run(
+        r#"<?php
+$url = new Uri\WhatWg\Url("http://h/" . str_repeat("%zz", 8192));
+echo $url->getAsciiHost(), ":", strlen($url->getPath()), "\n";
+"#,
+    );
+    assert_eq!(out, "h:24577\n");
+}
+
+/// Verifies IDNA recovery rejects hosts containing forbidden domain code points (`%`, DEL)
+/// instead of encoding them into an `xn--` label.
+#[test]
+fn test_uri_whatwg_idna_rejects_forbidden_domain_code_points() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["http://é%40x.com/", "http://é%2f.com/", "http://é\x7f.com/"] as $case) {
+    $url = Uri\WhatWg\Url::parse($case);
+    echo $url === null ? "null" : $url->toAsciiString(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "null\nnull\nnull\n");
+}
+
+/// Verifies RFC 3986 `resolve()` removes dot segments from an absolute reference's own path,
+/// matching RFC 3986 5.2.2 rather than only for relative references.
+#[test]
+fn test_uri_rfc3986_resolve_removes_dot_segments_from_absolute_references() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\Rfc3986\Uri("http://example.com/base");
+foreach (["x:a/../b", "x:/a/../b", "x:a/./b", "x:a/../../b"] as $reference) {
+    echo $reference, " => ", $base->resolve($reference)->toString(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "x:a/../b => x:b\nx:/a/../b => x:/b\nx:a/./b => x:a/b\nx:a/../../b => x:b\n"
+    );
+}
+
+/// Verifies WHATWG mutators and base resolution match lexbor: an opaque path ignores
+/// `withPath`, `withHost` truncates at a URL delimiter, extra leading slashes form a
+/// network-path reference, and IPv4-mapped IPv6 uses the normalized spelling.
+#[test]
+fn test_uri_whatwg_mutators_and_resolution_values() {
+    let out = compile_and_run(
+        r#"<?php
+$opaque = new Uri\WhatWg\Url("mailto:a@b");
+foreach (["x y", "/x", ""] as $path) {
+    echo json_encode($path), " => ", $opaque->withPath($path)->toAsciiString(), "\n";
+}
+$host = new Uri\WhatWg\Url("https://example.com/a");
+foreach (["h/x", "h\\x", "h?x", "h#x", "h/x?y#z"] as $value) {
+    echo json_encode($value), " => ", $host->withHost($value)->toAsciiString(), "\n";
+}
+$base = new Uri\WhatWg\Url("http://example.com/base");
+foreach (["////x", "/////x", "\\\\x"] as $reference) {
+    echo json_encode($reference), " => ", (new Uri\WhatWg\Url($reference, $base))->toAsciiString(), "\n";
+}
+foreach (["http://[::ffff:1.2.3.4]/", "http://[::1.2.3.4]/"] as $spelling) {
+    $url = new Uri\WhatWg\Url($spelling);
+    echo $url->getUnicodeHost(), "|", $url->toUnicodeString(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "\"x y\" => mailto:a@b\n",
+            "\"\\/x\" => mailto:a@b\n",
+            "\"\" => mailto:a@b\n",
+            "\"h\\/x\" => https://h/a\n",
+            "\"h\\\\x\" => https://h/a\n",
+            "\"h?x\" => https://h/a\n",
+            "\"h#x\" => https://h/a\n",
+            "\"h\\/x?y#z\" => https://h/a\n",
+            "\"\\/\\/\\/\\/x\" => http://x/\n",
+            "\"\\/\\/\\/\\/\\/x\" => http://x/\n",
+            "\"\\\\\\\\x\" => http://x/\n",
+            "[::ffff:102:304]|http://[::ffff:102:304]/\n",
+            "[::102:304]|http://[::102:304]/\n",
+        )
+    );
+}
+
+/// Verifies a colon inside a relative path or authority is not mistaken for a scheme
+/// separator, so the reference inherits the base scheme's warnings (`InvalidReverseSoldius`
+/// for a backslash path, `InvalidCredentials` for userinfo).
+#[test]
+fn test_uri_whatwg_relative_reference_colons_are_not_schemes() {
+    let out = compile_and_run(
+        r#"<?php
+$errors = [];
+$url = Uri\WhatWg\Url::parse("/x:y\\z", new Uri\WhatWg\Url("https://example.com/"), $errors);
+echo $url->toAsciiString(), "|", count($errors), "|", $errors[0]->type->name, "\n";
+$errors = [];
+$url = Uri\WhatWg\Url::parse("//user@example.com:443/", new Uri\WhatWg\Url("https://base/"), $errors);
+echo $url->toAsciiString(), "|", count($errors), "|", $errors[0]->type->name, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com/x:y/z|1|InvalidReverseSoldius\nhttps://user@example.com/|1|InvalidCredentials\n"
+    );
+}
+
+/// Verifies an IPvFuture address rejects percent escapes: RFC 3986 only allows unreserved,
+/// sub-delims and `:` in its tail, both from the constructor and from `withHost()`.
+#[test]
+fn test_uri_rfc3986_ipvfuture_rejects_percent_escapes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["https://[v1.%41]/", "https://[v1.]/"] as $spelling) {
+    try { new Uri\Rfc3986\Uri($spelling); echo "accepted|"; }
+    catch (Uri\InvalidUriException $error) { echo "malformed|"; }
+}
+echo new Uri\Rfc3986\Uri("https://[v1.abc]/")->toString(), "|";
+echo new Uri\Rfc3986\Uri("https://[vF.a:b]/")->toString(), "\n";
+$base = new Uri\Rfc3986\Uri("https://example.com/");
+try { $base->withHost("[v1.%41]"); echo "accepted\n"; }
+catch (Uri\InvalidUriException $error) { echo "malformed\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "malformed|malformed|https://[v1.abc]/|https://[vf.a:b]/\nmalformed\n"
+    );
+}
+
+/// Verifies reflection hides the prelude's native handle storage and compiler helpers, and
+/// reports the same method/property counts and membership tests as php-src's internal classes.
+#[test]
+fn test_uri_reflection_hides_internal_members() {
+    let out = compile_and_run(
+        r#"<?php
+$rfc = new ReflectionClass(Uri\Rfc3986\Uri::class);
+echo count($rfc->getMethods()), "|", count($rfc->getProperties()), "|",
+    (int) $rfc->hasMethod("__destruct"), "|", (int) $rfc->hasMethod("__clone"), "|",
+    (int) method_exists(Uri\Rfc3986\Uri::class, "__destruct"), "|",
+    (int) method_exists(Uri\Rfc3986\Uri::class, "__elephc_with"), "|",
+    (int) property_exists(Uri\Rfc3986\Uri::class, "__elephc_uri_handle"), "\n";
+$whatwg = new ReflectionClass(Uri\WhatWg\Url::class);
+echo count($whatwg->getMethods()), "|", count($whatwg->getProperties()), "|",
+    (int) $whatwg->hasMethod("__destruct"), "|", (int) $whatwg->hasMethod("__clone"), "|",
+    (int) method_exists(Uri\WhatWg\Url::class, "__destruct"), "|",
+    (int) method_exists(Uri\WhatWg\Url::class, "__elephc_with"), "|",
+    (int) property_exists(Uri\WhatWg\Url::class, "__elephc_uri_handle"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "33|0|0|0|0|0|0\n26|0|0|0|0|0|0\n"
+    );
+}
+
+/// Verifies a supplied by-reference soft-error variable receives the parse warnings even when
+/// it starts as null, while an omitted argument leaves no caller storage to update.
+#[test]
+fn test_uri_whatwg_supplied_null_soft_errors_receive_warnings() {
+    let out = compile_and_run(
+        r#"<?php
+$errors = null;
+new Uri\WhatWg\Url("https://example.com/a%", null, $errors);
+echo count($errors), "|", $errors[0]->type->name, "\n";
+$errors = null;
+Uri\WhatWg\Url::parse("https://example.com/a%", errors: $errors);
+echo count($errors), "|", $errors[0]->type->name, "\n";
+$errors = null;
+new Uri\WhatWg\Url("https://example.com/", null, $errors);
+var_dump($errors);
+"#,
+    );
+    assert_eq!(
+        out,
+        "1|InvalidUrlUnit\n1|InvalidUrlUnit\narray(0) {\n}\n"
+    );
+}
+
+/// Verifies extra leading separators keep their PATH meaning for `file:` and non-special
+/// bases, while a special non-file base still collapses them into an authority.
+#[test]
+fn test_uri_whatwg_extra_solidus_keeps_file_and_non_special_paths() {
+    let out = compile_and_run(
+        r#"<?php
+$file = new Uri\WhatWg\Url("file:///base/");
+foreach (["///tmp/x", "////x", "/////x"] as $reference) {
+    echo json_encode($reference), " => ", (new Uri\WhatWg\Url($reference, $file))->toAsciiString(), "\n";
+}
+$other = new Uri\WhatWg\Url("foo://h/base");
+foreach (["//x", "///x", "////x"] as $reference) {
+    echo "foo ", json_encode($reference), " => ", (new Uri\WhatWg\Url($reference, $other))->toAsciiString(), "\n";
+}
+$https = new Uri\WhatWg\Url("https://example.com/base");
+echo (new Uri\WhatWg\Url("///tmp/x", $https))->toAsciiString(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "\"\\/\\/\\/tmp\\/x\" => file:///tmp/x\n",
+            "\"\\/\\/\\/\\/x\" => file:////x\n",
+            "\"\\/\\/\\/\\/\\/x\" => file://///x\n",
+            "foo \"\\/\\/x\" => foo://x\n",
+            "foo \"\\/\\/\\/x\" => foo:///x\n",
+            "foo \"\\/\\/\\/\\/x\" => foo:////x\n",
+            "https://tmp/x\n",
+        )
+    );
+}
+
+/// Verifies a backslash in a reference against a non-special base stays a literal path byte
+/// instead of becoming an authority separator.
+#[test]
+fn test_uri_whatwg_non_special_backslashes_stay_path_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/base");
+foreach (["\\x", "\\\\x", "/__ELEPHC_BACKSLASH_ESC__/a\\b"] as $reference) {
+    echo json_encode($reference), " => ", (new Uri\WhatWg\Url($reference, $base))->toAsciiString(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "\"\\\\x\" => foo://h/\\x\n\"\\\\\\\\x\" => foo://h/\\\\x\n\"\\/__ELEPHC_BACKSLASH_ESC__\\/a\\\\b\" => foo://h/__ELEPHC_BACKSLASH_ESC__/a\\b\n"
+    );
+}
+
+/// Verifies the internal-class reflection filter matches only the two URI classes, so a user
+/// class in the `Uri\` namespace keeps its destructor, clone handler, and compiler-prefixed
+/// methods visible.
+#[test]
+fn test_uri_user_namespace_members_stay_visible() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Uri;
+class Custom {
+    public function __destruct() { echo "d|"; }
+    public function __clone() { echo "c|"; }
+    public function __elephc_helper() { echo "h|"; }
+}
+$object = new Custom;
+$object->__destruct();
+$object->__clone();
+$object->__elephc_helper();
+$reflection = new \ReflectionClass(Custom::class);
+echo count($reflection->getMethods()), "|",
+    (int) method_exists(Custom::class, "__destruct"), "|",
+    (int) method_exists(Custom::class, "__elephc_helper"), "\n";
+"#,
+    );
+    assert_eq!(out, "d|c|h|3|1|1\nd|");
+}
+
+/// Verifies the extra forbidden-domain-code-point repair only applies to special schemes:
+/// a non-special host keeps its `%XX` and UTF-8 spellings, while a literal space stays invalid.
+#[test]
+fn test_uri_whatwg_opaque_hosts_keep_percent_and_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["foo://exa%20mple.org/", "foo://éxample.org/"] as $spelling) {
+    $url = new Uri\WhatWg\Url($spelling);
+    echo $url->toAsciiString(), "|", json_encode($url->getAsciiHost()), "\n";
+}
+try { new Uri\WhatWg\Url("foo://exa mple.org/"); echo "accepted\n"; }
+catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo://exa%20mple.org/|\"exa%20mple.org\"\nfoo://%C3%A9xample.org/|\"%C3%A9xample.org\"\nrejected\n"
+    );
+}
+
+/// Verifies overlong and malformed UTF-8 in a percent-encoded host is rejected rather than
+/// IDNA-mapped to a different ASCII host.
+#[test]
+fn test_uri_whatwg_rejects_overlong_host_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+// Overlong encodings of "evil.com" and "127.0.0.1", plus an invalid continuation byte.
+foreach ([
+    "http://%C1%A5%C1%B6%C1%A9%C1%AC.com/",
+    "http://%C0%B1%C0%B2%C0%B7%C0%AE%C0%B0%C0%AE%C0%B0%C0%AE%C0%B1/",
+    "http://%C0%65%C0%76%C0%69%C0%6C.com/",
+] as $input) {
+    echo Uri\WhatWg\Url::parse($input) === null ? "null|" : "accepted|";
+    try { new Uri\WhatWg\Url($input); echo "constructed\n"; }
+    catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "null|rejected\nnull|rejected\nnull|rejected\n");
+}
+
+/// Verifies `withHost()` keeps percent escapes on a non-special host while still rejecting a
+/// literal forbidden byte, and still rejects a decoded slash on a special host.
+#[test]
+fn test_uri_whatwg_with_host_keeps_non_special_escapes() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/");
+echo $base->withHost("exa%2Fmple.org")->toAsciiString(), "|",
+    $base->withHost("exa%40mple.org")->toAsciiString(), "\n";
+try { $base->withHost("exa@mple.org"); echo "accepted\n"; }
+catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+$special = new Uri\WhatWg\Url("https://h/");
+try { $special->withHost("exa%2Fmple.org"); echo "accepted\n"; }
+catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo://exa%2Fmple.org/|foo://exa%40mple.org/\nrejected\nrejected\n"
+    );
+}
+
+/// Verifies an absolute reference keeps its own scheme's separator rules when resolved against
+/// a non-special base: a special-scheme backslash becomes the path separator, not a marker
+/// that corrupts the host.
+#[test]
+fn test_uri_whatwg_absolute_reference_keeps_its_host() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/base");
+$url = new Uri\WhatWg\Url("https://example.com\\foo", $base);
+echo $url->toAsciiString(), "|", $url->getAsciiHost(), "\n";
+try { new Uri\WhatWg\Url("foo://exa\\mple.org/x", $base); echo "accepted\n"; }
+catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+"#,
+    );
+    assert_eq!(out, "https://example.com/foo|example.com\nrejected\n");
+}
+
+/// Verifies the reversible backslash encoding leaves path escapes inherited from the base
+/// untouched, while still preserving a literal backslash in the relative reference.
+#[test]
+fn test_uri_whatwg_backslash_resolution_preserves_base_escapes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    ["foo://h/dir%25name/base", "child\\name"],
+    ["foo://h/dir%5Cname/base", "child\\name"],
+    ["foo://h/dir%25name/base", "/a%5Cb"],
+] as [$base, $reference]) {
+    $url = new Uri\WhatWg\Url($reference, new Uri\WhatWg\Url($base));
+    echo $url->toAsciiString(), "|", json_encode($url->getPath()), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "foo://h/dir%25name/child\\name|\"\\/dir%25name\\/child\\\\name\"\n",
+            "foo://h/dir%5Cname/child\\name|\"\\/dir%5Cname\\/child\\\\name\"\n",
+            "foo://h/a%5Cb|\"\\/a%5Cb\"\n",
+        )
+    );
+}
+
+/// Verifies a network-path reference's authority is not re-encoded by the non-special
+/// backslash path rewrite when the backslash appears in its query or path.
+#[test]
+fn test_uri_whatwg_network_path_keeps_its_escaped_host() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/base");
+$url = new Uri\WhatWg\Url("//exa%20mple.org/a\\b?q\\z#f\\g", $base);
+echo $url->toAsciiString(), "|", json_encode($url->getAsciiHost()), "|",
+    json_encode($url->getPath()), "|", json_encode($url->getQuery()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo://exa%20mple.org/a\\b?q\\z#f\\g|\"exa%20mple.org\"|\"\\/a\\\\b\"|\"q\\\\z\"\n"
+    );
+}
+
+/// Verifies the non-special backslash path never rewrites percent escapes, so an encoded dot
+/// segment still participates in dot-segment removal (`%2e` + `..` removes its parent).
+#[test]
+fn test_uri_whatwg_backslash_path_preserves_encoded_dot_segments() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/base");
+$url = new Uri\WhatWg\Url("/a/%2e/../b?q\\z", $base);
+echo $url->toAsciiString(), "|", json_encode($url->getPath()), "|", json_encode($url->getQuery()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo://h/b?q\\z|\"\\/b\"|\"q\\\\z\"\n"
+    );
+}
+
+/// Verifies absolute special URLs classify backslashes by component: the path reports
+/// `InvalidReverseSoldius`, while query/fragment bytes report `InvalidUrlUnit`.
+#[test]
+fn test_uri_whatwg_absolute_warning_components() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["https://h/p?q\\z#f\\g", "https://h/p\\x?q"] as $spelling) {
+    $errors = [];
+    new Uri\WhatWg\Url($spelling, null, $errors);
+    echo json_encode($spelling), " => ";
+    foreach ($errors as $error) {
+        echo $error->type->name, "(", json_encode($error->context), ") ";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "\"https:\\/\\/h\\/p?q\\\\z#f\\\\g\" => InvalidUrlUnit(\"\\\\g\") InvalidUrlUnit(\"\\\\z#f\\\\g\") \n",
+            "\"https:\\/\\/h\\/p\\\\x?q\" => InvalidReverseSoldius(\"\\\\x?q\") \n",
+        )
+    );
+}
+
+/// Verifies a forward-slash network reference reports each path backslash once: the
+/// authority scan owns path bytes, and query/fragment bytes stay `InvalidUrlUnit`.
+#[test]
+fn test_uri_whatwg_network_relative_warnings_are_not_duplicated() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("https://base/");
+foreach (["//h/p\\x", "//h/p\\x?q\\z#f\\g"] as $reference) {
+    $errors = [];
+    $url = new Uri\WhatWg\Url($reference, $base, $errors);
+    echo json_encode($reference), " => ", $url->toAsciiString(), " errors=";
+    foreach ($errors as $error) {
+        echo $error->type->name, ",", json_encode($error->context), " ";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "\"\\/\\/h\\/p\\\\x\" => https://h/p/x errors=InvalidReverseSoldius,\"\\\\x\" \n",
+            "\"\\/\\/h\\/p\\\\x?q\\\\z#f\\\\g\" => https://h/p/x?q\\z#f\\g errors=",
+            "InvalidUrlUnit,\"\\\\g\" InvalidUrlUnit,\"\\\\z#f\\\\g\" ",
+            "InvalidReverseSoldius,\"\\\\x?q\\\\z#f\\\\g\" \n",
+        )
+    );
+}
+
+/// Verifies a network-relative reference locates its authority for failure details even though
+/// it has no written scheme: port, domain, IPv6, IPv4, and missing-host errors use the same
+/// context and failure kinds php-src reports.
+#[test]
+fn test_uri_whatwg_network_relative_failures_use_the_reference_authority() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("https://base/");
+$cases = ["//example.com:99999/path", "//user@example.com:99999/p?q", "//exa mple.com/p", "//[bad/p", "//1.2.3.999/p", "//:80/p"];
+foreach ($cases as $reference) {
+    echo json_encode($reference), " => ";
+    try {
+        new Uri\WhatWg\Url($reference, $base);
+        echo "OK\n";
+    } catch (Uri\WhatWg\InvalidUrlException $error) {
+        echo $error->getMessage(), " [";
+        foreach ($error->errors as $entry) {
+            echo $entry->type->name, ",", json_encode($entry->context), " ";
+        }
+        echo "]\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""\/\/example.com:99999\/path" => The specified URI is malformed (PortOutOfRange) [PortOutOfRange,"\/path" ]
+"\/\/user@example.com:99999\/p?q" => The specified URI is malformed (PortOutOfRange) [PortOutOfRange,"\/p?q" InvalidCredentials,"@example.com:99999\/p?q" ]
+"\/\/exa mple.com\/p" => The specified URI is malformed (DomainInvalidCodePoint) [DomainInvalidCodePoint," mple.com" ]
+"\/\/[bad\/p" => The specified URI is malformed (Ipv6Unclosed) [Ipv6Unclosed,"d\/p" ]
+"\/\/1.2.3.999\/p" => The specified URI is malformed (Ipv4OutOfRangePart) [Ipv4OutOfRangePart,"999" ]
+"\/\/:80\/p" => The specified URI is malformed (HostMissing) [HostMissing,":80\/p" ]
+"#
+    );
+}
+
+/// Verifies a special-scheme authority ends at a backslash, so path text containing `@` is
+/// not reported as userinfo. A non-special scheme keeps the backslash inside its host and
+/// still reports the real credentials warning.
+#[test]
+fn test_uri_whatwg_special_backslash_does_not_create_credentials() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["https://h\\user@example.com/", "https://h\\user@example.com:80/p", "foo://h\\user@example.com/", "https://h\\\\user@example.com/", "file://h\\user@example.com/"] as $reference) {
+    $errors = [];
+    $url = new Uri\WhatWg\Url($reference, null, $errors);
+    $parts = [];
+    foreach ($errors as $error) {
+        $parts[] = $error->type->name . "," . json_encode($error->context);
+    }
+    echo json_encode($reference), " => ", $url->toAsciiString(), " host=", json_encode($url->getAsciiHost()), " path=", json_encode($url->getPath()), " errors=", implode(" ", $parts), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""https:\/\/h\\user@example.com\/" => https://h/user@example.com/ host="h" path="\/user@example.com\/" errors=InvalidReverseSoldius,"\\user@example.com\/"
+"https:\/\/h\\user@example.com:80\/p" => https://h/user@example.com:80/p host="h" path="\/user@example.com:80\/p" errors=InvalidReverseSoldius,"\\user@example.com:80\/p"
+"foo:\/\/h\\user@example.com\/" => foo://h%5Cuser@example.com/ host="example.com" path="\/" errors=InvalidCredentials,"@example.com\/"
+"https:\/\/h\\\\user@example.com\/" => https://h//user@example.com/ host="h" path="\/\/user@example.com\/" errors=InvalidReverseSoldius,"\\user@example.com\/" InvalidReverseSoldius,"\\\\user@example.com\/"
+"file:\/\/h\\user@example.com\/" => file://h/user@example.com/ host="h" path="\/user@example.com\/" errors=InvalidReverseSoldius,"\\user@example.com\/"
+"#
+    );
+}
+
+/// Verifies a special-scheme backslash path still reaches the component scanner, so invalid
+/// or truncated percent escapes after it report `InvalidUrlUnit` in addition to the path's
+/// `InvalidReverseSoldius`.
+#[test]
+fn test_uri_whatwg_special_backslash_path_reports_percent_escapes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["https://h\\a%", "https://h\\a%zz", "https://h\\a%20b", "https://h\\a%?q%#f%"] as $reference) {
+    $errors = [];
+    $url = new Uri\WhatWg\Url($reference, null, $errors);
+    $parts = [];
+    foreach ($errors as $error) {
+        $parts[] = $error->type->name . "," . json_encode($error->context);
+    }
+    echo json_encode($reference), " => ", $url->toAsciiString(), " errors=", implode(" ", $parts), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""https:\/\/h\\a%" => https://h/a% errors=InvalidUrlUnit,"%" InvalidReverseSoldius,"\\a%"
+"https:\/\/h\\a%zz" => https://h/a%zz errors=InvalidUrlUnit,"%zz" InvalidReverseSoldius,"\\a%zz"
+"https:\/\/h\\a%20b" => https://h/a%20b errors=InvalidReverseSoldius,"\\a%20b"
+"https:\/\/h\\a%?q%#f%" => https://h/a%?q%#f% errors=InvalidUrlUnit,"%" InvalidUrlUnit,"%#f%" InvalidUrlUnit,"%?q%#f%" InvalidReverseSoldius,"\\a%?q%#f%"
+"#
+    );
+}
+
+/// Verifies the absolute-file slash override requires a real scheme prefix: a colon inside a
+/// query, fragment, or relative path must not add leading separators to the resolved path.
+#[test]
+fn test_uri_whatwg_file_override_ignores_colons_outside_the_scheme() {
+    let out = compile_and_run(
+        r##"<?php
+$base = new Uri\WhatWg\Url("file:///base");
+foreach (["?q:////x", "#f:////x", "?q:////", "/x:////y", "file:////x"] as $reference) {
+    $url = new Uri\WhatWg\Url($reference, $base);
+    echo json_encode($reference), " => ", $url->toAsciiString(), " path=", json_encode($url->getPath()), "\n";
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        r##""?q:\/\/\/\/x" => file:///base?q:////x path="\/base"
+"#f:\/\/\/\/x" => file:///base#f:////x path="\/base"
+"?q:\/\/\/\/" => file:///base?q://// path="\/base"
+"\/x:\/\/\/\/y" => file:///x:////y path="\/x:\/\/\/\/y"
+"file:\/\/\/\/x" => file:////x path="\/\/x"
+"##
+    );
+}
+
+/// Verifies extra special-scheme separators still locate the authority for port, credential,
+/// and missing-solidus diagnostics, and that failure paths keep the separator warnings.
+#[test]
+fn test_uri_whatwg_extra_solidus_authority_diagnostics() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "https:///example.com:99999/path",
+    "https:///user@example.com/",
+    "https:////user@example.com/",
+    "https://\\user@example.com/",
+    "file:////x",
+];
+foreach ($cases as $reference) {
+    echo json_encode($reference), " => ";
+    try {
+        $url = new Uri\WhatWg\Url($reference, null, $errors);
+        echo "OK ", $url->toAsciiString(), " host=", json_encode($url->getAsciiHost()), " path=", json_encode($url->getPath());
+    } catch (Uri\WhatWg\InvalidUrlException $error) {
+        echo $error->getMessage();
+        $errors = $error->errors;
+    }
+    $parts = [];
+    foreach ($errors as $entry) {
+        $parts[] = $entry->type->name . "," . json_encode($entry->context);
+    }
+    echo " errors=", implode(" ", $parts), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""https:\/\/\/example.com:99999\/path" => The specified URI is malformed (PortOutOfRange) errors=PortOutOfRange,"\/path" SpecialSchemeMissingFollowingSolidus,"\/example.com:99999\/path"
+"https:\/\/\/user@example.com\/" => OK https://user@example.com/ host="example.com" path="\/" errors=InvalidCredentials,"@example.com\/" SpecialSchemeMissingFollowingSolidus,"\/user@example.com\/"
+"https:\/\/\/\/user@example.com\/" => OK https://user@example.com/ host="example.com" path="\/" errors=InvalidCredentials,"@example.com\/" SpecialSchemeMissingFollowingSolidus,"\/user@example.com\/" SpecialSchemeMissingFollowingSolidus,"\/\/user@example.com\/"
+"https:\/\/\\user@example.com\/" => OK https://user@example.com/ host="example.com" path="\/" errors=InvalidCredentials,"@example.com\/" SpecialSchemeMissingFollowingSolidus,"\\user@example.com\/"
+"file:\/\/\/\/x" => OK file:////x host="" path="\/\/x" errors=
+"#
+    );
+}
+
+/// Verifies the trimmed reference, not the raw input, reaches `Url::join()`: a leading space
+/// must not hide the leading-backslash repair that keeps non-special path bytes literal.
+#[test]
+fn test_uri_whatwg_trimmed_reference_preserves_leading_backslash() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new Uri\WhatWg\Url("foo://h/base");
+foreach ([" \\x", "\\\\x", " \\\\x", " \\a/b", "  child\\name"] as $reference) {
+    $url = new Uri\WhatWg\Url($reference, $base);
+    echo json_encode($reference), " => ", $url->toAsciiString(), " path=", json_encode($url->getPath()), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"" \\x" => foo://h/\x path="\/\\x"
+"\\\\x" => foo://h/\\x path="\/\\\\x"
+" \\\\x" => foo://h/\\x path="\/\\\\x"
+" \\a\/b" => foo://h/\a/b path="\/\\a\/b"
+"  child\\name" => foo://h/child\name path="\/child\\name"
+"#
+    );
+}
+
+/// Verifies relaxed IDNA recovery percent-decodes the special-scheme host first. Escaped
+/// labels recover through parsing, resolution, and `withHost()`; an escape inside the `xn--`
+/// prefix keeps lexbor's ASCII spelling while the Unicode host still decodes.
+#[test]
+fn test_uri_whatwg_escaped_labels_recover_through_all_entry_points() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "https://xn--a-.c%6Fm/",
+    "https://%78n--a-.com/",
+    "https://x%6E--a-.com/",
+    "https://%78%6E--a-.com/",
+];
+foreach ($cases as $reference) {
+    $url = new Uri\WhatWg\Url($reference);
+    echo json_encode($reference), " => ", $url->toAsciiString(), " host=", json_encode($url->getAsciiHost()), " uni=", json_encode($url->getUnicodeHost()), "\n";
+}
+$base = new Uri\WhatWg\Url("https://base/");
+foreach (["//xn--a-.c%6Fm/p", "//%78n--a-.com/"] as $reference) {
+    $url = new Uri\WhatWg\Url($reference, $base);
+    echo "resolve ", json_encode($reference), " => ", $url->toAsciiString(), " host=", json_encode($url->getAsciiHost()), " uni=", json_encode($url->getUnicodeHost()), "\n";
+}
+$url = new Uri\WhatWg\Url("https://base/");
+foreach (["xn--a-.c%6Fm", "%78n--a-.com"] as $host) {
+    $written = $url->withHost($host);
+    echo "withHost ", json_encode($host), " => ", $written->toAsciiString(), " host=", json_encode($written->getAsciiHost()), " uni=", json_encode($written->getUnicodeHost()), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        r#""https:\/\/xn--a-.c%6Fm\/" => https://a.com/ host="a.com" uni="a.com"
+"https:\/\/%78n--a-.com\/" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
+"https:\/\/x%6E--a-.com\/" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
+"https:\/\/%78%6E--a-.com\/" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
+resolve "\/\/xn--a-.c%6Fm\/p" => https://a.com/p host="a.com" uni="a.com"
+resolve "\/\/%78n--a-.com\/" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
+withHost "xn--a-.c%6Fm" => https://a.com/ host="a.com" uni="a.com"
+withHost "%78n--a-.com" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
+"#
+    );
+}
+
+/// Verifies a `mixed` value reaches URI class parameters (positional and named) and a nullable
+/// URI class return through PHP's run-time class check, with PHP's `TypeError` for the wrong
+/// URI class, null, or a string.
+#[test]
+fn test_uri_classes_at_mixed_class_typed_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+use Uri\Rfc3986\Uri;
+use Uri\WhatWg\Url;
+function take(?Uri $u): string { return $u?->toString() ?? "null"; }
+function takeUrl(Url $u): string { return $u->toAsciiString(); }
+function pick(array $a, int $i): ?Uri { return $a[$i] ?? null; }
+function getMixed(mixed $v): mixed { return $v; }
+$vals = [new Uri("https://example.com/a"), Url::parse("https://example.com/"), null, "x"];
+foreach ([0, 1, 2, 3] as $i) {
+    try { echo take(getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { echo takeUrl(u: getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { $r = pick($vals, $i); echo $r?->toString() ?? "null", "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com/a\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, Uri\\Rfc3986\\Uri given\n\
+         https://example.com/a\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url given\n\
+         https://example.com/\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url returned\n\
+         null\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, null given\n\
+         null\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, string given\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, string given\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, string returned\n"
     );
 }

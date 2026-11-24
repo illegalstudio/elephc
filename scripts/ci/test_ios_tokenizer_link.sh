@@ -35,7 +35,7 @@ else
     (cd "$PROJECT_DIR" && cargo build --locked -p elephc-tokenizer --target "$RUST_TARGET")
 fi
 cp "$SCRIPT_DIR/fixtures/ios-tokenizer-link/main.php" "$SCRIPT_DIR/fixtures/ios-tokenizer-link/host.c" "$WORK_DIR/"
-"$PROJECT_DIR/target/debug/elephc" --with-tokenizer --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$PROJECT_DIR/target/debug/elephc" build --with-tokenizer --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 nm -u "$WORK_DIR/libmain.a" > "$WORK_DIR/undefined"
 grep -F elephc_tokenizer_scan "$WORK_DIR/undefined"
 grep -F elephc_tokenizer_name "$WORK_DIR/undefined"

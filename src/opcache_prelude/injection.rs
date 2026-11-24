@@ -6,9 +6,29 @@
 //!
 //! Key details:
 //! - Per-function pay-for-use and user-declaration precedence remain authoritative.
+//! - A name counts as referenced (or declared) when the entry program OR a file of the autoload
+//!   closure references (or declares) it: Composer class files are loaded after this decision,
+//!   so `crate::autoload::prelude_probe` scans them for `PROBED_FUNCTIONS` beforehand.
 
 #[allow(unused_imports)]
 use super::*;
+
+/// Every function this prelude injects per name, which `crate::autoload::prelude_probe` also
+/// looks for in the autoload closure: a Composer class that alone calls `ini_get()` is loaded
+/// only after [`inject_if_used`] has decided, from the entry program, that nobody does.
+pub(crate) const PROBED_FUNCTIONS: &[&str] = &[
+    "ini_get",
+    "ini_set",
+    "ini_get_all",
+    GET_CONFIGURATION_FN,
+    RESET_FN,
+    GET_STATUS_FN,
+    IS_SCRIPT_CACHED_FN,
+    INVALIDATE_FN,
+    COMPILE_FILE_FN,
+    IS_SCRIPT_CACHED_IN_FILE_CACHE_FN,
+    JIT_BLACKLIST_FN,
+];
 
 /// Prepends the OPcache prelude functions (`opcache_get_configuration`, `opcache_reset`,
 /// `opcache_get_status`) each when the program references it and does not declare its
@@ -48,6 +68,12 @@ use super::*;
 /// as reference PHP fatals at startup before running a line of the script, and independently of
 /// whether the program calls any OPcache function at all.
 ///
+/// `autoloaded` describes the autoload closure (`crate::autoload::prelude_probe`): a name one of
+/// its files references is injected exactly as if the entry program referenced it, a name one of
+/// its files declares is left to that declaration as one in the entry program is, and an
+/// interpreter-backed `eval` there counts like one in the entry program. Callers without an
+/// autoload closure pass `&AutoloadedFunctions::default()`.
+///
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
 /// budget.
@@ -60,6 +86,8 @@ pub fn inject_if_used(
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
     strict: bool,
+    force_ini_get: bool,
+    autoloaded: &AutoloadedFunctions,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> (Program, ManifestBakeSites) {
     crate::compiler_stack::with_compiler_stack(|| {
@@ -72,6 +100,8 @@ pub fn inject_if_used(
             overrides,
             preload,
             strict,
+            force_ini_get,
+            autoloaded,
             inventory,
         )
     })
@@ -98,6 +128,8 @@ fn inject_if_used_on_compiler_stack(
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
     strict: bool,
+    force_ini_get: bool,
+    autoloaded: &AutoloadedFunctions,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> (Program, ManifestBakeSites) {
     let mut sites = ManifestBakeSites {
@@ -124,6 +156,14 @@ fn inject_if_used_on_compiler_stack(
     let mut declarations = crate::synthetic_class::internal_declarations(|| {
         let mut declarations: Program = Vec::new();
 
+        // A reference, or a user declaration, in the entry program or in a file of the
+        // autoload closure.
+        let references = |name: &str| {
+            autoloaded.references(name) || detect::program_references(&program, name)
+        };
+        let declares =
+            |name: &str| autoloaded.declares(name) || detect::program_declares(&program, name);
+
         // Whether THIS binary gets an `ini_set()` that can install an override. The
         // configuration literal below consults the override store only then: without such a
         // wrapper no override can exist, and the store's helper is injected with the INI
@@ -134,18 +174,18 @@ fn inject_if_used_on_compiler_stack(
         // `prune_unreachable_prelude_functions`, not from a reference check), and its body
         // runs the same opcache arms — so the flag is simply true.
         let ini_set_injected = web
-            || (detect::program_references(&program, "ini_set")
-                && !detect::program_declares(&program, "ini_set"));
+            || (references("ini_set")
+                && !declares("ini_set"));
 
         // Interpreter-backed eval can select an OPcache callable at runtime, including
         // literal fragments with computed names. Supply declarations in configured binaries,
         // while native and scope-only literals keep their no-interpreter startup behavior.
         let eval_reads_opcache =
             !opcache_configuration_is_cli_default(web, overrides)
-                && detect::program_has_bridge_eval(&program);
+                && (autoloaded.has_bridge_eval() || detect::program_has_bridge_eval(&program));
         let wanted = |name: &str| {
-            (detect::program_references(&program, name) || eval_reads_opcache)
-                && !detect::program_declares(&program, name)
+            (references(name) || eval_reads_opcache)
+                && !declares(name)
         };
 
         if wanted(GET_CONFIGURATION_FN) {
@@ -254,15 +294,21 @@ fn inject_if_used_on_compiler_stack(
         // is pay-for-use with its own redeclaration guard; the shared helpers are injected once
         // whenever any of the three is.
         if !web {
-            let ini_get_used = detect::program_references(&program, "ini_get")
-                && !detect::program_declares(&program, "ini_get");
+            // `force_ini_get` covers the tokenizer memory guard when `--ini memory_limit=...`
+            // configured a limit but the user program never mentions `ini_get`: the guard has to
+            // read the active Core INI value instead of falling back to the compiled heap size.
+            let ini_get_used = (force_ini_get || references("ini_get"))
+                && !declares("ini_get");
             // Inside `if !web`, so the flag reduces to the CLI reference check.
             let ini_set_used = ini_set_injected;
-            let ini_get_all_used = detect::program_references(&program, "ini_get_all")
-                && !detect::program_declares(&program, "ini_get_all");
+            let ini_get_all_used = references("ini_get_all")
+                && !declares("ini_get_all");
             if ini_get_used || ini_set_used || ini_get_all_used {
                 needs_env_helpers = true;
                 declarations.extend(ini_helper_declarations(php_version, overrides));
+                declarations.extend(crate::shared_ini_prelude::memory_limit_state_decls(
+                    &crate::shared_ini_prelude::memory_limit_initial(overrides),
+                ));
                 if ini_get_used {
                     declarations.push(build::cli_ini_get_decl());
                 }

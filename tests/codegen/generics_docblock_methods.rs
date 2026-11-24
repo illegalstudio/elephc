@@ -3,7 +3,7 @@
 //! Covers scalar and container storage, class scope, traits, bounds and call argument forms.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests generics_docblock_methods`.
+//! - `cargo test --test codegen_tests_oop generics_docblock_methods`.
 //!
 //! Key details:
 //! - The CLI regression checks that PHPDoc stays active with and without strict PHP.

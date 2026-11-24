@@ -114,15 +114,15 @@ jobs:
 
       - name: Check existing library outputs
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_cdylib_builds_and_host_calls_exports)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary_id(elephc::integration) and test(/^cdylib_tests::/) and test(test_cdylib_builds_and_host_calls_exports)'
 
       - name: Check static archive output
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_staticlib_links_directly_into_a_host_binary)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary_id(elephc::integration) and test(/^cdylib_tests::/) and test(test_staticlib_links_directly_into_a_host_binary)'
 
       - name: Check iOS library emitter contracts
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_ios_aarch64_emit_asm_pins_string_return_out_parameters)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary_id(elephc::integration) and test(/^cdylib_tests::/) and test(test_ios_aarch64_emit_asm_pins_string_return_out_parameters)'
 
       - name: Cache real PHP debug embed SDK
         if: runner.os == 'macOS'
@@ -173,21 +173,21 @@ jobs:
 
       - name: Check standalone null declaration parsing
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=parser_tests) and test(standalone_null)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary_id(elephc::integration) and test(/^parser_tests::/) and test(standalone_null)'
 
       - name: Check standalone warning cleanup and default output
         shell: elephc-ci-shell {0}
         run: |
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_core_error_regression_ordinary_warning_unwind)'
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_core_warning_fragments_newline_key_default_output)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(/^codegen_tests_/) and test(test_core_error_regression_ordinary_warning_unwind)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(/^codegen_tests_/) and test(test_core_warning_fragments_newline_key_default_output)'
 
       - name: Check standalone null declarations in executable output
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_standalone_null_parameters_and_returns)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(/^codegen_tests_/) and test(test_standalone_null_parameters_and_returns)'
 
       - name: Check standalone null and void diagnostics
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=error_tests) and test(test_standalone_null_return_requirements)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary_id(elephc::integration) and test(/^error_tests::/) and test(test_standalone_null_return_requirements)'
 
       - name: Audit consumer compilation
         if: always()

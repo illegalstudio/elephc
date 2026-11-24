@@ -25,7 +25,7 @@ echo $config["name"], "\n";
 ```
 
 ```bash
-elephc main.php && ./main
+elephc build main.php && ./main
 ```
 
 No PHP installation is involved, at build time or at run time: the binary is

@@ -21,7 +21,7 @@ When examples or internals docs use ARM64 snippets for readability, treat them a
 ```bash
 cargo build              # dev build
 cargo build --release    # optimized build
-cargo run -- file.php    # compile a PHP file
+cargo run -- build file.php    # compile a PHP file
 ```
 
 The compiler outputs a native binary next to the source file (e.g., `file.php` → `file`).
@@ -36,7 +36,7 @@ Local agent runs should stay focused. By default, run only the build checks and 
 
 ```bash
 cargo test test_fizzbuzz                     # run a focused test by name
-cargo test --test codegen_tests test_name    # run a focused end-to-end codegen test
+cargo test --test codegen_tests_core test_name  # run a focused end-to-end codegen test (pick the codegen_tests_<domain> binary)
 cargo nextest run --profile ci test_name     # run a focused nextest test with per-test timeout
 cargo test                                  # full local suite; only when explicitly requested/necessary
 cargo test -- --include-ignored             # ignored tests; only when relevant or requested
@@ -63,7 +63,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
-2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
+2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests_<domain> <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all eight test binaries (plus the library's unit-test harness) every cycle; `--test <binary>` builds only the one you need. Codegen tests live in six `codegen_tests_*` binaries by domain (`core`, `data`, `oop`, `runtime`, `ext`, `eval`); the root file of each (`tests/codegen_tests_<domain>.rs`) lists the `tests/codegen/` modules it mounts.
 3. **For target-sensitive changes**: run the smallest relevant macOS/Linux focused tests locally when they materially reduce risk; otherwise let CI provide complete target coverage.
 4. **For broad infrastructure changes**: validate the edited workflow/config directly (YAML parse, `cargo metadata`, `nextest` config checks, etc.) instead of running unrelated Rust suites.
 5. **PHP cross-check**: opt in narrowly with `ELEPHC_PHP_CHECK=1 cargo test <filter>` when PHP equivalence is the question.
@@ -84,10 +84,13 @@ For docs-only, workflow-only, or configuration-only changes, replace Rust test r
 
 | File | What it tests | How |
 |---|---|---|
-| `tests/lexer_tests.rs` | Tokenization | Asserts token sequences from source strings |
-| `tests/parser_tests.rs` | AST construction | Asserts AST node structure and operator precedence |
-| `tests/codegen_tests.rs`, `tests/codegen/` | Full pipeline (end-to-end) | Compiles PHP → binary, runs it, asserts stdout |
-| `tests/error_tests.rs`, `tests/error_tests/` | Error reporting | Asserts that invalid programs produce the right error messages |
+| `tests/codegen_tests_*.rs`, `tests/codegen/` | Full pipeline (end-to-end), six binaries by domain | Compiles PHP → binary, runs it, asserts stdout |
+| `tests/lexer_tests.rs` (in `integration`) | Tokenization | Asserts token sequences from source strings |
+| `tests/parser_tests.rs` (in `integration`) | AST construction | Asserts AST node structure and operator precedence |
+| `tests/error_tests.rs`, `tests/error_tests/` (in `integration`) | Error reporting | Asserts that invalid programs produce the right error messages |
+| `tests/integration.rs` | Every other `tests/*.rs` suite, one module each | `cargo test --test integration <suite>::` runs one suite |
+
+`Cargo.toml` sets `autotests = false`, so a new `tests/*.rs` file must be registered: add a `#[path]` module to `tests/integration.rs` (the default), or a `[[test]]` target for a large suite that deserves its own binary. Each extra binary is rebuilt and relinked after every library edit. The `every_suite_file_is_registered` test in `tests/integration.rs` fails when a file is in neither place, or is mounted under a name other than its file stem (CI selects suites by that `<stem>::` prefix).
 
 ### Test coverage requirements
 
@@ -139,8 +142,8 @@ by EIR lowering and `src/codegen/`.
 | Module | Entry point | Responsibility |
 |---|---|---|
 | `src/pipeline.rs` | `compile()` | Orchestrates frontend passes, type checking, optimization, runtime cache, codegen, and linking |
-| `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
-| `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
+| `crates/elephc-chopper/src/syntax/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
+| `crates/elephc-chopper/src/syntax/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
 | `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
 | `src/goto_lowering.rs`, `src/goto_lowering/` | `lower_program()` | Validates each file's `goto` jumps and rewrites them into dispatch loops (`while` + `continue N`) before any pass that reads control flow; no `StmtKind::Goto` survives it |
@@ -157,7 +160,7 @@ by EIR lowering and `src/codegen/`.
 | `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission |
 | `src/runtime_cache.rs` | `prepare_runtime_object()` | Builds/reuses the target runtime object before final linking |
 | `src/errors/` | `report()` | Error formatting with line:col |
-| `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
+| `crates/elephc-chopper/src/syntax/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
 
 ### Bridge crates and `--with-<crate>` flags
 
@@ -188,11 +191,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `uri`, `pack`, `tidy`), force-injects
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `tidy`, `uri`), force-injects
 that prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
-`--with-tls`, `--with-crypto`, `--with-iconv`, `--with-pack`, `--with-uri`,
-`--with-phar`, `--with-tz`, `--with-image`, `--with-curl`, `--with-xml`, `--with-tidy`.
+`--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
+`--with-image`, `--with-curl`, `--with-xml`, `--with-tidy`, `--with-uri`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -251,7 +254,7 @@ those packages, so a new pairing needs no edit in `scripts/verify-release-artifa
 
 Key invariants:
 
-- A new operator touches the whole pipeline: token (`src/lexer/`), Pratt binding power (`infix_bp()` in `src/parser/expr/pratt.rs`), `BinOp` variant (`src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
+- A new operator touches the whole pipeline: token (`crates/elephc-chopper/src/syntax/lexer/`), Pratt binding power (`infix_bp()` in `crates/elephc-chopper/src/syntax/parser/expr/pratt.rs`), `BinOp` variant (`crates/elephc-chopper/src/syntax/parser/ast/`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
 - Precedence and associativity must match PHP; keep folds PHP-equivalent and cross-check edge cases with `php -r`.
 - Needs a Pratt binding-power test asserting precedence relative to adjacent operators, plus tests in all 4 test files (lexer, parser, codegen, error).
 
@@ -259,7 +262,7 @@ Key invariants:
 
 Key invariants:
 
-- A new statement touches parser (`StmtKind` in `src/parser/ast.rs` + `src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
+- A new statement touches parser (`StmtKind` in `crates/elephc-chopper/src/syntax/parser/ast/` + `crates/elephc-chopper/src/syntax/parser/stmt/mod.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
 - If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and frame-layout allocation before frame sizing.
 - Also audit every AST-walking pass (see "Adding or changing an AST node") — a missed pass usually causes silent miscompilation rather than a compile error.
 
@@ -269,7 +272,7 @@ When adding a new `ExprKind` or `StmtKind`, check every AST-walking pass. The co
 
 Common places to audit:
 
-- Parser construction and lowering in `src/parser/`
+- Parser construction and lowering in `crates/elephc-chopper/src/syntax/parser/`
 - Resolver/include discovery and function-variant handling in `src/resolver/`
 - Namespace/use/FQN rewriting in `src/name_resolver/`
 - Type checking, inference, return analysis, warnings, and type compatibility in `src/types/`
@@ -497,7 +500,7 @@ column 81, with `// -- description --` block comments before related groups.
 Each example lives in `examples/<name>/main.php` with its own `.gitignore`. To run:
 
 ```bash
-cargo run -- examples/fizzbuzz/main.php
+cargo run -- build examples/fizzbuzz/main.php
 ./examples/fizzbuzz/main
 ```
 
@@ -668,5 +671,5 @@ compiled programs. Standard build/test/run commands are documented above and in
   `scripts/test-linux-x86_64.sh` / `-arm64.sh` require Docker, which is not set
   up here. Rely on host `cargo test`/`cargo nextest` (this VM is `linux-x86_64`)
   and CI for the full target matrix.
-- **Quick end-to-end sanity check:** `cargo run -- examples/fizzbuzz/main.php`
+- **Quick end-to-end sanity check:** `cargo run -- build examples/fizzbuzz/main.php`
   then `./examples/fizzbuzz/main`.

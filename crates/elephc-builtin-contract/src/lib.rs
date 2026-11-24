@@ -69,7 +69,9 @@ pub use constant_deprecation::{
     ConstantDeprecation,
 };
 pub use id::BuiltinId;
-pub use internal_final::INTERNAL_FINAL_CLASSES;
+pub use internal_final::{
+    is_internal_readonly_class, INTERNAL_FINAL_CLASSES, INTERNAL_READONLY_CLASSES,
+};
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
 pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
@@ -84,6 +86,7 @@ pub use object_operators::{
 pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
+pub use catalog_constants_tokenizer::token_const_id;
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{

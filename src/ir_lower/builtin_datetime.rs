@@ -22,7 +22,7 @@
 use super::program::instruction_uses_eval;
 use std::collections::HashSet;
 
-use crate::ir::{Function, Immediate, Module, Op};
+use crate::ir::{Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::ir_lower::function;
 use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, PhpType};
@@ -117,6 +117,7 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     lower_eval_date_alias_methods_if_needed(module, check_result, constants, fiber_return_sigs);
+    lower_unserialize_date_methods_if_needed(module, check_result, constants, fiber_return_sigs);
     loop {
         let mut methods = referenced_builtin_datetime_methods(module);
         methods.sort();
@@ -171,6 +172,79 @@ fn lower_eval_date_alias_methods_if_needed(
             fiber_return_sigs,
         );
     }
+}
+
+/// Lowers the DateTime instance surface when `unserialize()` can hydrate one.
+///
+/// The receiver's runtime class is unknown at the call site, so mixed dispatch uses the
+/// native vtable. Emitting every concrete instance method gives those slots real bodies;
+/// without them the vtable stays empty and dynamic dispatch either crashes or reports a
+/// spurious undefined-method Error for valid calls such as `modify()` or `setDate()`.
+fn lower_unserialize_date_methods_if_needed(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+) {
+    if !module_uses_unserialize(module) {
+        return;
+    }
+    let mut methods = Vec::new();
+    for class_name in ["DateTime", "DateTimeImmutable"] {
+        push_constructor_and_interface_methods(&mut methods, module, class_name);
+        // Mixed dispatch can select any concrete instance method on the hydrated
+        // receiver, not only DateTimeInterface. Emit the whole surface so the guard
+        // never reports a defined method as undefined.
+        if let Some(class_info) = check_result.classes.get(class_name) {
+            for method in &class_info.method_decls {
+                if method.has_body && !method.is_static {
+                    methods.push((class_name.to_string(), php_method_key(&method.name)));
+                }
+            }
+        }
+        // The hydration hook is not part of DateTimeInterface, but the runtime
+        // _class_unserialize_ptrs table dispatches to its symbol.
+        methods.push((class_name.to_string(), php_method_key("__unserialize")));
+    }
+    methods.sort();
+    methods.dedup();
+    let before = module.class_methods.len();
+    for (class_name, method_key) in methods {
+        lower_builtin_datetime_method(
+            &class_name,
+            &method_key,
+            module,
+            check_result,
+            constants,
+            fiber_return_sigs,
+        );
+    }
+    for method in module.class_methods.iter_mut().skip(before) {
+        method.flags.is_synthetic = true;
+    }
+}
+
+/// Returns whether any lowered function calls the runtime unserializer.
+fn module_uses_unserialize(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::Unserialize
+                    )))
+                )
+            })
+        })
 }
 
 /// Returns the builtin DateTime-family methods reachable from eval alias dispatch.

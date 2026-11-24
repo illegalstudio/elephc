@@ -26,7 +26,7 @@ sidebar:
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
 | `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |
 | `php_sapi_name()` | `php_sapi_name(): string` | Get the SAPI name (`"cli"`, or `"cli-server"` under `--web`) |
-| `ini_restore()` | `ini_restore(string $option): void` | Restore a directive to its startup value — a no-op, see below |
+| `ini_restore()` | `ini_restore(string $option): void` | Restore a directive to its startup value — a no-op except for `memory_limit`, see below |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
@@ -289,11 +289,17 @@ margin, answers correctly either way.
 
 ### `ini_restore()`
 
-`ini_restore()` is a no-op returning `void` (reference PHP returns `void` too).
-Every INI value in elephc is baked into the binary at compile time and nothing
-can change it at runtime — `ini_set()` already reports failure for every key for
-that reason — so a directive is *always already* at its startup value. "Restore
-it to the startup value" is therefore an exact no-op, not an approximation.
+`ini_restore()` returns `void` (reference PHP returns `void` too). Every
+compiled INI value is baked into the binary at compile time and cannot change at
+runtime, so restoring one is an exact no-op rather than an approximation.
+`memory_limit` is the exception: it is runtime-mutable through `ini_set()`, and
+`ini_restore('memory_limit')` reinstalls the startup raw string and ceiling. A startup or
+runtime limit above 1 GiB is reported verbatim, but the reserved arena is capped at 1 GiB,
+the largest layout every supported target can address; an attempt to grow past the arena
+keeps PHP's `Failed to set memory limit` warning and leaves the previous ceiling in place.
+When the reserved arena is smaller than the compiled startup value, restore uses
+the arena's actual startup ceiling instead of leaving a lowered limit in place,
+and the reported string changes only after that restore succeeds.
 
 ### Availability
 

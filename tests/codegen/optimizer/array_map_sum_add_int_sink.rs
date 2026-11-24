@@ -22,7 +22,7 @@ fn emit_main_ir(source: &str, ir_opt: bool) -> String {
         .arg(mode)
         .arg(&php_path)
         .output()
-        .expect("run elephc --emit-ir");
+        .expect("run elephc build --emit-ir");
     assert!(
         output.status.success(),
         "emit-ir failed: {}",

@@ -2,7 +2,7 @@
 //! Exercises Core global constants through native code and opaque eval.
 //!
 //! Called from:
-//! - The `codegen_tests` integration test harness.
+//! - The `codegen_tests_data` integration test harness.
 //!
 //! Key details:
 //! - Expected values follow the pinned PHP baseline rather than the compiler catalog.

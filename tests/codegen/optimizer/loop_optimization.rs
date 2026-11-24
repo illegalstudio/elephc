@@ -2,7 +2,7 @@
 //! End-to-end and emitted-code coverage for canonical EIR loop optimization.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::loop_optimization`.
+//! - `cargo test --test codegen_tests_core optimizer::loop_optimization`.
 //!
 //! Key details:
 //! - Compare optimizer modes with runtime-dependent inputs and cover all target emitters.

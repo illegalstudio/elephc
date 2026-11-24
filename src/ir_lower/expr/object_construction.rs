@@ -17,7 +17,8 @@ pub(super) fn lower_new_object(
     expr: &Expr,
 ) -> LoweredValue {
     let object_type = PhpType::Object(class_name.as_str().to_string());
-    if let Some(info) = ctx.throw_access_sites.get(&expr.span) {
+    let constructor_throw_site = ctx.throw_access_site(expr.span).cloned();
+    if let Some(info) = constructor_throw_site {
         if let crate::types::ThrowAccessKind::PrivateConstructor {
             visibility,
             class_name: declaring_class,
@@ -101,7 +102,12 @@ pub(super) fn lower_new_object(
         &php_type,
         expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     let previous_description = ctx
         .call_description
         .replace(format!("{}::__construct", class_name.as_str()));
@@ -139,6 +145,11 @@ pub(super) fn lower_new_object(
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,

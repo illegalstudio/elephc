@@ -326,12 +326,37 @@ impl Checker {
                 if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
                     return Ok(PhpType::Object(class_name.to_string()));
                 }
+                // A stored dynamic entry wins over `__get()` and keeps the type it was
+                // assigned, so the read is `Mixed` whenever such storage may exist. Only a
+                // miss answers the accessor and its declared return type.
+                if class_info.dynamic_property_hash_is_name_addressable()
+                    || super::super::super::scope_dynamic_storage::dynamic_property_creation_is_readable(
+                        self, class_name, property,
+                    )
+                {
+                    return Ok(PhpType::Mixed);
+                }
                 return Ok(sig.return_type.clone());
             }
             if class_info.allow_dynamic_properties {
                 // PHP 8.2 #[\AllowDynamicProperties]: undeclared property
                 // reads are dispatched to the side-table hashtable; the
                 // value is statically `Mixed` because we cannot infer it.
+                return Ok(PhpType::Mixed);
+            }
+            // An ordinary PHP 8.5 write can create this exact undeclared name in the
+            // per-instance hash, and a readonly class can never hold one, so the read is a
+            // runtime warning plus null rather than a compile-time refusal in both cases.
+            // Enums never have dynamic storage, so a missing enum member stays PHP's
+            // compile-time Undefined-property error. Ordinary classes (including readonly
+            // ones) answer the read at run time instead.
+            if !self.enums.contains_key(class_name.trim_start_matches('\\'))
+                && (super::super::super::scope_dynamic_storage::dynamic_property_creation_is_readable(
+                    self, class_name, property,
+                ) || super::super::super::scope_dynamic_storage::class_forbids_dynamic_properties(
+                    self, class_name,
+                ))
+            {
                 return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(

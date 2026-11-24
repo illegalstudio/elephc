@@ -8,13 +8,13 @@
 //! - Only planes 1, 2, and historical plane 14 are accepted.
 //! - Invalid plane and row bytes stop consumption at PHP's observable byte boundary.
 
-use super::{mapping::word, Decoded, Substitute, BAD_INPUT};
+use super::{mapping::Dense, Decoded, Substitute, BAD_INPUT};
 
 /// Exact older-CNS decoder planes and independent canonical BMP reverse mappings.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct EucTw {
-    pub planes: &'static [u8],
-    pub encode: &'static [u8],
+    pub planes: Dense,
+    pub encode: Dense,
 }
 
 impl EucTw {
@@ -65,13 +65,13 @@ impl EucTw {
     /// Looks up one assigned row/cell or returns the invalid-unit sentinel.
     fn character(self, plane: usize, row: u8, cell: u8) -> u32 {
         if !(0xa1..=0xfe).contains(&cell) { return BAD_INPUT; }
-        word(self.planes, (plane * 94 * 94 + usize::from(row - 0xa1) * 94 + usize::from(cell - 0xa1)) * 4)
+        self.planes.word(plane * 94 * 94 + usize::from(row - 0xa1) * 94 + usize::from(cell - 0xa1))
     }
 
     /// Appends a canonical one-, two-, or four-byte mapping without output on failure.
     fn append(self, code: u32, output: &mut Vec<u8>) -> bool {
         if code > 0xffff { return false; }
-        let mapped = word(self.encode, code as usize * 4);
+        let mapped = self.encode.word(code as usize);
         if mapped == BAD_INPUT { return false; }
         let bytes = mapped.to_be_bytes();
         let width = if mapped < 0x100 { 1 } else if mapped < 0x10000 { 2 } else { 4 };

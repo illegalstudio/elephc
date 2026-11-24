@@ -318,6 +318,7 @@
             ],
             total: 1000,
             queries: Vec::new(),
+            query_callers: Default::default(),
             lines: None,
             trace: None,
         };
@@ -439,7 +440,8 @@
         }
         nodes.push(node("leaf", w, w)); // index 3n, where the last arms point
         let graph = CallGraph {
-            nodes, edges, total: run_ns, queries: Vec::new(), lines: None, trace: None,
+            nodes, edges, total: run_ns, queries: Vec::new(),
+            query_callers: Default::default(), lines: None, trace: None,
         };
 
         let run: u64 = graph.nodes.iter().map(|n| n.exclusive).sum();
@@ -1135,6 +1137,34 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
             .contains(&("INSERT INTO users (name) VALUES (?)".to_string(), 200)));
     }
 
+    #[test]
+    /// Each query keeps the functions that ran it, in the order the profiler
+    /// listed them, and a caller's line moves to its function's declaration
+    /// when the file can be read.
+    fn parses_who_ran_each_query() {
+        let dir = std::env::temp_dir().join(format!("elephc-query-callers-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("shop.php");
+        std::fs::write(&file, "<?php\n\nfunction load_price($id) {\n    $x = $id;\n    return $x;\n}\n").unwrap();
+        let dump = format!(
+            "elephc-instr-query: 250 SELECT price FROM products WHERE id = ?\n\
+             elephc-instr-query-from: 240\t{0}:4\tload_price\n\
+             elephc-instr-query-from: 10\t-\tApp\\Cart::refresh\n\
+             elephc-instr-query: 1 CREATE TABLE products (id INTEGER)\n",
+            file.display()
+        );
+        let graph = parse_instrument_dump(&dump);
+        let _ = std::fs::remove_dir_all(&dir);
+        let callers = &graph.query_callers["SELECT price FROM products WHERE id = ?"];
+        assert_eq!(callers.len(), 2);
+        assert_eq!(callers[0].function, "load_price");
+        assert_eq!(callers[0].executions, 240);
+        assert_eq!(callers[0].location, format!("{}:3", file.display()), "the declaration line, not the body's");
+        assert_eq!(callers[1].function, "App\\Cart::refresh");
+        assert_eq!(callers[1].location, "", "an unknown place stays empty");
+        assert!(!graph.query_callers.contains_key("CREATE TABLE products (id INTEGER)"));
+    }
+
     /// Exact instrumentation dumps retain inclusive and exclusive network metrics.
     #[test]
     fn parses_instrument_network_metrics() {
@@ -1212,7 +1242,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// any `_`, `\` or non-ASCII name produces. Only the compact shape used to
     /// demangle (#922): the escaped one printed `::_My_Class___run`.
     fn demangles_php_symbols() {
-        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        use crate::names::{function_symbol, method_symbol, static_method_symbol};
         assert_eq!(demangle("main"), "{main}");
         assert_eq!(demangle(&function_symbol("hot_leaf")), "hot_leaf");
         assert_eq!(demangle(&function_symbol("App\\run")), "App\\run");
@@ -1236,7 +1266,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// Generator labels decode their PHP owner without confusing user underscores with suffixes.
     #[test]
     fn demangles_generator_entry_symbols() {
-        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        use crate::names::{function_symbol, method_symbol, static_method_symbol};
         for suffix in ["__genbody", "__gencb"] {
             for (class, method) in [
                 ("App\\Foo", "gen"), ("My_Class", "hot_gen"), ("Engine", "gen"),
@@ -1262,7 +1292,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// Escaped method separators must not turn literal method names into generator suffixes.
     #[test]
     fn monitor_review_preserves_generator_named_methods() {
-        use elephc::names::{method_symbol, static_method_symbol};
+        use crate::names::{method_symbol, static_method_symbol};
         for class in ["App\\Foo", "My_Class", "Engine", "prop", "local"] {
             for method in ["genbody", "gencb"] {
                 for symbol in [method_symbol(class, method), static_method_symbol(class, method)] {
@@ -1802,6 +1832,7 @@ elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
             edges: vec![GraphEdge { from: 0, to: 1, weight: 990_000, count: Some(1200) }],
             total: 1_000_000,
             queries: Vec::new(),
+            query_callers: Default::default(),
             lines: None,
             trace: None,
         }

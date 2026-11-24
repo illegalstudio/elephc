@@ -146,6 +146,9 @@ struct Frame {
     /// which is why its exit is recognised by `dropped_fps` instead.
     fp: usize,
     t_enter: u64,
+    /// The live heap when it was entered, read only while the timeline records: the
+    /// page shows each call's own memory change from it and the heap at its end.
+    heap_enter: u64,
     a_enter: u64,
     f_enter: u64,
     io_enter: u64,
@@ -258,6 +261,10 @@ struct State {
     trace: Vec<(u32, u64, u64)>,
     /// Calls not recorded because the trace buffer was full.
     trace_dropped: u64,
+    /// Beside each span of `trace`, in step with it: the call's depth on the
+    /// stack (0 for the entry point) and the bytes the heap held when it ended
+    /// — what the profile page's timeline draws its rows and its memory with.
+    trace_meta: Vec<(u32, u64, u64)>,
 }
 
 /// An exception that is still unwinding.
@@ -495,6 +502,7 @@ impl State {
             id,
             fp,
             t_enter: t,
+            heap_enter: if TRACE_ON.load(Ordering::Relaxed) { live_heap_bytes() } else { 0 },
             a_enter: a,
             f_enter: f,
             io_enter: io,
@@ -580,7 +588,7 @@ impl State {
         // Recording it only in `exit_at` left every pre-yield segment out of the
         // Chrome/Perfetto timeline, and an abandoned generator with no span at
         // all while the aggregate table accounted for it.
-        self.trace_span(frame.id, frame.t_enter, t);
+        self.trace_span(frame.id, frame.t_enter, t, frame.heap_enter);
         self.close_frame(frame, t, a, f, io, w);
         self.parked.push(Parked { fp, coro, frames });
     }
@@ -676,6 +684,7 @@ impl State {
                 id: frame_id,
                 fp: frame_fp,
                 t_enter: t,
+                heap_enter: if TRACE_ON.load(Ordering::Relaxed) { live_heap_bytes() } else { 0 },
                 a_enter: a,
                 f_enter: f,
                 io_enter: io,
@@ -826,7 +835,7 @@ impl State {
                 self.dropped_fps = Vec::new();
             }
         }
-        self.trace_span(id, frame.t_enter, t);
+        self.trace_span(id, frame.t_enter, t, frame.heap_enter);
         self.close_frame(frame, t, a, f, io, w);
     }
 
@@ -838,12 +847,14 @@ impl State {
     /// missing exactly the segments the aggregate table did account for: every
     /// stretch a generator ran before a `yield`, and an abandoned generator
     /// entirely.
-    fn trace_span(&mut self, id: u32, from: u64, to: u64) {
+    fn trace_span(&mut self, id: u32, from: u64, to: u64, heap_from: u64) {
         if !TRACE_ON.load(Ordering::Relaxed) {
             return;
         }
         if self.trace.len() < TRACE_CAP.load(Ordering::Relaxed) {
             self.trace.push((id, from, to));
+            // The frame is already off the stack, so its depth is what is left.
+            self.trace_meta.push((self.stack.len() as u32, heap_from, live_heap_bytes()));
         } else {
             self.trace_dropped += 1;
         }
@@ -1067,6 +1078,7 @@ impl State {
         // slice's first catcher the previous one's handler work.
         self.unwinding = None;
         self.trace.clear();
+        self.trace_meta.clear();
         self.trace_dropped = 0;
     }
 
@@ -1205,12 +1217,33 @@ extern "C" {
     /// probe is linked, else zero: where a `--apm` service counts its routes'
     /// database and network work.
     static elephc_probe_apm_event_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_trace_begin` when the sampling
+    /// probe is linked, else zero: where a `--apm` service publishes each web
+    /// request's trace context, which its error table and curl read.
+    static elephc_probe_trace_fn: usize;
 }
 
-// The standalone test binary has no compiled program to define the slot.
+// The standalone test binary has no compiled program to define the slots.
 #[cfg(test)]
 #[no_mangle]
 static mut elephc_probe_apm_event_fn: usize = 0;
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_probe_trace_fn: usize = 0;
+
+/// Hands a web request's `traceparent` to the probe's `--apm` trace context, before
+/// this crate's own dormancy check: in a combined build this crate owns the bridge's
+/// trace slot, and every request, profiled or not, links its errors to its trace
+/// (review). Whether the probe took it.
+fn forward_trace_to_apm(ptr: *const u8, len: usize, route_ptr: *const u8, route_len: usize) -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_trace_fn).read() };
+    if addr == 0 {
+        return false;
+    }
+    let begin = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*const u8, usize, *const u8, usize)>(addr) };
+    unsafe { begin(ptr, len, route_ptr, route_len) };
+    true
+}
 
 /// `--apm` event kinds, matching `elephc_probe::apm::IO_*`.
 const APM_DB_OPS: u32 = 0;
@@ -1358,6 +1391,66 @@ fn normalize_query(sql: &str) -> String {
     out.trim().to_string()
 }
 
+/// Where each function is declared (`path:line`, empty when unknown), by id,
+/// set once at init beside `NAMES`.
+static LOCATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether each function id is the database driver's own (PDO, mysqli), set
+/// once at init: a query is charged to the first frame above those, the
+/// application code that ran it.
+static DRIVER_FRAMES: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+
+/// For each query shape, the functions that ran it and how many times, as
+/// `(function id, executions)`. Kept apart from `QUERIES` so its shape and its
+/// readers stay as they are.
+static QUERY_CALLERS: Mutex<Vec<(String, Vec<(u32, u64)>)>> = Mutex::new(Vec::new());
+
+/// Whether a function is the database driver's rather than the application's:
+/// the PDO and mysqli classes elephc implements, and their functions. A query
+/// is reported against the code that called into them.
+///
+/// mysqli is matched as PHP names it, case-insensitively: its classes
+/// (`mysqli::`, `mysqli_stmt::`, `mysqli_result::`, ...) and its `mysqli_*`
+/// functions. A bare `mysqli` prefix also took the application's own
+/// `mysqliHelper`, and the query was charged to the frame above it (#2499).
+fn is_driver_frame(name: &str) -> bool {
+    const PDO_PREFIXES: [&str; 4] = ["PDO::", "PDOStatement::", "PDO\\", "Pdo\\"];
+    let mysqli = |prefix: &[u8]| name.as_bytes().get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix));
+    PDO_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) || mysqli(b"mysqli::") || mysqli(b"mysqli_")
+}
+
+/// The function a query running now is charged to: the innermost frame on this
+/// thread's stack that is not the driver's, or the innermost frame when all of
+/// them are. `None` with no frame open.
+fn query_caller() -> Option<u32> {
+    // The table is read under its lock while the stack is walked: copying it cost a
+    // program's whole function count per statement, for the few frames looked at (review).
+    let driver = DRIVER_FRAMES.lock().unwrap_or_else(|e| e.into_inner());
+    STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let mut frames = s.stack.iter().rev().map(|f| f.id);
+        let innermost = frames.clone().next();
+        frames.find(|id| !driver.get(*id as usize).copied().unwrap_or(false)).or(innermost)
+    })
+}
+
+/// Counts one execution of `key` against the function that ran it.
+fn note_query_caller(key: &str, caller: u32) {
+    let mut callers = QUERY_CALLERS.lock().unwrap_or_else(|e| e.into_inner());
+    let index = match callers.iter().position(|(shape, _)| shape == key) {
+        Some(index) => index,
+        None => {
+            callers.push((key.to_string(), Vec::new()));
+            callers.len() - 1
+        }
+    };
+    let rows = &mut callers[index].1;
+    match rows.iter_mut().find(|(id, _)| *id == caller) {
+        Some(row) => row.1 += 1,
+        None => rows.push((caller, 1)),
+    }
+}
+
 /// Records one DB query execution by its SQL text. `ptr`/`len` are the UTF-8
 /// bytes of the statement; copied immediately, so the caller's buffer need not
 /// outlive the call. Reached from the PDO bridge through the runtime
@@ -1378,6 +1471,12 @@ pub extern "C" fn elephc_instr_query(ptr: *const u8, len: usize) {
         return;
     }
     let mut q = QUERIES.lock().unwrap_or_else(|e| e.into_inner());
+    let known = q.iter().any(|(s, _)| *s == key);
+    if known || q.len() < MAX_QUERY_SHAPES {
+        if let Some(caller) = query_caller() {
+            note_query_caller(&key, caller);
+        }
+    }
     if let Some(row) = q.iter_mut().find(|(s, _)| *s == key) {
         row.1 += 1;
     } else if q.len() < MAX_QUERY_SHAPES {
@@ -1397,9 +1496,26 @@ fn render_queries() -> String {
     let q = QUERIES.lock().unwrap_or_else(|e| e.into_inner());
     let mut rows: Vec<&(String, u64)> = q.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1));
+    let callers = QUERY_CALLERS.lock().unwrap_or_else(|e| e.into_inner());
+    let names = NAMES.lock().map(|n| n.clone()).unwrap_or_default();
+    let locations = LOCATIONS.lock().map(|l| l.clone()).unwrap_or_default();
     let mut out = String::new();
     for (text, count) in rows {
         out.push_str(&format!("elephc-instr-query: {count} {text}\n"));
+        // Who ran it, most first: `<executions>\t<path:line or ->\t<function>`,
+        // right after the query they belong to.
+        if let Some((_, from)) = callers.iter().find(|(shape, _)| shape == text) {
+            let mut from = from.clone();
+            from.sort_by(|a, b| b.1.cmp(&a.1));
+            for (id, executions) in from {
+                let name = names.get(id as usize).cloned().unwrap_or_else(|| format!("#{id}"));
+                let location = locations.get(id as usize).filter(|l| !l.is_empty()).cloned();
+                out.push_str(&format!(
+                    "elephc-instr-query-from: {executions}\t{}\t{name}\n",
+                    location.as_deref().unwrap_or("-")
+                ));
+            }
+        }
     }
     let dropped = DROPPED_QUERY_SHAPES.load(Ordering::Relaxed);
     if dropped > 0 {
@@ -1543,10 +1659,18 @@ pub extern "C" fn elephc_instr_trace_begin(
     route_ptr: *const u8,
     route_len: usize,
 ) {
+    let enabled = ENABLED.load(Ordering::Relaxed);
+    // The probe's `--apm` context first, profiled or not. A profiled request then
+    // reuses the ids the probe published, so the two never disagree; the previous
+    // request's are cleared first, so a probe that published nothing is not misread.
+    if enabled {
+        std::env::remove_var("ELEPHC_TRACEPARENT");
+    }
+    let forwarded = forward_trace_to_apm(ptr, len, route_ptr, route_len);
     // Dormant costs nothing, like every other entry point: a service built with
     // the capability and nobody profiling it must not open /dev/urandom twice per
     // request to publish a trace id no one will read.
-    if !ENABLED.load(Ordering::Relaxed) {
+    if !enabled {
         return;
     }
     let inbound = if ptr.is_null() || len == 0 {
@@ -1555,11 +1679,16 @@ pub extern "C" fn elephc_instr_trace_begin(
         let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
         std::str::from_utf8(bytes).ok().and_then(parse_traceparent)
     };
-    let (trace_id, parent) = match inbound {
-        Some((trace_id, parent)) => (trace_id, parent),
-        None => (random_hex(16), String::new()),
+    let published = forwarded
+        .then(|| std::env::var("ELEPHC_TRACEPARENT").ok())
+        .flatten()
+        .as_deref()
+        .and_then(parse_traceparent);
+    let (trace_id, parent, span_id) = match (published, inbound) {
+        (Some((trace_id, span_id)), inbound) => (trace_id, inbound.map(|(_, parent)| parent).unwrap_or_default(), span_id),
+        (None, Some((trace_id, parent))) => (trace_id, parent, random_hex(8)),
+        (None, None) => (random_hex(16), String::new(), random_hex(8)),
     };
-    let span_id = random_hex(8);
     // Published through the environment so userland propagates it with `getenv()`
     // and a stream context, with no new builtin and no change to the request
     // assembly. That places one constraint on the host, and it is worth stating
@@ -1800,6 +1929,95 @@ static TRACE_ON: AtomicBool = AtomicBool::new(false);
 static TRACE_CAP: AtomicUsize = AtomicUsize::new(500_000);
 /// Output path for the Chrome trace, set from `ELEPHC_INSTR_TRACE`.
 static TRACE_PATH: Mutex<Option<String>> = Mutex::new(None);
+/// Output path for the profile page's timeline, set from
+/// `ELEPHC_INSTR_TIMELINE`: the same spans, with each call's depth and the heap
+/// in bytes when it ended, in a compact form `monitor --html` reads back.
+static TIMELINE_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+#[cfg(not(test))]
+extern "C" {
+    /// Runtime `.comm` slot holding the ADDRESS of the live-heap byte counter
+    /// (`_gc_live`, what `memory_get_usage()` returns), stored by the emitted
+    /// main right after `elephc_instr_init`. A pointer for the same reason as
+    /// the sampler's `elephc_probe_allocs_ptr`: `_gc_live` is spelled with a
+    /// hardcoded underscore that only assembly may name.
+    static elephc_instr_live_ptr: usize;
+}
+
+// The standalone test binary has no compiled program to define the slot.
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_instr_live_ptr: usize = 0;
+
+/// The heap's live bytes now, or zero when the runtime has not published its
+/// counter.
+fn live_heap_bytes() -> u64 {
+    // SAFETY: a plain read of the runtime's own 8-byte slot.
+    let ptr = unsafe { std::ptr::addr_of!(elephc_instr_live_ptr).read_volatile() };
+    if ptr == 0 {
+        return 0;
+    }
+    // SAFETY: the emitted main stores the address of the runtime's 8-byte
+    // `_gc_live` global, which lives for the whole process and is only written
+    // by this thread's allocator.
+    unsafe { std::ptr::read_volatile(ptr as *const u64) }
+}
+
+/// Writes the spans for the profile page's timeline.
+///
+/// Plain text, one record per line, so `monitor` reads it back without a JSON
+/// parser and a truncated file still yields every complete line:
+///
+/// ```text
+/// elephc-timeline 1
+/// converted 1
+/// dropped 0
+/// end <ns>
+/// name {main}
+/// span <id> <depth> <start_ns> <duration_ns> <heap_bytes_at_end> <heap_bytes_at_start>
+/// ```
+///
+/// `name` lines come in id order; start times count from the first span. `end` is when
+/// the run ended, from the same origin: past the recording limit later calls are not
+/// recorded, and the page still spans the whole run (review).
+fn write_timeline(
+    path: &str,
+    spans: &[(u32, u64, u64)],
+    meta: &[(u32, u64, u64)],
+    names: &[String],
+    dropped: u64,
+    converted: bool,
+    end_ticks: u64,
+) {
+    use std::fmt::Write as _;
+    let base = spans.iter().map(|s| s.1).min().unwrap_or(0);
+    let mut out = String::with_capacity(64 + names.len() * 24 + spans.len() * 40);
+    let _ = writeln!(out, "elephc-timeline 1");
+    let _ = writeln!(out, "converted {}", u8::from(converted));
+    let _ = writeln!(out, "dropped {dropped}");
+    let _ = writeln!(out, "end {}", ticks_to_ns(end_ticks.saturating_sub(base)));
+    for name in names {
+        // A name never holds a newline; one that did would only split itself.
+        let _ = writeln!(out, "name {}", name.replace('\n', " "));
+    }
+    for (i, (id, enter, exit)) in spans.iter().enumerate() {
+        let (depth, heap_start, heap) = meta.get(i).copied().unwrap_or((0, 0, 0));
+        // The heap at the call's start comes last: a reader of the five-field form still
+        // reads the rest the same.
+        let _ = writeln!(
+            out,
+            "span {id} {depth} {} {} {heap} {heap_start}",
+            ticks_to_ns(enter.wrapping_sub(base)),
+            ticks_to_ns(exit.wrapping_sub(*enter))
+        );
+    }
+    if let Err(e) = std::fs::write(path, out) {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            format!("elephc-instr: cannot write the timeline to {path}: {e}\n").as_bytes(),
+        );
+    }
+}
 
 /// JSON-escapes a string for the Chrome trace event names.
 fn json_escape(s: &str) -> String {
@@ -2061,13 +2279,14 @@ impl std::hash::BuildHasher for BuildIdHasher {
     }
 }
 
-/// Registers the id→name table: `count` entries of `(u64 name_ptr, u64 name_len)`
-/// — the compiler emits these as `.quad name, len` pairs. Call once before any
-/// enter/exit.
+/// Registers the id→name table: `count` entries of `(u64 name_ptr, u64 name_len,
+/// u64 location_ptr, u64 location_len)` — each function's name and where it is
+/// declared (`path:line`, empty when unknown), as the compiler emits them. Call
+/// once before any enter/exit.
 ///
 /// # Safety
-/// `table` must point to `count` valid `(ptr,len)` pairs, each `ptr`/`len`
-/// describing a live UTF-8(-ish) byte range for the duration of this call.
+/// `table` must point to `count` valid quads, each `ptr`/`len` pair describing
+/// a live UTF-8(-ish) byte range for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_instr_init(table: *const u8, count: usize) {
     // Before anything else, and before any `--web` fork: a mapping established
@@ -2080,25 +2299,50 @@ pub unsafe extern "C" fn elephc_instr_init(table: *const u8, count: usize) {
         return;
     }
     let base = table as *const u64;
-    let mut names = Vec::with_capacity(count);
-    for i in 0..count {
-        let ptr = *base.add(i * 2) as *const u8;
-        let len = *base.add(i * 2 + 1) as usize;
-        if ptr.is_null() {
-            names.push(String::new());
-            continue;
+    let text = |ptr: u64, len: u64| -> String {
+        if ptr == 0 || len == 0 {
+            return String::new();
         }
-        let slice = std::slice::from_raw_parts(ptr, len);
-        names.push(String::from_utf8_lossy(slice).into_owned());
+        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    let mut names = Vec::with_capacity(count);
+    let mut locations = Vec::with_capacity(count);
+    for i in 0..count {
+        names.push(text(*base.add(i * 4), *base.add(i * 4 + 1)));
+        locations.push(text(*base.add(i * 4 + 2), *base.add(i * 4 + 3)));
+    }
+    if let Ok(mut guard) = DRIVER_FRAMES.lock() {
+        *guard = names.iter().map(|name| is_driver_frame(name)).collect();
     }
     if let Ok(mut guard) = NAMES.lock() {
         *guard = names;
+    }
+    if let Ok(mut guard) = LOCATIONS.lock() {
+        *guard = locations;
     }
     // Opt-in timeline tracing: ELEPHC_INSTR_TRACE=<path> records per-call spans
     // and writes a Chrome trace at exit; ELEPHC_INSTR_TRACE_MAX caps the count.
     if let Ok(path) = std::env::var("ELEPHC_INSTR_TRACE") {
         if !path.is_empty() {
             if let Ok(mut guard) = TRACE_PATH.lock() {
+                *guard = Some(path);
+            }
+            if let Ok(max) = std::env::var("ELEPHC_INSTR_TRACE_MAX") {
+                if let Ok(n) = max.parse::<usize>() {
+                    if n > 0 {
+                        TRACE_CAP.store(n, Ordering::Relaxed);
+                    }
+                }
+            }
+            TRACE_ON.store(true, Ordering::Relaxed);
+        }
+    }
+    // The profile page's timeline rides on the same spans, so it turns the
+    // recording on too; ELEPHC_INSTR_TRACE_MAX caps both.
+    if let Ok(path) = std::env::var("ELEPHC_INSTR_TIMELINE") {
+        if !path.is_empty() {
+            if let Ok(mut guard) = TIMELINE_PATH.lock() {
                 *guard = Some(path);
             }
             if let Ok(max) = std::env::var("ELEPHC_INSTR_TRACE_MAX") {
@@ -2882,6 +3126,20 @@ pub extern "C" fn elephc_instr_dump() {
         let _ = std::io::stderr().write_all(slice.as_bytes());
     }
     if TRACE_ON.load(Ordering::Relaxed) {
+        if let Some(path) = TIMELINE_PATH.lock().ok().and_then(|g| g.clone()) {
+            STATE.with(|s| {
+                let s = s.borrow();
+                write_timeline(
+                    path.as_str(),
+                    &s.trace,
+                    &s.trace_meta,
+                    &names,
+                    s.trace_dropped,
+                    tick_rate().is_some(),
+                    now_ticks(),
+                );
+            });
+        }
         if let Some(path) = TRACE_PATH.lock().ok().and_then(|g| g.clone()) {
             STATE.with(|s| {
                 let s = s.borrow();
@@ -2913,6 +3171,9 @@ fn end_slice() {
     STATE.with(|s| s.borrow_mut().reset());
     if let Ok(mut q) = QUERIES.lock() {
         q.clear();
+    }
+    if let Ok(mut callers) = QUERY_CALLERS.lock() {
+        callers.clear();
     }
     DROPPED_QUERY_SHAPES.store(0, Ordering::Relaxed);
 }
@@ -5401,6 +5662,32 @@ mod tests {
     }
 
     #[test]
+    /// In a combined build each request's trace context goes on to the probe, dormant
+    /// or not, and a profiled request reuses the ids the probe published.
+    fn a_combined_build_hands_each_request_trace_to_the_probe() {
+        // In a combined build this crate owns the trace slot: every request's context
+        // goes on to the probe, dormant or not, and a profiled one reuses its ids (review).
+        static SEEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        /// Stands in for the probe's trace entry: counts calls and publishes known ids.
+        extern "C" fn probe(_: *const u8, _: usize, _: *const u8, _: usize) {
+            SEEN.fetch_add(1, Ordering::Relaxed);
+            std::env::set_var("ELEPHC_TRACEPARENT", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        }
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::ptr::addr_of_mut!(super::elephc_probe_trace_fn).write(probe as usize) };
+        ENABLED.store(false, Ordering::Relaxed);
+        elephc_instr_trace_begin(std::ptr::null(), 0, std::ptr::null(), 0);
+        assert_eq!(SEEN.load(Ordering::Relaxed), 1, "a dormant profiler still hands it on");
+        switch_on();
+        let hdr = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        elephc_instr_trace_begin(hdr.as_ptr(), hdr.len(), std::ptr::null(), 0);
+        let line = render_trace();
+        unsafe { std::ptr::addr_of_mut!(super::elephc_probe_trace_fn).write(0) };
+        ENABLED.store(false, Ordering::Relaxed);
+        assert!(line.contains("trace=0af7651916cd43dd8448eb211c80319c") && line.contains("parent=00f067aa0ba902b7"), "the probe's ids, the caller's parent: {line}");
+    }
+
+    #[test]
     /// A request joins its caller's trace when one arrives, and starts a fresh
     /// one when nothing usable does — never an island either way.
     fn trace_begin_continues_a_valid_trace_and_starts_one_otherwise() {
@@ -5653,6 +5940,66 @@ mod tests {
         ENABLED.store(was_enabled, Ordering::Relaxed);
     }
 
+    /// The driver's frames are the PDO and mysqli classes and the `mysqli_*`
+    /// functions, not an application function whose name merely starts with
+    /// `mysqli` (#2499).
+    #[test]
+    fn driver_frames_are_bounded_like_pdo() {
+        for driver in [
+            "PDO::query",
+            "PDOStatement::execute",
+            "Pdo\\Mysql::connect",
+            "mysqli::query",
+            "Mysqli::prepare",
+            "mysqli_stmt::execute",
+            "mysqli_result::fetch_assoc",
+            "mysqli_query",
+            "MYSQLI_real_query",
+        ] {
+            assert!(is_driver_frame(driver), "{driver}");
+        }
+        for application in ["mysqliHelper", "MysqliRepository::find", "mysqlix", "App\\mysqli_query", "load_price", "mysqli"] {
+            assert!(!is_driver_frame(application), "{application}");
+        }
+    }
+
+    #[test]
+    /// A query is charged to the application code that ran it — the first
+    /// frame above the driver's own (PDOStatement::execute) — and the report
+    /// lists that function, where it is declared and how often, under the query.
+    fn a_query_is_charged_to_the_code_above_the_driver() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let was_enabled = ENABLED.swap(true, Ordering::Relaxed);
+        let names = vec!["{main}".to_string(), "load_price".to_string(), "PDOStatement::execute".to_string()];
+        *DRIVER_FRAMES.lock().unwrap() = names.iter().map(|n| is_driver_frame(n)).collect();
+        *NAMES.lock().unwrap() = names;
+        *LOCATIONS.lock().unwrap() = vec![String::new(), "/app/shop.php:16".to_string(), String::new()];
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.enter_at(0, 0x1000, 0, 0, 0, 0, 0);
+            s.enter_at(1, 0x2000, 1, 0, 0, 0, 0);
+            s.enter_at(2, 0x3000, 2, 0, 0, 0, 0);
+        });
+        let sql = "SELECT price FROM caller_test WHERE id = 7";
+        elephc_instr_query(sql.as_ptr(), sql.len());
+        elephc_instr_query(sql.as_ptr(), sql.len());
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.exit_at(2, 0x3000, 3, 0, 0, 0, 0);
+            s.exit_at(1, 0x2000, 4, 0, 0, 0, 0);
+            s.exit_at(0, 0x1000, 5, 0, 0, 0, 0);
+        });
+        let out = render_queries();
+        ENABLED.store(was_enabled, Ordering::Relaxed);
+        assert!(
+            out.contains(
+                "elephc-instr-query: 2 SELECT price FROM caller_test WHERE id = ?\n\
+                 elephc-instr-query-from: 2\t/app/shop.php:16\tload_price\n"
+            ),
+            "{out}"
+        );
+    }
+
     /// A dormant profiler still hands every database and network event to the
     /// probe's `--apm` counters: transaction monitoring counts every request,
     /// profiled or not, and in a combined build this crate owns the slots.
@@ -5728,6 +6075,52 @@ mod tests {
         // child: enter 2000ns -> ts 1 µs, dur 1.5 µs.
         assert!(text.contains("\"name\":\"child\""), "{text}");
         assert!(text.contains("\"ts\":1,\"dur\":1.5"), "{text}");
+    }
+
+    #[test]
+    /// The page's timeline file carries every span with its depth and the heap
+    /// bytes at its end, times in ns from the first span, names in id order —
+    /// the shape `monitor --html` reads back line by line.
+    fn timeline_file_carries_depth_and_heap_bytes() {
+        let _serial = ticks_are_nanoseconds();
+        let spans = vec![(1u32, 2_000u64, 3_500u64), (0u32, 1_000u64, 5_000u64)];
+        let meta = vec![(1u32, 1_024u64, 4_096u64), (0u32, 0u64, 1_024u64)];
+        let names = vec!["{main}".to_string(), "child".to_string()];
+        let path = std::env::temp_dir().join("elephc_instr_timeline_test.txt");
+        write_timeline(path.to_str().unwrap(), &spans, &meta, &names, 3, true, 9_000);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "elephc-timeline 1",
+                "converted 1",
+                "dropped 3",
+                "end 8000",
+                "name {main}",
+                "name child",
+                "span 1 1 1000 1500 4096 1024",
+                "span 0 0 0 4000 1024 0",
+            ],
+            "{text}"
+        );
+    }
+
+    #[test]
+    /// A recorded span notes the depth its frame had: the stack left once the
+    /// frame is popped, so the entry point is 0 and its callee 1.
+    fn a_traced_span_records_its_depth() {
+        let _serial = ticks_are_nanoseconds();
+        let restore = TRACE_ON.swap(true, Ordering::Relaxed);
+        let mut s = State::default();
+        s.enter_at(0, 0x1000, 0, 0, 0, 0, 0);
+        s.enter_at(1, 0x2000, 5, 0, 0, 0, 0);
+        s.exit_at(1, 0x2000, 9, 0, 0, 0, 0);
+        s.exit_at(0, 0x1000, 20, 0, 0, 0, 0);
+        TRACE_ON.store(restore, Ordering::Relaxed);
+        assert_eq!(s.trace, vec![(1, 5, 9), (0, 0, 20)]);
+        assert_eq!(s.trace_meta.iter().map(|m| m.0).collect::<Vec<_>>(), vec![1, 0]);
     }
 
     #[test]

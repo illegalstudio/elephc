@@ -4,7 +4,7 @@
 //! only known at runtime.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` harness via `crate::support`.
+//! - `cargo test` through the `codegen_tests_data` harness via `crate::support`.
 //!
 //! Key details:
 //! - PHP `foreach` keys are always `Mixed` in EIR (`Op::IterCurrentKey`), so a

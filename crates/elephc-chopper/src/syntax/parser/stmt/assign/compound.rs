@@ -1,0 +1,209 @@
+//! Purpose:
+//! Parses direct variable compound assignment statements.
+//! Maps compound assignment tokens into binary operations plus assignment statement values.
+//!
+//! Called from:
+//! - `crate::syntax::parser::stmt::assign::simple::parse_variable_stmt()`.
+//!
+//! Key details:
+//! - Compound lowering must preserve PHP's read-modify-write semantics for the target variable.
+
+use crate::syntax::errors::CompileError;
+use crate::syntax::lexer::{SpannedToken, Token};
+use crate::syntax::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::syntax::parser::expr::{parse_assignment_value_expr, parse_expr};
+use crate::syntax::span::Span;
+
+use super::super::expect_semicolon;
+
+/// Compound assignment operators: plain assignment (`=`), compound binary operators
+/// (`+=`, `-=`, `*=`, etc.), and null coalesce assignment (`??=`).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum AssignmentOperator {
+    Assign,
+    Compound(BinOp),
+    NullCoalesce,
+    /// An internal incdec update, distinct from numeric compound arithmetic.
+    IncDec(bool),
+}
+
+/// Parses a direct variable compound assignment statement (`$x += 1`, `$x ??= 2`, etc.).
+///
+/// Consumes the variable name token, then the assignment operator, then the RHS expression.
+/// If the RHS ends with `and`/`or`/`xor` (bitwise assignment with expression chain), falls back
+/// to a full expression parse and emits an `ExprStmt` instead.
+///
+/// Returns the parsed `Assign` statement wrapping the target variable and the computed value
+/// expression, or an `ExprStmt` for the bitwise-chain fallback case.
+pub(super) fn parse_assign(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let start = *pos;
+    let name = match &tokens[*pos].0 {
+        Token::Variable(n) => n.clone(),
+        _ => unreachable!(),
+    };
+    *pos += 1;
+
+    if *pos >= tokens.len() {
+        return Err(CompileError::new(span, "Expected '=' after variable name"));
+    }
+
+    let op = assignment_operator(&tokens[*pos].0)
+        .ok_or_else(|| CompileError::new(span, "Expected '=' after variable name"))?;
+    *pos += 1;
+
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return parse_ref_assign(tokens, pos, name, span);
+    }
+
+    // `$x = require X;` assigns the included file's value (its top-level `return`, or `1`).
+    if op == AssignmentOperator::Assign {
+        if let Some(include_value) = super::super::simple::try_parse_value_include(tokens, pos)? {
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(
+                StmtKind::Assign {
+                    name,
+                    value: include_value,
+                },
+                span,
+            ));
+        }
+    }
+
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::And | Token::Or | Token::Xor)
+    ) {
+        *pos = start;
+        let expr = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+    }
+    expect_semicolon(tokens, pos)?;
+
+    let target = Expr::new(ExprKind::Variable(name.clone()), span);
+    let value = assignment_value(target, op, rhs, span);
+
+    Ok(Stmt::new(StmtKind::Assign { name, value }, span))
+}
+
+/// Parses direct variable reference assignment after the leading `$target =` tokens.
+///
+/// PHP spells reference aliasing as `$target =& $source;`. This parser accepts
+/// direct variable sources and leaves broader lvalue reference targets for
+/// future storage-specific lowering.
+fn parse_ref_assign(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    target: String,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let source = parse_expr(tokens, pos)?;
+    if !is_valid_reference_source(&source.kind) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+}
+
+/// Returns true when an expression is a legal source for `$x = &<source>`.
+///
+/// PHP allows aliasing variables, array elements, named object properties, static properties,
+/// and the results of calls that return by reference. Other expressions are rejected until their
+/// storage-specific lowering is available.
+fn is_valid_reference_source(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
+}
+
+/// Converts a lexer `Token` into an `AssignmentOperator` variant.
+///
+/// Returns `None` for tokens that are not assignment operators.
+pub(super) fn assignment_operator(token: &Token) -> Option<AssignmentOperator> {
+    match token {
+        Token::Assign => Some(AssignmentOperator::Assign),
+        Token::PlusAssign => Some(AssignmentOperator::Compound(BinOp::Add)),
+        Token::MinusAssign => Some(AssignmentOperator::Compound(BinOp::Sub)),
+        Token::StarAssign => Some(AssignmentOperator::Compound(BinOp::Mul)),
+        Token::StarStarAssign => Some(AssignmentOperator::Compound(BinOp::Pow)),
+        Token::SlashAssign => Some(AssignmentOperator::Compound(BinOp::Div)),
+        Token::PercentAssign => Some(AssignmentOperator::Compound(BinOp::Mod)),
+        Token::DotAssign => Some(AssignmentOperator::Compound(BinOp::Concat)),
+        Token::AmpAssign => Some(AssignmentOperator::Compound(BinOp::BitAnd)),
+        Token::PipeAssign => Some(AssignmentOperator::Compound(BinOp::BitOr)),
+        Token::CaretAssign => Some(AssignmentOperator::Compound(BinOp::BitXor)),
+        Token::LessLessAssign => Some(AssignmentOperator::Compound(BinOp::ShiftLeft)),
+        Token::GreaterGreaterAssign => Some(AssignmentOperator::Compound(BinOp::ShiftRight)),
+        Token::QuestionQuestionAssign => Some(AssignmentOperator::NullCoalesce),
+        _ => None,
+    }
+}
+
+/// Builds the value expression for an assignment.
+///
+/// - Plain `Assign`: returns the RHS unchanged.
+/// - `Compound(BinOp)`: wraps `target op= rhs` as a `BinaryOp` node (`target` on the left,
+///   `rhs` on the right) so the codegen emits read-modify-write for the target variable.
+/// - `NullCoalesce`: wraps as a `NullCoalesce` node with `target` as the value and `rhs` as
+///   the default, preserving the short-circuit semantics of `??`.
+/// - `IncDec`: captures the element once and applies ordinary pre-incdec to that local.
+pub(super) fn assignment_value(
+    target: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Expr {
+    match op {
+        AssignmentOperator::Assign => rhs,
+        AssignmentOperator::IncDec(increment) => {
+            let old = crate::syntax::names::generated_local_name(&format!(
+                "__elephc_element_incdec_old_{}_{}", span.line, span.col));
+            let new = crate::syntax::names::generated_local_name(&format!(
+                "__elephc_element_incdec_new_{}_{}", span.line, span.col));
+            let operation = if increment { ExprKind::PreIncrement(old.clone()) }
+                else { ExprKind::PreDecrement(old.clone()) };
+            Expr::new(ExprKind::Assignment {
+                target: Box::new(Expr::new(ExprKind::Variable(new), span)),
+                value: Box::new(Expr::new(operation, span)),
+                result_target: None,
+                prelude: vec![Stmt::new(StmtKind::Assign { name: old, value: target }, span)],
+                conditional_value_temp: None,
+            }, span)
+        }
+        AssignmentOperator::Compound(op) => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(target),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        ),
+        AssignmentOperator::NullCoalesce => Expr::new(
+            ExprKind::NullCoalesce {
+                value: Box::new(target),
+                default: Box::new(rhs),
+            },
+            span,
+        ),
+    }
+}

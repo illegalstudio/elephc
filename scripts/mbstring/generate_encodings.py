@@ -9,6 +9,29 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "crates/elephc-mbstring/src/encoding"
 
 
+# Sorted key/value index fields embedded in the compact layout built by the crate's build.rs.
+DOUBLE_BYTE_INDEXES = {"pairs", "triples", "encode"}
+MOBILE_UTF8_INDEXES = {"decode", "encode"}
+
+
+def indexed_fields(mapping, indexes):
+    """Renders codec fields, embedding sorted indexes through `index_table!`."""
+    return ", ".join(
+        f'{key}: index_table!("{value["file"]}")' if key in indexes
+        else f'{key}: include_bytes!("data/{value["file"]}")'
+        for key, value in mapping.items())
+
+
+def dense_fields(mapping):
+    """Renders a codec whose every table is a dense word array in the shared page pool."""
+    return ", ".join(f'{key}: dense_table!("{value["file"]}")' for key, value in mapping.items())
+
+
+def double_byte_fields(mapping):
+    """Renders one `DoubleByte` field list."""
+    return indexed_fields(mapping, DOUBLE_BYTE_INDEXES)
+
+
 def generate():
     """Write canonical names, aliases, MIME names, and available codec bindings."""
     surface = json.loads((ROOT / "scripts/mbstring/php_surface.json").read_text())
@@ -39,8 +62,10 @@ def generate():
         "//! - Regenerate with `python3 scripts/mbstring/generate_encodings.py`.",
         "//! - Canonical spelling, order, and aliases come from PHP's reflection fixture.",
         "//! - One immutable static prevents codec-table copies at each catalog use site.",
+        "//! - Sorted codec indexes use `index_table!`, which embeds the compact copy built by build.rs.",
+        "//! - Large dense word tables use `dense_table!`, which reads pages shared through build.rs.",
         "",
-        "use super::{catalog::{Codec, EncodingInfo, Slicing}, doublebyte::DoubleByte, euctw::EucTw, gb18030::Gb18030, hz::Hz, iso2022kr::Iso2022Kr, jis::{Jis, Variant}, jis2004::Jis2004, mobile_utf8::MobileUtf8, mobile_sjis::MobileSjis, singlebyte::SingleByte, transfer::Transfer, utf7::Utf7, UnicodeEncoding};",
+        "use super::{catalog::{Codec, EncodingInfo, Slicing}, doublebyte::DoubleByte, euctw::EucTw, gb18030::Gb18030, hz::Hz, iso2022kr::Iso2022Kr, jis::{Jis, Variant}, jis2004::Jis2004, mapping::{dense_table, index_table}, mobile_utf8::MobileUtf8, mobile_sjis::MobileSjis, singlebyte::SingleByte, transfer::Transfer, utf7::Utf7, UnicodeEncoding};",
         "",
         "/// Complete encoding list in PHP's public enumeration order.",
         "pub(super) static ENCODINGS: &[EncodingInfo] = &[",
@@ -58,14 +83,12 @@ def generate():
         elif name == "ISO-2022-JP-2004":
             planes = []
             for plane, source in [("classic", "EUC-JP"), ("extended", "EUC-JP-2004")]:
-                fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                                   for key, value in double["encodings"][source].items())
+                fields = double_byte_fields(double["encodings"][source])
                 planes.append(f"{plane}: DoubleByte {{ {fields} }}")
             codec = "Codec::Jis2004(Jis2004 { " + ", ".join(planes) + " })"
         elif name in jis["encodings"]:
             mapping = double["encodings"]["CP51932" if name == "ISO-2022-JP-MS" else "EUC-JP"]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = double_byte_fields(mapping)
             encoder_name = "CP50221" if name == "CP50220" else name
             encode = jis["encodings"][encoder_name]["encode"]["file"]
             errors = jis["encodings"]["ISO-2022-JP" if name == "JIS" else encoder_name]["encode"]["file"]
@@ -76,28 +99,24 @@ def generate():
                 supplementary = 'include_bytes!("data/jis-kddi-supplementary.bin")'
                 composites = 'include_bytes!("data/jis-kddi-composites.bin")'
             codec = (f'Codec::Jis(Jis {{ base: DoubleByte {{ {fields} }}, '
-                     f'encode: include_bytes!("data/{encode}"), error_encode: include_bytes!("data/{errors}"), '
+                     f'encode: dense_table!("{encode}"), error_encode: dense_table!("{errors}"), '
                      f'supplementary: {supplementary}, composites: {composites}, '
                      f'variant: Variant::{variant} }})')
         elif name == "HZ":
             mapping = double["encodings"]["EUC-CN"]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = double_byte_fields(mapping)
             codec = f"Codec::Hz(Hz(DoubleByte {{ {fields} }}))"
         elif name == "ISO-2022-KR":
             mapping = double["encodings"]["UHC"]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = double_byte_fields(mapping)
             codec = f"Codec::Iso2022Kr(Iso2022Kr(DoubleByte {{ {fields} }}))"
         elif name in gb18030["encodings"]:
             mapping = gb18030["encodings"][name]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = dense_fields(mapping)
             codec = f"Codec::Gb18030(Gb18030 {{ {fields} }})"
         elif name in euctw["encodings"]:
             mapping = euctw["encodings"][name]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = dense_fields(mapping)
             codec = f"Codec::EucTw(EucTw {{ {fields} }})"
         elif name in single["encodings"]:
             mapping = single["encodings"][name]
@@ -107,8 +126,7 @@ def generate():
                      "})")
         elif name in double["encodings"]:
             mapping = double["encodings"][name]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = double_byte_fields(mapping)
             if name.startswith("SJIS-Mobile#"):
                 flags = "false" if name.endswith("DOCOMO") else "true"
                 codec = f"Codec::MobileSjis(MobileSjis {{ base: DoubleByte {{ {fields} }}, flags: {flags} }})"
@@ -116,8 +134,7 @@ def generate():
                 codec = f"Codec::DoubleByte(DoubleByte {{ {fields} }})"
         elif name in mobile["encodings"]:
             mapping = mobile["encodings"][name]
-            fields = ", ".join(f'{key}: include_bytes!("data/{value["file"]}")'
-                               for key, value in mapping.items())
+            fields = indexed_fields(mapping, MOBILE_UTF8_INDEXES)
             codec = f"Codec::MobileUtf8(MobileUtf8 {{ {fields} }})"
         else:
             raise ValueError(f"Missing native codec for canonical encoding {name}")

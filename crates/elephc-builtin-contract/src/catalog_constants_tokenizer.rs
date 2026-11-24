@@ -174,3 +174,34 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     token("T_YIELD", 281),
     token("T_YIELD_FROM", 282),
 ];
+
+/// Returns the PHP 8.5 tokenizer identifier for `name`, or `-1` when the catalog has no such token.
+///
+/// The lookup runs at compile time when the argument is a literal, letting the parser
+/// validation view compare integer token IDs without hashing the shared catalog per token.
+pub const fn token_const_id(name: &str) -> i64 {
+    let bytes = name.as_bytes();
+    let mut index = 0;
+    while index < CONSTANTS.len() {
+        let constant = &CONSTANTS[index];
+        if constant.name.len() == bytes.len() {
+            let candidate = constant.name.as_bytes();
+            let mut offset = 0;
+            let mut same = true;
+            while offset < bytes.len() {
+                if candidate[offset] != bytes[offset] {
+                    same = false;
+                    break;
+                }
+                offset += 1;
+            }
+            if same {
+                if let ConstValue::Int(value) = constant.value {
+                    return value;
+                }
+            }
+        }
+        index += 1;
+    }
+    -1
+}

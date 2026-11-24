@@ -7,7 +7,7 @@
 #   ./scripts/ios-relink-spike.sh device          # iOS device (build + link only)
 #   ./scripts/ios-relink-spike.sh --keep          # keep the work directory
 #
-# This exercises the shipping path: `elephc --target ios-* --emit staticlib`.
+# This exercises the shipping path: `elephc build --target ios-* --emit staticlib`.
 # An earlier version assembled for macOS and relinked against the iOS SDK by
 # hand, on the theory that only the SDK differed. It does not — a Mach-O object
 # records the platform it was assembled for, and ld refuses to mix them:
@@ -90,7 +90,7 @@ PHP
 export XDG_CACHE_HOME="$WORK/cache"
 
 echo "==> compiling for $ELEPHC_TARGET"
-(cd "$WORK" && "$ELEPHC" --target "$ELEPHC_TARGET" --emit staticlib spike.php)
+(cd "$WORK" && "$ELEPHC" build --target "$ELEPHC_TARGET" --emit staticlib spike.php)
 
 echo "==> archive members and their Mach-O platform"
 (cd "$WORK" && for member in $(ar t libspike.a | grep -v SYMDEF); do

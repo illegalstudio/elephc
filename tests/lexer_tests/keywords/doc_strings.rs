@@ -56,4 +56,21 @@ fn test_nowdoc_no_interpolation_token() {
     assert!(!t.contains(&Token::Variable("name".into())));
 }
 
-// --- Const keyword ---
+/// A multibyte closing label consumes bytes through the label and leaves punctuation intact.
+#[test]
+fn test_unicode_heredoc_label_leaves_following_tokens() {
+    let tokens = tokenize("<?php echo <<<标签\ncontent\n标签; echo 7;")
+        .expect("Unicode heredoc should tokenize");
+    let kinds: Vec<_> = tokens.iter().map(|(token, _)| token.clone()).collect();
+    assert_eq!(kinds, [
+        Token::OpenTag,
+        Token::Echo,
+        Token::StringLiteral("content".into()),
+        Token::Semicolon,
+        Token::Echo,
+        Token::IntLiteral(7),
+        Token::Semicolon,
+        Token::Eof,
+    ]);
+    assert_eq!((tokens[3].1.span.line, tokens[3].1.span.col), (3, 3));
+}

@@ -128,7 +128,7 @@ fn phpext_classes_float_constants_require_static_widening_before_sdk() {
         let path = project.0.join(format!("opaque_float_{index}.php"));
         fs::write(&path, source).unwrap();
         for terminal in ["--check", "--emit-ir"] {
-            let output = Command::new(compiler_binary()).args(["--emit", "phpext", terminal]).arg(&path)
+            let output = Command::new(compiler_binary()).args(["build", "--emit", "phpext", terminal]).arg(&path)
                 .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "{source}: {terminal}");
@@ -139,12 +139,12 @@ fn phpext_classes_float_constants_require_static_widening_before_sdk() {
     }
     let path = project.0.join("unused_opaque_float.php");
     fs::write(&path, "<?php class UnusedOpaqueFloat { private const float VALUE = [2][0.5]; } #[Export] function plain_export(): int { return 42; }").unwrap();
-    let output = Command::new(compiler_binary()).args(["--emit", "phpext", "--check"]).arg(&path)
+    let output = Command::new(compiler_binary()).args(["build", "--emit", "phpext", "--check"]).arg(&path)
         .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let path = project.0.join("unused_opaque_with_class.php");
     fs::write(&path, "<?php class AnotherUnusedOpaque { private const float VALUE = [2][0.5]; } interface AnotherUnusedUnits { public const float VALUE = [2][0.5]; } #[Export] final class PlainExportedClass {}").unwrap();
-    let output = Command::new(compiler_binary()).args(["--emit", "phpext", "--check"]).arg(&path)
+    let output = Command::new(compiler_binary()).args(["build", "--emit", "phpext", "--check"]).arg(&path)
         .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }

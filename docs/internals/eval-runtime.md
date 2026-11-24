@@ -523,8 +523,9 @@ dependent defaults, and the specialization depth limit shared by the compiler an
 Compiler adapters live in `src/generics/shared.rs`; runtime dispatch lives in
 `crates/elephc-magician/src/interpreter/generics/` and its parent module.
 
-The Magician parser retains an `EvalGenericTemplate` containing a declaration prototype, lexer
-tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
+Chopper records the positions of type-parameter uses while parsing the declaration. Magician
+lowers the AST to EvalIR and retains an `EvalGenericTemplate` with the declaration prototype,
+runtime tokens, lexical imports and namespace, and those token positions. Replay
 substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
 slots have separate lexical identities so promotion and shadowing remain correct.
 Class-reference type arguments are consumed only after lookahead parses a complete list;

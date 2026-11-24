@@ -44,7 +44,7 @@ system-library fallback:
 
 ```bash
 elephc native add pcre2
-elephc app.php
+elephc build app.php
 ```
 
 Declaring PCRE2 does not force it into a program that does not use regex. Exact
@@ -60,7 +60,7 @@ the same no-system-fallback contract (no Homebrew/distro `-lcurl`/`-lssl`):
 
 ```bash
 elephc native add curl
-elephc app.php --with-curl
+elephc build app.php --with-curl
 ```
 
 libxml2 backs the `xml` bridge the same way: `elephc_xml`'s parser and writer
@@ -73,7 +73,7 @@ SDK's `libiconv`, which glibc already provides on Linux:
 
 ```bash
 elephc native add libxml2
-elephc app.php --with-xml
+elephc build app.php --with-xml
 ```
 
 Symmetric `openssl_*` calls use the separate `openssl` bridge and managed
@@ -88,9 +88,9 @@ Links an extra native library. Accepts the spaced form, the short flag, and the
 attached form; repeat it for multiple libraries.
 
 ```bash
-elephc app.php --link sqlite3
-elephc app.php -l sqlite3
-elephc app.php -lsqlite3
+elephc build app.php --link sqlite3
+elephc build app.php -l sqlite3
+elephc build app.php -lsqlite3
 ```
 
 ### `--link-path` / `-L`
@@ -98,8 +98,8 @@ elephc app.php -lsqlite3
 Adds a directory to the library search path. Repeatable.
 
 ```bash
-elephc app.php -l sqlite3 -L /opt/homebrew/lib
-elephc app.php --link-path /usr/local/lib
+elephc build app.php -l sqlite3 -L /opt/homebrew/lib
+elephc build app.php --link-path /usr/local/lib
 ```
 
 ### `--framework`
@@ -107,7 +107,7 @@ elephc app.php --link-path /usr/local/lib
 Links a macOS framework. Repeatable.
 
 ```bash
-elephc app.php --framework Cocoa --framework Metal
+elephc build app.php --framework Cocoa --framework Metal
 ```
 
 `extern "libname" { ... }` blocks in source add their own `-l` flags
@@ -156,14 +156,14 @@ available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
 ```bash
-elephc app.php --with-pdo
-elephc app.php --with-crypto --with-tls
-elephc app.php --with-bcmath
-elephc app.php --with-random
-elephc app.php --with-mbstring
-elephc app.php --with-iconv
-elephc app.php --with-pcntl
-elephc app.php --with-eval
+elephc build app.php --with-pdo
+elephc build app.php --with-crypto --with-tls
+elephc build app.php --with-bcmath
+elephc build app.php --with-random
+elephc build app.php --with-mbstring
+elephc build app.php --with-iconv
+elephc build app.php --with-pcntl
+elephc build app.php --with-eval
 ```
 
 `--with-pcntl` force-links the process-control bridge for indirect or opaque
@@ -190,7 +190,7 @@ provider with Magician:
 
 ```bash
 elephc native add pcre2
-elephc --with-regex app.php
+elephc build --with-regex app.php
 ```
 
 Without it, dynamic eval still compiles and runs non-regex code, but `preg_*`
@@ -214,7 +214,7 @@ package.
 
 ```bash
 elephc native add curl
-elephc app.php --with-curl
+elephc build app.php --with-curl
 ```
 
 `--with-xml` is the second such flag. The `elephc_xml` archive carries the
@@ -229,7 +229,7 @@ accommodates:
 
 ```bash
 elephc native add libxml2
-elephc app.php --with-xml
+elephc build app.php --with-xml
 ```
 
 `--with-tidy` has the same shape. The `elephc_tidy` archive carries the
@@ -240,7 +240,7 @@ the same; the flag only adds the force-link and the prelude injection.
 
 ```bash
 elephc native add libtidy
-elephc app.php --with-tidy
+elephc build app.php --with-tidy
 ```
 
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
@@ -402,11 +402,16 @@ program never touches cost nothing. Programs that keep more live data need more.
 Sets the heap size in bytes. The minimum is `65536` (64 KB).
 
 ```bash
-elephc --heap-size=16777216 heavy.php   # 16 MB
+elephc build --heap-size=16777216 heavy.php   # 16 MB
 ```
 
 If a program exhausts its heap it aborts with a fatal "heap memory exhausted"
-error; raising `--heap-size` is the fix. See [Memory Model](../internals/memory-model.md).
+error; raising `--heap-size` is the fix. `--ini memory_limit=…` can lower the
+runtime ceiling below the reservation, and the compiled binary also honours
+`ini_set('memory_limit', …)` at run time. Raising the limit beyond the reserved arena is
+refused with PHP's `Failed to set memory limit` warning and leaves the previous ceiling in
+place; rebuild with a larger `--heap-size` to allow it.
+See [Memory Model](../internals/memory-model.md).
 
 ## Runtime dead stripping
 
@@ -509,9 +514,9 @@ projects and LFC source: LFC `ifdef` consumes the symbol while PHP source
 remains audited.
 
 ```bash
-elephc --define DEBUG app.php
-elephc --define=DEBUG --define=METAL app.php
-elephc --strict-php --define DEBUG app.lfc
+elephc build --define DEBUG app.php
+elephc build --define=DEBUG --define=METAL app.php
+elephc build --strict-php --define DEBUG app.lfc
 ```
 
 ```php

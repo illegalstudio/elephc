@@ -9,17 +9,51 @@
 //! - Codes match the declaration order of `Uri\WhatWg\UrlValidationErrorType`; changing one
 //!   is a PHP-visible break.
 //! - Contexts are raw bytes because inputs are binary-safe; the C ABI hex-encodes them.
+//! - Input-derived contexts share one `Arc<[u8]>` source and carry byte ranges, so one
+//!   invalid byte warning costs sixteen bytes instead of a copy of the whole remaining URL.
+//!   Synthetic contexts (a decoded host, `b"/"`, `b""`) keep an owned copy.
+
+use std::sync::Arc;
 
 /// One WHATWG URL validation log entry.
 #[derive(Clone, Debug)]
 pub struct ValidationError {
-    /// Original input bytes the entry points at, truncated at the first NUL like PHP's
-    /// `zend_update_property_string` does.
-    pub context: Vec<u8>,
+    /// The bytes the entry points at, viewed through a shared source when possible.
+    context: Context,
     /// Stable `UrlValidationErrorType` code.
     pub type_code: i64,
     /// Whether this entry is fatal (`failure`) or a warning.
     pub failure: bool,
+}
+
+/// Storage for one validation entry's context bytes.
+#[derive(Clone, Debug)]
+enum Context {
+    /// A standalone context that is not a slice of the parsed input.
+    Owned(Vec<u8>),
+    /// A range into the parsed input, shared by every entry that points into it.
+    Shared {
+        /// The complete input bytes, cloned by pointer.
+        source: Arc<[u8]>,
+        /// Inclusive start offset.
+        start: usize,
+        /// Exclusive end offset.
+        end: usize,
+    },
+}
+
+impl ValidationError {
+    /// Returns the PHP-visible context bytes, truncated at the first NUL.
+    pub fn context(&self) -> &[u8] {
+        let bytes = match &self.context {
+            Context::Owned(bytes) => bytes.as_slice(),
+            Context::Shared { source, start, end } => &source[*start..*end],
+        };
+        match bytes.iter().position(|byte| *byte == 0) {
+            Some(end) => &bytes[..end],
+            None => bytes,
+        }
+    }
 }
 
 /// A failed operation's message and optional validation log.
@@ -126,14 +160,45 @@ pub fn type_name(code: i64) -> &'static str {
     }
 }
 
-/// Builds a validation entry, truncating its context at the first NUL.
+/// Builds a standalone validation entry, truncating its context at the first NUL.
 pub fn entry(context: &[u8], type_code: i64, failure: bool) -> ValidationError {
     let end = context
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(context.len());
     ValidationError {
-        context: context[..end].to_vec(),
+        context: Context::Owned(context[..end].to_vec()),
+        type_code,
+        failure,
+    }
+}
+
+/// Builds a validation entry whose context is the input suffix starting at `start`.
+pub fn entry_at(
+    source: &Arc<[u8]>,
+    start: usize,
+    type_code: i64,
+    failure: bool,
+) -> ValidationError {
+    entry_range(source, start, source.len(), type_code, failure)
+}
+
+/// Builds a validation entry whose context is one range of the shared input.
+pub fn entry_range(
+    source: &Arc<[u8]>,
+    start: usize,
+    end: usize,
+    type_code: i64,
+    failure: bool,
+) -> ValidationError {
+    let start = start.min(source.len());
+    let end = end.min(source.len()).max(start);
+    ValidationError {
+        context: Context::Shared {
+            source: Arc::clone(source),
+            start,
+            end,
+        },
         type_code,
         failure,
     }

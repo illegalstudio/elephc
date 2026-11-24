@@ -105,11 +105,11 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     ]),
             )
             .build(),
-        enum_declaration("UrlHostType", &["IpV4", "IpV6", "Domain", "Opaque", "Empty"]),
         class("Url").span(Span::new(1, 1))
             .final_()
             .private_prop("__elephc_uri_handle", t_nullable(TypeExpr::Int), Some(e_null()))
             .private_static_prop("__elephc_charge", t_array(), Some(e_array(vec![])))
+            .private_static_prop("__elephc_handle_owner", t_array(), Some(e_array(vec![])))
             .method(
                 method("parse")
                     .static_()
@@ -118,14 +118,35 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param_by_ref_default("errors", None, e_null())
                     .returns(t_nullable(t_class("static")))
                     .body(vec![
-                        s_try(vec![
-                            s_return(e_new_self(vec![e_var("uri"), e_var("baseUrl"), e_var("errors")])),
-                        ], vec![
-                            (vec!["\\Uri\\WhatWg\\InvalidUrlException"], Some("e"), vec![
-                                s_assign("errors", e_prop(e_var("e"), "errors")),
-                                s_return(e_null()),
+                        super::s_reject_wrong_uri_instance(
+                            "baseUrl",
+                            "\\Uri\\WhatWg\\Url",
+                            "Uri\\WhatWg\\Url::parse(): Argument #2 ($baseUrl) must be of type ?Uri\\WhatWg\\Url, ",
+                            true,
+                        ),
+                        s_if(
+                            e_binop(e_call("func_num_args", vec![]), BinOp::GtEq, e_int(3)),
+                            vec![
+                                s_try(vec![
+                                    s_return(e_new_self(vec![e_var("uri"), e_var("baseUrl"), e_var("errors")])),
+                                ], vec![
+                                    (vec!["\\Uri\\WhatWg\\InvalidUrlException"], Some("e"), vec![
+                                        s_assign("errors", e_prop(e_var("e"), "errors")),
+                                        s_return(e_null()),
+                                    ]),
+                                ], None),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_try(vec![
+                                    s_return(e_new_self(vec![e_var("uri"), e_var("baseUrl")])),
+                                ], vec![
+                                    (vec!["\\Uri\\WhatWg\\InvalidUrlException"], Some("_ignored"), vec![
+                                        s_return(e_null()),
+                                    ]),
+                                ], None),
                             ]),
-                        ], None),
+                        ),
                     ]),
             )
             .method(
@@ -146,13 +167,11 @@ pub(super) fn whatwg_declaration() -> Stmt {
                         s_if(
                             e_binop(e_var("baseUrl"), BinOp::StrictNotEq, e_null()),
                             vec![
-                                s_if(
-                                    e_not(e_instance_of(e_var("baseUrl"), "\\Uri\\WhatWg\\Url")),
-                                    vec![
-                                        s_throw(e_new_fq("TypeError", vec![e_str("Uri\\WhatWg\\Url::__construct(): Argument #2 ($baseUrl) must be of type ?Uri\\WhatWg\\Url")])),
-                                    ],
-                                    vec![],
-                                    None,
+                                super::s_reject_wrong_uri_instance(
+                                    "baseUrl",
+                                    "\\Uri\\WhatWg\\Url",
+                                    "Uri\\WhatWg\\Url::__construct(): Argument #2 ($baseUrl) must be of type ?Uri\\WhatWg\\Url, ",
+                                    true,
                                 ),
                                 s_assign("base", e_null_coalesce(e_prop(e_var("baseUrl"), "__elephc_uri_handle"), e_int(0))),
                             ],
@@ -162,28 +181,37 @@ pub(super) fn whatwg_declaration() -> Stmt {
                         s_assign("handle", e_call("\\elephc_uri_parse", vec![e_int(1), e_call("\\bin2hex", vec![e_var("uri")]), e_var("base")])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
-                            {
-                                // PHP 8.6 resets the caller's `$softErrors` on failure; the
-                                // validation errors remain on the thrown exception instead.
-                                // Earlier profiles leave the caller's value untouched.
-                                let mut failure = Vec::new();
-                                if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
-                                    failure.push(s_assign("softErrors", e_array(vec![])));
-                                }
-                                failure.push(s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])));
-                                failure
-                            },
+                            vec![
+                                s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])),
+                            ],
                             vec![],
                             None,
                         ),
-                        s_assign("warnings", e_self_call("__elephc_errors", vec![])),
-                        s_assign("softErrors", e_var("warnings")),
+                        // Attach the native handle before materializing warnings. Building one
+                        // object per parse warning can exhaust an exported library's allocator;
+                        // the partially constructed object must own the handle so cleanup can
+                        // release it instead of leaking the native URL.
                         s_prop_assign(e_this(), "__elephc_uri_handle", e_var("handle")),
+                        // The soft-error list is optional. Building one object per parse
+                        // warning for a hostile URL is quadratic in the input size; only
+                        // materialize it when the caller supplied a by-reference slot.
+                        s_if(
+                            e_binop(e_call("func_num_args", vec![]), BinOp::GtEq, e_int(3)),
+                            vec![
+                                // A supplied slot receives the warning list even when its
+                                // value started as null; an omitted argument is a local.
+                                s_assign("warnings", e_self_call("__elephc_errors", vec![])),
+                                s_assign("softErrors", e_var("warnings")),
+                            ],
+                            vec![],
+                            None,
+                        ),
                         s_expr(e_self_call("__elephc_set_charge", vec![e_this(), e_var("handle")])),
                     ]),
             )
             .method(
                 method("__destruct")
+                    .private()
                     .body(vec![
                         s_if(
                             e_binop(e_this_prop("__elephc_uri_handle"), BinOp::StrictNotEq, e_null()),
@@ -203,7 +231,26 @@ pub(super) fn whatwg_declaration() -> Stmt {
                         s_if(
                             e_binop(e_this_prop("__elephc_uri_handle"), BinOp::StrictNotEq, e_null()),
                             vec![
-                                s_prop_assign(e_this(), "__elephc_uri_handle", e_call("\\elephc_uri_clone", vec![e_this_prop("__elephc_uri_handle")])),
+                                // PHP does not expose the engine's `__clone` hook as a callable
+                                // method. The clone operator invokes it on a NEW object id; a
+                                // direct call still carries the original object's owner entry.
+                                s_if(
+                                    e_binop(
+                                        e_null_coalesce(
+                                            e_index(
+                                                e_self_static_prop("__elephc_handle_owner"),
+                                                e_cast(CastType::String, e_call("\\spl_object_id", vec![e_this()])),
+                                            ),
+                                            e_null(),
+                                        ),
+                                        BinOp::StrictEq,
+                                        e_this_prop("__elephc_uri_handle"),
+                                    ),
+                                    vec![s_throw(e_new_fq("Error", vec![e_binop(e_str("Call to undefined method "), BinOp::Concat, e_binop(e_self_class(), BinOp::Concat, e_str("::__clone()"))) ]))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "__elephc_uri_handle", e_call("\\elephc_uri_clone", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
                                 s_expr(e_self_call("__elephc_set_charge", vec![e_this(), e_this_prop("__elephc_uri_handle")])),
                             ],
                             vec![],
@@ -279,27 +326,6 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     ]),
             )
             .method(
-                method("getHostType")
-                    .returns(t_nullable(t_class("\\Uri\\WhatWg\\UrlHostType")))
-                    .body(vec![
-                        s_assign("type", e_call("\\elephc_uri_host_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
-                        s_return(e_match(e_var("type"), vec![
-                            (vec![e_int(0)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "IpV4")),
-                            (vec![e_int(1)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "IpV6")),
-                            (vec![e_int(2)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Domain")),
-                            (vec![e_int(3)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Opaque")),
-                            (vec![e_int(4)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Empty")),
-                        ], Some(e_null()))),
-                    ]),
-            )
-            .method(
-                method("isSpecialScheme")
-                    .returns(TypeExpr::Bool)
-                    .body(vec![
-                        s_return(e_call("\\in_array", vec![e_method_call(e_this(), "getScheme", vec![]), e_array(vec![e_str("http"), e_str("https"), e_str("ws"), e_str("wss"), e_str("ftp"), e_str("file")]), e_bool(true)])),
-                    ]),
-            )
-            .method(
                 method("getPort")
                     .returns(t_nullable(TypeExpr::Int))
                     .body(vec![
@@ -312,16 +338,29 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param("port", t_nullable(TypeExpr::Int))
                     .returns(t_class("static"))
                     .body(vec![
+                        // Clone before the native copy. The receiver keeps its handle, so a
+                        // failed allocation cannot leave it cleared; the new native URL does
+                        // not exist yet, so it cannot leak across the clone either.
+                        s_assign("copy", e_clone(e_this())),
                         s_assign("handle", e_call("\\elephc_uri_with_port", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_ternary(e_binop(e_var("port"), BinOp::StrictEq, e_null()), e_int(0), e_var("port")), e_ternary(e_binop(e_var("port"), BinOp::StrictEq, e_null()), e_int(1), e_int(0))])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
                             vec![
+                                s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_prop(e_var("copy"), "__elephc_uri_handle"), e_int(0))])),
+                                s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_null()),
+                                s_expr(e_self_call("__elephc_drop_charge", vec![e_var("copy")])),
                                 s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])),
                             ],
                             vec![],
                             None,
                         ),
-                        s_return(e_method_call(e_this(), "__elephc_rebind", vec![e_var("handle")])),
+                        // The clone owns a duplicate of the old native URL; replace it with the
+                        // new handle and release the duplicate before charging the copy.
+                        s_assign("previous", e_prop(e_var("copy"), "__elephc_uri_handle")),
+                        s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_var("handle")),
+                        s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_var("previous"), e_int(0))])),
+                        s_expr(e_self_call("__elephc_set_charge", vec![e_var("copy"), e_var("handle")])),
+                        s_return(e_var("copy")),
                     ]),
             )
             .method(
@@ -337,14 +376,6 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .returns(t_class("static"))
                     .body(vec![
                         s_return(e_method_call(e_this(), "__elephc_with", vec![e_int(6), e_var("path")])),
-                    ]),
-            )
-            .method(
-                method("__elephc_override_opaque_path")
-                    .param("path", TypeExpr::Str)
-                    .returns(TypeExpr::Void)
-                    .body(vec![
-                        s_expr(e_call("\\elephc_uri_set_opaque_path", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_call("\\bin2hex", vec![e_var("path")])])),
                     ]),
             )
             .method(
@@ -383,13 +414,11 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param_default("comparisonMode", t_class("\\Uri\\UriComparisonMode"), e_class_const("\\Uri\\UriComparisonMode", "ExcludeFragment"))
                     .returns(TypeExpr::Bool)
                     .body(vec![
-                        s_if(
-                            e_not(e_instance_of(e_var("url"), "\\Uri\\WhatWg\\Url")),
-                            vec![
-                                s_throw(e_new_fq("TypeError", vec![e_str("Uri\\WhatWg\\Url::equals(): Argument #1 ($url) must be of type Uri\\WhatWg\\Url")])),
-                            ],
-                            vec![],
-                            None,
+                        super::s_reject_wrong_uri_instance(
+                            "url",
+                            "\\Uri\\WhatWg\\Url",
+                            "Uri\\WhatWg\\Url::equals(): Argument #1 ($url) must be of type Uri\\WhatWg\\Url, ",
+                            false,
                         ),
                         s_assign("result", e_call("\\elephc_uri_equals", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_null_coalesce(e_prop(e_var("url"), "__elephc_uri_handle"), e_int(0)), e_ternary(e_binop(e_var("comparisonMode"), BinOp::StrictEq, e_class_const("\\Uri\\UriComparisonMode", "IncludeFragment")), e_int(1), e_int(0))])),
                         s_return(e_binop(e_var("result"), BinOp::StrictNotEq, e_int(0))),
@@ -415,7 +444,16 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param_by_ref_default("softErrors", None, e_null())
                     .returns(t_class("static"))
                     .body(vec![
-                        s_return(e_new_self(vec![e_var("uri"), e_this(), e_var("softErrors")])),
+                        s_if(
+                            e_binop(e_call("func_num_args", vec![]), BinOp::GtEq, e_int(2)),
+                            vec![
+                                s_return(e_new_self(vec![e_var("uri"), e_this(), e_var("softErrors")])),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_return(e_new_self(vec![e_var("uri"), e_this()])),
+                            ]),
+                        ),
                     ]),
             )
             .method(
@@ -503,33 +541,27 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param("value", t_nullable(TypeExpr::Str))
                     .returns(t_class("static"))
                     .body(vec![
+                        // Clone before the native copy. The receiver keeps its handle, so a
+                        // failed allocation cannot leave it cleared; the new native URL does
+                        // not exist yet, so it cannot leak across the clone either.
+                        s_assign("copy", e_clone(e_this())),
                         s_assign("handle", e_call("\\elephc_uri_with", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_var("component"), e_ternary(e_binop(e_var("value"), BinOp::StrictEq, e_null()), e_str(""), e_call("\\bin2hex", vec![e_var("value")])), e_ternary(e_binop(e_var("value"), BinOp::StrictEq, e_null()), e_int(1), e_int(0))])),
                         s_if(
                             e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
                             vec![
+                                s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_prop(e_var("copy"), "__elephc_uri_handle"), e_int(0))])),
+                                s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_null()),
+                                s_expr(e_self_call("__elephc_drop_charge", vec![e_var("copy")])),
                                 s_throw(e_new_fq("Uri\\WhatWg\\InvalidUrlException", vec![e_self_call("__elephc_message", vec![]), e_self_call("__elephc_errors", vec![])])),
                             ],
                             vec![],
                             None,
                         ),
-                        s_return(e_method_call(e_this(), "__elephc_rebind", vec![e_var("handle")])),
-                    ]),
-            )
-            .method(
-                method("__elephc_rebind")
-                    .private()
-                    .param("handle", TypeExpr::Int)
-                    .returns(t_class("static"))
-                    .body(vec![
-                        // Clear the handle before cloning: `__clone()` then has nothing to
-                        // duplicate, and the clone receives the new handle directly below.
-                        // The class is final and `__clone()` runs no user code, so restoring the
-                        // original handle immediately after the clone cannot be observed.
-                        s_assign("saved", e_this_prop("__elephc_uri_handle")),
-                        s_prop_assign(e_this(), "__elephc_uri_handle", e_null()),
-                        s_assign("copy", e_clone(e_this())),
-                        s_prop_assign(e_this(), "__elephc_uri_handle", e_var("saved")),
+                        // The clone owns a duplicate of the old native URL; replace it with the
+                        // new handle and release the duplicate before charging the copy.
+                        s_assign("previous", e_prop(e_var("copy"), "__elephc_uri_handle")),
                         s_prop_assign(e_var("copy"), "__elephc_uri_handle", e_var("handle")),
+                        s_expr(e_call("\\elephc_uri_free", vec![e_null_coalesce(e_var("previous"), e_int(0))])),
                         s_expr(e_self_call("__elephc_set_charge", vec![e_var("copy"), e_var("handle")])),
                         s_return(e_var("copy")),
                     ]),
@@ -570,7 +602,10 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .body(vec![
                         s_assign("errors", e_array(vec![])),
                         s_assign("count", e_call("\\elephc_uri_error_count", vec![])),
-                        error_loop(),
+                        s_for(Some(s_assign("index", e_int(0))), Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("index"))), vec![
+                            s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
+                            s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
+                        ]),
                         s_return(e_var("errors")),
                     ]),
             )
@@ -837,6 +872,11 @@ pub(super) fn whatwg_declaration() -> Stmt {
                             e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
                             e_call("\\array_fill", vec![e_int(0), e_var("units"), e_int(0)]),
                         ),
+                        s_self_static_prop_array_assign(
+                            "__elephc_handle_owner",
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                            e_var("handle"),
+                        ),
                     ]),
             )
             .method(
@@ -846,53 +886,19 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .param("object", t_class("object"))
                     .returns(TypeExpr::Void)
                     .body(vec![
-                        s_typed_assign(t_array(), "map", e_self_static_prop("__elephc_charge")),
-                        s_expr(e_call("unset", vec![e_index(e_var("map"), e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])))])),
-                        s_self_static_prop_assign("__elephc_charge", e_var("map")),
+                        // Remove the entry in place. Copying the map out, unsetting, and storing it
+                        // back would COW-duplicate every live entry on each destruction, turning
+                        // teardown of N URI objects into O(N^2) work.
+                        s_expr(e_call("unset", vec![e_index(
+                            e_self_static_prop("__elephc_charge"),
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                        )])),
+                        s_expr(e_call("unset", vec![e_index(
+                            e_self_static_prop("__elephc_handle_owner"),
+                            e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
+                        )])),
                     ]),
             )
             .build()
     ])
-}
-
-/// Builds one unit-enum declaration with the given case names.
-/// Builds the `UrlValidationError` collection loop for the active PHP profile.
-///
-/// PHP 8.6 reports the validation errors in the order they are detected. PHP 8.5 and
-/// earlier exposed the same list reversed, so the pre-8.6 profile walks the bridge's
-/// detection-ordered list backwards.
-fn error_loop() -> Stmt {
-    let body = vec![
-        s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
-        s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
-    ];
-    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
-        s_for(Some(s_assign("index", e_int(0))), Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("index"))), body)
-    } else {
-        s_for(Some(s_assign("index", e_binop(e_var("count"), BinOp::Sub, e_int(1)))), Some(e_binop(e_var("index"), BinOp::GtEq, e_int(0))), Some(s_expr(e_post_dec("index"))), body)
-    }
-}
-
-fn enum_declaration(name: &str, cases: &[&str]) -> Stmt {
-    Stmt::new(
-        crate::parser::ast::StmtKind::EnumDecl {
-            name: name.to_string(),
-            generics: None,
-            backing_type: None,
-            cases: cases
-                .iter()
-                .map(|case| crate::parser::ast::EnumCaseDecl {
-                    name: (*case).to_string(),
-                    value: None,
-                    span: Span::dummy(),
-                    attributes: Vec::new(),
-                })
-                .collect(),
-            implements: Vec::new(),
-            trait_uses: Vec::new(),
-            methods: Vec::new(),
-            constants: Vec::new(),
-        },
-        Span::dummy(),
-    )
 }

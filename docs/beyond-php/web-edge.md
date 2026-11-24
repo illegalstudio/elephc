@@ -1,6 +1,6 @@
 ---
 title: "Edge Deployment"
-description: "Run an elephc --web origin behind Caddy, nginx, HAProxy, Traefik, Apache, Ferron, or a cloud load balancer."
+description: "Run an elephc build --web origin behind Caddy, nginx, HAProxy, Traefik, Apache, Ferron, or a cloud load balancer."
 sidebar:
   order: 8
 ---
@@ -37,7 +37,7 @@ Unix domain socket, or loopback TCP when a Unix socket is not available.
 Compile the example and start it on a Unix socket:
 
 ```bash
-cargo run -- --web examples/web-edge/main.php
+cargo run -- build --web examples/web-edge/main.php
 ./examples/web-edge/main --listen unix:/run/elephc/app.sock --workers 4
 ```
 

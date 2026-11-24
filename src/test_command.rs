@@ -4,7 +4,7 @@
 //! prelude forced and compile-time discovery on, runs the binary, and returns its verdict.
 //!
 //! Called from:
-//! - `crate::main()` through `cli::Command::Test`.
+//! - `crate::entry::run()` through `cli::Command::Test`.
 //!
 //! Key details:
 //! - The entry is VIRTUAL: `<root>/.elephc-test.lfc` is never written. Its directory is what
@@ -92,8 +92,8 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
     let mut args = vec!["elephc".to_string(), logical_entry];
     args.extend(command.compile_args.iter().cloned());
     let mut config = crate::cli::parse_compile_args(&args);
-    crate::apply_project_ini(&mut config);
-    crate::emit_ini_override_warnings(&config);
+    crate::entry::apply_project_ini(&mut config);
+    crate::entry::emit_ini_override_warnings(&config);
     // The report path is resolved against the caller's directory now, so the suite writes
     // it where the user pointed even though the binary lives under the cache.
     let junit = command.junit.as_deref().map(|path| {

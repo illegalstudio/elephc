@@ -266,6 +266,16 @@ pub(super) fn lower_lazy_property_isset_operand(
     }
     match property_isset_action(ctx, object, property, arg)? {
         IssetPropertyAction::Fallback => None,
+        IssetPropertyAction::HashProbe => {
+            let probed = super::property_access::lower_dynamic_property_fetch(
+                ctx,
+                object,
+                &Expr::new(ExprKind::StringLiteral(property.to_string()), arg.span),
+                crate::ir::PropertyFetchMode::Isset,
+                arg,
+            );
+            Some(probe_value_is_set(ctx, probed, arg))
+        }
         IssetPropertyAction::Magic => {
             let object = lower_member_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
@@ -284,6 +294,9 @@ pub(super) fn lower_lazy_property_isset_operand(
 /// Describes how `isset($object->property)` should be lowered for a known receiver class.
 pub(super) enum IssetPropertyAction {
     Fallback,
+    /// A class with a reserved per-instance hash: probe that hash silently, because a missing
+    /// undeclared name is PHP's ordinary `isset()` false and never a warning.
+    HashProbe,
     Magic,
     AlwaysFalse,
     /// A declared (typed) property slot, which can be uninitialized: probe the slot
@@ -306,9 +319,9 @@ pub(super) fn property_isset_action(
     if crate::types::builtin_classes::native_property_method(&class_name, property,
         elephc_builtin_contract::ObjectProperty::Isset, ctx.classes).is_some()
     { return Some(IssetPropertyAction::Magic); }
-    if class_info.allow_dynamic_properties {
-        return Some(IssetPropertyAction::Fallback);
-    }
+    // A visible declared slot is storage this scope can answer directly. It wins over the
+    // per-instance hash: a typed slot can be uninitialized, which `isset()` must answer false
+    // for without reading it, and a hash lookup would otherwise report the name missing.
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         if let Some((index, (_, property_ty))) = class_info.visible_property(property) {
             if class_info.property_slot_is_declared(index, property)
@@ -319,6 +332,13 @@ pub(super) fn property_isset_action(
             }
         }
         return Some(IssetPropertyAction::Fallback);
+    }
+    // Every class with a reserved per-instance hash can hold an undeclared name, whether the
+    // hash comes from `#[\AllowDynamicProperties]`, a clone override, or an ordinary PHP 8.5
+    // dynamic write. Probe that hash silently rather than taking a value read, which would
+    // report PHP's `Undefined property` warning for a name `isset()` only tests.
+    if class_info.dynamic_property_hash_is_name_addressable() {
+        return Some(IssetPropertyAction::HashProbe);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {
         Some(IssetPropertyAction::Magic)

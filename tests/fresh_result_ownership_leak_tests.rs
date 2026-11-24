@@ -26,7 +26,7 @@
 //! in one place is what makes the fourth recurrence visible as a pattern.
 //!
 //! Called from:
-//! - `cargo test --test fresh_result_ownership_leak_tests` through Rust's test harness.
+//! - `cargo test --test integration fresh_result_ownership_leak_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `--heap-debug` is the authoritative instrument for elephc's own arena; it reports on the
@@ -98,7 +98,9 @@ fn compile_with_heap_debug(dir: &Path, source: &str, stem: &str) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg("--heap-debug");
     cmd.arg(&php);

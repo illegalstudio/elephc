@@ -53,7 +53,38 @@ pub(super) fn check_property_assign(
     // whose layout carries THIS name as a strict ancestor's private slot. Without it the Mixed
     // write ladder had no arm for such a class and the store fell through to the stdClass-only
     // miss helper, which dropped it with no diagnostic anywhere.
-    if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
+    // A call-site-specialized untyped parameter can present as one concrete class in the
+    // checker's flow view while the ABI still passes a boxed Mixed cell. Reserve the mixed
+    // receiver's storage rather than only the first observed class.
+    let untyped_parameter = matches!(
+        &object.kind,
+        crate::parser::ast::ExprKind::Variable(name)
+            if current_parameter_is_untyped(checker, name)
+    );
+    // A static-name write through a call-site-specialized untyped parameter cannot dispatch a
+    // reachable `__set` in this phase. Keep the merge-base refusal rather than silently
+    // dropping the store when the inferred receiver declares the accessor.
+    if untyped_parameter {
+        if let PhpType::Object(class_name) = &obj_ty {
+            if checker
+                .classes
+                .get(class_name.trim_start_matches('\\'))
+                .is_some_and(|info| {
+                    info.methods
+                        .contains_key(&crate::names::php_symbol_key("__set"))
+                        && info.visible_property(property).is_none()
+                })
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Undefined property: {}::${}", class_name, property),
+                ));
+            }
+        }
+    }
+    if matches!(obj_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || untyped_parameter
+    {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
     }
     if let PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) = &obj_ty {
@@ -143,36 +174,6 @@ fn class_declares_method(checker: &Checker, class_name: &str, method: &str) -> b
         .classes
         .get(class_name.trim_start_matches('\\'))
         .is_some_and(|class_info| class_info.methods.contains_key(method))
-}
-
-/// Refuses creating a dynamic property on a `readonly` class, which php forbids outright.
-///
-/// A `readonly` class carries php's no-dynamic-properties flag, so a name php resolves to a
-/// dynamic property there is not stored at all: php raises `Cannot create dynamic property
-/// C::$p`. The scope-dynamic arm above answers before the whole visibility and readonly ladder
-/// runs, so without this the arm would have created on a class that may not hold anything, and
-/// `scope_dynamic_storage` would have reserved a hash no legal write can ever fill.
-fn refuse_dynamic_property_on_readonly_class(
-    checker: &Checker,
-    class_name: &str,
-    property: &str,
-    span: Span,
-) -> Result<(), CompileError> {
-    let readonly = checker
-        .classes
-        .get(class_name.trim_start_matches('\\'))
-        .is_some_and(|class_info| class_info.is_readonly_class);
-    if !readonly {
-        return Ok(());
-    }
-    Err(CompileError::new(
-        span,
-        &format!(
-            "Cannot create dynamic property {}::${}",
-            class_name.trim_start_matches('\\'),
-            property
-        ),
-    ))
 }
 
 /// Refuses an element write through a name php does NOT resolve to a declared slot here.
@@ -310,6 +311,23 @@ pub(super) fn check_property_array_assign(
     }
 }
 
+/// Returns whether `name` is a parameter of the current free function with no declared type.
+///
+/// A call site can specialize that parameter's flow type to one object while EIR still passes a
+/// boxed Mixed cell, so a dynamic write through it must reserve every possible receiver class.
+fn current_parameter_is_untyped(checker: &Checker, name: &str) -> bool {
+    let Some(function) = checker.current_function.as_deref() else {
+        return false;
+    };
+    let Some(decl) = checker.fn_decls.get(function) else {
+        return false;
+    };
+    let Some(index) = decl.params.iter().position(|param| param == name) else {
+        return false;
+    };
+    decl.param_types.get(index).is_none_or(Option::is_none)
+}
+
 /// Validates a write to a named property of a class instance.
 ///
 /// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),
@@ -328,6 +346,27 @@ fn check_object_property_write(
 ) -> Result<(), CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
+    }
+    // An interface names no physical property layout. Writes through interfaces implemented
+    // by the native XML surface are supported by its runtime selection path; any other
+    // interface keeps the merge-base refusal instead of an internal "unknown class" codegen
+    // error.
+    if checker.interfaces.contains_key(class_name.trim_start_matches('\\')) {
+        let xml_implements_interface = checker
+            .classes
+            .get("SimpleXMLElement")
+            .is_some_and(|info| {
+                info.interfaces
+                    .iter()
+                    .any(|implemented| implemented.eq_ignore_ascii_case(class_name))
+            });
+        if xml_implements_interface {
+            return Ok(());
+        }
+        return Err(CompileError::new(
+            span,
+            &format!("Undefined property: {}::${}", class_name, property),
+        ));
     }
     if crate::types::builtin_classes::native_property_method(class_name, property,
         elephc_builtin_contract::ObjectProperty::Set, &checker.classes).is_some()
@@ -348,9 +387,6 @@ fn check_object_property_write(
         let same_pair_reentry = scope_dynamic_storage::record_magic_set_same_pair_reentry(
             checker, object, class_name, property,
         );
-        if same_pair_reentry || !class_declares_method(checker, class_name, "__set") {
-            refuse_dynamic_property_on_readonly_class(checker, class_name, property, span)?;
-        }
         if !same_pair_reentry {
             scope_dynamic_storage::record_scope_dynamic_mutation(
                 checker, class_name, property, "__set",
@@ -358,31 +394,42 @@ fn check_object_property_write(
         }
         return Ok(());
     }
-    if let Some(class_info) = checker.classes.get(class_name) {
-        if class_info.visible_property(property).is_none() {
-            if class_info.methods.contains_key("__set") {
-                let same_pair_reentry =
-                    scope_dynamic_storage::record_magic_set_same_pair_reentry(
-                    checker, object, class_name, property,
-                );
-                if same_pair_reentry {
-                    refuse_dynamic_property_on_readonly_class(
-                        checker, class_name, property, span,
-                    )?;
-                }
-                return Ok(());
-            }
-            if class_info.allow_dynamic_properties {
-                // PHP 8.2 #[\AllowDynamicProperties]: writes to undeclared
-                // properties are routed at codegen time to a per-object
-                // hashtable side-table. The value is stored as `Mixed`.
-                return Ok(());
-            }
-            return Err(CompileError::new(
-                span,
-                &format!("Undefined property: {}::{}", class_name, property),
-            ));
+    // PHP 8.5 allows creating an undeclared property on an ordinary class and reports
+    // `Creation of dynamic property C::$p is deprecated`. A `readonly` class (including the
+    // php-src-internal URI classes) carries the engine's no-dynamic-properties flag: the write
+    // compiles too, but lowering raises `Cannot create dynamic property C::$p` at runtime.
+    if checker
+        .classes
+        .get(class_name)
+        .is_some_and(|info| info.visible_property(property).is_none())
+    {
+        if class_declares_method(checker, class_name, "__set") {
+            scope_dynamic_storage::record_magic_set_same_pair_reentry(
+                checker, object, class_name, property,
+            );
+            return Ok(());
         }
+        if checker
+            .classes
+            .get(class_name)
+            .is_some_and(|info| info.allow_dynamic_properties)
+        {
+            // PHP 8.2 #[\AllowDynamicProperties]: writes to undeclared
+            // properties are routed at codegen time to a per-object
+            // hashtable side-table. The value is stored as `Mixed`.
+            return Ok(());
+        }
+        if !scope_dynamic_storage::class_forbids_dynamic_properties(checker, class_name) {
+            // Reserve the per-instance hash and remember the exact name so a later read of the
+            // property this write created type-checks against the same storage.
+            scope_dynamic_storage::record_dynamic_property_creation(
+                checker, class_name, property,
+            );
+            scope_dynamic_storage::record_scope_dynamic_runtime_name_mutation(checker, class_name);
+        }
+        return Ok(());
+    }
+    if let Some(class_info) = checker.classes.get(class_name) {
         let expected_ty = class_info
             .visible_property(property)
             .map(|(_, (_, ty))| ty.clone())
@@ -422,8 +469,10 @@ fn check_object_property_write(
             && !compound_property_update
             && !is_compound_property_assignment_self_read(value, object, property, span, &[])
         {
+            let scope = checker.current_loop_storage_scope.clone();
             crate::types::checker::record_throw_access_site(
                 &mut checker.throw_access_sites,
+                &scope,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,
@@ -453,8 +502,10 @@ fn check_object_property_write(
             let initialization_denied = initialization_error.is_some();
             // An initialized slot rejects an overwrite first. An uninitialized slot
             // instead honors its effective setter, including inherited protected access.
+            let scope = checker.current_loop_storage_scope.clone();
             crate::types::checker::record_throw_access_site(
                 &mut checker.throw_access_sites,
+                &scope,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,
@@ -495,13 +546,15 @@ fn check_object_property_write(
                 ),
             ));
         }
-        // A `mixed` value carries no compile-time type to compare with the declared slot, and
-        // PHP checks exactly this assignment at run time under weak-mode property typing. The
-        // codegen guard raises the catchable `TypeError` there, so rejecting the write here
-        // would forbid a program PHP accepts whenever the runtime value happens to fit.
+        // A `mixed` (or `object|null`) value carries no compile-time type to compare with the
+        // declared slot, and PHP checks exactly this assignment at run time under weak-mode
+        // property typing. The codegen guard raises the catchable `TypeError` there, so
+        // rejecting the write here would forbid a program PHP accepts whenever the runtime
+        // value happens to fit.
         // An initialized readonly slot throws before PHP considers the replacement type.
         // Its uninitialized branch still enforces that type at the runtime property store.
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
+            || crate::types::object_boundary::runtime_object_boundary(&expected_ty, val_ty).is_some()
             || readonly_write_guard;
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(

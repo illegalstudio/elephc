@@ -207,6 +207,7 @@ fn packed_field_refs_testing(field: &PackedField) -> bool {
 /// bypass detection.
 fn expr_refs_testing(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_testing),
         // Leaves and identifier-only forms carry no class reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

@@ -4,7 +4,7 @@
 //
 // Builds a small banner with GmagickDraw, applies a fluent transform chain, writes
 // a PNG, reads it back, and assembles a two-frame wand. Run:
-//   cargo run -- examples/image_gmagick/main.php
+//   cargo run -- build examples/image_gmagick/main.php
 //   ./examples/image_gmagick/main
 
 // -- create a canvas and draw on it (GmagickDraw is fluent) --

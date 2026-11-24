@@ -5,7 +5,7 @@
 //! `curl_setopt()` return value.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture writes its own real temporary file with `std::fs::write` before
@@ -374,6 +374,31 @@ fn copy_handle_with_an_attached_multipart_body_transfers_correctly() {
         "#
     ));
     assert_eq!(out, "name\nbody\n");
+}
+
+/// `curl_reset()` must drop an attached multipart body so a copy cannot resend it.
+#[test]
+fn curl_reset_drops_attached_multipart_postfields_for_copies() {
+    if skip_without_curl_native("curl_reset_drops_attached_multipart_postfields_for_copies") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/multipart");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, ['a' => 'original']);
+        curl_reset($ch);
+        $copy = curl_copy_handle($ch);
+        curl_setopt($copy, CURLOPT_URL, "{url}");
+        curl_setopt($copy, CURLOPT_RETURNTRANSFER, true);
+        $out = curl_exec($copy);
+        echo str_contains($out, "part[0].name=a") ? "resent\n" : "clean\n";
+        echo str_contains($out, "original") ? "body-resent\n" : "body-clean\n";
+        "#
+    ));
+    assert_eq!(out, "clean\nbody-clean\n");
 }
 
 /// A NESTED ARRAY VALUE FLATTENS ONE LEVEL, matching php-src's own

@@ -16,7 +16,7 @@
 //! - `__rt_concat_publish` derives the storage class from the pointer itself: only pointers
 //!   inside `[_concat_buf, _concat_buf + capacity)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
-//! - Requests larger than the configured heap capacity (`_heap_max`), including the wrapped
+//! - Requests larger than the reserved arena (`_heap_max`), including the wrapped
 //!   or negative sizes produced by an overflowing size computation, reach
 //!   `__rt_alloc_overflow`; an active cdylib boundary recovers with allocation
 //!   status, while executables retain PHP's fatal behavior.
@@ -53,7 +53,15 @@ pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
 /// - Input: `x0` (AArch64) / `rax` (x86_64) = required payload bytes, interpreted as unsigned.
 /// - Output: `x0` / `rax` = destination pointer with room for at least that many bytes.
 /// - Clobbers every caller-saved register: callers must spill their live state first.
-/// - Fatals through `__rt_alloc_overflow` when the request exceeds `_heap_max`.
+/// - Fatals through `__rt_alloc_overflow` when the request exceeds the reserved arena
+///   `_heap_max`; a request between the runtime `_heap_limit` and the arena reaches
+///   `__rt_heap_alloc` and reports php-src's Allowed-memory fatal.
+/// - Scratch results are charged against the runtime ceiling: when
+///   `_gc_live + _concat_off + request` exceeds `_heap_limit`, the helper takes the shared
+///   Allowed-memory fatal instead of returning unaccounted scratch bytes. A scratch cursor
+///   already above a lowered ceiling falls through to the capacity/heap path, preserving
+///   host-callback reentry; when no lower limit is configured, the scratch capacity and
+///   `_heap_limit` are both the arena size, so the existing capacity check guarantees it.
 ///
 /// # `__rt_concat_publish`
 /// - Input/output: `x1`/`x2` (AArch64) or `rax`/`rdx` (x86_64) = result pointer and length,
@@ -88,9 +96,10 @@ pub fn emit_concat_scratch(emitter: &mut Emitter) {
 
 /// Emits the AArch64 `__rt_concat_reserve` helper.
 ///
-/// Picks scratch storage while `_concat_off + required` still fits the 64 KiB buffer and
-/// falls back to an owned heap allocation otherwise. `_concat_off` is deliberately left
-/// unchanged so a caller that writes fewer bytes than it reserved does not waste scratch.
+/// Picks scratch storage while `_concat_off + required` still fits the shared scratch
+/// capacity and the combined heap/scratch live total fits `_heap_limit`, falling back to an
+/// owned heap allocation otherwise. `_concat_off` is deliberately left unchanged so a caller
+/// that writes fewer bytes than it reserved does not waste scratch.
 fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat_reserve ---");
@@ -102,13 +111,27 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x9");                                          // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("b.hi __rt_concat_reserve_too_large");                  // report a PHP-style allocation overflow instead of writing past any buffer
 
-    // -- prefer the shared 64 KiB scratch buffer while the result still fits --
+    // -- prefer the shared scratch buffer while the result still fits --
     abi::emit_symbol_address(emitter, "x10", "_concat_off");
     emitter.instruction("ldr x11, [x10]");                                      // load the current concat scratch write offset
     emitter.instruction("add x12, x11, x0");                                    // compute the scratch tail this request would reach
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x12, x13");                                        // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("b.hi __rt_concat_reserve_heap");                       // use the owned heap fallback when the scratch buffer would overflow
+    // -- when a lower runtime ceiling is active, charge heap + scratch + request --
+    abi::emit_symbol_address(emitter, "x9", "_heap_limit");
+    emitter.instruction("ldr x9, [x9]");                                        // load the runtime memory ceiling
+    abi::emit_symbol_address(emitter, "x10", "_heap_max");
+    emitter.instruction("ldr x10, [x10]");                                      // load the reserved arena capacity
+    emitter.instruction("cmp x9, x10");                                         // is a separate memory ceiling active?
+    emitter.instruction("b.eq __rt_concat_reserve_budget_checked");             // no — the arena-sized scratch has its own capacity check
+    abi::emit_symbol_address(emitter, "x10", "_gc_live");
+    emitter.instruction("ldr x10, [x10]");                                      // load the live heap bytes
+    emitter.instruction("add x10, x10, x11");                                   // combine live heap and scratch storage
+    emitter.instruction("add x10, x10, x0");                                    // add the requested scratch result
+    emitter.instruction("cmp x10, x9");                                         // does the combined live total fit the ceiling?
+    emitter.instruction("b.hi __rt_concat_reserve_budget_failed");              // no — report PHP's Allowed-memory fatal
+    emitter.label("__rt_concat_reserve_budget_checked");
     abi::emit_symbol_address(emitter, "x14", "_concat_buf");
     emitter.instruction("add x0, x14, x11");                                    // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
@@ -122,6 +145,10 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap allocation as a string payload
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the allocator call
     emitter.instruction("ret");                                                 // return the heap-backed reservation to the caller
+
+    // -- live budget exceeded: use the shared Allowed-memory fatal through a local trampoline --
+    emitter.label("__rt_concat_reserve_budget_failed");
+    emitter.instruction("b __rt_heap_allocation_failed");                       // unconditional cross-atom branch keeps macOS atom splitting safe
 
     // -- impossible request: report PHP's allocation-overflow fatal error --
     emitter.label("__rt_concat_reserve_too_large");
@@ -303,7 +330,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, r8");                                         // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("ja __rt_concat_reserve_too_large_x86");                // report a PHP-style allocation overflow instead of writing past any buffer
 
-    // -- prefer the shared 64 KiB scratch buffer while the result still fits --
+    // -- prefer the shared scratch buffer while the result still fits --
     abi::emit_symbol_address(emitter, "r9", "_concat_off");
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current concat scratch write offset
     emitter.instruction("mov r10, r9");                                         // copy the write offset before deriving the tail this request would reach
@@ -311,6 +338,19 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
     emitter.instruction("cmp r10, r8");                                         // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("ja __rt_concat_reserve_heap_x86");                     // use the owned heap fallback when the scratch buffer would overflow
+    // -- when a lower runtime ceiling is active, charge heap + scratch + request --
+    abi::emit_symbol_address(emitter, "r8", "_heap_limit");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the runtime memory ceiling
+    abi::emit_symbol_address(emitter, "r10", "_heap_max");
+    emitter.instruction("cmp r8, QWORD PTR [r10]");                             // is a separate memory ceiling active?
+    emitter.instruction("je __rt_concat_reserve_budget_checked_x86");           // no — the arena-sized scratch has its own capacity check
+    abi::emit_symbol_address(emitter, "r10", "_gc_live");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the live heap bytes
+    emitter.instruction("add r10, r9");                                         // combine live heap and scratch storage
+    emitter.instruction("add r10, rax");                                        // add the requested scratch result
+    emitter.instruction("cmp r10, r8");                                         // does the combined live total fit the ceiling?
+    emitter.instruction("ja __rt_concat_reserve_budget_failed_x86");            // no — report PHP's Allowed-memory fatal
+    emitter.label("__rt_concat_reserve_budget_checked_x86");
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("lea rax, [r11 + r9]");                                 // return the scratch destination pointer at the current write offset
     emitter.instruction("ret");                                                 // return the scratch-backed reservation to the caller
@@ -324,6 +364,10 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a string payload
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the allocator call
     emitter.instruction("ret");                                                 // return the heap-backed reservation to the caller
+
+    // -- live budget exceeded: use the shared Allowed-memory fatal through a local trampoline --
+    emitter.label("__rt_concat_reserve_budget_failed_x86");
+    emitter.instruction("jmp __rt_heap_allocation_failed");                     // unconditional cross-atom branch keeps the shared fatal reachable
 
     // -- impossible request: report PHP's allocation-overflow fatal error --
     emitter.label("__rt_concat_reserve_too_large_x86");

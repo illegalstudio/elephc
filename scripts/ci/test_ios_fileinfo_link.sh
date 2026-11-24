@@ -105,7 +105,7 @@ cp "$PROJECT_DIR/examples/fileinfo/elephc.toml" "$WORK_DIR/elephc.toml"
 cp "$PROJECT_DIR/examples/fileinfo/elephc.lock" "$WORK_DIR/elephc.lock"
 
 echo "==> compiling fileinfo-using PHP as an $ELEPHC_TARGET staticlib"
-"$ELEPHC_BIN" --with-fileinfo --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$ELEPHC_BIN" build --with-fileinfo --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 test -s "$WORK_DIR/libmain.a"
 test -s "$WORK_DIR/libmain.h"
 

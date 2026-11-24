@@ -1,188 +1,23 @@
 ---
 title: "Profiling (elephc monitor)"
-description: "Profile an elephc-compiled program at the PHP level with one command, in every environment: build it with --with-monitoring, then point elephc monitor at the binary or at the running service."
+description: "Profile an elephc program at the PHP level with one command: a script, a binary, a running service or a CI job."
 sidebar:
   order: 9
 ---
 
-elephc profiles compiled programs at the **PHP level**. Because elephc is the
-compiler, it knows every function's name, the source line of every instruction,
-and what each runtime helper does — so a profile names your PHP functions, not
-assembly labels, and it can translate runtime-helper time into causes a PHP
-developer acts on: *heap allocation*, *Mixed cell boxing*, *reference counting*,
-*dynamic Mixed arithmetic*. That cause view is the piece an interpreter-based
-profiler cannot produce.
+`elephc monitor` profiles a compiled program at the PHP level. The profile names your PHP functions, not assembly labels. It also turns runtime-helper time into causes you can act on: heap allocation, Mixed cell boxing, reference counting, dynamic Mixed arithmetic.
 
-There is **one command**, and it does not change with the environment. What
-changes is what you point it at:
+## Start
 
-| You have | You run | What happens |
-|---|---|---|
-| a source | `elephc monitor shop.php` | built with `--with-monitoring`, then read |
-| a binary | `elephc monitor ./shop` | read, if it carries monitoring |
-| a running service | `elephc monitor host:9411` | read through its endpoint, sampled or `--exact` |
-| a local socket | `elephc monitor /run/app.sock` | the same, on the same machine |
-
-All four read the same instrumentation, but they do not all answer the same
-question, and which one you get depends on whether the command launches the
-program or connects to one already running.
-
-A target this command **launches** — a source or a binary — is measured for its
-whole run and reports the full table: per-function calls, inclusive and self
-wall time, allocations, retained objects, DB queries, DB-driver wait, outgoing
-network operations and network wait. File I/O is not yet counted or timed.
-Every export follows:
-[Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
-Graphviz, the HTML call graph.
-
-A service **already running** answers through its endpoint, and there the default
-is the sampler: folded stacks with their sample counts, plus allocations per
-stack whose counter deltas and attribution cover only intervals between samples.
-That is a statistical view of where CPU time goes, not a per-function
-table. `--exact` asks instead for the measured table of the next request that
-completes — the same numbers a launched run gives, scoped to one request. That
-exact remote answer is the table itself today; the exporters read the sampled
-capture, and the command says so rather than accepting a flag and writing
-nothing.
-
-So before you rely on the sampled answer, know what it does not carry: no
-per-function call counts, no retained objects, and — in a binary built with the
-combined `--with-monitoring` — no per-route query or I/O wait summary either,
-because the exact runtime claims those slots (there is a note on this near the
-end of this page). Ask for those with `--exact`, or with a signed
-`X-Elephc-Query` header.
-
-The capability matrix is explicit about each dimension:
-
-| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | Network | File I/O | Wait | Routes |
-|---|---|---|---|---|---|---|---|---|---|
-| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | untagged local run |
-| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
-| service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
-| `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | request route tags for `--web`; otherwise untagged |
-| `--attach` | sampled from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
-| [`--apm`](apm.md) | not measured | exact per request, request head to handler return, as a latency histogram | request counts per route, not function calls | unavailable | unavailable | unavailable | unavailable | unavailable | every request per route shape, with status classes |
-
-A probe-only binary can emit exact per-route DB and outgoing-network operation
-and wait counters beside its sampled stacks. `--with-monitoring` links both
-runtimes, and the exact runtime owns those callbacks, so the combined
-service-default row above is the one users of the public flag receive.
-
-Profiling answers *where* a run or a request spends its time. To know *which*
-routes are slow, failing or busy over hours and days, start a `--web` service
-with `--apm` and read it with `elephc monitor --apm`: see [Transaction
-monitoring](apm.md).
-
-What *is* the same across all four is the mechanism. Profiling in production is
-normally a *different tool* answering a *smaller question*, an approximation you
-learn to read differently from the exact numbers you get on a laptop. Here the
-sampled and exact answers come from one instrumentation and agree with each
-other, so the smaller question is a narrower slice of the same picture rather
-than a second thing to reconcile.
-
-## Building a program that can be profiled
+Profile a script and open the result:
 
 ```bash
-elephc --with-monitoring shop.php
+elephc monitor app.php --html app.html
 ```
 
-`--with-monitoring` embeds the profiling machinery in the binary: the exact
-enter/exit hooks, the sampler, the symbol table both read, and a 32-byte build
-key. `--with-monitoring=<names>` embeds it for named functions only (see
-[below](#narrowing-it-to-a-few-functions)).
+`monitor` builds the script with `--with-monitoring`, runs it, prints a per-function table and writes `app.html`. Open that file in any browser. It is one self-contained page with no network access.
 
-The capability is **dormant until asked**. A monitored binary run on its own
-behaves exactly like one built without it — same output, nothing on stderr — and
-turns nothing on until `elephc monitor` connects or a signed request arrives.
-That is what makes it safe to ship the same artifact you profile.
-
-A binary built *without* the flag has nothing to read, and `monitor` says so and
-stops:
-
-```text
-elephc monitor: ./shop was not built with --with-monitoring, so there is nothing
-to monitor.
-  Rebuild it:  elephc --with-monitoring shop.php
-  Or point monitor at the source and let it build:  elephc monitor shop.php
-```
-
-It refuses rather than falling back to a lesser profile on purpose. A degraded
-answer that looks like the real one is worse than no answer: you would read the
-numbers as exact and act on them.
-
-### What it costs
-
-**About 30 ns per profiled function call**, and nothing at all the rest of the
-time. That is the whole cost model; every percentage below is that figure
-multiplied by how many calls a program makes, divided by how long it runs.
-
-On the demo service — 35 instrumented functions, ~550 queries, twenty orders,
-**135,351 profiled calls** in a quarter of a second:
-
-| | CPU time | overhead |
-|---|---|---|
-| built without it | 247 ms | — |
-| `--with-monitoring`, nobody asked | 247 ms | +0% |
-| `--with-monitoring`, profiling | 254 ms | **+3%** |
-| `--with-monitoring=` 3 functions, profiling | 251 ms | +2% |
-
-and the binary grows 219 KB (38.1 → 38.3 MB, +0.6%).
-
-The second row is the one that decides whether you ship it everywhere, and it
-does not register: a dormant binary's cost is one flag check per call, below what
-this measurement resolves. That holds for database work too, which is worth
-saying because it did not always: the PDO bridge used to ask whether the profiler
-was *linked* — always true in a monitored binary — rather than whether anyone had
-asked, so every statement paid two clock reads and a copy of its SQL. Measured on
-a program running 8,000 statements, that was 519 ns each, and it is gone.
-
-The third row is paid only while a profile is actually being taken — one run, or
-one request carrying the header.
-
-**Do not carry the +3% to your own program.** 135,351 calls × 30 ns is 4.1 ms,
-which is what that percentage is; a program's own figure depends entirely on how
-much work it does per call. A loop that is almost nothing but calls — two million
-of them in 130 ms, one every 65 ns — pays **+48%** with the same runtime on the
-same machine. Same profiler, same day, sixteen times the percentage. Estimate
-`30 ns × your call count` instead, or measure your own program: the table above
-is one data point about a service that talks to a database, not a property of the
-tool.
-
-> **Benchmarking this inside a clone of elephc?** You will measure roughly seven
-> times these figures — +3% dormant, +22% profiling, +964 KB — and nothing is
-> wrong. A bridge archive is resolved from the directory the compiler itself
-> lives in, so an installed elephc links the release build of `elephc-instr`
-> while a source checkout links the debug one: the same instrumentation, one of
-> them unoptimized, at about 165 ns per call instead of 30.
-
-Two things about the method, both learned by getting them wrong. All variants are
-built first and then timed round-robin, each keeping its minimum: timed one after
-another instead, this machine drifted far enough between the first variant and
-the last that three named functions came out *slower* than instrumenting all
-thirty-five — an ordering that cannot be true. And the figures are CPU time, not
-wall clock. On a busy machine wall clock counts the time a process spent waiting
-for a core, which is the neighbours' work rather than this one's; measured that
-way the same column moved from +1% to −3% between two passes, and a build cannot
-be faster than the build without it.
-
-The 30 ns is down from about 43. The caller→callee map hashed its keys with
-SipHash — the default, chosen to make hash flooding impractical when keys come
-from outside — and these keys are function ids the compiler assigned, which
-nothing at run time can influence; the defence cost more than everything it
-defended. And the clock was `clock_gettime`, 23 ns a read for a value that
-resolves to one microsecond, where the counter register behind it costs 0.33 ns
-and ticks every 41 ns — cheaper *and* twenty-four times finer, which is not a
-trade at all. Ticks are converted to nanoseconds once, at render.
-
-## Quick local profile
-
-```bash
-# The build is implicit for a .php target.
-elephc monitor hot.php
-```
-
-Output is a per-function table with proportion bars; under each function, the
-runtime time is broken down by cause:
+The table shows a proportion bar per function. Under each function, the runtime time is split by cause:
 
 ```text
 hot_leaf                   ██████████████████░░░░  79.2%  self  4.0%
@@ -192,204 +27,157 @@ hot_leaf                   █████████████████�
     Mixed cell boxing      ██░░░░░░░░░░░░░░░░░░░░   7.4%
 ```
 
-That cause breakdown is the piece worth pausing on: `hot_leaf` spends 79% of the
-run and only 4% of it in its own PHP — the rest is the runtime, itemized by what
-it was doing.
+Here `hot_leaf` takes 79% of the run, but only 4% is its own PHP. The rest is the runtime.
 
-`monitor` also writes a Speedscope file (`--out`, default
-`<target>.speedscope.json`) with two views: **PHP (helpers folded)** shows only
-your functions, and **Why (runtime)** keeps the helper frames annotated with
-their cause. In GitHub Actions it appends the same report to the job summary
-(a Markdown table plus a Mermaid cause chart) when `$GITHUB_STEP_SUMMARY` is set.
+`monitor` also writes a Speedscope file (`--out`, default `<target>.speedscope.json`). In GitHub Actions it appends the report to the job summary when `$GITHUB_STEP_SUMMARY` is set.
 
-### Live view and attaching
+### What you point it at
 
-```bash
-elephc monitor hot.php --live          # top-style, refreshed each window
-elephc monitor --attach <pid> --live   # profile a process already running
-```
+| You have | You run | What happens |
+|---|---|---|
+| a source | `elephc monitor shop.php` | built with `--with-monitoring`, then run and measured |
+| a binary | `elephc monitor ./shop` | run and measured, if it carries monitoring |
+| a running service | `elephc monitor host:9411` | read through its endpoint |
+| a local socket | `elephc monitor /run/app.sock` | the same, on the same machine |
 
-These two are the exception to *exact by default*. Both answer from the sampled
-ring rather than the instrumented table, once per millisecond of CPU time, so
-their numbers are estimates that sharpen as samples accumulate and neither can
-see time spent blocked on I/O.
+### Exact or sampled
 
-Where they differ is who is being asked. `--live` **launches** the program, so it
-hands it a socketpair and asks it directly — the same channel the exact path has
-always used, and the reason a live table needs no external tool and works
-wherever elephc does. `--attach` is given a pid that is already running under
-someone else's control, with no channel in, so reading it means reading a process
-from the **outside**: `/usr/bin/sample` on macOS, and on Linux elephc does it
-itself, stopping each thread with `ptrace` and walking its frame chain.
+- A program that `monitor` **launches** is measured exactly for its whole run. You get calls, inclusive and self wall time, allocations, retained objects, DB queries, DB-driver wait, outgoing network operations and network wait. File I/O is not counted. All exports work.
+- A service that is **already running** answers by sampling. You get folded stacks, sample counts and allocations per stack. You do not get per-function call counts or retained objects.
+- `--exact` on a service asks for the exact table of the next request that completes. It is the same table a launched run gives, for one request.
 
-Reading from the outside asks two things of the target that asking it does not:
-
-- **Its symbols.** An address is not a name. elephc strips the symbol table by
-  default, because nothing *inside* a program reads it — so build a program you
-  intend to attach to with `--keep-symbols` (or `--debug-info`). Attaching to a
-  stripped binary says so rather than reporting a profile of `<native>`.
-- **Permission to trace it.** On Linux, `yama/ptrace_scope` commonly restricts
-  attaching to descendants; the refusal names the setting when it is what stopped
-  you. In a container, `--cap-add=SYS_PTRACE` and a seccomp profile that permits
-  `ptrace`.
-
-Neither applies to the endpoint, which is why it stays the answer for a program
-you cannot rebuild or are not allowed to trace: start it with
-`ELEPHC_PROBE_ADDR` and read it with `elephc monitor <addr>`.
-
-`--live` refreshes a top-style table once per window (`--duration`, default 3s in
-live mode) with trend arrows against the previous window and a cumulative share.
-`--attach` monitors a process that is already running, and discovers and merges
-its worker children — so a `--web` prefork server is measured across all its
-workers. A launched `--live` of a `--web` binary asks the master over the
-control channel; workers write into the same shared ring that answer reads, so
-the table includes worker samples with request route tags (`METHOD /path`).
-The header counts discovered processes, which can differ from the ring contributors.
-For Linux attach, a thread that cannot stop stays attached across windows; a
-live window with only such threads retries instead of ending the view. Each
-stop wait is bounded to 50ms per thread, including cleanup; the initial delay
-can therefore grow with the number of blocked threads.
-When the target is a `.php` source and its `.dSYM` is present, calls the
-inliner erased reappear as virtual `name (inlined)` frames, recovered from the
-source spans the inliner preserved.
-
-On Linux, and whenever you want the exact numbers instead, the answer is the
-endpoint: run the program with `ELEPHC_PROBE_ADDR` set and point `monitor` at
-the address ([below](#profiling-something-that-is-already-running)).
-
-## CI regression gate
-
-Capture a baseline, then fail a build when a function grows:
+### Build a binary that can be profiled
 
 ```bash
-elephc monitor app.php --save baseline.json                    # once, on main
-elephc monitor app.php --baseline baseline.json \
-                       --fail-on-regression 5                  # in CI
+elephc --with-monitoring shop.php
 ```
 
-`--save` writes the capture; `--baseline` reads one back. The delta table prints
-per-function shares old vs new, and `--fail-on-regression <points>` exits with
-status 2 when any function's share grew by more than that many percentage
-points. Because both captures are exact, a call-count change of `+1` is a real
-`+1` rather than noise — no threshold padding for sampling variance.
+The profiling code stays dormant until asked. A monitored binary run on its own behaves like one built without the flag: same output, nothing on stderr. It is safe to ship the binary you profile.
 
-`--out` writes a Speedscope document, which is for *reading* a profile, not for
-comparing two. Passing one as `--baseline` fails the command outright rather
-than passing a gate that compared nothing.
+A binary built without the flag has nothing to read. `monitor` says so and stops:
 
-## Exporting to pprof / Pyroscope
-
-```bash
-elephc monitor app.php --pprof app.pb.gz
-go tool pprof -top app.pb.gz            # or upload to Grafana Pyroscope / Parca
+```text
+elephc monitor: ./shop was not built with --with-monitoring, so there is nothing
+to monitor.
+  Rebuild it:  elephc build --with-monitoring shop.php
+  Or point monitor at the source and let it build:  elephc monitor shop.php
 ```
 
-`--pprof` writes a gzip-compressed pprof profile. The route (see below) is the
-outermost frame of each stack, so a flamegraph groups by endpoint for free.
+## Read the page
 
-## Call graph (HTML / DOT)
-
-Where the table ranks functions and the flamegraph shows the stack, the **call
-graph** shows how the program calls itself — the same view
-[Blackfire](https://docs.blackfire.io/profiling-cookbooks/understanding-call-graphs)
-popularized. Each PHP function is one node carrying its inclusive and self
-share and its runtime-cause breakdown; each edge is a caller→callee call,
-weighted by the samples that took it.
-
-```bash
-elephc monitor app.php --html app.callgraph.html   # interactive, open in a browser
-elephc monitor app.php --dot  app.callgraph.dot    # Graphviz source
-dot -Tsvg app.callgraph.dot -o app.callgraph.svg
-```
-
-`--html` writes a **self-contained** page — inline CSS and JS, no network, no
-external graph library. It lays the graph out top-down (a `{main}` root, hotter
-self-time redder), and you can hover a node for its metrics and cause bars,
-click it to isolate its callers and callees, search by name, and zoom/pan.
-`--dot` writes plain Graphviz for `dot`, `go tool pprof -dot`-style tooling, or
-anything that reads the format. Both flags also work against a running service, so a
-production capture exports the same graph.
-
-### Reading the page
+`--html` writes the profile page. Every screenshot below is a real capture of the demo service under `scripts/docs/profiling_demo/`. Regenerate them with `scripts/docs/profiling_screenshots.sh` after you change the page.
 
 ![The call graph, timed](../images/profiling/call-graph.png)
 
-Every screenshot on this page is a real capture of the demo service under
-`scripts/docs/profiling_demo/`, photographed by
-`scripts/docs/profiling_screenshots.sh` — run it to regenerate them after a
-change to the page.
+The top bar holds the view, the dimension and the search box. Settings you change rarely are behind the **menu** button. Hover any control to see what it does.
 
-The bar holds only what a reading loop touches — which view, which dimension,
-and search. Everything set once and left alone lives behind **☰**.
+**Views** are ways to read one capture. The page offers only the views a capture supports.
 
-```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ shop   14.3 ms · 35 functions    🕸Graph 🔥 🗄 📄 ✅   ⏱ 🧠Memory 💧 ⏳ 🗄 #  │
-│                                                        [Find a function] ☰│
-└──────────────────────────────────────────────────────────────────────────┘
-```
+| View | Shows |
+|---|---|
+| **Graph** | who calls whom, one card per function |
+| **Flame** | every call on a time axis, or the call tree merged into bars |
+| **Queries** | every distinct DB statement, with run counts |
+| **Source** | your PHP file, annotated |
+| **Checks** | the performance budget and what the run measured |
 
-The chosen view and dimension are filled with the accent colour, and only the
-chosen dimension keeps its name — the bar reads *"Graph, by Memory"* at a
-glance. Hovering any control explains what it does.
+**Dimensions** recolour the graph and re-sort the list: time, memory, retained, wait, SQL, network, network wait, calls. A capture offers only the dimensions it measured.
 
 ![The same graph ranked by allocations instead of time](../images/profiling/memory.png)
 
-**Views** are five ways to read the same capture, and only the ones a capture
-supports are offered — a sampled run has no flame graph, an exact one has no
-per-line samples:
+### The Functions list
 
-| | | |
-|---|---|---|
-| 🕸 **Graph** | who calls whom | one box per function |
-| 🔥 **Flame** | the same tree as nested bars | width is time; click to zoom, <kbd>Esc</kbd> out |
-| 🗄 **Queries** | every distinct DB statement | with its exact run count |
-| 📄 **Source** | your PHP file, annotated | per function (exact) or per line (sampled) |
-| ✅ **Checks** | the performance budget | and what this run measured |
+The side list ranks functions by the current dimension. You can search it, resize it and group it under classes and namespaces.
 
-**Dimensions** recolour the graph and re-sort the list: ⏱ time, 🧠 memory,
-💧 retained, ⏳ wait, 🗄 SQL, \# calls. Not every capture has all six.
+The **Self / Inclusive** switch picks the cost the list ranks by:
 
-**The sidebar** ranks functions by the current dimension, searchable, resizable,
-and groupable under classes and namespaces (⊞). Selecting one opens it in
-place, as Blackfire does: its inclusive and exclusive cost in every dimension
-the capture has, then **Callers** or **Callees** — one button each, the choice
-kept from one function to the next — each with its call count and the time it
-contributes; clicking one opens it in turn, *In the graph* centres the graph on
-it, and a second click on the row folds it. Panning the graph keeps the
-selection.
+| Choice | Ranks by |
+|---|---|
+| Self | a function's own cost |
+| Inclusive | its own cost plus everything it calls |
+
+- The figure on each row and each graph card follows the switch. The other figure sits beside it.
+- Heat colour always follows the own cost.
+- The choice is kept. A shared link carries it as `#sc=incl`.
+
+Select a function to open it in place. You see its inclusive and own cost in every dimension the capture has. Then pick **Callers** or **Callees**. The choice is kept from one function to the next. Each entry shows its call count and the time it contributes.
+
+- Click an entry to open that function.
+- Click *In the graph* to centre the graph on it.
+- Click the row again to fold it.
+- Panning the graph keeps the selection.
 
 ![A function opened in place, with its figures and its callees](../images/profiling/function.png)
 
-**The ☰ menu** holds *Start over* (back to the graph, timed, nothing selected or
-filtered), *Fit in view*, *Critical path*, the pruning threshold, the theme
-(Auto / Light / Dark), and the shortcut sheet. On a page with no profile yet — a
-monitor page before its first capture — it holds only the theme.
+### Graph
 
-**Keyboard**, all listed under `?`:
+Each function is a white card. A heat gauge on its left fills further, from gold to magenta, as the function's own cost grows. The card shows the name, the figure and a bar. A long name keeps its method and loses its namespace first.
 
-| | | | |
-|---|---|---|---|
-| <kbd>m</kbd> cycle dimension | <kbd>f</kbd> flame | <kbd>q</kbd> queries | <kbd>s</kbd> source |
-| <kbd>c</kbd> checks | <kbd>p</kbd> critical path | <kbd>0</kbd> fit in view | <kbd>r</kbd> start over |
-| <kbd>d</kbd> diff vs previous | <kbd>l</kbd> follow live | <kbd>←</kbd> <kbd>→</kbd> scrub captures | <kbd>?</kbd> this sheet |
+- Hover a card for its metrics and cause bars.
+- Click a card to isolate its callers and callees.
+- Zoom and pan freely. The graph frames itself on arrival and after a resize, until you move it. Then your view is kept.
+- A graph too big to fit at a readable size opens on the top of the tree, centred on its entry point. **Fit in view** (`0`) shows all of it.
 
-The graph frames itself on arrival and re-frames if the window changes size —
-until you pan or zoom, after which the view is yours and is remembered. A stored
-view that would open on empty space is discarded rather than restored.
-
-The page follows the system's light/dark setting unless you pick one in the
-menu. The heat ramp follows it too: on a dark ground a quiet function is a dark
-card rather than a glaring white one, while the hot end stays gold → magenta.
+The page follows the system light or dark setting unless you pick one in the menu. On a dark ground a quiet function is a dark card. The hot end stays gold to magenta.
 
 ![The same capture on a dark ground](../images/profiling/call-graph-dark.png)
 
-### Per-line source view
+### Flame
 
-A **sampled** capture can place every sample on a *source line*, because a sample
-is an address and the dSYM says which line owns it — so this view needs a macOS
-build with its `.dSYM` beside the binary. Open
-the call graph and hit **📄 Source** (or `s`):
+Press `f`. Flame has two modes.
+
+**Timeline** is the default for a launched run. It draws every call where and when it ran.
+
+- Rows are call depth, on a time axis. Each call uses its function's heat.
+- The memory the heap held, in bytes, is an area behind the calls. Its scale is on the left.
+- An overview of the whole run sits on top. Drag across it to pick a range.
+- Click a call to zoom on it. You see its wall time, its own time, and how much memory it took or gave back.
+- Zoom with the wheel. Click **Whole run** or press `Esc` to come back.
+- A run with more than 60 000 calls keeps the longest ones and says how many it shows.
+
+![The timeline, with the heap behind the calls](../images/profiling/timeline.png)
+
+**Merged** is the icicle. All calls of a function under one caller fold into one bar. A child's width is its share of its parent's time. Click a frame to zoom into its subtree. Click **Back to all roots** or press `Esc` to zoom out. A link with `fm=merged` opens this mode.
+
+![The merged icicle](../images/profiling/flame.png)
+
+### Queries
+
+Press `q`. The panel lists every distinct SQL statement with its exact run count. Literals are replaced by `?`, so 200 runs of the same statement fold into one row. A statement that ran many times gets an `N+1?` flag.
+
+```text
+Runs                     Statement
+×200   ████████████████  SELECT name FROM users WHERE id = ?   N+1?
+×200   ████████████████  INSERT INTO users (name) VALUES (?)   N+1?
+×1     ▏                 CREATE TABLE users (id INTEGER …, name TEXT)
+```
+
+Click a statement to see which application functions ran it. A function is the first frame above the PDO or mysqli driver's own methods. Each one shows:
+
+- the file and line of its declaration,
+- how many of the statement's runs it made,
+- its share of those runs.
+
+Click a caller to open it in the function list.
+
+![The queries panel, with the N+1 flagged](../images/profiling/queries.png)
+
+### Source
+
+Press `s`. The view annotates your PHP file in one of two ways.
+
+**Exact capture, per function.** Each declaration is labelled with its inclusive share and call count. Its body is tinted.
+
+```text
+ 16   2.6%   function load_price(PDO $pdo, int $id): int {    incl 82.8% · 250 calls
+ 24   8.1%   function record_audit(array $log, ...): array    incl  8.1% · 250 calls
+ 30   0.5%   function format_money(int $cents): string {      incl  0.5% · 250 calls
+ 45   6.1%   function process_order(PDO $pdo, int $items)     incl 100.0% · 1 call
+```
+
+![The source view](../images/profiling/source.png)
+
+**Sampled capture, per line.** Each line shows the share of samples that landed on it, heat-coloured like the graph. This needs a macOS build with its `.dSYM` next to the binary.
 
 ```text
   5   1.2%   $row = [$id, $id * 7, $id % 5, $id + 1];
@@ -402,91 +190,109 @@ the call graph and hit **📄 Source** (or `s`):
 
 ![Per-line shares over the source](../images/profiling/source-lines.png)
 
-Each line carries the share of samples that landed on it, heat-colored like the
-graph, so the expensive *statement* is visible, not just the expensive function.
-The panel appears whenever the dSYM and the source are both present.
+Per-line shares are always sampled. A line with a large share is hot. A line at 0% was never caught, which does not prove it is free. Per-function costs in the same panel are exact.
 
-The **exact** capture — what you get by default — has no per-line data at all: it
-times whole calls, not statements. There, the same view annotates the file **per
-function**, from the exact costs and the declaration ranges. Each declaration is
-labelled and its body tinted, which is the macro read of where a file spends
-itself:
+### Checks
 
-```text
- 16   2.6%   function load_price(PDO $pdo, int $id): int {    incl 82.8% · 250 calls
- 24   8.1%   function record_audit(array $log, ...): array    incl  8.1% · 250 calls
- 30   0.5%   function format_money(int $cents): string {      incl  0.5% · 250 calls
- 45   6.1%   function process_order(PDO $pdo, int $items)     incl 100.0% · 1 call
+Press `c`. The panel lists each assertion with its measured value beside its budget. See [Recommendations and assertions](#recommendations-and-assertions).
+
+![The checks panel](../images/profiling/checks.png)
+
+### The menu
+
+| Item | Does |
+|---|---|
+| Start over | back to the timed graph, nothing selected or filtered |
+| Fit in view | frames the whole graph |
+| Critical path | highlights the heaviest root-to-leaf chain for the current dimension |
+| Pruning threshold | All, 1%, 5% or 10%, to hide the small |
+| Theme | Auto, Light or Dark |
+| Shortcuts | the sheet below |
+
+On a monitor page that has no profile yet, the menu holds only the theme.
+
+### Keyboard
+
+| Key | Does | Key | Does |
+|---|---|---|---|
+| `m` | cycle dimension | `f` | flame |
+| `q` | queries | `s` | source |
+| `c` | checks | `p` | critical path |
+| `0` | fit in view | `r` | start over |
+| `d` | diff vs previous | `l` | follow live |
+| `←` `→` | scrub captures | `?` | shortcut sheet |
+| `Esc` | zoom back out | | |
+
+## Live and running programs
+
+### Watch a program live
+
+```bash
+elephc monitor hot.php --live
 ```
 
-![The source view](../images/profiling/source.png)
+`--live` launches the program and shows a top-style table. It refreshes once per window (`--duration`, default 3 s) and shows trend arrows against the previous window and a cumulative share. A final cumulative table prints on exit.
 
-Per-line shares are **sampled by construction**, and no amount of engineering
-changes that: exact per-line timing would mean a clock read at every line, far
-more expensive than the code being measured. Read them accordingly — a line with
-a large share really is hot, but a line at 0% was merely never caught, which is
-not proof that it is free. Per-function costs, in the same panel, are exact.
+A live capture is sampled. It estimates, and it cannot see time spent blocked on I/O. It works on every platform.
 
-### Real-time call graph
-
-Add `--live` and the call graph becomes a moving picture — it re-captures each
-window and keeps the **last 10** graphs navigable:
+Add `--html` to get a moving call graph:
 
 ```bash
 elephc monitor app.php --live --html live.callgraph.html
 ```
 
-Open `live.callgraph.html` in a browser and leave it: the page auto-reloads as
-new windows land. A bottom timeline scrubs the last ten captures (arrow keys, or
-click a pill — each pill is tinted by how hot that frame ran), a **live** toggle
-(`l`) follows the newest or pauses on the one you are studying, and a **Δ
-vs previous** toggle (`d`) outlines every function whose self time grew since the
-frame before — so you watch the hot path move as your program shifts phases
-(request parsing → indexing → rendering). Every frame is drawn on one stable
-layout — the union of all ten captures — so a function keeps its position while
-you scrub, and your selected frame, pan, and zoom survive each update. All ten
-graphs are embedded in the single self-contained file; there is still no network.
+- Open the file in a browser and leave it. It reloads as new windows arrive.
+- The page keeps the last 10 captures. A timeline at the bottom scrubs them with the arrow keys, or click a pill. Each pill is tinted by how hot that window ran.
+- `l` follows the newest capture or pauses on the one you study.
+- `d` outlines every function whose self time grew since the previous capture.
+- All captures share one layout, so a function keeps its position while you scrub. Your selection, pan and zoom survive each update.
 
-Opened as a plain file the page auto-reloads to pick up new windows. Served over
-http it does better: it re-fetches itself and merges new frames **in place** —
-no reload, no flicker, even when a newly-hot function first appears (the layout
-reflows in place). `--serve <host:port>` runs a tiny built-in HTTP server for
-exactly that:
+To avoid full reloads, serve the page:
 
 ```bash
 elephc monitor app.php --live --html live.callgraph.html --serve 127.0.0.1:9000
 # then open http://127.0.0.1:9000/
 ```
 
-Bind a loopback address unless you intend to expose the profile; the server has
-one resource (the graph) and serves nothing else.
+Served over HTTP, the page merges new captures in place without a reload. The server has one resource, the graph. Bind a loopback address unless you mean to expose the profile.
 
-## Profiling something that is already running
+### Attach to a process
 
-A program you launch is profiled by launching it. A program already serving
-traffic is profiled by **connecting to it** — same command, an address instead of
-a path.
+```bash
+elephc monitor --attach <pid> --live
+```
 
-Three things are separate here, and the whole model is easier to hold once you
-have seen them apart. Compiling gives the binary the **capability**. Starting it
-with an address opens the **endpoint**. Reading it takes the **key** — always,
-whatever the transport:
+`--attach` profiles a process that is already running. Ctrl-C stops monitoring and leaves the process running. A `--web` prefork server is measured across all its workers, because `--attach` discovers the worker children and merges them.
+
+It reads the process from the outside, so it needs three things:
+
+| Need | Detail |
+|---|---|
+| Symbols | Build the target with `--keep-symbols` (or `--debug-info`). Attaching to a stripped binary says so. |
+| Permission | On Linux, `yama/ptrace_scope` often restricts attaching. The refusal names the setting. In a container, add `--cap-add=SYS_PTRACE` and a seccomp profile that allows `ptrace`. |
+| Frame pointers | Stacks are walked through the frame pointer. A broken chain ends there. |
+
+On macOS `--attach` uses `/usr/bin/sample`. On Linux elephc stops each thread with `ptrace` itself. Each stop wait is bounded to 50 ms per thread, so the first window can be slow when many threads are blocked.
+
+If you cannot meet these needs, use the endpoint described next.
+
+### Profiling something that is already running
+
+Use the same command with an address instead of a path. Three steps are separate:
+
+1. Compile with `--with-monitoring`. The binary gets the capability and a build key.
+2. Start it with `ELEPHC_PROBE_ADDR`. That opens the endpoint.
+3. Read it with `elephc monitor <address>` and the key.
 
 ```console
-$ elephc --with-monitoring service.php
+$ elephc build --with-monitoring service.php
 probe build fingerprint: 9b28f463
 Compiled 'service.php' -> 'service'
 
 $ ls service*
 service   service.key   service.php          # a binary and a key. No socket.
 
-$ ./service &                                # runs like any other binary
-$ ls /tmp/app.sock
-ls: /tmp/app.sock: No such file or directory
-
 $ ELEPHC_PROBE_ADDR=/tmp/app.sock ./service &        # now the endpoint opens
-$ ls -l /tmp/app.sock
-srw-------  1 you  wheel  0 Aug 19 10:45 /tmp/app.sock
 
 $ elephc monitor /tmp/app.sock --key service.key
 connected to probe build 9b28f463
@@ -494,501 +300,263 @@ samples: 86
 ...
 ```
 
-The fingerprint printed at compile time and the one printed on connecting are the
-same value, which is the point of printing it twice: it says you reached the
-build you think you reached, and it appears *after* the handshake, so it reports
-what was proven rather than what was claimed.
+The fingerprint printed at compile time and on connecting must match. It confirms that you reached the build you meant.
 
-`ELEPHC_PROBE_ADDR` takes a `host:port` just as happily, which is the same flow
-with the socket replaced by a listening port:
+`ELEPHC_PROBE_ADDR` also accepts `host:port`:
 
 ```bash
-ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./app       # on the server
+ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./app                 # on the server
 
-elephc monitor 127.0.0.1:9411 --key app.key          # sampled, from your machine
-elephc monitor 127.0.0.1:9411 --key app.key --exact  # the next request, exactly
+elephc monitor 127.0.0.1:9411 --key app.key            # sampled, from your machine
+elephc monitor 127.0.0.1:9411 --key app.key --exact    # the next request, exactly
 ```
 
-The profile crosses sealed under keys both sides derive from the build key and
-the two nonces, so reaching the port is not the same as reading the answer. On a
-network you do not control, put it behind a tunnel or a TLS-terminating proxy and
-point `https://` at that — the probe listener itself speaks the framed protocol
-above, not TLS, so `https://` aimed straight at `ELEPHC_PROBE_ADDR` will not
-connect.
+#### The key
 
-Nothing about the binary changes between those runs: the same
-`--with-monitoring` artifact you run in CI is the one serving here.
+`--with-monitoring` creates a 32-byte build key, embeds it in the binary, writes it to `<binary>.key` and prints its public fingerprint. Keep the sidecar as secret as a `.env` file.
 
-`--with-monitoring` generates a **32-byte build key**, embeds it in the binary,
-writes it to a `<binary>.key` sidecar, and prints its public fingerprint at
-compile time. Keep the sidecar like a `.env` secret — it is what a remote
-profiler uses to prove it is talking to *your* build.
+`monitor <address>` takes the key from one of:
 
-The two ends run a mutual HMAC handshake: the server proves it holds the build
-key (so you never profile an instance you do not control), and the client proves
-it holds the key (so a stray connection cannot read your production stacks). No
-secret crosses the connection, and a party that cannot prove the key is
-disconnected before any samples are sent. The build fingerprint is printed on
-both sides so you can confirm you reached the intended deployment — and it is
-printed *after* the handshake, so it reports what was proven rather than what was
-claimed.
+- `--key <file>`,
+- the `ELEPHC_PROBE_KEY` environment variable (hex),
+- a `.key` sidecar next to the socket.
 
-Two answers come back through that one address, and the flag says which:
+The client and the server prove to each other that they hold the key. A client that cannot prove it is disconnected before any sample is sent. The profile crosses the connection encrypted.
 
-```bash
-elephc monitor host:9411 --key app.key           # sampled: what the process is doing, now
-elephc monitor host:9411 --key app.key --exact   # exact: the next request that completes
-```
+Setting `ELEPHC_PROBE_ADDR` only opens the endpoint. It does not start collection. A service nobody asked arms no timer, fills no ring and prints nothing.
 
-The **sampled** answer needs no request to complete: a timer fills a ring, so a
-process doing anything has something to hand over, and the ring is shared across
-every `--web` worker — including the pool and request isolation models, where
-PHP runs in a handler child rather than in the worker itself.
+If the address is a path and the bind fails, the program says so on stderr. Socket paths are limited to about 104 bytes, so keep them in `/tmp` or `/run`.
 
-It is not, however, instant. Collection starts when you first ask for it, so the
-very first answer on a service nobody had asked yet can be thin or empty — the
-timer has not fired since you asked. Ask again and it is there. This is the one
-place the sampler is not simply "already running": the alternative was a service
-that samples itself from boot whether or not anyone ever looks.
+For `https://`, the endpoint must sit behind a TLS terminator such as a reverse proxy or tunnel. The probe listener itself does not speak TLS. The certificate is checked against the system roots, and a self-signed or expired one stops the connection.
 
-The **exact** answer is the same measurement a local run gives:
-per-function calls, self and inclusive time, allocations, retained objects,
-DB queries, DB-driver wait, outgoing network operations and network wait, for
-one request, rooted at `{main}`. It does not count or time file I/O. It exists
-only once a request completes, so `--exact` waits up to thirty seconds for the
-next one.
+#### Two answers
 
-One exact capture runs at a time. The rendezvous the worker leaves its slice in
-is a single slot, so a second `--exact` while one is in flight is told so rather
-than taking the first one's answer away — and when nothing comes back, the reply
-says which of the three reasons it is: someone else is asking, nothing completed
-in time, or the profile was too large to hand over. An empty answer would be
-indistinguishable from a service that served no traffic, which is the one thing
-you should not have to guess about.
+| Command | Answer |
+|---|---|
+| `elephc monitor host:9411 --key app.key` | sampled: what the process is doing now |
+| `elephc monitor host:9411 --key app.key --exact` | exact: the next request that completes |
 
-Under `--web` those two live in different processes — the endpoint answers from
-the parent that accepts and forks, the request runs in a worker — so the slice
-travels through a small shared mapping established before the fork, the same way
-the sample ring does.
-
-The profile itself is **encrypted**, whatever it travels over. Once both sides
-have proven the key, each derives the same pair of subkeys from that key and the
-two nonces they just exchanged, and the payload crosses sealed and authenticated.
-Proving authority is therefore no longer enough to *read* a capture: someone
-positioned in the middle relays two proofs and receives ciphertext, and a
-recorded exchange cannot be replayed against a later connection, because the keys
-are bound to both nonces. Verified with a relay in the path — it copied every
-byte the server sent and found no fragment of the profile in it.
-
-That is deliberately not TLS. The trust anchor here is the build key both sides
-already hold, not a certificate authority, so a diagnostic socket does not need a
-certificate to issue, rotate, or verify — and a monitored binary does not need to
-carry a TLS stack.
-
-`https://` remains for reaching an endpoint that sits **behind a TLS terminator**
-— a reverse proxy or a tunnel that speaks TLS and forwards to the probe socket.
-There the certificate is validated against the system roots first, and a
-self-signed or expired one stops the connection. Pointed straight at
-`ELEPHC_PROBE_ADDR`, `https://` will not connect: that listener speaks the framed
-protocol above, not TLS.
-
-Locally, `elephc monitor ./app` needs no key and no address. It passes the
-program a **control channel** — a socket on fd 3 — and possession of that channel
-is the credential: there is nothing to copy, leak, or replay, because it exists
-only for as long as the two processes are connected.
-
-`ELEPHC_PROBE_ADDR` does one thing: it opens the endpoint, which still refuses
-everyone who cannot prove the build key. That makes it a deployment decision like
-binding a port, and nothing more.
-
-It does **not** start collection. Setting it costs what leaving it unset costs
-until a client proves the key and asks for the sampled answer; a service nobody
-has asked arms no timer, fills no ring, and prints nothing on its way out.
-
-This changed. Configuring an endpoint used to arm the sampler as a side effect,
-so a run started with the variable wrote a profile to stderr at exit whether or
-not anyone ever connected — a service that was merely *reachable* profiled and
-logged itself. Two words for one decision, and the wrong one by default. If you
-relied on that to get a profile out of a run without a key, launch it under
-`elephc monitor <binary>` instead, which asks over the control channel.
-
-If the address is a path and the bind fails, the program says so on stderr. The
-commonest cause is invisible otherwise: a `sockaddr_un` holds about 104 bytes, so
-a socket under a deep directory never binds.
+- **Sampled.** Collection starts when you first ask. The first answer on an unasked service can be thin or empty. Ask again.
+- **Exact.** It waits up to 30 seconds for the next request. One exact capture runs at a time. If it cannot answer, the reply says why: someone else is asking, nothing completed in time, or the profile was too large to hand over.
+- **Exports.** The exact answer is the table only. The exporters (`--out`, `--pprof`, `--dot`, `--html`) read the sampled capture. `--exact` with one of them is refused.
 
 ### One request in production
 
-A `--web` service also answers a signed **`X-Elephc-Query`** header, which
-profiles that single request and leaves every other one untouched:
+A `--web` service also accepts a signed `X-Elephc-Query` header. It profiles that single request and leaves every other one alone.
 
 ```text
 X-Elephc-Query: t=<unix seconds>,v=<hex hmac of the timestamp>
 X-Elephc-Query: t=<unix seconds>,n=<request id>,v=<hex hmac of "<t>.<n>">
 ```
 
-The value is signed with the build key, so it cannot be forged by someone who can
-set headers. It is also **single use**: a value that has been honoured is spent,
-and every later request carrying it is refused — whichever worker receives it,
-because the service remembers spent signatures in the same shared mapping its
-workers already share. A header lifted from a proxy log, an access log or a
-shared trace is therefore worth nothing, and one lifted before the legitimate
-request lands is worth exactly one request rather than a window of them.
-
-**Use the second form when you profile more than once a second.** With the
-timestamp alone, two requests minted in the same second produce the identical
-header, and nothing at the far end can tell them from a replay of each other — so
-the second is refused. An `n=` value (up to 64 characters of `A-Za-z0-9-_`, a
-request id or a UUID) makes them distinct. It is part of the **signed** message,
-not a field beside it: a nonce that could be varied without re-signing would turn
-one captured header into as many spends as an attacker wanted, which is exactly
-what single use exists to deny. Omitting it keeps the original format working.
-
-The timestamp bounds how long a value can be presented at all: five minutes
-either side of the server's wall clock. That is the clock it has to be — the
-timestamp was minted on another machine, so a monotonic one would mean nothing —
-so the window still has to absorb clock skew between the two hosts, and a
-backwards correction on the server shortens it. It no longer has to stand in for
-a replay defence, which is what it was doing alone.
-
-Two limits worth stating. Each signature is remembered in one slot chosen by the
-signature itself, out of 4096 — so two signatures that land on the same slot
-cannot both be live, and the second is refused. That is one chance in 4096, it
-fails in the direction that refuses rather than admits, and the table is sized far
-above what a five-minute window ever carries precisely so it stays there. A
-service whose shared mapping could not be established refuses every signed header,
-for the same reason: a signature it cannot account for cannot be promised to be
-used once. An invalid, spent or missing value
-profiles nothing — the request runs exactly as it would have. (This is the shape
-Blackfire uses, for the same reason: turning profiling on costs the request real
-time and reveals the code, so asking has to be something only a key holder can
-do.)
+- The header is signed with the build key.
+- It is single use. Once honoured, the value is spent for every worker.
+- The timestamp must be within five minutes of the server's clock.
+- Use the second form when you profile more than once a second. `n` is a request id or UUID of up to 64 characters from `A-Za-z0-9-_`. It is part of the signed text.
+- An invalid, spent or missing value profiles nothing. The request runs as usual.
+- Two signatures can collide in the 4096-slot spent table. The second is then refused (one chance in 4096). A service whose shared mapping could not be set up refuses every signed header.
 
 ### `--web` servers: all workers, per route
 
-Under `--web` the sample ring lives in shared memory allocated before the
-prefork, so every worker samples into one ring the master's endpoint serves — a
-single connection sees the whole server, not one worker.
+Under `--web`, every worker samples into one shared ring. One connection sees the whole server.
 
-Samples taken while a worker is handling a request are tagged with the request
-route (`METHOD /path`), which becomes the outermost frame of the stack. The
-table, the flamegraph, and the pprof export therefore group by endpoint:
+Samples taken while a worker handles a request carry the request route as the outermost frame. The table, the flame graph and the pprof export group by endpoint:
 
 ```text
 GET /api/orders   ██████████████████████ 98.4%
   {main}  serialize  <native>...
 ```
 
-**The label is a shape, not a path.** The server derives it from the request:
-each path segment that cannot be a route name is replaced by what it is — a
-segment of only digits becomes `{id}`, a UUID becomes `{uuid}`, twelve or more
-hex characters become `{hash}` (per dot-separated part, so
-`/assets/app.9f8c2b1a4d5e.js` reads as `/assets/app.{hash}.js`). Everything else
-is kept verbatim, because merging two real endpoints into one row would report a
-number true of neither. So `/users/1` and `/users/2` share the row
-`GET /users/{id}` without the application doing anything, and no framework
-routing table is consulted — by the time a request reaches the sampler, the path
-is the only thing known about it.
+The label is a shape, not a path. Path segments that cannot be route names are replaced:
 
-Route names are sanitized (a `;` or a newline from a crafted path cannot forge
-frames). The distinct-route table holds 255 entries plus one `<other>` bucket,
-and nothing is interned until someone asks for a profile — an unasked service
-spends none of it, and the window you get is the window you asked for. Past 255
-distinct shapes the surplus is reported as `<other>` rather than dropped, so a
-table that fills says so instead of quietly leaving endpoints out. A service
-started with [`--apm`](apm.md) interns a route from the first request it
-answers, because it counts every request from boot; a "not found" answer
-interns nothing.
+| Segment | Becomes |
+|---|---|
+| only digits | `{id}` |
+| a UUID | `{uuid}` |
+| 12 or more hex characters | `{hash}` (per dot-separated part) |
+| anything else | kept as is |
 
-## What the numbers are
+So `/users/1` and `/users/2` share the row `GET /users/{id}`. `/assets/app.9f8c2b1a4d5e.js` reads as `/assets/app.{hash}.js`.
 
-The profile is **exact, not sampled**: the binary counts every entry and times
-every call from a real enter/exit shadow stack, and writes the result to stderr
-at exit.
+- The route table holds 255 shapes plus one `<other>` bucket. The surplus goes to `<other>` and is not dropped.
+- Route names are sanitized. A `;` or a newline in a crafted path cannot forge frames.
+- Nothing is recorded until someone asks for a profile. A service started with [`--apm`](apm.md) names routes from its first request instead, because it counts every request from boot. A "not found" answer interns nothing.
 
-```text
-elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns> incl_network=<n> excl_network=<n> incl_network_wait=<ns> excl_network_wait=<ns>
-elephc-instr-edge: {caller} -> {callee} count=<n> ns=<callee ns under caller>
-elephc-instr-query: <count> <normalized SQL text>   (one per distinct statement, if any DB ran)
-```
+To know which routes are slow, failing or busy over hours and days, use [Transaction monitoring](apm.md).
 
-`elephc monitor` reads those lines and renders them; you rarely see them
-yourself. `calls` is the true invocation count, `incl_ns` the wall time between
-enter and exit (the outermost activation for a recursive function, so recursion
-is not double counted), and `excl_ns` the function's own time (inclusive minus
-its callees'). Across a run the exclusive times sum to the root's inclusive — a
-real partition of the program's time.
+## In CI
 
-A **sampled** view exists alongside it in three paths. A running service's
-default endpoint answer comes from the in-process CPU-time ring, and so does
-`--live`, which launches its target and asks it over a socketpair. Only
-`--attach` reads a process from the outside, because it is handed a pid and has
-no channel in. All three report estimates that sharpen as samples accumulate,
-carry noise (around ±0.3 points at ~1,500 samples), and cannot see time spent
-blocked on I/O because their CPU-time clocks do not tick while a program waits.
-An outside reading carries no sampled allocation deltas or route tags — those
-come from the in-process ring, which `--attach` is not talking to. Where a page
-or table shows sampled numbers it says so.
+### Recommendations and assertions
 
-### Narrowing it to a few functions
+`monitor` ends with a **recommendations** section. It lists:
+
+- the time hotspot and the allocation hotspot,
+- functions whose per-call cost hints at call overhead,
+- **N+1** shapes: a callee invoked many times by one caller, especially when it touches the database,
+- retained objects, for example *`hoard` retains the most: 20001 of its 20014 allocations (100%) are still live when it returns*,
+- I/O-bound runs, when a quarter or more of the run is spent waiting on the database.
+
+An N+1 reads like this: *`list_all` calls `get_user` 200 times and `get_user` issues 200 DB queries. Batch them into one query.* The counts are exact.
+
+To gate a build, add assertions. Each `--assert <metric>:<fn><op><value>` is checked against the exact profile. Any failure exits with status 2.
 
 ```bash
-elephc --with-monitoring=process_order,'PDOStatement::*' app.php
-elephc --with-monitoring=@hot-functions.txt app.php
+elephc monitor app.php \
+  --assert 'calls:render<=1' \
+  --assert 'self_ms:parse<10' \
+  --assert 'allocs:build<=5000'
 ```
 
-Hooks land only on the functions you name; `{main}` names the top-level frame, a
-trailing `*` matches by prefix, and `@file` reads one name per line. Everything
-else runs at full speed — on the demo
-service, profiling all 35 functions costs +3% while three named ones cost +2%.
-What that saves is proportional to the calls it removes, so the narrowing pays on
-a program whose hot functions are called often ([full table and the cost model
-above](#what-it-costs)).
-
-A natural way to build the list is to let a first, whole-program profile pick it:
-profile once, take the functions that dominate, and name those.
-
-**It changes what "self" means, and the run says so.** An uninstrumented callee
-runs inside its instrumented caller's frame, so its time lands in that caller's
-self rather than in a child — self values stop summing to the root's inclusive,
-which is the property the full mode's numbers rest on. Every selective run prints:
-
-```text
-elephc-instr: note: selective instrumentation — self time includes any
-uninstrumented callees, so self values do not sum to the root's inclusive
-```
-
-You can see it in the data: instrument `load_price` but not the PDO methods it
-calls, and `load_price` reports `excl_ns` equal to its `incl_ns`.
-
-#### What "exact" does and does not cover
-
-The numbers are exact in the sense that every call is counted and timed rather
-than sampled. These boundaries are worth knowing, because each one is a place
-where a figure would otherwise be trusted further than it should be:
-
-- **Frames beyond 65,536 deep are not timed.** The shadow stack is capped so a
-  runaway recursion degrades instead of growing without bound. Past the cap,
-  calls are still counted but carry no time, and `monitor` says so: *"905 calls
-  beyond depth 65536 were not tracked"*. The frames that fit are unaffected.
-  The cap costs nothing until it is approached — the stack grows on demand — so
-  reaching it at all means the recursion is worth looking at on its own.
-- **An exception's frames are closed at the instant of the throw.** Their own
-  exit hooks never run, so the runtime's single unwinder tells the profiler that
-  one started, and when. Without that the only moment available was the catching
-  function's return, which charged everything the handler did to whatever threw:
-  measured on a function whose entire body is `throw`, it carried 100% of the
-  self time — the eight-million-iteration loop the catch block ran. It now
-  reports ~0%, and the work sits with the catcher. All six dimensions are read
-  at the throw, so what a handler allocates belongs to the handler the
-  same way its time does.
-
-  This holds through the awkward shapes too — a handler that calls something, a
-  handler that throws again, an exception raised and caught inside a call the
-  handler made. Each throw is resolved by the exit that caught it, and each frame
-  is closed at the instant of the throw that killed it.
-- **On a machine whose counter rate is not published, a run under 100 µs reports
-  counter ticks.** The rate is derived from the run itself — elapsed ticks
-  against elapsed nanoseconds — and a run too short to divide safely gets no
-  rate. Rather than invent one, `monitor` says so: *"this run was too short to
-  measure the counter rate — the _ns columns below are raw counter ticks"*.
-  ARM machines publish the rate and never take this path.
-- **Inlined functions fold into their caller** and do not appear at all, exactly
-  as with `--counters`.
-- **Full exact captures have a `{main}` root.** Its enter/exit hooks bracket the
-  top-level PHP body, so a top-level-only program still produces a profile and
-  ordinary functions sit below one root without double entry or exit. Selective
-  instrumentation preserves its named-only overhead contract: if `{main}` is
-  not selected, shares are relative to the largest included function and
-  independent self shares can sum past 100%.
-- **A suspended generator or fiber is off the stack while it is suspended.** A
-  `yield` and a `Fiber::suspend` switch stacks rather than returning, so the body
-  is not running between two resumes and is not counted as running: the frame is
-  closed at the suspension and opened again at the resume, and the span between
-  them belongs to whoever drove it.
-- **`yield from` flattens one level of the call graph.** The delegating body is
-  off the stack for the whole delegation rather than around each forwarded yield,
-  because the runtime helper that drives the inner generator calls the suspension
-  primitive itself. The inner generator therefore starts while the outer one is
-  already suspended and is recorded as a callee of the *consumer*: `drain →
-  inner` where PHP says `outer → inner`. Inclusive time is right for both — the
-  outer body took **52.6%** of a program for 52 µs of work before this, and reads
-  0.3% now — and the consumer's loop is what drives those resumes, so the edge
-  names something real.
-- **A suspension that raises instead of returning still puts the frame back.**
-  The runtime's suspend helper leaves three ways without returning to the
-  suspension site: `Fiber::suspend()` outside a fiber and a live `unserialize()`
-  both raise `FiberError` before the stack switch, and a `Fiber::throw()` /
-  `Generator::throw()` delivered on resume raises after it. All three reach PHP
-  handlers, so the helper restores the activation before the raise — keyed by the
-  running coroutine, which is the one identity it has at each of those points.
-  Without it, a body whose own `catch` did the work had that work attributed to
-  the consumer instead: the graph read `drive → heavy` for a call `drive` never
-  makes.
-- **A suspension from inside a nested call parks only the innermost frame.**
-  `Fiber::suspend()` called from a function the fiber body called suspends the
-  whole coroutine, but what the hook is told is one frame pointer, and the frames
-  below it on that stack cannot be told from the consumer's without a record of
-  where the coroutine began. The outer body therefore keeps its frame, exactly as
-  every coroutine frame did before. Suspending directly from the body — which is
-  every `yield`, since `yield` is only ever lexically in the generator — is the
-  case that is exact.
-- **At most 4,096 coroutines can be suspended at once.** Past that a suspension
-  is refused and the frame is left where it was, which is the old attribution
-  rather than a new one; the report says how many. A suspension also releases
-  whatever was still parked under its own coroutine: a fiber address is handed to
-  the next fiber once the first is freed, so a group still standing under it
-  belongs to a coroutine that is gone and will never be resumed. Abandoned
-  generators therefore cost a slot only until their address is reused.
-
-**Memory too.** `incl_allocs` / `excl_allocs` are the exact number of heap
-allocations attributed to each function — the same shadow-stack math applied to
-the allocation counter instead of the clock, so allocation counts also partition
-exactly. Because elephc *is* the allocator, this is exact and free of extra
-bookkeeping — the second dimension Blackfire is known for, measured rather than
-sampled. (A useful surprise it surfaces: in elephc, arithmetic on `mixed`-typed
-values allocates, so a hot integer loop can be an allocation hotspot.)
-
-**And queries.** `incl_io` / `excl_io` count **database queries** per function
-(PDO statement executions and `PDO::exec`), attributed the same exact way. That
-turns N+1 detection from a heuristic into a certainty: when a caller invokes a
-callee many times and that callee issues one query each, the recommendation says
-so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
-issues 200 DB queries — batch them into one query*". `monitor`
-shows a `queries` column and per-function query counts in the graph tooltips.
-
-**And outgoing network work.** `incl_network` / `excl_network` count curl
-transfers with the same inclusive/exclusive attribution as DB queries, while
-`incl_network_wait` / `excl_network_wait` record blocking curl transfer,
-connection-upkeep, or multi-wait time. `curl_upkeep()` contributes maintenance
-wait but not a transfer operation, and PHP callback execution nested inside
-`curl_exec()` is subtracted from network wait. These counters are separate from
-the PDO dimensions, so an HTTP-heavy request cannot inflate query budgets or
-trigger a false N+1 diagnosis. The stdout table, interactive graph, distributed
-trace waterfall, OTLP and Prometheus exports, and performance assertions all
-carry the network dimensions. Filesystem I/O is still not counted.
-
-**And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
-allocated minus freed — attributed per function the same exact way, by reading
-the free counter (`_gc_frees`) alongside the allocation counter at each hook.
-It answers a different question from *Memory*: not how much a function churned
-through, but how much it left on the heap when it returned. The value is
-**signed**, so a function that releases more than it takes reports negative, and
-the self values still partition the root's total. The two dimensions genuinely
-disagree — here `churn` is the biggest allocator while `hoard` is the leak:
-
-```
-churn   incl 100.0%  self 100.0%  calls 1  allocs 40001  retained     +2
-hoard   incl  98.7%  self  98.7%  calls 1  allocs 20014  retained +20001
-```
-
-A function that keeps most of what it allocates gets called out directly —
-"*`hoard` retains the most — 20001 of its 20014 allocations (100%) are still
-live when it returns; check for a cache or collection that only grows*".
-
-**And wall time vs recorded DB waiting.** `incl_wait` / `excl_wait` are the nanoseconds a function
-spent **blocked inside a driver call** rather than running PHP. The PDO bridge
-times the database work — statement execution and `PDO::exec`, across every
-driver — and reports the elapsed time through the same pay-for-use slot
-mechanism, so the profiler can split every function's self time into recorded DB
-wait and a non-DB remainder. Network wait is reported in its own curl-backed
-dimension, while file I/O remains unmeasured. Neither remainder is an OS
-measurement of actual on-CPU time.
-
-```
-PDO::exec              self 1.8 ms   wait 1.4 ms   non-DB 363.7 µs
-PDOStatement::execute  self 2.9 ms   wait 167.0 µs non-DB 2.8 ms
-PDO::prepare           self 2.1 ms   wait 0 ns     non-DB 2.1 ms
-```
-
-That distinction decides where tuning pays: `PDO::exec` above is *not* slow PHP,
-it is the database; `PDO::prepare` is predominantly in the non-DB remainder.
-When a quarter or
-more of the run is spent blocked, the recommendations say so outright — "*the
-run is I/O-bound: 41% of it (1.4 ms) is spent waiting on the database — PDO::exec
-blocks longest; batching or caching queries will beat any PHP-side tuning*". The
-timing costs nothing in a normal binary: with the profiler unlinked the slot is
-zero and the bridge never even reads the clock.
-
-`elephc monitor` renders those numbers as a table and, with `--html` / `--dot`,
-as a call graph labeled *exact* (cost is a share of measured time, and call
-counts are exact):
+Use `*` as the function to assert on the whole run:
 
 ```bash
-elephc monitor app.php --html app.exact.html
+elephc monitor app.php \
+  --assert 'queries:*<=50' \
+  --assert 'wait_ms:*<=5'
 ```
 
-In the exact HTML the dimension switch (⏱ Time / 🧠 Memory / 💧 Retained / ⏳ Wait /
-🗄 SQL / # Calls, or the `m` key) recolors the whole graph — the hot node becomes the
-biggest allocator, the biggest retainer, the one that blocks longest, the
-busiest query issuer, or the most-called function, and each node's tooltip carries the exact inclusive/self
-numbers. It is the same dimension switch Blackfire offers, on measured data.
+| Metric | Measures |
+|---|---|
+| `calls` | invocations |
+| `allocs` | heap allocations |
+| `retained` | allocated minus freed objects (can be negative) |
+| `queries` | DB queries |
+| `self_ms` | own wall time |
+| `incl_ms` | inclusive wall time |
+| `wait_ms` | time blocked in DB driver calls |
+| `network` | outgoing network operations |
+| `network_wait_ms` | time blocked in curl |
+| `time_pct` | share of the run |
 
-### Reading the exact call graph
+Operators are `<=`, `>=`, `==`, `<` and `>`. Because the numbers are exact, an assertion such as "at most one call to `render`" is not flaky.
 
-The exact page carries the views you reach for when a graph gets big, all
-driven by the measured numbers (they need the exact per-edge weights, so they are
-absent from a `--live` or `--attach` capture):
+### A budget per project
 
-- **🔥 Flame** (`f`) swaps the node-link graph for an icicle built from the exact
-  inclusive-time tree — each child's width is its share of its parent's time.
-  Click any frame to zoom in on that subtree; `⌂ reset` or `Esc` zooms back out.
+Keep the budget in the `[budgets]` table of the project's `elephc.toml`. This is the file that already holds [native dependencies](../compiling/native-dependencies.md) and [`[ini]` directives](../compiling/cli-reference.md#in-the-project-file).
 
-  ![The icicle view](../images/profiling/flame.png)
-
-- **Selecting a function** opens it in the list: its figures, then its exact
-  callers or callees, each with the call count along that edge and the time it
-  contributes. Click one to walk to that neighbour. An N+1 reads
-  straight off it — `get_user ← list_all ×200`, and `get_user → {prepare,
-  execute, fetch} ×200` each.
-- **⚡ Path** (`p`) highlights the heaviest root→leaf chain for the current
-  dimension, edge thickness tracks each callee's inclusive share, and the
-  threshold selector (All / ≥1% / ≥5% / ≥10%) prunes the long tail.
-
-### SQL queries (the N+1 view)
-
-![The queries panel, with the N+1 flagged](../images/profiling/queries.png)
-
-When the run touched a database, a **🗄 Queries** panel (`q`) lists every distinct
-statement and how many times it ran. Query text is normalized — string and
-numeric literals collapse to `?` — so 200 executions of the same prepared
-`SELECT`, or 200 `INSERT`s with different values, each fold into a single row
-whose count is the smoking gun. Statements that ran many times are flagged
-`N+1?`:
-
-```
-Runs                     Statement
-×200   ████████████████  SELECT name FROM users WHERE id = ?   N+1?
-×200   ████████████████  INSERT INTO users (name) VALUES (?)   N+1?
-×1     ▏                 CREATE TABLE users (id INTEGER …, name TEXT)
+```toml
+# elephc.toml: performance budget for the order service.
+# One rule per string: <metric>:<function><op><value>.
+# `*` targets the whole run. Text after `#` labels the rule.
+[budgets]
+rules = [
+  "calls:PDO::prepare <= 10     # prepare once per request, not per row",
+  "retained:record_audit <= 1000 # the audit log must not hoard",
+  "queries:* <= 100             # whole-run query budget",
+  "wait_ms:* <= 50              # and the database must not dominate",
+]
 ```
 
-The counts are exact: the PDO bridge reports each executed statement to the
-profiler (pay-for-use — a binary built without the capability records nothing), so the
-panel and the N+1 recommendation below agree by construction.
+- The file is found by walking up from the profiled source. The working directory does not matter.
+- `--assert-file <path>` names a budget file explicitly.
+- `--assert` flags still apply on top.
+- The syntax is the same as the flag. The label after `#` says why a budget exists.
+- An older `.elephc` file (one assertion per line) is still read when `elephc.toml` has no `[budgets]` table. A note asks you to move it.
 
-### Distributed profiling (W3C Trace Context)
+The report lists failures first:
 
-Under `--web --with-monitoring`, each request is profiled as its own slice and that
-slice carries a **trace identity**, so profiles taken in different services
-link into one distributed trace:
+```text
+assertions — 3 passed, 3 failed, 1 not evaluated
+  [FAIL] calls:PDO::prepare    <= 10 (actual 250)  — prepare once per request, not per row
+  [FAIL] retained:record_audit <= 1000 (actual 31625)  — the audit log must not hoard
+  [FAIL] queries:*             <= 100 (actual 551)  — whole-run query budget
+  [SKIP] calls:nonexistent     <= 1 ('nonexistent' never ran)
+  [PASS] wait_ms:*             <= 50 (actual 2.034)  — and the database must not dominate
+```
+
+`SKIP` means the budget names a function the run never reached, or a metric that does not exist. It still fails the gate. A budget that measures nothing is a mistake.
+
+### Before and after
+
+```bash
+elephc monitor app.php --save before.json                    # once, on main
+# ... change the code ...
+elephc monitor app.php --baseline before.json \
+                       --fail-on-regression 5                # in CI
+```
+
+- `--save` stores a capture. `--baseline` reads one back and prints a per-function delta table with time share and call count, before and after.
+- `--fail-on-regression <points>` exits with status 2 when any function's share grew by more than that many percentage points.
+- Add `--html diff.html` for a two-frame diff graph. Scrub between baseline and current. The diff toggle (`d`) lights up every function that grew.
+- With exact captures, a call-count change of `+1` is a real `+1`.
+- A Speedscope file from `--out` is for reading, not comparing. Passing one as `--baseline` fails the command.
+- Compare captures of the same kind. A `.php` capture recovers inlined frames that a bare-binary capture cannot, and the asymmetry shows as false deltas.
+- Sampled captures carry noise of about 0.3 points at 1 500 samples. Thresholds of a few points are well clear of it.
+
+![Red for what grew, green for what shrank](../images/profiling/diff.png)
+
+## Exports
+
+| Flag | Writes | Opens in |
+|---|---|---|
+| `--out <file>` | Speedscope JSON | speedscope.app |
+| `--pprof <file.pb.gz>` | pprof profile | `go tool pprof`, Pyroscope, Parca |
+| `--dot <file>` | Graphviz call graph | `dot`, any DOT reader |
+| `--html <file>` | self-contained call graph page | any browser |
+| `--trace <file>` | Chrome Trace Format timeline | ui.perfetto.dev, `chrome://tracing` |
+| `--stitch <log>` | distributed trace report | terminal, `--html`, OTLP, Prometheus |
+
+`--dot`, `--html`, `--pprof` and `--out` also work against a running service.
+
+### Speedscope
+
+The Speedscope file has two views. **PHP (helpers folded)** shows only your functions. **Why (runtime)** keeps the helper frames, each annotated with its cause.
+
+### pprof and Pyroscope
+
+```bash
+elephc monitor app.php --pprof app.pb.gz
+go tool pprof -top app.pb.gz            # or upload to Grafana Pyroscope / Parca
+```
+
+The route is the outermost frame of each stack, so a flame graph groups by endpoint.
+
+To send the profile to an OpenTelemetry backend, use the Collector's `pprof` receiver with the file `--pprof` writes:
+
+```yaml
+receivers:
+  pprof:
+    endpoint: 127.0.0.1:4319
+service:
+  pipelines:
+    profiles:
+      receivers: [pprof]
+      exporters: [otlp]
+```
+
+### Call graph (DOT)
+
+```bash
+elephc monitor app.php --dot app.callgraph.dot
+dot -Tsvg app.callgraph.dot -o app.callgraph.svg
+```
+
+### Timeline for Perfetto
+
+```bash
+elephc monitor app.php --trace app.trace.json
+# then open app.trace.json at https://ui.perfetto.dev (or chrome://tracing)
+```
+
+Each call becomes a nested slice, so you see the real order and duration of calls. A generator resumed three times appears as three slices on its own row.
+
+To record from a monitored binary directly, set `ELEPHC_INSTR_TRACE=<path>` and, optionally, `ELEPHC_INSTR_TRACE_MAX=<n>`. The trace keeps at most 500 000 calls by default and reports the overflow.
+
+### Distributed profiling with W3C Trace Context
+
+Under `--web --with-monitoring`, each request is profiled as its own slice. The slice has a trace identity:
 
 ```text
 elephc-instr-trace: trace=35bd350e10388a888de06d4020ca84fa span=acef53ab67c88954 parent=-
 ```
 
-elephc speaks the standard [W3C Trace Context](https://www.w3.org/TR/trace-context/)
-`traceparent` header rather than a private one. That choice matters: an elephc
-profile joins whatever trace its caller already belongs to — an OpenTelemetry
-service, Jaeger, Datadog, nginx, or another elephc binary — instead of forming
-an island only elephc tooling can read. When a request arrives with a valid
-`traceparent`, the slice continues that trace as a child span; otherwise it
-starts a new one. A malformed header always starts a fresh trace, so a caller
-cannot inject text into your profile output.
+elephc uses the standard [W3C Trace Context](https://www.w3.org/TR/trace-context/) `traceparent` header.
 
-Curl carries the trace onward automatically while a monitoring capture is
-active. It injects the value the profiler publishes for the current request
-unless the program already supplied a `traceparent` header. Explicit user
-headers always win. The same value remains available for other HTTP clients:
+- A request with a valid `traceparent` continues that trace as a child span. Otherwise a new trace starts.
+- A malformed header always starts a new trace.
+- The caller can be any OpenTelemetry service, Jaeger, Datadog, nginx or another elephc binary.
+- Curl forwards the trace to the next service automatically while a capture is active. A `traceparent` header you set yourself wins.
+- For other HTTP clients, read `ELEPHC_TRACEPARENT`. It is refreshed at the start of every captured request and carries this slice's span id.
 
 ```php
 $ctx = stream_context_create(['http' => [
@@ -996,11 +564,6 @@ $ctx = stream_context_create(['http' => [
 ]]);
 $fh = fopen('http://inventory.internal/stock', 'r', false, $ctx);
 ```
-
-`ELEPHC_TRACEPARENT` is refreshed at the start of every captured request and already
-carries *this* slice's span id, so the callee records it as its parent. Nothing
-else is needed — no extra flag, no new builtin, and non-instrument binaries
-carry none of this machinery (the runtime slot stays zero).
 
 The result across two elephc services and an external caller:
 
@@ -1010,15 +573,9 @@ caller (any OTel service)  trace=1111…8888  span=aaaabbbbccccdddd
     service B              trace=1111…8888  span=13b8fb9994026a78  parent=604e39a69a8d26e2
 ```
 
-Propagation reaches curl automatically and the HTTP stream layer manually
-(`fopen("http://…")` with a stream context). Automatic curl propagation is
-dormant outside an active capture and removes a previously injected header when
-the handle is reused later.
-
 #### Correlating the services
 
-Collect each service's stderr and hand the logs to `--stitch` (repeatable). It
-captures nothing itself — it correlates slices that were already recorded:
+Collect each service's stderr and pass the logs to `--stitch`. It captures nothing itself. It correlates slices that are already recorded.
 
 ```bash
 elephc monitor --stitch gateway.log --stitch inventory.log
@@ -1033,14 +590,9 @@ trace 1a03577bf4ef56af5d28e7932937e56f
   └─ inventory  2.3 ms  ·········███  1 fn
 ```
 
-The bars are a waterfall in the terminal too: leading `·` is time before that
-span started. Two hops one after the other step rightwards, as above; two that
-overlapped would share a starting column. That distinction is the reason to
-correlate services at all, so it is in the default output rather than only in
-the chart.
+Each line is a span: the service (named after its log file), its duration, its share of the trace and its function count. When non-zero, it also shows query count and wait. The bars are a waterfall. A leading `·` is time before the span started. Two hops in sequence step to the right. Two overlapping hops share a starting column. A span whose parent is missing from the logs is shown as a root.
 
-The report opens with a **per-service summary**, which is the part an operator
-reads first:
+The report opens with a per-service summary:
 
 ```text
 per service
@@ -1050,41 +602,18 @@ gateway · GET /                      25     5.2 ms     5.6 ms     5.9 ms     6.
 inventory · GET /                    50     1.3 ms     1.4 ms     1.4 ms     1.5 ms    292.6      0.0      0%
 ```
 
-Rows split per endpoint when every slice names one, because a service-wide p95
-averages away the one slow route you are looking for. Percentiles are
-nearest-rank: each is a duration some request actually took, rather than an
-interpolation nobody experienced. Under 20 requests the report says so — at that
-count the upper percentiles *are* the slowest requests, and calling them "p99"
-would dress a maximum up as a distribution. The rate is omitted rather than
-invented when the slices carry no timestamps, or all share one instant.
+- Rows split per endpoint when every slice names one.
+- Percentiles are nearest-rank. Each is a duration some request really took.
+- Under 20 requests the report says so, because the upper percentiles are then only the slowest requests.
+- The rate is omitted when slices carry no timestamps or all share one instant.
 
-Each line below is one span: the service (named after its log file), its exact
-duration, its share of the trace, how many functions ran, and — when non-zero —
-its query count and time spent waiting. A span whose parent is missing from the
-collected logs is shown as a root rather than dropped, so a partial collection
-still renders what it has.
-
-Add `--html` for the same thing as a chart — each span placed by when it opened
-and sized by how long it ran, and opening a row reveals that service's hottest
-functions, so a slow hop is diagnosable without going and finding its own
-profile:
+Add `--html` for a chart. Each span is placed by when it opened and sized by how long it ran. Open a row to see that service's hottest functions.
 
 ```bash
 elephc monitor --stitch gateway.log --stitch inventory.log --html trace.html
 ```
 
-It is a **waterfall**: a slice stamps the wall clock when its trace context
-opens, so spans are placed on a shared axis rather than all drawn flush left.
-Two children of one service therefore read differently depending on what
-actually happened — one after the other, or overlapping.
-
-The axis is wall clock, which is the only clock two hosts share, so this carries
-the caveat every distributed tracer carries: their clocks can drift apart, and a
-hop may appear to start a hair before its parent. And a trace is placed only when
-**every** span in it is dated; if one is not (a capture taken before slices
-carried timestamps), the whole trace falls back to duration-only bars, because a
-single undated span pinned at the origin would read as "started first" rather
-than "unknown".
+The axis is wall clock, so clocks that drift apart can show a hop starting slightly before its parent. A trace is placed on the axis only when every span in it has a timestamp. Otherwise the whole trace falls back to duration-only bars.
 
 #### Sending it to OpenTelemetry
 
@@ -1093,185 +622,15 @@ elephc monitor --stitch gateway.log --stitch inventory.log \
                --otlp http://127.0.0.1:4318 --prometheus elephc.prom
 ```
 
-`--otlp` posts the slices as **OpenTelemetry spans**. elephc already carried the
-W3C trace identity — the service belonged to its caller's trace whether or not
-anything was exported — so what this adds is that the hop stops being a *gap* in
-that trace and starts being a span with its own duration, route, query count,
-network-operation count and time spent waiting.
+- `--otlp` posts the slices as OpenTelemetry spans. Each span carries its duration, route, query count, network-operation count and wait.
+- Use plain HTTP to a local agent. An `https` endpoint is refused with advice to put a sidecar in front.
+- Slices without timestamps are skipped and counted.
+- Profiles are not exported over OTLP. Use the `--pprof` file with the Collector as shown above.
+- `--prometheus <file>` writes per-service stats in the text exposition format, for a textfile collector. Percentiles are a `summary`. Network data is exported as the `elephc_network_operations_per_request` and `elephc_network_wait_seconds_per_request` gauges.
 
-Plain HTTP to a local agent is the intended deployment, so an https endpoint is
-refused with that advice rather than a socket error: a remote or authenticated
-collector belongs behind a sidecar, which keeps a TLS stack and a credential
-store out of the compiler. Slices without timestamps are skipped and counted,
-because OTel needs both ends of an interval and exporting them at epoch 0 would
-file the lot under 1970.
+### Exact call counts
 
-**Profiles are not exported over OTLP, on purpose.** That signal entered public
-alpha in 2026 and its own SIG advises against depending on it. It is also
-unnecessary: OTLP Profiles round-trips losslessly with pprof, and the Collector
-ships a `pprof` receiver — so the `--pprof` file elephc already writes reaches an
-OTel backend today, without this compiler chasing a moving wire format:
-
-```yaml
-receivers:
-  pprof:
-    endpoint: 127.0.0.1:4319
-service:
-  pipelines:
-    profiles:
-      receivers: [pprof]
-      exporters: [otlp]
-```
-
-`--prometheus` writes the per-service stats in the text exposition format, for a
-textfile collector. A file rather than an endpoint, because `monitor` runs and
-exits and leaves nothing to poll; percentiles are a `summary` rather than a
-histogram, because we hold exact per-request values and buckets would invent a
-resolution the capture does not have. Network data is exported as the
-`elephc_network_operations_per_request` and
-`elephc_network_wait_seconds_per_request` gauges.
-
-### Timeline (Perfetto)
-
-The call graph collapses time; a **timeline** keeps it. Because the profile
-records every call's enter and exit, it can emit a real wall-clock trace:
-
-```bash
-elephc monitor app.php --trace app.trace.json
-# then open app.trace.json at https://ui.perfetto.dev (or chrome://tracing)
-```
-
-Each call becomes a nested slice, so you see the actual sequence and duration of
-calls over time — the view sampling cannot produce. It writes the
-[Chrome Trace Format](https://perfetto.dev/docs/reference/synthetic-track-event),
-so any Perfetto/`chrome://tracing`-compatible viewer opens it. Standalone, set
-`ELEPHC_INSTR_TRACE=<path>` (and optionally `ELEPHC_INSTR_TRACE_MAX=<n>`) when
-running a monitored binary. The trace is bounded (500k calls by default)
-so a hot program's trace stays openable; the overflow count is reported.
-
-A coroutine is the one thing that produces more than one slice per call. A
-suspension ends a span exactly as a return does, so a generator resumed three
-times appears as three slices on its own row, with the consumer's work between
-them where it belongs — and an abandoned generator still gets the slice it ran
-for, even though its exit never arrives.
-
-### Recommendations and assertions
-
-`monitor` ends with a short **recommendations** section — the time
-hotspot, the allocation hotspot, functions whose per-call cost hints at call
-overhead, and **high fan-out edges** (a callee invoked many times from one
-caller — the classic **N+1** shape if that callee touches the database, network,
-or filesystem). These come straight from the exact call counts on each edge, so
-the count in "calls `render` 1,200 times" is exact, not sampled. (A full
-per-query *dimension* — counting SQL statements or HTTP requests per function the
-way Blackfire does — would need a runtime hook in each such builtin; the fan-out
-heuristic surfaces the same N+1 pattern from data elephc already has.)
-
-For CI it also gates on exact metrics. Each `--assert <metric>:<fn><op><value>`
-is checked against the profile, and any failure exits the command with status 2:
-
-```bash
-elephc monitor app.php \
-  --assert 'calls:render<=1' \
-  --assert 'self_ms:parse<10' \
-  --assert 'allocs:build<=5000'
-```
-
-Every measured dimension is assertable — `calls`, `allocs`, `retained`,
-`queries`, `self_ms`, `incl_ms`, `wait_ms`, `network`, `network_wait_ms`,
-`time_pct` - with the operators
-`<= >= == < >`. Use `*` as the function to assert on the **whole run**:
-
-```bash
-elephc monitor app.php \
-  --assert 'queries:*<=50' \
-  --assert 'wait_ms:*<=5'
-```
-
-Because the numbers are exact, an assertion like "this endpoint issues at most
-one call to `render`" is a hard, non-flaky gate — not a sampled approximation.
-
-#### A budget per project
-
-Passing the same flags on every invocation does not survive contact with a team,
-so a project keeps its budget in a **`.elephc`** file. It is found by walking up
-from the profiled source, the way `.editorconfig` and `.gitignore` are, so one
-file at the project root covers everything under it and profiling
-`src/deep/thing.php` still finds it. A nearer `.elephc` wins over the root: the
-closest budget is the one describing that code. `--assert-file <path>` names one
-explicitly, and `--assert` flags still apply on top.
-
-The search is anchored on the *source*, not the working directory — where you
-run the profiler from cannot silently change which budget gates the build.
-
-```text
-# .elephc — performance budget for the order service.
-# One assertion per line: <metric>:<function><op><value>
-# `*` targets the whole run. Text after `#` labels the assertion.
-
-calls:PDO::prepare    <= 10       # prepare once per request, not per row
-retained:record_audit <= 1000     # the audit log must not hoard
-queries:*             <= 100      # whole-run query budget
-wait_ms:*             <= 50       # and the database must not dominate
-```
-
-Same syntax as the flag, so there is one thing to learn. The label after `#` is
-the point of the file: a red gate that says *why* a budget exists is actionable
-where a bare number is not.
-
-The report lists failures first — a gate is read when it is red — with the
-counts up front:
-
-```text
-assertions — 3 passed, 3 failed, 1 not evaluated
-  [FAIL] calls:PDO::prepare    <= 10 (actual 250)  — prepare once per request, not per row
-  [FAIL] retained:record_audit <= 1000 (actual 31625)  — the audit log must not hoard
-  [FAIL] queries:*             <= 100 (actual 551)  — whole-run query budget
-  [SKIP] calls:nonexistent     <= 1 ('nonexistent' never ran)
-  [PASS] wait_ms:*             <= 50 (actual 2.034)  — and the database must not dominate
-```
-
-`SKIP` is deliberately distinct from `FAIL`: an assertion naming a function the
-run never reached, or a metric that does not exist, says something is wrong with
-the *budget*, not with the code — but it still fails the gate, because a budget
-that silently measures nothing is worse than no budget.
-
-With `--html` the same verdicts become a **✅ Checks** panel (key `c`) listing
-each assertion with its measured value beside its budget.
-
-![The checks panel](../images/profiling/checks.png)
-
-### Before / after diff
-
-`--save <file.json>` stores an exact capture; feeding it back as `--baseline`
-prints a per-function delta table (time share and call count, before → after)
-and, with `--html`, a **two-frame diff graph** — the navigator scrubs between
-baseline and current, and the diff toggle lights up every function that grew:
-
-```bash
-elephc monitor app.php --save before.json                   # on main
-# ... make a change ...
-elephc monitor app.php --baseline before.json --html diff.html
-```
-
-![Red for what grew, green for what shrank](../images/profiling/diff.png)
-
-Because both captures are exact, a call-count change of `+1` is a real `+1`
-(the sampled `--baseline` above is the statistical equivalent for a `--live` capture).
-
-The trade-off is overhead: two clock reads and a bookkeeping update per call.
-That is the +3% in the table above, and it is why the hooks stay dormant until
-asked and why `--with-monitoring=<names>` exists — a production service profiles
-what matters and leaves the rest at full speed. Inlined functions fold into their
-caller (they have no prologue to hook), exactly as with `--counters`; and time
-spent on a path that throws is attributed best-effort (the shadow stack
-resynchronizes after an exception unwinds past a missed exit). Instrumentation is
-per-thread and reports the main thread at exit, which is the whole program for
-single-threaded PHP.
-
-## Exact call counts
-
-For exact (not sampled) per-function call counts, compile with `--counters`:
+For exact per-function call counts without the full profiler, compile with `--counters`:
 
 ```bash
 elephc --counters app.php
@@ -1280,98 +639,159 @@ elephc --counters app.php
 # elephc-counters: call_hot 0
 ```
 
-Each PHP function gets one BSS counter incremented in its prologue. A fully
-inlined call site keeps its counter at **zero** — so a zero next to a hot
-sampled function makes inlining visible by difference.
+Each PHP function gets one counter incremented in its prologue. A fully inlined call keeps its counter at zero. A zero next to a hot sampled function shows that it was inlined.
 
-## Security model and caveats
+## Reference
 
-- **The trigger is the credential, and there are three of them.** Locally, a
-  control channel on fd 3 that `monitor` hands the program it launched:
-  possession is the proof, and there is nothing to copy or replay. Remotely, the
-  32-byte build key, proven by both ends before a single sample crosses.
-  Per-request, a signed `X-Elephc-Query` header, good for one request and for
-  five minutes at most.
-  Deliberately absent: an environment variable that turns profiling on, because
-  anyone who can set one could then profile a service they do not own.
-- **Anyone who can read the *binary* can extract the key.** The handshake
-  protects against other processes and other hosts, not against someone who
-  already has the artifact — so on a host with untrusted local users, every one
-  of them holds the profiling credential for anything deployed world-readable
-  there. The `<binary>.key` file is written `0600`, and a Unix probe socket is
-  chmod `0600`, but the binary's own permissions are yours to set.
-- **The seal covers the payload, not the fact of a connection.** A watcher
-  learns that something profiled the process, when, and roughly how large the
-  answer was. The answer itself is ciphertext.
-- **`https://` needs something that terminates TLS.** The probe listener speaks
-  the framed protocol, not TLS, so `https://` against `ELEPHC_PROBE_ADDR` fails;
-  put it behind a proxy or tunnel if you want transport-level protection on top
-  of the sealed payload.
-- **Unix socket paths are limited to ~104 bytes** (`SUN_LEN`). Keep the socket
-  in `/tmp` or `/run`.
-- **Route names come from requests.** They are sanitized (a `;` or a newline from
-  a crafted path cannot forge frames) and shaped, so identifiers in the path do
-  not become route names — the rules are under *`--web` servers: all workers,
-  per route*, above.
-  The table holds 255 shapes plus an `<other>` bucket and is not written to at
-  all until someone asks for a profile, so a crawler hitting an unasked service
-  exhausts nothing, and one hitting an asked service lands in `<other>` rather
-  than displacing the endpoints you are watching. A service started with
-  `--apm` counts every request from boot, so it names routes from boot too —
-  but only once a request is answered with something other than 404, 405 or
-  410; until then those are counted under one `<not found>` row: a crawler
-  still exhausts nothing (see [Transaction monitoring](apm.md)).
-- **Self re-exec.** A program that calls `execve` *without* forking (a graceful
-  self-restart) keeps the armed sampling timer, which would kill the new image.
-  Call the exported `elephc_probe_disarm` before such an exec. Ordinary
-  `exec()`/`proc_open`/`popen` (which fork first) are already safe.
-- **`--attach` needs symbols, permission, and frame pointers.** It is handed a
-  pid already running under someone else's control, so there is no channel in and
-  it has to read the process from the outside — `/usr/bin/sample` on macOS,
-  `ptrace` on Linux. That costs three things asking does not: the target must
-  keep its symbol table (`--keep-symbols`), the kernel must permit tracing it
-  (`yama/ptrace_scope`, `CAP_SYS_PTRACE` in a container), and its stacks are
-  walked through the frame pointer, so a chain that loses one ends there rather
-  than being guessed past. Where any of the three is missing, the endpoint needs
-  none of them: run the program with `ELEPHC_PROBE_ADDR` set and read it with
-  `elephc monitor <addr>`, which reaches a live process and answers from the
-  sample ring, or with `--exact` returns the measured per-function table for one
-  completed request.
+### What the numbers are
 
-  `--live` used to be listed here beside it and did not belong: it LAUNCHES the
-  target, so it can hand it a socketpair and ask, exactly as the exact path
-  always has. It simply never opened one, and reading its own child from the
-  outside was the consequence. Everything else — profiling a source, a binary, a
-  service, the assertions, the exports, `--stitch` — was already
-  platform-independent.
-- **A service answers from the ring by default; `--exact` measures one request.**
-  `elephc monitor <addr>` returns folded sampled stacks — shares that sharpen as
-  samples accumulate — and `--exact` arms the instrumentation and returns the
-  measured per-function table of the next request that completes. The exact
-  answer is that table alone: the exporters (Speedscope, pprof, DOT, HTML) render
-  the sampled capture, so `--exact` with `--out`, `--pprof`, `--dot` or `--html`
-  is refused rather than accepted and ignored. A program you launch is measured
-  throughout and exports everything.
-- **The sampled answer from a `--with-monitoring` binary carries no query
-  summary.** Both runtimes are linked, and the exact one claims the PDO I/O slots
-  on purpose — it attributes the same events per function through its shadow
-  stack, which strictly refines the sampler's per-route counts. The consequence
-  is that per-route SQL and I/O wait, which a probe-only binary would report, are
-  not in the sampled capture of a combined one. Ask for them with `--exact`, or
-  with a signed `X-Elephc-Query` header.
-- **Sampled captures are CPU-time only.** The service-default ring and external
-  `--live`/`--attach` paths do not attribute time spent blocked on I/O. Exact
-  capture measures DB-driver wait directly (see *wall time vs recorded DB
-  waiting* above). On Apple `arm64e` builds, PAC-signed return addresses degrade
-  sampled stacks to `<native>`; the default `arm64` target is unaffected.
-- **A sampled stack can be short; it is not invented.** The in-process sampler
-  walks the frame-pointer chain, and a function that uses the frame register as
-  an ordinary one leaves a value there that looks exactly like a frame — every
-  sampler that walks in-process carries this. What the walk does with it is
-  refuse to report it: a return address inside the program's own compiled text
-  vouches for the frame it came from and for the native frames held behind it, so
-  a genuine PHP → helper → PHP chain is kept whole, while a chain that never
-  returns into compiled code is dropped rather than reported. So a sampled stack
-  may end earlier than the real one did, and what it does show really ran.
+A launched run is exact. The binary counts every call and times it between enter and exit.
 
-See the [CLI reference](../compiling/cli-reference.md) for the full flag list.
+| Field | Meaning |
+|---|---|
+| calls | the true invocation count |
+| inclusive time | wall time from enter to exit. Recursion counts the outermost activation only. |
+| self (exclusive) time | inclusive time minus the callees' |
+| allocations | heap allocations, inclusive and self |
+| retained | allocated minus freed, signed. A function that releases more than it takes reports a negative value. |
+| queries | PDO statement executions and `PDO::exec` |
+| wait | time blocked inside DB driver calls, across every driver |
+| network, network wait | curl transfers, and time blocked in curl |
+
+Self times add up to the root's inclusive time. Allocation counts partition the same way.
+
+Two dimensions can disagree. A function can allocate most and retain little, while another keeps what it allocates:
+
+```text
+churn   incl 100.0%  self 100.0%  calls 1  allocs 40001  retained     +2
+hoard   incl  98.7%  self  98.7%  calls 1  allocs 20014  retained +20001
+```
+
+Wait lets you tell slow PHP from a slow database:
+
+```text
+PDO::exec              self 1.8 ms   wait 1.4 ms   non-DB 363.7 µs
+PDOStatement::execute  self 2.9 ms   wait 167.0 µs non-DB 2.8 ms
+PDO::prepare           self 2.1 ms   wait 0 ns     non-DB 2.1 ms
+```
+
+`PDO::exec` above is the database. `PDO::prepare` is mostly PHP. The non-DB remainder is not an OS measurement of on-CPU time.
+
+Network counters are separate from the PDO ones, so HTTP-heavy requests do not trigger a false N+1. `curl_upkeep()` adds wait but is not a transfer. PHP callbacks nested inside `curl_exec()` are subtracted from network wait.
+
+**Sampled** captures come from a service's endpoint, from `--live` and from `--attach`.
+
+- They are estimates that sharpen as samples accumulate.
+- They carry noise of about 0.3 points at 1 500 samples.
+- They count CPU time only. They cannot see time blocked on I/O.
+- `--attach` carries no sampled allocation deltas and no route tags.
+- A binary built with the combined `--with-monitoring` gives no per-route query or wait summary in the sampled answer. Ask for it with `--exact` or with a signed header.
+- On Apple `arm64e` builds, PAC-signed return addresses reduce sampled stacks to `<native>`. The default `arm64` target is not affected.
+
+A sampled stack can be shorter than the real one. What it shows did run.
+
+#### Limits of "exact"
+
+| Case | What happens |
+|---|---|
+| Frames deeper than 65 536 | Calls are counted but not timed. `monitor` says how many. |
+| Exceptions | Frames are closed at the throw. The catcher gets the handler's time and allocations. |
+| Run shorter than 100 µs on a machine without a published counter rate | The `_ns` columns are raw counter ticks, and `monitor` says so. ARM machines are not affected. |
+| Inlined functions | They fold into their caller and do not appear. |
+| No `{main}` selected | Shares are relative to the largest included function, and self shares can add up to more than 100%. |
+| Generators and fibers | A suspended body is off the stack. Time between a suspend and a resume belongs to whoever drove it. |
+| `yield from` | The inner generator is recorded as a callee of the consumer, not of the outer generator. Inclusive times are right. |
+| Suspension from a nested call | Only the innermost frame is parked. The outer body keeps its frame. Suspending directly from the body, as every `yield` does, is exact. |
+| More than 4 096 suspended coroutines | Further suspensions keep the old attribution. The report says how many. |
+| File I/O | Not counted or timed. |
+| Threads | Instrumentation is per thread and reports the main thread at exit. |
+
+### Narrowing it to a few functions
+
+```bash
+elephc --with-monitoring=process_order,'PDOStatement::*' app.php
+elephc --with-monitoring=@hot-functions.txt app.php
+```
+
+- Hooks go only on the functions you name.
+- `{main}` names the top-level frame.
+- A trailing `*` matches by prefix.
+- `@file` reads one name per line.
+
+A good way to build the list is to profile the whole program once and name the functions that dominate.
+
+Selective runs change what "self" means. An uninstrumented callee runs inside its instrumented caller's frame. Its time lands in the caller's self, and self values no longer add up to the root's inclusive. Every selective run prints:
+
+```text
+elephc-instr: note: selective instrumentation — self time includes any
+uninstrumented callees, so self values do not sum to the root's inclusive
+```
+
+### What it costs
+
+The cost is about 30 ns per profiled function call. It is nothing the rest of the time.
+
+On the demo service (35 instrumented functions, about 550 queries, 135 351 profiled calls in a quarter of a second):
+
+| | CPU time | overhead |
+|---|---|---|
+| built without it | 247 ms | none |
+| `--with-monitoring`, nobody asked | 247 ms | +0% |
+| `--with-monitoring`, profiling | 254 ms | +3% |
+| `--with-monitoring=` 3 functions, profiling | 251 ms | +2% |
+
+The binary grows by 219 KB (38.1 to 38.3 MB, +0.6%).
+
+- A dormant binary pays one flag check per call. That is below what the measurement resolves. This holds for database work too.
+- You pay the profiling cost only while a profile is taken: one run, or one request with the header.
+- Do not carry the +3% to your program. Estimate `30 ns × your call count` instead, or measure it. A loop that is nearly all calls (two million calls in 130 ms) pays +48%.
+- Naming fewer functions saves time in proportion to the calls it removes.
+
+If you benchmark inside a clone of elephc, you will measure about seven times these figures. A source checkout links the debug build of the instrumentation, at about 165 ns per call. An installed elephc links the release build.
+
+### Security model and caveats
+
+- **Three triggers, each a credential.** Locally, the control channel that `monitor` hands the program it launched. Remotely, the 32-byte build key. Per request, a signed `X-Elephc-Query` header, good for one request and five minutes at most. No environment variable turns profiling on.
+- **Anyone who can read the binary can extract the key.** On a host with untrusted local users, each of them holds the profiling credential for anything world-readable there. The `<binary>.key` file is written `0600` and a Unix probe socket is `0600`. The binary's own permissions are yours to set.
+- **The seal covers the payload, not the connection.** A watcher learns that something profiled the process, when, and roughly how large the answer was.
+- **`https://` needs a TLS terminator.** Put the endpoint behind a proxy or tunnel for transport protection on top of the sealed payload.
+- **Unix socket paths are limited to about 104 bytes.**
+- **Route names come from requests.** They are sanitized and shaped. The table holds 255 shapes plus `<other>`, and is not written until someone asks. A crawler cannot exhaust it or displace your endpoints. A service with `--apm` names routes from boot, but only once a request is answered with something other than 404, 405 or 410. Until then those requests count under one `<not found>` row.
+- **Self re-exec.** A program that calls `execve` without forking keeps the armed sampling timer, which would kill the new image. Call the exported `elephc_probe_disarm` before such an exec. `exec()`, `proc_open` and `popen` fork first and are safe.
+- **Exporters read the sampled capture.** `--exact` with `--out`, `--pprof`, `--dot` or `--html` is refused instead of being accepted and ignored.
+
+### Options
+
+| Option | Used with | Effect |
+|---|---|---|
+| `--with-monitoring[=<names>]` | `elephc` | embed profiling, for all or the named functions |
+| `--keep-symbols`, `--debug-info` | `elephc` | keep symbols, needed by `--attach` |
+| `--counters` | `elephc` | exact per-function call counters |
+| `--html <file>` | `monitor` | interactive page |
+| `--out <file>` | `monitor` | Speedscope JSON |
+| `--pprof <file.pb.gz>` | `monitor` | pprof profile |
+| `--dot <file>` | `monitor` | Graphviz graph |
+| `--trace <file>` | `monitor` | Perfetto timeline |
+| `--live` | `monitor` | top-style table, sampled |
+| `--duration <seconds>` | `monitor --live`, `--attach` | window length, default 3 s |
+| `--serve <host:port>` | `monitor --live --html` | serve the page |
+| `--attach <pid>` | `monitor` | profile a running local process |
+| `--key <file>` | `monitor <address>` | build key |
+| `--exact` | `monitor <address>` | exact table of the next request |
+| `--assert <expr>` | `monitor` | assertion, exit 2 on failure |
+| `--assert-file <file>` | `monitor` | budget file |
+| `--save <file>` | `monitor` | store an exact capture |
+| `--baseline <file>` | `monitor` | compare with a saved capture |
+| `--fail-on-regression <points>` | `monitor` | exit 2 when a share grows by more |
+| `--stitch <log>` | `monitor` | correlate service logs (repeatable) |
+| `--otlp <endpoint>` | `monitor --stitch` | send spans to OpenTelemetry |
+| `--prometheus <file>` | `monitor --stitch` | per-service metrics |
+
+| Environment variable | Effect |
+|---|---|
+| `ELEPHC_PROBE_ADDR` | opens the endpoint of a monitored binary |
+| `ELEPHC_PROBE_KEY` | build key in hex, for `monitor <address>` |
+| `ELEPHC_INSTR_TRACE`, `ELEPHC_INSTR_TRACE_MAX` | write a Perfetto trace from a monitored binary |
+| `ELEPHC_TRACEPARENT` | the current request's `traceparent`, for other HTTP clients |
+
+See the [CLI reference](../compiling/cli-reference.md) for the full flag list. To learn how the sampler and the instrumentation work, read [How it works](../internals/profiling.md).

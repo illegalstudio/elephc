@@ -1,18 +1,14 @@
 //! Purpose:
-//! Parses tokenized eval fragments into EvalIR.
-//! The parser state owns PHP statement and expression grammar for the runtime
-//! eval subset after tokenization has completed.
+//! Holds source and caller-scope metadata for runtime PHP fragments.
 //!
 //! Called from:
 //! - `crate::parser::parse_fragment()`.
 //!
 //! Key details:
-//! - Namespace imports are tracked as parser state and restored across blocks.
-//! - Unsupported PHP constructs fail with explicit parse statuses instead of
-//!   partially lowering ambiguous syntax.
+//! - Generic specialization carries the declaration's imports and strict mode.
+//! - Tokens retain CLI superglobal usage and the caller's variable access mask.
 
-use super::cursor::split_first_name_segment;
-use crate::errors::EvalParseError;
+use super::names::split_first_name_segment;
 use crate::eval_ir::{
     eval_scope_name_mask, EvalProgram, EVAL_CLI_POPULATED_SUPERGLOBALS,
     EVAL_SCOPE_ACCESS_ALL,
@@ -24,32 +20,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-/// Parses tokenized eval fragments into EvalIR.
-#[derive(Clone)]
-pub(super) struct Parser {
-    pub(super) type_parameters: Vec<String>,
-    pub(super) type_parameter_origins: Vec<usize>,
-    pub(super) type_parameter_uses: HashMap<usize, usize>,
-    pub(super) native_generic_syntax: bool,
+/// Retains source tokens and lexical scope for Chopper and EvalIR lowering.
+pub(super) struct FragmentInput {
     /// `declare(strict_types=...)` active for this eval fragment.
     pub(super) strict_types: bool,
     pub(super) tokens: Vec<TokenKind>,
     pub(super) token_lines: Vec<i64>,
     pub(super) token_phpdoc: Vec<bool>,
-    pub(super) pos: usize,
     pub(super) source_len: usize,
     pub(super) namespace: String,
     pub(super) imports: NamespaceImports,
-    pub(super) allow_use_imports: bool,
-    /// Whether a `goto` or a label has been parsed so far, so jump validation is skipped for
-    /// the fragments that have none.
-    pub(super) saw_jump: bool,
-}
-
-/// A parsed PHP name plus whether it used a leading global namespace separator.
-pub(super) struct ParsedQualifiedName {
-    pub(super) name: String,
-    pub(super) absolute: bool,
 }
 
 /// Import alias tables active for the current namespace declaration region.
@@ -60,44 +40,36 @@ pub(crate) struct NamespaceImports {
     constants: HashMap<String, String>,
 }
 
-/// The `use` declaration namespace being imported.
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub(super) enum UseImportKind {
-    Class,
-    Function,
-    Const,
-}
-
 /// Returns a parser-global synthetic class name for one eval anonymous class expression.
-pub(super) fn next_anonymous_class_name() -> String {
+pub(crate) fn next_anonymous_class_name() -> String {
     let id = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("class@anonymous#eval{id}")
 }
 
 /// Returns a parser-global synthetic function name for one eval closure expression.
-pub(super) fn next_closure_function_name() -> String {
+pub(crate) fn next_closure_function_name() -> String {
     let id = CLOSURE_FUNCTION_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{{closure:eval:function:{id}}}")
 }
 
 impl NamespaceImports {
     /// Stores one class import under PHP's case-insensitive class alias key.
-    pub(super) fn insert_class(&mut self, alias: String, name: String) {
+    pub(crate) fn insert_class(&mut self, alias: String, name: String) {
         self.classes.insert(alias.to_ascii_lowercase(), name);
     }
 
     /// Stores one function import under PHP's case-insensitive function alias key.
-    pub(super) fn insert_function(&mut self, alias: String, name: String) {
+    pub(crate) fn insert_function(&mut self, alias: String, name: String) {
         self.functions.insert(alias.to_ascii_lowercase(), name);
     }
 
     /// Stores one constant import under PHP's case-sensitive constant alias key.
-    pub(super) fn insert_constant(&mut self, alias: String, name: String) {
+    pub(crate) fn insert_constant(&mut self, alias: String, name: String) {
         self.constants.insert(alias, name);
     }
 
     /// Resolves a class import, including aliases used as the first segment of a class name.
-    pub(super) fn resolve_class(&self, name: &str) -> Option<String> {
+    pub(crate) fn resolve_class(&self, name: &str) -> Option<String> {
         let (first, tail) = split_first_name_segment(name);
         let imported = self.classes.get(&first.to_ascii_lowercase())?;
         Some(match tail {
@@ -107,19 +79,19 @@ impl NamespaceImports {
     }
 
     /// Resolves an unqualified function alias.
-    pub(super) fn resolve_function(&self, name: &str) -> Option<&str> {
+    pub(crate) fn resolve_function(&self, name: &str) -> Option<&str> {
         self.functions
             .get(&name.to_ascii_lowercase())
             .map(String::as_str)
     }
 
     /// Resolves a case-sensitive unqualified constant alias.
-    pub(super) fn resolve_constant(&self, name: &str) -> Option<&str> {
+    pub(crate) fn resolve_constant(&self, name: &str) -> Option<&str> {
         self.constants.get(name).map(String::as_str)
     }
 }
 
-impl Parser {
+impl FragmentInput {
     /// Creates a parser over tokens produced from a source fragment.
     pub(super) fn new(tokens: Vec<Token>, source_len: usize) -> Self {
         let tokens = super::docblocks::apply(tokens);
@@ -127,93 +99,22 @@ impl Parser {
         let token_lines = tokens.iter().map(Token::line).collect();
         let tokens = tokens.into_iter().map(Token::into_kind).collect();
         Self {
-            type_parameters: Vec::new(),
-            type_parameter_origins: Vec::new(),
-            type_parameter_uses: HashMap::new(),
-            native_generic_syntax: false,
             strict_types: false,
             tokens,
             token_lines,
             token_phpdoc,
-            pos: 0,
             source_len,
             namespace: String::new(),
             imports: NamespaceImports::default(),
-            allow_use_imports: true,
-            saw_jump: false,
         }
     }
 
-    /// Parses a complete eval fragment until EOF.
-    pub(super) fn parse_program(&mut self) -> Result<EvalProgram, EvalParseError> {
-        let mut statements = Vec::new();
-        while !matches!(self.current(), TokenKind::Eof) {
-            // PHP allows a run of leading `declare` directives but rejects `strict_types`
-            // once any other statement has been parsed.
-            if statements.is_empty() && self.try_parse_strict_types_declare()? {
-                continue;
-            }
-            statements.extend(self.parse_stmt()?);
-        }
-        if self.saw_jump {
-            super::jumps::validate_jump_scope(&statements)?;
-        }
-        let cli_superglobals = self.named_cli_superglobals();
-        let scope_access_mask = self.scope_access_mask();
-        Ok(EvalProgram::new(self.source_len, statements)
-            .with_cli_superglobals(cli_superglobals)
-            .with_native_generic_syntax(self.native_generic_syntax)
-            .with_scope_access_mask(scope_access_mask)
-            .with_strict_types(self.strict_types))
-    }
-
-    /// Consumes a top-level `declare(strict_types=0|1);` and records its mode.
-    ///
-    /// A value other than exactly `0` or `1` is a parse error, matching PHP's main parser.
-    /// Only the strict-types directive changes eval semantics here. Any other `declare`
-    /// form is left to the ordinary statement parser, which continues to reject unsupported
-    /// directives rather than silently ignoring them.
-    fn try_parse_strict_types_declare(&mut self) -> Result<bool, EvalParseError> {
-        if !matches!(self.current(), TokenKind::Ident(name) if name.eq_ignore_ascii_case("declare")) {
-            return Ok(false);
-        }
-        let start = self.pos;
-        self.advance();
-        if !self.consume(TokenKind::LParen) {
-            self.pos = start;
-            return Ok(false);
-        }
-        let TokenKind::Ident(key) = self.current() else {
-            self.pos = start;
-            return Ok(false);
-        };
-        if !key.eq_ignore_ascii_case("strict_types") {
-            self.pos = start;
-            return Ok(false);
-        }
-        self.advance();
-        if !self.consume(TokenKind::Equal) {
-            self.pos = start;
-            return Ok(false);
-        }
-        let TokenKind::Int(value) = self.current() else {
-            self.pos = start;
-            return Ok(false);
-        };
-        let strict = match *value {
-            0 => false,
-            1 => true,
-            // PHP requires exactly `0` or `1`; any other literal is a parse error rather than
-            // a truthy strict mode switch.
-            _ => return Err(EvalParseError::UnexpectedToken),
-        };
-        self.advance();
-        if !self.consume(TokenKind::RParen) || !self.consume(TokenKind::Semicolon) {
-            self.pos = start;
-            return Ok(false);
-        }
-        self.strict_types = strict;
-        Ok(true)
+    /// Preserves token-based metadata for EvalIR produced by Chopper.
+    pub(super) fn finish_program(&self, statements: Vec<crate::eval_ir::EvalStmt>) -> EvalProgram {
+        let program = EvalProgram::new(self.source_len, statements);
+        program.with_cli_superglobals(self.named_cli_superglobals())
+            .with_scope_access_mask(self.scope_access_mask())
+            .with_strict_types(self.strict_types)
     }
 
     /// Builds a conservative mask of caller-scope variable names named by this fragment.

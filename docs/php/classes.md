@@ -647,6 +647,20 @@ Binds to lexical class, not runtime child.
 ## static::method()
 Late static binding — resolves against called class at runtime.
 
+When the method is a private static method of the class that contains the call, the
+called class's own `method` still decides, as in PHP: a subclass that does not redeclare
+it runs the private method, a public or protected redeclaration (or a class inheriting
+one) runs instead, and a private redeclaration throws
+`Error: Call to private method B::method() from scope A`, unless the called class has
+`__call()` (called on `$this` from an instance method) or `__callStatic()`, which then runs.
+An instance-method redeclaration runs on `$this` from an instance method and throws
+`Error: Non-static method B::method() cannot be called statically` from a static one. A
+static call whose called class is abstract and sees an abstract redeclaration throws
+`Error: Cannot call abstract method B::method()`. Only
+classes that redeclare the method get a runtime check; when none does, the call binds
+directly, and when every redeclaration has the private method's signature the check is a
+branch inside the one call.
+
 ## Static methods
 Called with `::`, no `$this`.
 
@@ -823,10 +837,24 @@ Rules:
 - `new readonly class { ... }` is supported.
 
 ## Override rules
-Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.
+An override, an interface implementation, or an interface redeclaring a parent interface's method keeps every inherited parameter position: same pass-by-reference positions, same default layout, same variadic shape. As in PHP, an instance method may append trailing optional parameters:
+
+```php
+<?php
+interface PsrContainer { public function get(string $id); }
+class Container implements PsrContainer {
+    public function get(string $id, int $invalidBehavior = 1) { return "$id:$invalidBehavior"; }
+}
+function fetch(PsrContainer $c) { return $c->get("svc"); }
+echo fetch(new Container()); // svc:1
+```
+
+An interface extending both the widening interface and the narrower one keeps the wider declaration when the widening parent is listed first (`interface K extends J, I`); PHP rejects the reverse order, and so does elephc. A call through the narrower parent or interface gets the override's defaults, and `func_num_args()` counts only the arguments the caller passed. Not yet supported: a widened override that calls `func_num_args()`/`func_get_args()` when an inherited parameter is optional and the parent method or interface does not count its own arguments, appending optional parameters to a static method, appending a variadic parameter, making an inherited required parameter optional, and calling a widened method on a `mixed`/untyped receiver whose candidate classes disagree on the parameter count (the call reports a member call on `null`).
 
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
+
+Two traits that bring the same method name collide unless `insteadof` picks one, as in PHP: `Trait method B::foo has not been applied as C::foo, because of collision with A::foo`. The same trait method reached along two paths (`trait A { use T; } trait B { use T; } class C { use A, B; }`) is one method, not a collision. An abstract trait method is a requirement, not a definition: another trait's method or the class's own method satisfies it, and must be compatible with its signature.
 
 Traits may declare abstract hooked property contracts. A concrete class using the trait must satisfy the contract directly or inherit it through an abstract base class that is later completed by a concrete child.
 
@@ -860,6 +888,36 @@ $p->{$field} = 9;
 echo $p->x;               // 9
 ```
 
+### Undeclared property writes
+
+An assignment to a name the class does not declare is accepted. PHP 8.5 creates the
+property and reports `Deprecated: Creation of dynamic property C::$p is deprecated`;
+elephc stores the value in the class's per-instance property hash and emits the same
+notice when the write creates the entry. The name then participates in reads,
+`isset()`, `unset()`, clone/copy, property enumeration, and `var_dump()` / `print_r()` /
+`var_export()` exactly like an `#[\AllowDynamicProperties]` property. A stored entry wins
+over `__isset()` and `__get()`: `isset($object->name)` answers from the entry, including a
+stored `null` (which answers `false`), and only a name the hash does not hold reaches the
+accessor. A class that declares `__get()` but no `__isset()` therefore still reports a
+stored name as set, and never calls `__get()` for a probe.
+
+```php
+<?php
+class Box { public int $x = 1; }
+$b = new Box();
+$b->y = 3;                // Deprecated: Creation of dynamic property Box::$y is deprecated
+echo $b->y;               // 3
+var_dump(isset($b->y));   // true
+unset($b->y);
+var_dump(isset($b->y));   // false
+```
+
+A `readonly` class carries PHP's no-dynamic-properties flag: the write still compiles,
+but it throws `Error: Cannot create dynamic property C::$p` at runtime and creates
+nothing. The same applies to php-src's internal readonly classes, including
+`Uri\Rfc3986\Uri` and `Uri\WhatWg\Url`. A class marked `#[\AllowDynamicProperties]`
+creates the property without the deprecation notice.
+
 ## Enums
 ```php
 <?php
@@ -872,6 +930,8 @@ echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Case names are case-sensitive and may use PHP keywords other than the reserved `class` name; their exact declaration spelling is retained, so `case Match` and `case MATCH` are distinct and report `Match` / `MATCH` through `->name`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+
+As in PHP 8.2+, a backed case value may be a constant expression rather than a literal: a global `const` (also one declared later in the file or in a `require_once`d file), a class or interface constant (including one inherited from a parent class or implemented interface), and concatenation, arithmetic, bitwise shifts, or a constant ternary over them, for example `case Orders = API_PREFIX . "orders";` or `case NotFound = HttpCodes::BASE_ERROR + 4;`. The value is folded at compile time and must produce the backing type (an `int` constant cannot back a `string` enum); folded duplicates are rejected like literal duplicates. Not yet folded, and reported as a compile error: the enum's own constants (`self::X`), constants of an enum declared later in the file, runtime `define()` constants, float operands in a concatenation, and enum-case property reads such as `Other::Case->value`.
 
 Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
 
@@ -1327,6 +1387,9 @@ Supported syntax:
 - **`#[\Override]`** (PHP 8.3) — the type checker verifies that the marked method actually overrides a method declared in a parent class or implemented interface (transitively). A typo in the method name or a missing parent method becomes a compile-time error: `<class>::<method>() has #[\Override] attribute, but no matching parent method was found`. Both the unqualified `#[Override]` and fully-qualified `#[\Override]` forms are recognized.
 - **`#[\Deprecated]`** / **`#[\Deprecated("reason")]`** (PHP 8.4) — calls to the marked function, method, or static method emit a compile warning: `Call to deprecated function: name() — reason`. The reason argument (if a string literal) is appended to the message.
 - **`#[\AllowDynamicProperties]`** (PHP 8.2) — instances of the marked class accept assignment of undeclared properties at runtime. Each instance carries a per-object hashtable side-table allocated by the constructor (~296 bytes); the type checker accepts undeclared reads as `mixed`. The hashtable is freed automatically with the object.
+  `property_exists()` reports declared slots only: a name created dynamically on an instance
+  is visible to `isset()`, reads, and `unset()`, but `property_exists($object, "name")`
+  answers `false` (PHP answers `true` for an object target and `false` for a class string).
 
 Built-in attributes follow PHP class-name resolution. In a namespace, `#[Deprecated]` means `#[CurrentNamespace\Deprecated]`; use `#[\Deprecated]` or an import alias such as `use Deprecated as Old; #[Old]` to target the global built-in attribute.
 

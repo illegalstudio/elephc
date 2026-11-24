@@ -19,6 +19,32 @@ use crate::codegen_support::emit::Emitter;
 /// (C name, mangled per platform by `extern_symbol`).
 pub(crate) const APM_COLLECTOR_SYMBOL: &str = "elephc_probe_collector_address";
 
+/// The NUL-terminated start-up text a probe build embeds, one item per line: `+pattern` and
+/// `-pattern` for `[apm] include` / `exclude`, `@<unix seconds> <label>` for the build's
+/// identity (C name, mangled per platform by `extern_symbol`).
+pub(crate) const APM_RULES_SYMBOL: &str = "elephc_probe_apm_rules_text";
+
+/// Publishes the embedded rule text in the probe's `elephc_probe_apm_rules` slot, before
+/// any transaction can start: the probe reads it once, on the first label it matches.
+pub(crate) fn emit_apm_rules_slot(emitter: &mut Emitter) {
+    let target = emitter.target;
+    emitter.comment("apm: the project's include/exclude rules ([apm] in elephc.toml)");
+    let scratch = abi::int_arg_reg_name(target, 0);
+    abi::emit_symbol_address(emitter, scratch, &target.extern_symbol(APM_RULES_SYMBOL));
+    abi::emit_store_reg_to_symbol(emitter, scratch, &target.extern_symbol("elephc_probe_apm_rules"), 0);
+}
+
+/// Publishes the address of the runtime's live-heap watermark (`_gc_peak`) in the probe's
+/// `elephc_probe_heap_peak` slot: a `--web` request starts it over, so when the request is
+/// recorded it holds that request's peak memory.
+pub(crate) fn emit_heap_peak_slot(emitter: &mut Emitter) {
+    let target = emitter.target;
+    emitter.comment("apm: where the probe reads a request's peak memory");
+    let scratch = abi::int_arg_reg_name(target, 0);
+    abi::emit_symbol_address(emitter, scratch, "_gc_peak");
+    abi::emit_store_reg_to_symbol(emitter, scratch, &target.extern_symbol("elephc_probe_heap_peak"), 0);
+}
+
 /// Emits the `--with-apm` initialization call: hands `elephc_probe_apm_init`
 /// the build key and the embedded collector address (or null), which maps
 /// the counters and starts sending them when there is a collector. `enable`
@@ -70,8 +96,15 @@ pub(crate) fn emit_probe_io_slots(emitter: &mut Emitter) {
         ("elephc_probe_note_wait", "elephc_instr_wait_fn"),
         ("elephc_probe_note_network", "elephc_instr_network_fn"),
         ("elephc_probe_note_network_wait", "elephc_instr_network_wait_fn"),
+        // A web request's W3C trace context: read from its `traceparent`, or started,
+        // and handed to curl for the next hop (`elephc_probe_trace_begin`).
+        ("elephc_probe_trace_begin", "elephc_instr_trace_fn"),
     ] {
         abi::emit_symbol_address(emitter, scratch, &target.extern_symbol(entry));
         abi::emit_store_reg_to_symbol(emitter, scratch, &target.extern_symbol(slot), 0);
     }
+    // Where the probe says a trace context is published: the word curl checks before it
+    // sends a `traceparent`, without turning on the exact profiler's capture.
+    abi::emit_symbol_address(emitter, scratch, &target.extern_symbol("elephc_trace_active"));
+    abi::emit_store_reg_to_symbol(emitter, scratch, &target.extern_symbol("elephc_probe_trace_active"), 0);
 }

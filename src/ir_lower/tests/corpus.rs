@@ -101,7 +101,7 @@ fn lowers_examples_corpus_part_3() { verify_examples_corpus(3); }
 /// Verifies one disjoint part of the example corpus without changing its fixture coverage.
 ///
 /// The `strict-php` example is lowered with strict-PHP mode enabled, matching
-/// its documented `elephc --strict-php` invocation: it deliberately declares a
+/// its documented `elephc build --strict-php` invocation: it deliberately declares a
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
 fn verify_examples_corpus(part: usize) {

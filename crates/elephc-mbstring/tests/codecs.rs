@@ -2,7 +2,7 @@
 //! Verifies Unicode codecs against exhaustive short-input and seeded PHP fixtures.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test codecs`.
+//! - `cargo test -p elephc-mbstring --test engine codecs::`.
 //!
 //! Key details:
 //! - Independently captured hashes include validity, length, decoding, scrubbing, and case.

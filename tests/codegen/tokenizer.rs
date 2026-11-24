@@ -84,6 +84,57 @@ echo count(token_get_all('<?php function broken(')) > 0 ? 'permissive' : 'wrong'
     assert_eq!(out, "T_STRING\nParseError\npermissive");
 }
 
+/// TOKEN_PARSE throws CompileError for a nested halt and ParseError for the other halt failures.
+///
+/// Direct calls use the compiled prelude. The literal eval uses Magician's tokenizer throw.
+#[test]
+fn test_tokenizer_halt_compiler_exception_class() {
+    let out = compile_and_run(r#"<?php
+function show(string $label, string $code): void {
+    try {
+        token_get_all($code, TOKEN_PARSE);
+        echo $label, ":ok\n";
+    } catch (Throwable $e) {
+        echo $label, ":", get_class($e), ":", $e->getMessage(), "\n";
+    }
+}
+show('fn', '<?php function f() { __halt_compiler(); }');
+show('ns', '<?php namespace N { __halt_compiler(); }');
+show('if', '<?php if (1) __halt_compiler();');
+show('top', '<?php __halt_compiler();');
+try {
+    PhpToken::tokenize('<?php function p() { __halt_compiler(); }', TOKEN_PARSE);
+    echo "token:ok\n";
+} catch (ParseError $e) {
+    echo "token:ParseError\n";
+} catch (CompileError $e) {
+    echo "token:CompileError\n";
+}
+eval('try { token_get_all("<?php function g() { __halt_compiler(); }", TOKEN_PARSE); echo "eval:ok\n"; } catch (ParseError $e) { echo "eval:ParseError\n"; } catch (CompileError $e) { echo "eval:CompileError\n"; }');
+"#);
+    assert_eq!(
+        out,
+        "fn:CompileError:__HALT_COMPILER() can only be used from the outermost scope\n\
+ns:ParseError:Unclosed '{'\n\
+if:ParseError:syntax error, unexpected token \"__halt_compiler\"\n\
+top:ok\n\
+token:CompileError\n\
+eval:CompileError\n"
+    );
+}
+
+/// A nested unpack contributes an unknown number of arguments, so the static arity gate
+/// leaves the call to the runtime instead of counting the unpack itself as one argument.
+#[test]
+fn test_tokenizer_nested_spread_argument_count() {
+    let out = compile_and_run(r#"<?php
+$empty = [];
+$tokens = token_get_all('<?php echo 1;', ...[0, ...$empty]);
+echo is_array($tokens) ? 'ok' : 'bad';
+"#);
+    assert_eq!(out, "ok");
+}
+
 /// Named, spread, case-insensitive and first-class callable forms share PHP's signatures.
 #[test]
 fn test_tokenizer_callable_and_named_argument_forms() {
@@ -257,4 +308,390 @@ echo "\n";
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "4|5|\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// TOKEN_PARSE reports PHP's E_DEPRECATED level for every non-canonical cast spelling.
+#[test]
+fn test_tokenizer_non_canonical_cast_deprecations() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+foreach (['(double)', '(integer)', '(boolean)', '(binary)', '(float)', '(int)'] as $cast) {
+    token_get_all('<?php ' . $cast . ' $x;', TOKEN_PARSE);
+}
+PhpToken::tokenize('<?php (double) $x;', TOKEN_PARSE);
+"#);
+    assert_eq!(
+        out,
+        "8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n8192:Non-canonical cast (integer) is deprecated, use the (int) cast instead\n8192:Non-canonical cast (boolean) is deprecated, use the (bool) cast instead\n8192:Non-canonical cast (binary) is deprecated, use the (string) cast instead\n8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n"
+    );
+}
+
+/// `declare(encoding=...)` reports through PHP's E_WARNING channel, not the cast deprecations.
+#[test]
+fn test_tokenizer_declare_encoding_uses_warning_level() {
+    let out = compile_and_run_capture(r#"<?php
+token_get_all('<?php declare(encoding="ISO-8859-1");', TOKEN_PARSE);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert!(
+        out.stderr.contains(
+            "Warning: declare(encoding=...) ignored because Zend multibyte feature is turned off by settings"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("Deprecated: declare(encoding=...)"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The `declare(encoding=...)` warning survives the parse failure that follows it.
+#[test]
+fn test_tokenizer_declare_encoding_warning_precedes_parse_error() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, "\n";
+    return true;
+});
+try {
+    token_get_all("<?php declare(encoding='ISO-8859-1'); echo ;", TOKEN_PARSE);
+} catch (ParseError $e) {
+    echo 'caught:', $e->getLine(), "\n";
+}
+"#);
+    assert_eq!(out, "2:1\ncaught:1\n");
+}
+
+/// Runtime eval reports `declare(encoding=...)` through the Warning channel too.
+#[test]
+fn test_tokenizer_eval_declare_encoding_warning_level() {
+    let out = compile_and_run_capture(r#"<?php
+$code = $argc > 0 ? '
+token_get_all("<?php declare(encoding=\"ISO-8859-1\");", TOKEN_PARSE);
+' : '';
+eval($code);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert!(
+        out.stderr.contains(
+            "Warning: declare(encoding=...) ignored because Zend multibyte feature is turned off by settings"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("Deprecated: declare(encoding=...)"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A throwing eval error handler stays catchable across a tokenizer warning.
+#[test]
+fn test_tokenizer_eval_warning_handler_throw_is_catchable() {
+    let out = compile_and_run(r#"<?php
+$code = $argc > 0 ? '
+try {
+    set_error_handler(function (int $level, string $message): bool {
+        throw new RuntimeException("handled:" . $level);
+    });
+    token_get_all("<?php declare(encoding=\"ISO-8859-1\");", TOKEN_PARSE);
+    echo "no throw";
+} catch (RuntimeException $e) {
+    echo $e->getMessage();
+}
+' : '';
+eval($code);
+"#);
+    assert_eq!(out, "handled:2");
+}
+
+/// Runtime eval raises the same non-canonical-cast deprecations through TOKEN_PARSE.
+#[test]
+fn test_tokenizer_eval_non_canonical_cast_deprecations() {
+    let out = compile_and_run(r#"<?php
+$code = $argc > 0 ? '
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ":", $message, "\n";
+    return true;
+});
+token_get_all("<?php (double) \$x;", TOKEN_PARSE);
+PhpToken::tokenize("<?php (binary) \$x;", TOKEN_PARSE);
+' : '';
+eval($code);
+"#);
+    assert_eq!(
+        out,
+        "8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n\
+8192:Non-canonical cast (binary) is deprecated, use the (string) cast instead\n"
+    );
+}
+
+/// PhpToken tokens come from a Mixed array element; unset must dispatch on the runtime class.
+#[test]
+fn test_tokenizer_phptoken_unset_mixed_receiver_property() {
+    let out = compile_and_run(r#"<?php
+$tokens = PhpToken::tokenize('<?php function foo() {}');
+$token = $tokens[1];
+unset($token->id);
+unset($token->text);
+echo get_class($token), ':', $token->pos;
+"#);
+    assert_eq!(out, "PhpToken:6");
+}
+
+/// An undefined constant in a subclass property default throws at instantiation, as PHP does.
+#[test]
+fn test_tokenizer_subclass_undefined_property_default_throws() {
+    let out = compile_and_run(r#"<?php
+class BrokenSourceToken extends PhpToken { public $extra = UNKNOWN; }
+try { BrokenSourceToken::tokenize('<?php foo'); echo 'wrong'; }
+catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Undefined constant \"UNKNOWN\"");
+}
+
+/// TOKEN_PARSE preserves a throwing user error handler for non-canonical casts.
+#[test]
+fn test_tokenizer_deprecation_handler_throw_propagates() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    throw new RuntimeException('handler: ' . $message);
+});
+try { PhpToken::tokenize('<?php (double) $x;', TOKEN_PARSE); echo 'wrong'; }
+catch (RuntimeException $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "handler: Non-canonical cast (double) is deprecated, use the (float) cast instead");
+}
+
+/// A tokenizer-only program enforces the compiled heap capacity without `ini_set`.
+#[test]
+fn test_tokenizer_memory_limit_defaults_without_ini_set() {
+    let out = compile_and_run_expect_failure(r#"<?php
+$tokens = token_get_all(str_repeat('<?php echo 1;', 8000));
+echo count($tokens);
+"#);
+    assert!(out.contains("Allowed memory size"), "{out}");
+    assert!(out.contains("on line 2"), "{out}");
+    assert!(!out.contains("tokenizer.php"), "{out}");
+}
+
+/// A namespaced user `ini_set` declaration must not be used by the memory guard.
+#[test]
+fn test_tokenizer_memory_limit_ignores_namespaced_ini_set() {
+    let out = compile_and_run(r#"<?php
+namespace Foo;
+function ini_set(string $key, string $value): string { return $value; }
+echo is_array(token_get_all('<?php echo 1;')) ? 'ok' : 'bad';
+"#);
+    assert_eq!(out, "ok");
+}
+
+/// Core INI quantity forms reach the memory guard as the numbers Zend parses.
+///
+/// The guard used to read the previous `memory_limit` with `(int)` plus its last character,
+/// which turned `0x1000000` into zero and made every nonempty scan a fatal.
+#[test]
+fn test_tokenizer_memory_limit_accepts_core_ini_quantity_forms() {
+    // The in-process fixture harness has no opcache prelude, so `ini_set` only exists on the
+    // real CLI pipeline that also injects the quantity parser this guard shares.
+    let out = compile_cli_file_and_run(r#"<?php
+foreach (['0x1000000', '16M ', '1024K'] as $limit) {
+    ini_set('memory_limit', $limit);
+    echo is_array(token_get_all('<?php echo 1;')) ? 'ok' : 'bad';
+}
+"#, &[]);
+    assert_eq!(out, "okokok");
+}
+
+/// The tokenizer allocation guard reports the caller's file and line, not a synthetic prelude.
+#[test]
+fn test_tokenizer_memory_limit_reports_call_site() {
+    let out = compile_cli_file_expect_runtime_failure(r#"<?php
+ini_set('memory_limit', '4M');
+token_get_all('<?php ' . str_repeat('$a = 1; ', 30000));
+"#);
+    assert!(out.contains("Allowed memory size of 4194304 bytes exhausted"), "{out}");
+    assert!(out.contains("on line 3"), "{out}");
+    assert!(!out.contains("tokenizer.php"), "{out}");
+}
+
+/// Tokenizer diagnostics report the line inside the tokenized source, like PHP.
+#[test]
+fn test_tokenizer_warning_reports_tokenized_source_line() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, "\n";
+    return true;
+});
+$src = "<?php\n\n\n(integer)\$a;\n";
+token_get_all($src, TOKEN_PARSE);
+"#);
+    assert_eq!(out, "8192:4\n");
+}
+
+/// Octal-escape overflow warns without TOKEN_PARSE and reports its own line.
+#[test]
+fn test_tokenizer_octal_overflow_reports_tokenized_source_line() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, ':', $message, "\n";
+    return true;
+});
+$src = "<?php\n\$s = \"\\400\";\n";
+token_get_all($src);
+"#);
+    assert_eq!(
+        out,
+        "2:2:Octal escape sequence overflow \\400 is greater than \\377\n"
+    );
+}
+
+/// PHP emits the diagnostics that precede a parse failure before throwing.
+#[test]
+fn test_tokenizer_warning_precedes_parse_error() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, "\n";
+    return true;
+});
+try {
+    token_get_all("<?php\n\n(integer)\$a;\n\n\n +;", TOKEN_PARSE);
+} catch (ParseError $e) {
+    echo 'caught:', $e->getLine(), "\n";
+}
+"#);
+    assert_eq!(out, "8192:3\ncaught:6\n");
+}
+
+/// Nowdoc bodies have no interpolation, so every indented line is stripped like PHP does.
+#[test]
+fn test_tokenizer_nowdoc_indentation_strips_unclosed_brace_lines() {
+    let out = compile_and_run(r#"<?php
+$nowdoc = <<<'A'
+    {$a
+    b}
+    A;
+var_export($nowdoc);
+echo "\n";
+$heredoc = <<<A
+    \{$a
+    b}
+    A;
+var_export($heredoc);
+"#);
+    assert_eq!(out, "'{$a\nb}'\n'\\\\{\nb}'");
+}
+
+/// Eval reports tokenizer warnings at the line inside the scanned source.
+#[test]
+fn test_tokenizer_eval_warning_reports_tokenized_source_line() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, "\n";
+    return true;
+});
+$code = $argc > 0 ? '
+token_get_all("<?php\\n\\n(integer)\$a;\\n", TOKEN_PARSE);
+' : '';
+eval($code);
+"#);
+    assert_eq!(out, "8192:3\n");
+}
+
+/// `PhpToken::tokenize` keeps the diagnostics that precede a parse failure.
+#[test]
+fn test_tokenizer_eval_object_scan_reports_warnings_before_error() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, ':', $line, "\n";
+    return true;
+});
+$code = $argc > 0 ? '
+try { PhpToken::tokenize("<?php\\n\\n(integer)\$a;\\n\\n\\n +;", TOKEN_PARSE); }
+catch (ParseError $e) { echo "caught:", $e->getLine(), "\n"; }
+' : '';
+eval($code);
+"#);
+    assert_eq!(out, "8192:3\ncaught:6\n");
+}
+
+/// The tokenizer memory guard honors `--ini memory_limit` without an `ini_set` call.
+#[test]
+fn test_tokenizer_memory_guard_reads_configured_ini_limit() {
+    let directory = make_cli_test_dir("tokenizer_memory_limit");
+    let php = directory.join("main.php");
+    std::fs::write(&php, r#"<?php
+echo ini_get('memory_limit'), "\n";
+$src = '<?php ' . str_repeat('$a = 1; ', 30000) . "\n";
+token_get_all($src);
+echo "ok\n";
+"#).unwrap();
+    let output = elephc_cli_command(&directory)
+        .args(["--ini", "memory_limit=4M"])
+        .arg(&php)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let executed = std::process::Command::new(php.with_extension("")).output().unwrap();
+    let stdout = String::from_utf8_lossy(&executed.stdout);
+    assert!(stdout.contains("4M"), "{stdout}");
+    assert!(stdout.contains("Allowed memory size"), "{stdout}");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// The memory guard honors `--ini memory_limit` even when the program never calls `ini_get`.
+#[test]
+fn test_tokenizer_memory_guard_reads_configured_ini_limit_without_ini_get() {
+    let directory = make_cli_test_dir("tokenizer_memory_limit_no_ini_get");
+    let php = directory.join("main.php");
+    std::fs::write(&php, r#"<?php
+$src = '<?php ' . str_repeat('$a = 1; ', 30000) . "\n";
+token_get_all($src);
+echo "ok\n";
+"#).unwrap();
+    let output = elephc_cli_command(&directory)
+        .args(["--ini", "memory_limit=4M"])
+        .arg(&php)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let executed = std::process::Command::new(php.with_extension("")).output().unwrap();
+    let stdout = String::from_utf8_lossy(&executed.stdout);
+    assert!(stdout.contains("Allowed memory size of 4194304 bytes exhausted"), "{stdout}");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Tokenizer warnings leave the handler's file empty, like php_error_docref(NULL, ...).
+#[test]
+fn test_tokenizer_warning_uses_empty_file_field() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo strlen($file), ':', $line, "\n";
+    return true;
+});
+token_get_all("<?php\n\n(integer)\$a;\n", TOKEN_PARSE);
+"#);
+    assert_eq!(out, "0:3\n");
+}
+
+/// Eval tokenizer warnings leave the handler's file empty, like php_error_docref(NULL, ...).
+#[test]
+fn test_tokenizer_eval_warning_uses_empty_file_field() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo strlen($file), ':', $line, "\n";
+    return true;
+});
+$code = $argc > 0 ? '
+token_get_all("<?php\\n\\n(integer)\\$a;\\n", TOKEN_PARSE);
+' : '';
+eval($code);
+"#);
+    assert_eq!(out, "0:3\n");
 }

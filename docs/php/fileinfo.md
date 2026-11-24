@@ -15,7 +15,7 @@ Declare the pinned native package once in the PHP project:
 
 ```bash
 elephc native add libmagic
-elephc main.php
+elephc build main.php
 ```
 
 Static references automatically link `elephc_fileinfo` and the managed libmagic

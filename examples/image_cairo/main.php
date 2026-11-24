@@ -4,7 +4,7 @@
 //
 // Draws onto an image surface with paths, a transform, a stroke, and a linear
 // gradient fill, writes a PNG, then reads a pixel back through GD. Run:
-//   cargo run -- examples/image_cairo/main.php
+//   cargo run -- build examples/image_cairo/main.php
 //   ./examples/image_cairo/main
 
 $surface = new CairoImageSurface(CairoFormat::ARGB32, 160, 120);

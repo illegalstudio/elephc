@@ -1000,6 +1000,14 @@ pub trait RuntimeValueOps {
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 
+    /// Emits one PHP warning reported at an explicit source line.
+    ///
+    /// Adapters that cannot carry a line fall back to the interpreter's current line.
+    fn warning_at(&mut self, message: &str, line: usize) -> Result<(), EvalStatus> {
+        let _ = line;
+        self.warning(message)
+    }
+
     /// Emits one unsuppressible PHP fatal diagnostic and stops eval execution.
     fn fatal(&mut self, message: &str) -> Result<(), EvalStatus> {
         self.warning(message)?;

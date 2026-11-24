@@ -1,10 +1,13 @@
 //! Purpose:
-//! Constructs tokenizer ParseErrors with their scanned source coordinates.
+//! Constructs tokenizer CompileError and ParseError exceptions with their scanned source
+//! coordinates.
 //!
 //! Called from:
 //! - Both tokenizer eval entry points after the shared parser rejects input.
 //!
 //! Key details:
+//! - The exact outermost-scope `__halt_compiler()` message selects CompileError.
+//! - Every other diagnostic stays a ParseError.
 //! - The versioned runtime operation stamps metadata before publishing the exception owner.
 
 use super::*;
@@ -16,13 +19,14 @@ eval_builtin! {
     values: none,
 }
 
-/// Constructs a catchable ParseError and preserves the parser's source-buffer location.
+/// Constructs a catchable CompileError or ParseError and preserves the parser's source location.
 pub(super) fn throw_parse_error<T>(
-    error: &elephc_tokenizer_engine::ParseError,
+    error: &elephc_chopper::syntax::php_tokenizer::ParseError,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ParseError")?;
+    let class = if error.is_compile_error() { "CompileError" } else { "ParseError" };
+    let exception = values.new_object(class)?;
     let constructed = (|| {
         let message = values.string(&error.message)?;
         with_eval_value_lease(message, context, values, |message, context, values| {

@@ -15,7 +15,7 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked --bin elephc \
-    && ./target/release/elephc --web examples/web-edge/main.php
+    && ./target/release/elephc build --web examples/web-edge/main.php
 
 FROM debian:bookworm-slim
 RUN apt-get update \

@@ -4,7 +4,7 @@
 //! `Fatal error: eval() runtime failed`.
 //!
 //! Called from:
-//! - `cargo test --test eval_argument_count_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_argument_count_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expected line is PINNED FROM REFERENCE PHP 8.5.10, running the same source through
@@ -55,8 +55,9 @@ fn elephc_bin() -> String {
 fn compile(prefix: &str, source: &str, extra: &[&str]) -> PathBuf {
     let dir = make_test_dir(prefix);
     fs::write(dir.join("main.php"), source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .args(["--php-version", "8.5"])

@@ -1,8 +1,10 @@
 //! Purpose:
-//! Exports profiled request slices as OpenTelemetry spans over OTLP/HTTP.
+//! Exports profiled request slices as OpenTelemetry spans, and transaction counters as
+//! OpenTelemetry metrics, over OTLP/HTTP.
 //!
 //! Called from:
-//! - `crate::monitor::run_stitch()` when `--otlp <endpoint>` is passed.
+//! - `crate::monitor::run_stitch()` when `--otlp <endpoint>` is passed (spans).
+//! - `crate::monitor::apm::otlp_export` under `monitor --apm --otlp` (metrics).
 //!
 //! Key details:
 //! - elephc already speaks **W3C Trace Context**: a `--web --instrument` slice
@@ -181,11 +183,129 @@ pub(crate) fn encode_traces(spans: &[OtlpSpan]) -> Vec<u8> {
     request
 }
 
+/// The value of one metric data point.
+pub(crate) enum OtlpValue {
+    /// A count over the batch's interval (a delta, monotonic sum).
+    Count(u64),
+    /// A distribution over the batch's interval: `counts` has one more entry than
+    /// `bounds`, the last for everything above the last bound.
+    Histogram { bounds: Vec<f64>, counts: Vec<u64>, sum: f64 },
+}
+
+/// One metric: its points, each with its attributes.
+pub(crate) struct OtlpMetric {
+    pub name: String,
+    pub unit: String,
+    pub description: String,
+    /// Every point must hold the same kind of value.
+    pub points: Vec<(Vec<(String, String)>, OtlpValue)>,
+}
+
+/// The metrics one service measured over one interval.
+pub(crate) struct OtlpMetrics {
+    /// Becomes the `service.name` resource attribute.
+    pub service: String,
+    pub start_unix_nano: u64,
+    pub end_unix_nano: u64,
+    pub metrics: Vec<OtlpMetric>,
+}
+
+/// `AggregationTemporality::DELTA`: each point counts its own interval only.
+const TEMPORALITY_DELTA: u64 = 1;
+
+/// Encodes one data point of `metric`, between `start` and `end`.
+fn encode_point(attributes: &[(String, String)], value: &OtlpValue, start: u64, end: u64) -> Vec<u8> {
+    let mut point = Vec::new();
+    put_fixed64(&mut point, 2, start);
+    put_fixed64(&mut point, 3, end);
+    match value {
+        // NumberDataPoint: as_int = 6 (sfixed64), attributes = 7.
+        OtlpValue::Count(count) => {
+            put_fixed64(&mut point, 6, *count);
+            for (key, value) in attributes {
+                put_bytes(&mut point, 7, &key_value_str(key, value));
+            }
+        }
+        // HistogramDataPoint: count = 4, sum = 5 (double), bucket_counts = 6 and
+        // explicit_bounds = 7 (packed), attributes = 9.
+        OtlpValue::Histogram { bounds, counts, sum } => {
+            put_fixed64(&mut point, 4, counts.iter().sum());
+            put_fixed64(&mut point, 5, sum.to_bits());
+            let packed_counts: Vec<u8> = counts.iter().flat_map(|count| count.to_le_bytes()).collect();
+            put_bytes(&mut point, 6, &packed_counts);
+            let packed_bounds: Vec<u8> = bounds.iter().flat_map(|bound| bound.to_bits().to_le_bytes()).collect();
+            put_bytes(&mut point, 7, &packed_bounds);
+            for (key, value) in attributes {
+                put_bytes(&mut point, 9, &key_value_str(key, value));
+            }
+        }
+    }
+    point
+}
+
+/// Encodes one `Metric`: a delta, monotonic `Sum` or a delta `Histogram`.
+fn encode_metric(metric: &OtlpMetric, start: u64, end: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_bytes(&mut out, 1, metric.name.as_bytes());
+    put_bytes(&mut out, 2, metric.description.as_bytes());
+    put_bytes(&mut out, 3, metric.unit.as_bytes());
+    let mut data = Vec::new();
+    for (attributes, value) in &metric.points {
+        put_bytes(&mut data, 1, &encode_point(attributes, value, start, end));
+    }
+    put_varint_field(&mut data, 2, TEMPORALITY_DELTA);
+    match metric.points.first().map(|(_, value)| value) {
+        Some(OtlpValue::Histogram { .. }) => put_bytes(&mut out, 9, &data),
+        _ => {
+            // Sum.is_monotonic = 3.
+            put_varint_field(&mut data, 3, 1);
+            put_bytes(&mut out, 7, &data);
+        }
+    }
+    out
+}
+
+/// Encodes an `ExportMetricsServiceRequest`, one `ResourceMetrics` per batch.
+pub(crate) fn encode_metrics(batches: &[OtlpMetrics]) -> Vec<u8> {
+    let mut request = Vec::new();
+    for batch in batches {
+        let mut resource = Vec::new();
+        put_bytes(&mut resource, 1, &key_value_str("service.name", &batch.service));
+        let mut scope = Vec::new();
+        let mut scope_msg = Vec::new();
+        put_bytes(&mut scope_msg, 1, b"elephc");
+        put_bytes(&mut scope_msg, 2, env!("CARGO_PKG_VERSION").as_bytes());
+        put_bytes(&mut scope, 1, &scope_msg);
+        for metric in batch.metrics.iter().filter(|metric| !metric.points.is_empty()) {
+            put_bytes(&mut scope, 2, &encode_metric(metric, batch.start_unix_nano, batch.end_unix_nano));
+        }
+        let mut resource_metrics = Vec::new();
+        put_bytes(&mut resource_metrics, 1, &resource);
+        put_bytes(&mut resource_metrics, 2, &scope);
+        put_bytes(&mut request, 1, &resource_metrics);
+    }
+    request
+}
+
+/// POSTs encoded metrics to an OTLP/HTTP endpoint; `/v1/metrics` is appended when the
+/// endpoint names no path.
+pub(crate) fn post_metrics(endpoint: &str, body: &[u8]) -> Result<(), String> {
+    post(endpoint, "/v1/metrics", body)
+}
+
 /// POSTs an encoded payload to an OTLP/HTTP endpoint.
 ///
 /// `endpoint` is the base URL; `/v1/traces` is appended when absent, matching
 /// what every collector expects and what `OTEL_EXPORTER_OTLP_ENDPOINT` means.
 pub(crate) fn post_traces(endpoint: &str, body: &[u8]) -> Result<(), String> {
+    post(endpoint, "/v1/traces", body)
+}
+
+/// How long one export may take to connect, to send, and to be answered.
+const POST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// POSTs `body` to `endpoint`, at `default_path` when the endpoint names no path.
+fn post(endpoint: &str, default_path: &str, body: &[u8]) -> Result<(), String> {
     let rest = endpoint
         .strip_prefix("http://")
         .ok_or_else(|| match endpoint.strip_prefix("https://") {
@@ -202,7 +322,7 @@ pub(crate) fn post_traces(endpoint: &str, body: &[u8]) -> Result<(), String> {
         None => (rest, ""),
     };
     let path = if path.is_empty() || path == "/" {
-        "/v1/traces"
+        default_path
     } else {
         path
     };
@@ -212,8 +332,26 @@ pub(crate) fn post_traces(endpoint: &str, body: &[u8]) -> Result<(), String> {
         format!("{authority}:4318")
     };
 
-    let mut stream = std::net::TcpStream::connect(&address)
+    // Every step has a deadline: an endpoint that accepts and then never answers must
+    // not hold the exporter, and the batches behind it, forever (review).
+    // Each address the name resolves to is tried in turn, as `TcpStream::connect` does: one
+    // that is down must not drop the batch when another answers (review).
+    let targets = std::net::ToSocketAddrs::to_socket_addrs(&address)
         .map_err(|error| format!("cannot reach the collector at {address}: {error}"))?;
+    let mut last = format!("cannot reach the collector at {address}: no address");
+    let mut connected = None;
+    for target in targets {
+        match std::net::TcpStream::connect_timeout(&target, POST_TIMEOUT) {
+            Ok(stream) => {
+                connected = Some(stream);
+                break;
+            }
+            Err(error) => last = format!("cannot reach the collector at {address}: {error}"),
+        }
+    }
+    let mut stream = connected.ok_or(last)?;
+    let _ = stream.set_write_timeout(Some(POST_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(POST_TIMEOUT));
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/x-protobuf\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",

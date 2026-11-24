@@ -277,6 +277,33 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
 
+    // `__elephc_eval_warning_at(ptr, len, line)`: the tokenizer prelude reports the line inside
+    // the SCANNED source, so this publishes it for the diagnostic and restores the interpreter's
+    // line afterwards.
+    label_c_global(emitter, "__elephc_eval_warning_at");
+    emitter.instruction("sub rsp, 40");                                         // reserve the saved line/file slots and align the nested call
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // keep the requested warning line
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_diagnostic_line", 0);
+    emitter.instruction("mov QWORD PTR [rsp], r10");                            // remember the interpreter's line across the handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_diagnostic_file", 0);
+    emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // remember the interpreter's file pointer
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_diagnostic_file_len", 0);
+    emitter.instruction("mov QWORD PTR [rsp + 24], r10");                       // remember the interpreter's file length
+    emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // reload the requested warning line
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_diagnostic_line", 0);
+    emitter.instruction("xor eax, eax");                                        // clear the file pointer: token_get_all names no file
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_php_diagnostic_file", 0);
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_php_diagnostic_file_len", 0);
+    emitter.instruction("call __rt_diag_warning");                              // SysV rdi/rsi already match the warning dispatcher
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the interpreter's line
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_diagnostic_line", 0);
+    emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // recover the interpreter's file pointer
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_diagnostic_file", 0);
+    emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                       // recover the interpreter's file length
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_diagnostic_file_len", 0);
+    emitter.instruction("add rsp, 40");                                         // drop the saved slots
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
+
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov rdx, rsi");                                        // move fatal length into the stderr write-length register
     emitter.instruction("mov rsi, rdi");                                        // move fatal pointer into the stderr write-buffer register
@@ -301,4 +328,28 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning_raw");
     emitter.instruction("jmp __rt_diag_write");                                 // do not redispatch already-filtered trigger_error output
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// The x86_64 warning-at wrapper keeps the SysV rdi/rsi warning arguments intact.
+    #[test]
+    fn warning_at_keeps_sysv_warning_arguments() {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emitter.raw(".intel_syntax noprefix");
+        emitter.raw(".text");
+        emit_x86_64_output(&mut emitter);
+        let assembly = emitter.output();
+        let start = assembly.find("__elephc_eval_warning_at:").expect("warning-at wrapper");
+        let end = assembly[start..].find("__elephc_eval_fatal:").expect("fatal wrapper") + start;
+        let body = &assembly[start..end];
+        assert!(body.contains("call __rt_diag_warning"), "{body}");
+        assert!(body.contains("_php_diagnostic_file"), "{body}");
+        assert!(body.contains("_php_diagnostic_file_len"), "{body}");
+        assert!(!body.contains("mov rdx, rsi"), "{body}");
+        assert!(!body.contains("mov rsi, rdi"), "{body}");
+    }
 }

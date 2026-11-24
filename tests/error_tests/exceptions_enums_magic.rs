@@ -725,11 +725,21 @@ fn test_error_enum_review_trait_parameter_requirement() {
     );
 }
 
-/// An abstract requirement survives an intermediate trait's concrete implementation.
+/// A requirement an intermediate trait satisfies stops at that trait: an enum may replace
+/// `Middle::f` with any signature, as php 8.5.12 accepts (it prints `ok` for this program).
+#[test]
+fn test_enum_review_nested_trait_requirement_stops_at_the_satisfying_trait() {
+    expect_no_error(
+        "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): int { return 1; } } enum E { case Ready; use Middle; public function f(): string { return 'bad'; } }",
+    );
+}
+
+/// The intermediate trait's own implementation must honour the requirement it satisfies, as
+/// php 8.5.12 reports `Declaration of Middle::f(): string must be compatible with T::f(): int`.
 #[test]
 fn test_error_enum_review_nested_trait_return_requirement() {
     expect_error(
-        "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): int { return 1; } } enum E { case Ready; use Middle; public function f(): string { return 'bad'; } }",
+        "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): string { return 'bad'; } } enum E { case Ready; use Middle; }",
         "incompatible return type",
     );
 }

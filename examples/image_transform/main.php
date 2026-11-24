@@ -5,7 +5,7 @@
 // reading pixels back to show each step worked, and saving a few stages to PNG.
 //
 // Build & run:
-//   cargo run -- examples/image_transform/main.php
+//   cargo run -- build examples/image_transform/main.php
 //   ./examples/image_transform/main
 
 $dir = sys_get_temp_dir();

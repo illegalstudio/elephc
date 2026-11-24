@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with the optional unixODBC profile:
-// cargo run --features pdo-odbc -- examples/pdo-odbc/main.php
+// cargo run --features pdo-odbc -- build examples/pdo-odbc/main.php
 // ELEPHC_ODBC_DSN='odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=app;UID=app;PWD=secret' ./examples/pdo-odbc/main
 $dsn = (string) getenv("ELEPHC_ODBC_DSN");
 try {

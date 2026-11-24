@@ -78,6 +78,10 @@ pub(crate) struct MonitorCommand {
     pub apm_retention_days: u32,
     /// Whether `--retention` was given, as opposed to defaulted.
     pub apm_retention_explicit: bool,
+    /// Days the store keeps at the collector's resolution (`--retention-full`).
+    pub apm_full_days: u32,
+    /// Days the store keeps at least by the minute (`--retention-minute`); hours after.
+    pub apm_minute_days: u32,
     /// Seconds of traffic folded into one stored record.
     pub apm_resolution_secs: u64,
     /// Route (or script transaction) whose latency histogram to print.
@@ -110,7 +114,8 @@ pub(crate) const MONITOR_USAGE: &str = "Usage: elephc monitor <program|source.ph
                       [--otlp <http://collector:4318>] [--prometheus <file.prom>]
        elephc monitor --attach <pid> [--live] [--duration <seconds>]
        elephc monitor <host:port|socket> --apm [--live] [--duration <seconds>] [--key <file>]
-                      [--store <dir>] [--retention <days>] [--resolution <seconds>]
+                      [--store <dir>] [--retention <days>] [--retention-full <days>]
+                      [--retention-minute <days>] [--resolution <seconds>] [--otlp <http://collector:4318>]
                       [--serve <host:port>] [--route <label>] [--capture-every <seconds>]
                       [--alert <metric>:<route><op><value>]... [--alert-window <s>] [--alert-exec <cmd>]
        elephc monitor <host:port|socket> --apm --reset-routes [--key <file>]
@@ -209,7 +214,9 @@ request can be profiled in production without touching the others.
 spans, so an elephc hop stops being a gap in someone else's trace. --prometheus
 writes the per-service stats in the text exposition format, for a textfile
 collector. Profiles are not exported over OTLP on purpose: that signal is alpha,
-and --pprof already feeds a Collector's pprof receiver.
+and --pprof already feeds a Collector's pprof receiver. With --apm, --otlp makes the
+collector post its per-transaction counts, latency and memory histograms and grouped
+errors as OTLP metrics, once per --resolution.
 
 --stitch <file> (repeatable) captures nothing: it reads the stderr logs of
 services built with --web --with-monitoring and correlates their per-request
@@ -228,7 +235,9 @@ not anyone is reading. `monitor <service> --apm` prints those counters since the
 service started (requests, req/s, mean, p50/p95/p99, 4xx and 5xx shares, share
 of total time). Add --live for a table refreshed every --duration seconds,
 --store <dir> to keep the history on disk (one JSON line per --resolution
-seconds, default 10, one file per UTC day, --retention days kept, default 7),
+seconds, default 10, one file per UTC day, --retention days kept, default 7; past
+--retention-full days, default 2, a day is rolled up by the minute, and past
+--retention-minute days, default 7, by the hour),
 and --serve <host:port> for a live dashboard: throughput, latency percentiles
 and error rate over a chosen range, per route, plus Prometheus counters at
 /metrics. The collector polls once a second until Ctrl-C, writing what it holds
@@ -298,6 +307,8 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut apm = false;
     let mut apm_store = None;
     let mut apm_retention_days = None;
+    let mut apm_full_days: Option<u32> = None;
+    let mut apm_minute_days: Option<u32> = None;
     let mut apm_resolution_secs = None;
     let mut target_args: Vec<String> = Vec::new();
     let mut apm_route = None;
@@ -425,6 +436,17 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
                         .ok_or_else(|| format!("invalid --retention '{value}' (whole days, at least 1)"))?,
                 );
             }
+            flag @ ("--retention-full" | "--retention-minute") => {
+                let value = it.next().ok_or_else(|| format!("{flag} needs a number of days"))?;
+                let days = value
+                    .parse::<u32>()
+                    .map_err(|_| format!("invalid {flag} '{value}' (whole days, 0 or more)"))?;
+                if flag == "--retention-full" {
+                    apm_full_days = Some(days);
+                } else {
+                    apm_minute_days = Some(days);
+                }
+            }
             "--resolution" => {
                 let value = it.next().ok_or("--resolution needs a number of seconds")?;
                 apm_resolution_secs = Some(bounded_seconds("--resolution", value, 86_400)?);
@@ -459,6 +481,8 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let store_flags: Vec<&str> = [
         ("--store", apm_store.is_some()),
         ("--retention", apm_retention_days.is_some()),
+        ("--retention-full", apm_full_days.is_some()),
+        ("--retention-minute", apm_minute_days.is_some()),
         ("--resolution", apm_resolution_secs.is_some()),
         ("--route", apm_route.is_some()),
         ("--capture-every", apm_capture_every.is_some()),
@@ -531,7 +555,13 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         }
         // Store settings with no store to apply them to.
         if apm_store.is_none() {
-            for (flag, given) in [("--retention", apm_retention_days.is_some()), ("--resolution", apm_resolution_secs.is_some())] {
+            for (flag, given) in [
+                ("--retention", apm_retention_days.is_some()),
+                ("--retention-full", apm_full_days.is_some()),
+                ("--retention-minute", apm_minute_days.is_some()),
+                // It also sets how often an --otlp export posts.
+                ("--resolution", apm_resolution_secs.is_some() && otlp.is_none()),
+            ] {
                 if given {
                     return Err(format!("{flag} sets how the --store history is kept; it needs --store <dir>"));
                 }
@@ -542,11 +572,14 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         if target.is_none() && apm_listen.is_none() {
             let collecting: Vec<&str> = [
                 ("--live", live),
+                ("--otlp", otlp.is_some()),
                 ("--capture-every", apm_capture_every.is_some()),
                 ("--alert", !apm_alerts.is_empty()),
                 ("--alert-exec", apm_alert_exec.is_some()),
                 ("--resolution", apm_resolution_secs.is_some()),
                 ("--retention", apm_retention_days.is_some()),
+                ("--retention-full", apm_full_days.is_some()),
+                ("--retention-minute", apm_minute_days.is_some()),
             ]
             .iter()
             .filter(|(_, given)| *given)
@@ -593,6 +626,8 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             target_args,
             apm_store,
             apm_retention_explicit: apm_retention_days.is_some(),
+            apm_full_days: apm_full_days.unwrap_or(crate::monitor::apm::DEFAULT_FULL_DAYS),
+            apm_minute_days: apm_minute_days.unwrap_or(crate::monitor::apm::DEFAULT_MINUTE_DAYS),
             apm_retention_days: apm_retention_days.unwrap_or(crate::monitor::apm::DEFAULT_RETENTION_DAYS),
             apm_resolution_secs: apm_resolution_secs.unwrap_or(crate::monitor::apm::DEFAULT_RESOLUTION_SECS),
             apm_route,
@@ -672,6 +707,8 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         apm_store,
         apm_retention_days: crate::monitor::apm::DEFAULT_RETENTION_DAYS,
         apm_retention_explicit: false,
+        apm_full_days: crate::monitor::apm::DEFAULT_FULL_DAYS,
+        apm_minute_days: crate::monitor::apm::DEFAULT_MINUTE_DAYS,
         apm_resolution_secs: crate::monitor::apm::DEFAULT_RESOLUTION_SECS,
         apm_route,
         apm_capture_every: 0,

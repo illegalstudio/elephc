@@ -2,7 +2,7 @@
 //! Regression coverage for PHP namespace fallback after availability guards remove polyfills.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests namespace_polyfill` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop namespace_polyfill` through Rust's test harness.
 //!
 //! Key details:
 //! - Unqualified calls may fall back globally; retained declarations and explicit imports win.

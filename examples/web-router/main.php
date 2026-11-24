@@ -1,6 +1,6 @@
 <?php
 // elephc-web: a tiny method + path router.
-// Compile: cargo run -- --web examples/web-router/main.php
+// Compile: cargo run -- build --web examples/web-router/main.php
 // Run:     ./examples/web-router/main --listen 127.0.0.1:8080 --access-log
 // Try:     curl -i 127.0.0.1:8080/
 //          curl -i '127.0.0.1:8080/hello?name=ada'

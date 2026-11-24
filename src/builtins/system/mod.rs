@@ -26,8 +26,10 @@
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
 pub mod __elephc_builtin_deprecated;
+pub mod __elephc_builtin_deprecated_at;
 pub mod __elephc_builtin_warning;
 pub mod __elephc_call_strict_types;
+pub mod __elephc_builtin_warning_at;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;
 pub mod __elephc_eval_reflection_class_build;
@@ -51,8 +53,12 @@ pub mod __elephc_reflection_class_build;
 pub mod __elephc_nl_langinfo;
 pub mod __elephc_setlocale_query;
 pub mod __elephc_setlocale_set;
+pub mod __elephc_set_memory_limit;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
+pub mod __elephc_preg_compile;
+pub mod __elephc_preg_free;
+pub mod __elephc_preg_match_compiled;
 pub mod __elephc_simplexml_warning;
 pub mod __elephc_strtotime_raw;
 pub mod __elephc_tokenizer_error_location;

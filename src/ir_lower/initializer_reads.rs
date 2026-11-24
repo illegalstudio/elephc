@@ -1111,8 +1111,8 @@ fn visit_direct_children(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
         ExprKind::ArrayLiteralMixed(entries) => {
             for entry in entries {
                 match entry {
-                    ArrayEntry::Spread(value) | ArrayEntry::Value(value) => visit(value),
-                    ArrayEntry::Keyed(key, value) => {
+                    ArrayEntry::Spread(value) | ArrayEntry::Value(value) | ArrayEntry::Reference(value) => visit(value),
+                    ArrayEntry::Keyed(key, value) | ArrayEntry::KeyReference(key, value) => {
                         visit(key);
                         visit(value);
                     }

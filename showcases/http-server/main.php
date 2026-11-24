@@ -2,7 +2,7 @@
 // elephc http-server — a native, asynchronous HTTP/1.1 server.
 //
 // Build & run:
-//   cargo run -- showcases/http-server/main.php
+//   cargo run -- build showcases/http-server/main.php
 //   ./showcases/http-server/main
 //
 // Then open http://127.0.0.1:8080/ in a browser, or:

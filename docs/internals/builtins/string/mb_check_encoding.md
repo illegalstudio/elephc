@@ -25,7 +25,7 @@ description: "Compiler internals for mb_check_encoding(): lowering path, type ch
 - **Result type source**: `checked`
 - **Result ownership**: `non_heap`
 - **Effects**: `static (17 declared effects)`
-- **Requirements**: `static (1 requirements)`
+- **Requirements**: `shared`
 - **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 

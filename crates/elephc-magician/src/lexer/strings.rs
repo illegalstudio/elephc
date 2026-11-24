@@ -5,7 +5,7 @@
 //! grammar already lowers to `EvalBinOp::Concat`.
 //!
 //! Called from:
-//! - `super::scan::Lexer::next_tokens()` for every `"` encountered in a fragment.
+//! - The projection of Chopper's quoted string tokens.
 //!
 //! Key details:
 //! - Escape handling covers PHP's simple, hexadecimal, and octal forms; `\$` still
@@ -18,12 +18,16 @@
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
 //!   parse errors rather than silently inventing a key.
 
-use super::scan::{is_ident_start, tokenize, Lexer};
+use super::decode::{is_ident_start, LiteralCursor};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
+use elephc_chopper::scanner::{
+    braced_expression_len, braced_interpolation, BracedInterpolation, InterpolationComment,
+    InterpolationError,
+};
 use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 
-impl Lexer<'_> {
+impl LiteralCursor<'_> {
     /// Reads a double-quoted string literal starting at the opening quote.
     ///
     /// Returns exactly one `TokenKind::String` when the literal contains no
@@ -51,7 +55,7 @@ impl Lexer<'_> {
                     self.push_double_quoted_escape(escaped, &mut current)?;
                 }
                 // Complex interpolation: `{` is only special when a `$` follows it.
-                '{' if self.peek_next_char() == Some('$') => {
+                '{' if braced_interpolation(self.remaining().as_bytes()) == Some(BracedInterpolation::CurlyDollar) => {
                     self.bump_char();
                     let inner = self.capture_braced_expr()?;
                     let part = tokenize_interpolated_fragment(&inner, line)?;
@@ -60,7 +64,7 @@ impl Lexer<'_> {
                 }
                 '$' => {
                     // Legacy `${expr}` form: PHP 8.2 deprecates it but still evaluates it.
-                    if self.peek_next_char() == Some('{') {
+                    if braced_interpolation(self.remaining().as_bytes()) == Some(BracedInterpolation::DollarCurly) {
                         self.bump_char();
                         self.bump_char();
                         let inner_raw = self.capture_braced_expr()?;
@@ -199,126 +203,17 @@ impl Lexer<'_> {
         Ok(())
     }
 
-    /// Captures the raw source text of a `{$expr}` interpolation up to its matching `}`.
-    ///
-    /// The opening `{` is already consumed and the closing `}` is consumed here. Nested
-    /// braces are balanced and quoted sections are copied verbatim so braces inside a
-    /// nested string literal never change the depth.
+    /// Captures an eval expression and rejects PHP closing tags inside its comments.
     fn capture_braced_expr(&mut self) -> Result<String, EvalParseError> {
-        let mut inner = String::new();
-        let mut depth = 1usize;
-        loop {
-            let Some(ch) = self.peek_char() else {
-                return Err(EvalParseError::UnterminatedString);
-            };
-            self.bump_char();
-            match ch {
-                '{' => {
-                    depth += 1;
-                    inner.push('{');
-                }
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Ok(inner);
-                    }
-                    inner.push('}');
-                }
-                quote @ ('"' | '\'') => {
-                    inner.push(quote);
-                    self.capture_braced_string(quote, &mut inner)?;
-                }
-                '/' if self.peek_char() == Some('*') => {
-                    inner.push('/');
-                    self.bump_char();
-                    self.capture_braced_block_comment(&mut inner)?;
-                }
-                '/' if self.peek_char() == Some('/') => {
-                    // BOTH slashes are copied: the capture is lexed again as a whole, and a lone
-                    // `/` there is a division — `"{$a[ // " }⏎"k"]}"` then read `" }…` as an
-                    // unterminated string.
-                    inner.push_str("//");
-                    self.bump_char();
-                    self.capture_braced_line_comment(&mut inner)?;
-                }
-                '#' if self.peek_char() != Some('[') => {
-                    inner.push('#');
-                    self.capture_braced_line_comment(&mut inner)?;
-                }
-                other => inner.push(other),
-            }
-        }
-    }
-
-    /// Copies a block comment verbatim so its braces and quotes do not affect nesting.
-    ///
-    /// The caller has already consumed the opening `/*`; only the `*` is still to be copied.
-    /// This used to consume one more character as well, which dropped the first byte of the
-    /// body: harmless for `/*x*/`, fatal for `/**/`, whose first body byte is the closing star,
-    /// so the scan ran past `*/` and `"{$a[/**/"k"]}"` was "eval() fragment is invalid"
-    /// (MEASURED on PHP 8.5.10: reference prints `v`).
-    fn capture_braced_block_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
-        inner.push('*');
-        while let Some(ch) = self.peek_char() {
-            self.bump_char();
-            inner.push(ch);
-            if ch == '*' && self.peek_char() == Some('/') {
-                inner.push('/');
-                self.bump_char();
-                return Ok(());
-            }
-        }
-        Err(EvalParseError::UnterminatedString)
-    }
-
-    /// Copies a line comment through its newline, leaving braces and quotes inert.
-    ///
-    /// A `?>` ends a PHP line comment too, and inside `{$…}` it then ends PHP mode in the middle
-    /// of the expression, which reference PHP always rejects. The copy used to run to the
-    /// newline, hiding the `?>`: `"{$a[// ?>⏎"k"]}"` evaluated to `v` in eval'd code, where
-    /// PHP 8.5.10 raises a parse error (MEASURED; reported by two reviewers of PR #968). The
-    /// capture refuses it itself rather than stopping before it, because the captured text is
-    /// lexed again, and that pass's line-comment skip would swallow the `?>` a second time.
-    fn capture_braced_line_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
-        while let Some(ch) = self.peek_char() {
-            if ch == '?' && self.peek_next_char() == Some('>') {
-                return Err(EvalParseError::UnexpectedToken);
-            }
-            self.bump_char();
-            inner.push(ch);
-            if ch == '\n' {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    /// Copies a nested string literal inside a `{$expr}` capture verbatim, including its
-    /// escape sequences and its closing quote.
-    fn capture_braced_string(
-        &mut self,
-        quote: char,
-        inner: &mut String,
-    ) -> Result<(), EvalParseError> {
-        loop {
-            let Some(ch) = self.peek_char() else {
-                return Err(EvalParseError::UnterminatedString);
-            };
-            self.bump_char();
-            if ch == '\\' {
-                inner.push('\\');
-                let Some(escaped) = self.peek_char() else {
-                    return Err(EvalParseError::UnterminatedString);
-                };
-                inner.push(escaped);
-                self.bump_char();
-                continue;
-            }
-            inner.push(ch);
-            if ch == quote {
-                return Ok(());
-            }
-        }
+        let source = self.remaining();
+        let len = braced_expression_len(source.as_bytes(), InterpolationComment::RejectCloseTag)
+            .map_err(|error| match error {
+                InterpolationError::CloseTag => EvalParseError::UnexpectedToken,
+                _ => EvalParseError::UnterminatedString,
+            })?;
+        let inner = source[..len - 1].to_owned();
+        self.skip_bytes(len);
+        Ok(inner)
     }
 
     /// Appends one PHP double-quoted escape, consuming any hexadecimal, octal or `\u{…}` tail.
@@ -463,7 +358,7 @@ fn tokenize_interpolated_fragment(
     inner: &str,
     line: i64,
 ) -> Result<Vec<Token>, EvalParseError> {
-    let fragment = tokenize(inner)?;
+    let fragment = super::tokenize(inner)?;
     let mut part = vec![Token::new(TokenKind::LParen, line)];
     part.extend(
         fragment

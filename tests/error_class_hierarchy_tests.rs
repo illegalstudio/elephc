@@ -13,7 +13,7 @@
 //! `Exception`.
 //!
 //! Called from:
-//! - `cargo test --test error_class_hierarchy_tests` through Rust's test harness.
+//! - `cargo test --test integration error_class_hierarchy_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp
@@ -73,7 +73,9 @@ fn compile_raw(dir: &Path, source: &str, stem: &str) -> std::process::Output {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.output().expect("failed to spawn elephc")

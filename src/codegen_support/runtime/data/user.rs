@@ -297,6 +297,9 @@ pub(crate) fn emit_runtime_data_user(
         // its class in a VALUE, so the refusal has to be raised at run time and
         // has no EIR class reference to hang the id off either.
         ("_spl_argument_count_error_class_id", "ArgumentCountError"),
+        // Emitted for the runtime `newInstanceWithoutConstructor()` guard on internal-final
+        // classes (the URI surface), whose dynamic class name has no EIR class reference.
+        ("_reflection_exception_class_id", "ReflectionException"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)
@@ -1564,7 +1567,8 @@ pub(crate) fn emit_runtime_data_user(
                     .get(prop_name)
                     .map(String::as_str)
                     .unwrap_or(class_name);
-                (!class_property_is_hidden(declaring_class, prop_name))
+                ((!class_property_is_hidden(declaring_class, prop_name))
+                    && !is_uri_opaque_handle(class_name, prop_name))
                     .then_some((prop_index, prop_name, prop_ty))
             })
             .collect();
@@ -1799,7 +1803,9 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str("    .quad 0\n");
         } else {
             for method_name in &class_info.vtable_methods {
-                if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
+                if let Some(entry) = narrowed_vtable_entry(class_info, method_name, false, classes) {
+                    out.push_str(&format!("    .quad {}\n", entry));
+                } else if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
                     out.push_str(&format!("    .quad {}\n", method_symbol(impl_class, method_name)));
                 } else {
                     out.push_str("    .quad 0\n");
@@ -3865,6 +3871,9 @@ fn source_instance_vtable_entry(
     method_name: &str,
     classes: &HashMap<String, ClassInfo>,
 ) -> Result<String, String> {
+    if let Some(entry) = narrowed_vtable_entry(class_info, method_name, true, classes) {
+        return Ok(entry);
+    }
     let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
     };
@@ -3882,6 +3891,28 @@ fn source_instance_vtable_entry(
         physical,
         MethodKind::Instance,
     )
+}
+
+/// Returns the adapter entry of a slot retired by a widening override, or `None` for a method.
+///
+/// The adapter is the EIR function `crate::ir_lower::function::lower_narrowed_vtable_adapters`
+/// built for the implementing class; an abstract implementation leaves the slot null, exactly
+/// like the method's own slot. `source_abi` selects the source-visible vtable's entry, which
+/// differs only when the retired signature carries generated `func_args` slots.
+fn narrowed_vtable_entry(
+    class_info: &ClassInfo,
+    slot_key: &str,
+    source_abi: bool,
+    classes: &HashMap<String, ClassInfo>,
+) -> Option<String> {
+    let slot = class_info.narrowed_vtable_slots.get(slot_key)?;
+    let caller = class_info.narrowed_slot_signature(slot_key, classes)?;
+    let Some(owner) = class_info.method_impl_classes.get(&slot.method) else {
+        return Some("0".to_string());
+    };
+    let source_abi = source_abi && source_method_adapters::uses_physical_func_args_abi(caller);
+    let adapter = crate::names::narrowed_vtable_adapter_name(owner, slot_key, source_abi);
+    Some(crate::names::function_symbol(&adapter))
 }
 
 /// Static counterpart of `source_instance_vtable_entry`.
@@ -4092,6 +4123,7 @@ fn var_dump_descriptor_rows(
         .properties
         .iter()
         .enumerate()
+        .filter(|(_, (prop_name, _))| !is_uri_opaque_handle(class_name, prop_name))
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
@@ -4117,6 +4149,20 @@ fn var_dump_descriptor_rows(
         .collect()
 }
 
+/// Returns whether `declaring_class::$prop_name` is the URI prelude's opaque native handle slot.
+///
+/// PHP's internal `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` expose no properties. The prelude
+/// keeps the bridge handle in this private slot, so every property walker omits it while the
+/// prelude itself can still read and write it. The check is gated on the DECLARING class:
+/// a user class may legitimately declare its own property with that name.
+pub(crate) fn is_uri_opaque_handle(declaring_class: &str, prop_name: &str) -> bool {
+    prop_name == "__elephc_uri_handle"
+        && matches!(
+            php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+            "uri\\rfc3986\\uri" | "uri\\whatwg\\url"
+        )
+}
+
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
 /// declares on PHP's builtin Reflection classes (`__name`, `__attrs`, `__position`, ...).
 ///
@@ -4139,6 +4185,9 @@ fn var_dump_descriptor_rows(
 /// too; PHP's object has no such property, so no renderer shows it.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
     if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY && is_hosted_extension_class(class_info) {
+        return true;
+    }
+    if is_uri_opaque_handle(class_name, prop_name) {
         return true;
     }
     if !prop_name.starts_with("__")
@@ -4961,6 +5010,7 @@ mod tests {
             abstract_methods: HashSet::new(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
+            narrowed_vtable_slots: HashMap::new(),
             static_method_visibilities: HashMap::new(),
             final_static_methods: HashSet::new(),
             static_method_declaring_classes: HashMap::new(),

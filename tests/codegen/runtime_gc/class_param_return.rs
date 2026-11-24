@@ -3,7 +3,7 @@
 //! the caller release storage it only lent.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests class_param_return` through Rust's test harness.
+//! - `cargo test --test codegen_tests_runtime class_param_return` through Rust's test harness.
 //!
 //! Key details:
 //! - The summary was always right; the CONSUMER never asked it.

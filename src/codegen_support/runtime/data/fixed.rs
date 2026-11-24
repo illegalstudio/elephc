@@ -68,24 +68,22 @@ pub(crate) fn emit_runtime_data_fixed(
     target: Target,
     php_version: PhpVersion,
 ) -> String {
+    // A compile-time `--ini memory_limit` lowers the allocator's runtime ceiling below the
+    // reserved heap capacity. The runtime cache key includes the same value, so one cached
+    // object never serves two different limits.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
-    out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
-    for name in [
-        "__elephc_stream_read_count",
-        "__elephc_stream_read_excess",
-        "__elephc_stream_read_class",
-        "__elephc_stream_read_missing",
-        "__elephc_stream_cast_count",
-        "__elephc_stream_cast_class",
-        "__elephc_stream_write_returned",
-        "__elephc_stream_write_requested",
-        "__elephc_stream_write_missing",
-        "__elephc_stream_write_class",
-    ] {
-        out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
-    }
+    // The scratch arena is bounded by the same capacity the runtime publishes: a
+    // `--heap-size` above 1 GiB must not reserve a second giant buffer, or the link
+    // exceeds AArch64's 4 GiB ADRP window.
+    out.push_str(&comm_directive(
+        "_concat_buf",
+        super::super::concat_scratch_capacity(heap_size),
+        target,
+    ));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.
@@ -507,8 +505,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
     // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
     // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
-    out.push_str(&comm_directive("_stack_limit", 8, target));
-    out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    // These two are read by every compiled prologue, so keep them in `.data` near the
+    // text: a large `--heap-size` pushes `.comm` far enough that ADRP cannot reach the
+    // end of the common block from `__text` (a 2G heap already crosses the 4G window).
+    out.push_str(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n");
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
@@ -545,6 +546,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // --probe; the exact runtime forwards database and network events through
     // it, so --apm counts them per route in a combined build.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_event_fn"), 8, target));
+    // elephc_probe_trace_fn: filled with elephc_probe_trace_begin under --probe; in a
+    // combined build the exact runtime owns the web bridge's trace slot and hands each
+    // request's `traceparent` on through it, so --apm links errors to traces.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_trace_fn"), 8, target));
     // elephc_probe_reap_fn: filled with elephc_probe_reap under --probe; the
     // --web master calls it for every worker it reaps, so a request that died
     // with its worker is counted as a server error under --apm.
@@ -580,6 +585,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // it. One check, in one place: repeating it would consume the control
     // channel's marker twice and the second reader would see nothing.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_trace_active: 1 while a transaction-monitoring build (`--with-apm`) has
+    // published the current request's W3C trace context, so curl propagates it without
+    // the exact profiler's capture being on. Zero in every other binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_trace_active"), 8, target));
     // elephc_monitor_event_active_fn: optional callback for a monitoring
     // consumer whose shared event window is not represented by the exact-slice
     // word above. The sampled probe installs it so bridges can avoid clock reads
@@ -596,6 +605,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // names it; a Rust crate resolving it directly would break every ELF link.
     // Handing over a pointer keeps that name inside the assembly.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_allocs_ptr"), 8, target));
+    // elephc_instr_live_ptr: the ADDRESS of `_gc_live`, published under
+    // --instrument so the exact profiler can note the heap's bytes at the end of
+    // each call it records for the profile page's timeline. A pointer for the
+    // same reason as the slot above.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_live_ptr"), 8, target));
     // elephc_instr_io_fn: a function-pointer slot filled with elephc_instr_io
     // under --instrument, else zero. I/O builtins (PDO queries) read it and call
     // through it when non-null, so the exact profiler can count queries per
@@ -826,6 +840,29 @@ pub(crate) fn emit_runtime_data_fixed(
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str(&format!(
+        ".globl _heap_limit\n_heap_limit:\n    .quad {}\n",
+        memory_limit
+    ));
+    // The startup ceiling is immutable: `ini_set('memory_limit', …)` only moves `_heap_limit`,
+    // and the web request boundary copies this value back so one request cannot cap the next.
+    out.push_str(&format!(
+        ".globl _heap_limit_startup\n_heap_limit_startup:\n    .quad {}\n",
+        memory_limit
+    ));
+    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
+    out.push_str(&format!(
+        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_MIDDLE
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_SUFFIX
+    ));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
@@ -1390,6 +1427,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // by the Phar/PharData metadata and stub accessors.
     out.push_str(".p2align 3\n.globl _elephc_phar_get_metadata_fn\n_elephc_phar_get_metadata_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_set_metadata_fn\n_elephc_phar_set_metadata_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_archive_valid_fn\n_elephc_phar_archive_valid_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_get_stub_fn\n_elephc_phar_get_stub_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_set_stub_fn\n_elephc_phar_set_stub_fn:\n    .quad 0\n");
     // Per-file (PharFileInfo) metadata read/write bridges.
@@ -1401,6 +1439,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _elephc_phar_decompress_archive_fn\n_elephc_phar_decompress_archive_fn:\n    .quad 0\n");
     // PHAR signature bridges (OpenSSL RSA + hash algorithms + signature read).
     out.push_str(".p2align 3\n.globl _elephc_phar_sign_openssl_fn\n_elephc_phar_sign_openssl_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_sign_openssl_algo_fn\n_elephc_phar_sign_openssl_algo_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_sign_hash_fn\n_elephc_phar_sign_hash_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_get_signature_hash_fn\n_elephc_phar_get_signature_hash_fn:\n    .quad 0\n");
     out.push_str(".p2align 3\n.globl _elephc_phar_get_signature_type_fn\n_elephc_phar_get_signature_type_fn:\n    .quad 0\n");
@@ -2183,18 +2222,24 @@ mod tests {
         }
     }
 
-    /// Pins the symbol whose under-alignment broke linux-aarch64 linking, so a future
-    /// hand-written `.comm` for it cannot regress past the sweep above.
+    /// Pins the stack-guard symbols in `.data`, aligned, rather than in `.comm`.
+    ///
+    /// A large `--heap-size` pushes the end of the common block past AArch64's ±4 GiB
+    /// `ADRP` window; every compiled prologue reads `_stack_limit`, so it must stay near
+    /// the text. Under-alignment previously broke linux-aarch64 linking.
     #[test]
-    fn test_stack_limit_is_eight_byte_aligned_on_elf() {
+    fn test_stack_limit_symbols_live_in_aligned_data() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
             PhpVersion::Php85,
         );
 
-        assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
-        assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+        assert!(asm.contains(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n"));
+        assert!(asm.contains(
+            ".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n"
+        ));
+        assert!(!asm.contains(".comm _stack_limit,"));
     }
 
     /// Verifies the initial reporting mask follows PHP's version-specific `E_ALL` value.

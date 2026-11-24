@@ -2,7 +2,7 @@
 //! End-to-end regression coverage for issue #623 checked integer sink specialization.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::checked_int_sink`.
+//! - `cargo test --test codegen_tests_core optimizer::checked_int_sink`.
 //!
 //! Key details:
 //! - CLI `--emit-ir` comparisons pin CSE and LICM structure with optimization on/off.
@@ -17,7 +17,7 @@ fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
     fs::write(&php_path, source).expect("write issue-623 EIR fixture");
     let mut command = elephc_cli_command(&dir);
     command.arg("--emit-ir").args(extra_args).arg(&php_path);
-    let output = command.output().expect("run elephc --emit-ir");
+    let output = command.output().expect("run elephc build --emit-ir");
     assert!(
         output.status.success(),
         "emit-ir failed: {}",

@@ -83,13 +83,14 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("simplexml_prelude", crate::simplexml_prelude::declarations()),
         ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
-        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
+        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations(134_217_728, crate::tokenizer_prelude::IniMemorySource::None)),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
             crate::version_prelude::version_declarations(
                 &["zend_version", "php_sapi_name", "ini_restore"],
                 crate::web_prelude::PhpVersion::Php85,
+                true,
             ),
         ),
         ("pcre_prelude", crate::pcre_prelude::pcre_declarations()),
@@ -160,6 +161,8 @@ fn opcache_api_program() -> crate::parser::ast::Program {
         &[],
         None,
         false,
+        false,
+        &crate::opcache_prelude::AutoloadedFunctions::default(),
         &mut inventory,
     );
     // Keep the injected declarations only: the probe's own call statements are not prelude

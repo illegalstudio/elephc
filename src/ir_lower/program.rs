@@ -104,6 +104,13 @@ fn lower_on_compiler_stack(
     let _closure_param_hints =
         crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
     let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
+    // A program that runs dynamic `eval()` code can define constants after schema creation.
+    // Declared initializers must ask the eval runtime for those names instead of reading native
+    // global storage, which never receives them.
+    let _program_eval = crate::ir_lower::program_eval::install(
+        check_result.program_contains_eval || crate::ir_lower::body_contains_eval_call(program),
+        &check_result.native_defined_constants,
+    );
     let mut module = Module::new(target);
     module.source_path = source_path.map(crate::source::canonical_source_path);
     // Codegen may run on another thread than parsing, so freeze the span-to-file table here.
@@ -168,6 +175,7 @@ fn lower_on_compiler_stack(
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     function::lower_optional_interface_adapters(&mut module);
+    function::lower_narrowed_vtable_adapters(&mut module);
     function::lower_object_comparison_dispatch(&mut module);
     include_lowered_runtime_features(&mut module);
     super::reflection::lower_referenced_builtin_methods(

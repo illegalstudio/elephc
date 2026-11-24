@@ -30,7 +30,7 @@
 //! here too, as no-regression coverage rather than as fixes.
 //!
 //! Called from:
-//! - `cargo test --test recursive_return_type_tests` through Rust's test harness.
+//! - `cargo test --test integration recursive_return_type_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI
@@ -81,7 +81,9 @@ fn compile_raw(dir: &Path, source: &str, stem: &str) -> std::process::Output {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.output().expect("failed to spawn elephc")

@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::emit_box_current_value_as_mixed;
+use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -111,7 +111,57 @@ pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     let slot = super::super::local_slot_for_loaded_value(ctx, value)?;
     emit_settype_conversion(ctx, value, &target_ty)?;
-    store_settype_local_result(ctx, slot, &target_ty)?;
+    if ctx.local_stores_ref_cell_pointer(slot) {
+        // The operand is a `load_ref_cell` view, so the slot holds the cell pointer rather than
+        // the value. Storing the converted scalar into the slot would overwrite that pointer.
+        // Publish through the cell instead; the property/parameter temporary is boxed Mixed.
+        let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+        if payload == PhpType::Mixed {
+            if target_ty.codegen_repr() == PhpType::Str {
+                // Integer, float, boolean and scalar-to-string conversions can leave the
+                // bytes in `_concat_buf`, which a later string operation overwrites. A boxed
+                // source conversion reports its ownership in the PHP return flag; persist a
+                // borrowed result, transfer an owned one.
+                let raw = ctx.raw_value_php_type(value)?.codegen_repr();
+                if matches!(raw, PhpType::Mixed | PhpType::Union(_)) {
+                    let owned = ctx.next_label("settype_string_owned");
+                    let boxed = ctx.next_label("settype_string_boxed");
+                    abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+                    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+                    abi::emit_jump(ctx.emitter, &boxed);
+                    ctx.emitter.label(&owned);
+                    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+                    ctx.emitter.label(&boxed);
+                } else {
+                    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+                }
+            } else {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &target_ty);
+            }
+            crate::codegen::lower_inst::local_stores::publish_current_ref_cell_value(
+                ctx,
+                slot,
+                &PhpType::Mixed,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
+            )?;
+        } else if payload == target_ty.codegen_repr() {
+            // The cell already has the requested representation, so the conversion is a no-op
+            // for the caller's storage. Publish the converted value through the cell instead of
+            // rejecting a typed reference parameter (`settype($intRef, "int")`).
+            crate::codegen::lower_inst::local_stores::publish_current_ref_cell_value(
+                ctx,
+                slot,
+                &payload,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
+            )?;
+        } else {
+            return Err(CodegenIrError::unsupported(format!(
+                "settype() cannot retype a native reference with {payload:?} payload"
+            )));
+        }
+    } else {
+        store_settype_local_result(ctx, slot, &target_ty)?;
+    }
     emit_bool_result(ctx, true);
     store_if_result(ctx, inst)
 }

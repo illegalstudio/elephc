@@ -391,6 +391,158 @@ echo isset($b->absent) ? "yes" : "no";
     assert_eq!(out, "yes|no");
 }
 
+/// Verifies a real dynamic entry precedes `__isset()`: a stored value, including a stored
+/// `null` and `false`, answers from the instance hash, while only a missing name reaches the
+/// accessor. `__get` is never consulted by an `isset()` probe.
+#[test]
+fn test_magic_isset_prefers_a_real_dynamic_entry() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class HashBag {
+    public function __isset($name) { echo "isset:", $name, "|"; return $name === "virtual"; }
+    public function __get($name) { echo "get:", $name, "|"; return "value"; }
+}
+$bag = new HashBag();
+$bag->stored = 5;
+$bag->storedNull = null;
+$bag->storedFalse = false;
+echo isset($bag->stored) ? "stored" : "missing", "|";
+echo isset($bag->storedNull) ? "stored" : "missing", "|";
+echo isset($bag->storedFalse) ? "stored" : "missing", "|";
+echo isset($bag->virtual) ? "virtual" : "missing", "|";
+echo isset($bag->absent) ? "virtual" : "missing", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "stored|missing|stored|isset:virtual|virtual|isset:absent|missing\n"
+    );
+}
+
+/// Verifies a stored dynamic entry still wins on a class with `__get()` but no `__isset()`:
+/// `isset()`/`empty()` must probe the hash instead of answering absent before the plan runs,
+/// and `__get()` is never called for a probe on such a class.
+#[test]
+fn test_hash_probe_precedes_absent_probe_on_a_get_only_class() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class GetOnlyBag {
+    public function __get($name) { echo "get:", $name, "|"; return 7; }
+}
+$bag = new GetOnlyBag();
+$bag->saved = 3;
+echo isset($bag->saved) ? "saved" : "missing", "|";
+echo isset($bag->virtual) ? "saved" : "missing", "|";
+echo empty($bag->saved) ? "empty" : "set", "|";
+echo empty($bag->virtual) ? "empty" : "set", "\n";
+"#,
+    );
+    assert_eq!(out, "saved|missing|set|empty\n");
+}
+
+/// Verifies the same dynamic-entry precedence through a by-reference `__isset()` result.
+#[test]
+fn test_magic_isset_prefers_a_real_dynamic_entry_over_a_reference_accessor() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class ReferenceHashBag {
+    public bool $answer = true;
+    public function &__isset(string $name): bool { echo "isset:", $name, "|"; return $this->answer; }
+}
+$bag = new ReferenceHashBag();
+$bag->stored = 1;
+echo isset($bag->stored) ? "stored" : "missing", "|";
+echo isset($bag->virtual) ? "virtual" : "missing", "\n";
+"#,
+    );
+    assert_eq!(out, "stored|isset:virtual|virtual\n");
+}
+
+/// Verifies `empty()` on a class with both `__get()` and `__isset()` probes a stored dynamic
+/// entry before either accessor: a stored `0` is empty, a stored `5` is not, and only a missing
+/// name runs `__isset` (then `__get` when present). A class without `__get()` still answers a
+/// true `__isset` as an empty null value.
+#[test]
+fn test_empty_hash_probe_precedes_magic_accessors() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class EmptyMagicBag {
+    public function __isset($name) {
+        echo "isset:", $name, "|";
+        return $name === "virtual" || $name === "zeroVirtual";
+    }
+    public function __get($name) {
+        echo "get:", $name, "|";
+        return $name === "zeroVirtual" ? 0 : 7;
+    }
+}
+$bag = new EmptyMagicBag();
+$bag->saved = 0;
+$bag->stored = 5;
+echo empty($bag->saved) ? "empty" : "set", "|";
+echo empty($bag->stored) ? "empty" : "set", "|";
+echo empty($bag->virtual) ? "empty" : "set", "|";
+echo empty($bag->zeroVirtual) ? "empty" : "set", "|";
+echo empty($bag->{'saved'}) ? "empty" : "set", "|";
+#[AllowDynamicProperties]
+class EmptyIssetOnlyBag {
+    public function __isset($name) { echo "only:", $name, "|"; return true; }
+}
+$only = new EmptyIssetOnlyBag();
+$only->saved = 0;
+echo empty($only->saved) ? "empty" : "set", "|";
+echo empty($only->virtual) ? "empty" : "set", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "empty|set|isset:virtual|get:virtual|set|isset:zeroVirtual|get:zeroVirtual|empty|empty|empty|only:virtual|empty\n"
+    );
+}
+
+/// Verifies a stored dynamic entry wins over `__get` on plain reads and `??`, while a miss
+/// still calls the accessor; a stored null remains null for a read and selects `??`'s default.
+#[test]
+fn test_hash_stored_entry_precedes_get_on_reads_and_coalesce() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class ReadHashBag {
+    public function __get($name) { echo "get:", $name, "|"; return 1; }
+}
+$bag = new ReadHashBag();
+$bag->stored = 0;
+var_dump($bag->stored);
+var_dump($bag->stored ?? "default");
+var_dump($bag->missing);
+var_dump($bag->missing ?? "default");
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(0)\nint(0)\nget:missing|int(1)\nget:missing|int(1)\n"
+    );
+}
+
+/// Verifies `empty()`/`isset()` answer a typed uninitialized slot even after the class has
+/// reserved a dynamic-property hash.
+#[test]
+fn test_uninitialized_typed_property_probe_wins_over_dynamic_hash() {
+    let out = compile_and_run(
+        r#"<?php
+class UninitializedWithHash { public int $value; }
+$object = new UninitializedWithHash();
+$object->dynamic = 1;
+var_dump(empty($object->value), isset($object->value));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
 /// Verifies `unset($obj->prop)` on an undeclared property dispatches to `__unset`.
 #[test]
 fn test_magic_unset_handles_undeclared_property() {
@@ -663,4 +815,115 @@ var_dump(g(new D), g(new E), h(new E), g(new C));
          bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies `??` checks a stored dynamic hash entry before `__isset()`, so a saved `0` answers
+/// from storage while a missing name still consults the accessor and falls back.
+#[test]
+fn test_coalesce_prefers_a_stored_dynamic_entry_over_isset() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class CoalesceHashBag {
+    public function __isset($n) { echo "isset(" . $n . ")|"; return false; }
+    public function __get($n) { echo "get(" . $n . ")|"; return 1; }
+}
+$bag = new CoalesceHashBag;
+$bag->saved = 0;
+var_dump($bag->saved ?? 9);
+var_dump($bag->missing ?? 9);
+"#,
+    );
+    assert_eq!(out, "int(0)\nisset(missing)|int(9)\n");
+}
+
+/// Verifies `isset()`/`empty()` convert an unannotated `__isset()` return value with PHP
+/// truthiness, including the string `"0"`, empty strings, and empty arrays, and release the
+/// boxed accessor result.
+#[test]
+fn test_magic_isset_result_uses_php_truthiness_and_releases_it() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class TruthyIssetBag {
+    public function __isset($name) {
+        return match ($name) {
+            "zero" => "0",
+            "emptyString" => "",
+            "emptyArray" => [],
+            "fullArray" => [1],
+            default => 5,
+        };
+    }
+    public function __get($name) { return "value"; }
+}
+$bag = new TruthyIssetBag;
+var_dump(isset($bag->zero), isset($bag->emptyString), isset($bag->emptyArray), isset($bag->fullArray), isset($bag->int));
+var_dump(empty($bag->zero), empty($bag->emptyString), empty($bag->emptyArray), empty($bag->fullArray));
+var_dump($bag->zero ?? "d", $bag->emptyArray ?? "d", $bag->fullArray ?? "d");
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(true)\nbool(false)\n\
+         string(1) \"d\"\nstring(1) \"d\"\nstring(5) \"value\"\n",
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a stored dynamic property keeps its assigned type even when the class declares a
+/// typed `__get()`: only a missing entry answers the accessor, and its declared return type is
+/// never applied to the stored value.
+#[test]
+fn test_dynamic_property_read_bypasses_typed_magic_get_return() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class DynMagicBag {
+    public function __get($name): int { echo "get:$name|"; return 7; }
+}
+$bag = new DynMagicBag();
+$bag->saved = "text";
+var_dump($bag->saved);
+$bag->count = 42;
+var_dump($bag->count);
+var_dump($bag->missing);
+"#,
+    );
+    assert_eq!(out, "string(4) \"text\"\nint(42)\nget:missing|int(7)\n");
+}
+
+/// Verifies a runtime-name read probes the receiver's dynamic-property hash before the
+/// accessor fallback: a name that only a used subclass declares still enters the candidate
+/// ladder, and the base class's stored entry must win over the deferred `__get`.
+#[test]
+fn test_runtime_name_read_probes_dynamic_storage_before_magic_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+#[AllowDynamicProperties]
+class RuntimeDynBag {
+    public function __get($name) { return "magic:$name"; }
+}
+class RuntimeDynBagChild extends RuntimeDynBag {
+    public string $saved = "declared";
+}
+$bag = new RuntimeDynBag();
+$bag->saved = 'text';
+$bag->other = 42;
+$name = 'saved';
+var_dump($bag->{$name});
+$name = 'other';
+var_dump($bag->{$name});
+$child = new RuntimeDynBagChild();
+$name = 'saved';
+var_dump($child->{$name});
+"#,
+    );
+    assert_eq!(out, "string(4) \"text\"\nint(42)\nstring(8) \"declared\"\n");
 }

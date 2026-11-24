@@ -5,7 +5,7 @@
 //! PHP interpreter (`php -d xdebug.mode=off`, PHP 8.x) for the same program.
 //!
 //! Called from:
-//! - `cargo test --test var_dump_nested_tests` through Rust's test harness.
+//! - `cargo test --test integration var_dump_nested_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - REGRESSION ANCHOR: `var_dump()` used to render EVERY nested array as `NULL`
@@ -89,7 +89,9 @@ fn run_php(stem: &str, source: &str) -> String {
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
     cmd.arg(&php);
     let compile = cmd.output().expect("failed to spawn elephc");

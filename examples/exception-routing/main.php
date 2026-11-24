@@ -9,7 +9,7 @@
 //
 // This file writes ten catch clauses; four of them can never run. See it with
 //
-//     elephc --emit-ir examples/exception-routing/main.php
+//     elephc build --emit-ir examples/exception-routing/main.php
 //
 // Six handlers survive (one `catch_bind` each), and PaymentIncident,
 // CarrierDesk, restockAndRetry() and legacyPaymentFallback() are nowhere in

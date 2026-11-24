@@ -10,7 +10,7 @@
 //! - Finding a possible error is distinct from selecting an unconditional property error.
 //! - Lazy branches retain their expression structure rather than becoming eager root errors.
 
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind};
 
 /// Preserves a declared class-constant spelling independently of its normalized value or Error.
 pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
@@ -119,15 +119,8 @@ pub(crate) fn unconditional_error_message(default: &Expr) -> Option<&str> {
             unconditional_error_message(key).or_else(|| unconditional_error_message(value))),
         ExprKind::ArrayLiteralMixed(items) => items.iter()
             .find_map(|item| item.exprs().find_map(unconditional_error_message)),
-        ExprKind::BinaryOp { left, op, right } => unconditional_error_message(left).or_else(|| {
-            let evaluates_right = match op {
-                BinOp::And => literal_truthiness(left) == Some(true),
-                BinOp::Or => literal_truthiness(left) == Some(false),
-                BinOp::NullCoalesce => matches!(left.kind, ExprKind::Null),
-                _ => true,
-            };
-            evaluates_right.then(|| unconditional_error_message(right)).flatten()
-        }),
+        ExprKind::BinaryOp { left, op, right } => unconditional_error_message(left)
+            .or_else(|| right_side_evaluates(op, left).then(|| unconditional_error_message(right)).flatten()),
         ExprKind::ArrayAccess { array, index } => unconditional_error_message(array)
             .or_else(|| unconditional_error_message(index)),
         ExprKind::Ternary { condition, then_expr, else_expr } => {
@@ -150,8 +143,21 @@ pub(crate) fn unconditional_error_message(default: &Expr) -> Option<&str> {
     }
 }
 
+/// Returns whether a binary operator's right-hand side always runs after `left`.
+///
+/// `&&`, `||` and `??` short-circuit, so a name they guard is only a hard error when the left
+/// side already decides they run.
+pub(crate) fn right_side_evaluates(op: &BinOp, left: &Expr) -> bool {
+    match op {
+        BinOp::And => literal_truthiness(left) == Some(true),
+        BinOp::Or => literal_truthiness(left) == Some(false),
+        BinOp::NullCoalesce => matches!(left.kind, ExprKind::Null),
+        _ => true,
+    }
+}
+
 /// Resolves PHP truthiness only for side-effect-free literal branch selectors.
-fn literal_truthiness(value: &Expr) -> Option<bool> {
+pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
     match &value.kind {
         ExprKind::BoolLiteral(value) => Some(*value),
         ExprKind::Null => Some(false),
@@ -160,7 +166,64 @@ fn literal_truthiness(value: &Expr) -> Option<bool> {
         ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
         ExprKind::ArrayLiteral(items) if items.iter().all(|item| literal_truthiness(item).is_some()) =>
             Some(!items.is_empty()),
+        // A keyed literal (`['k' => 1]`) is decided like a list: non-empty means truthy.
+        ExprKind::ArrayLiteralAssoc(items) if items.iter().all(|(key, value)| {
+            clean_literal_key(key) && literal_truthiness(value).is_some()
+        }) => Some(!items.is_empty()),
+        ExprKind::ArrayLiteralMixed(items) if items.iter().all(|item| match item {
+            ArrayEntry::Value(value) => literal_truthiness(value).is_some(),
+            ArrayEntry::Keyed(key, value) =>
+                clean_literal_key(key) && literal_truthiness(value).is_some(),
+            _ => false,
+        }) && appends_fit(items) => Some(!items.is_empty()),
         _ => None,
+    }
+}
+
+/// Whether every unkeyed entry of a mixed literal gets a free next int key. After an int key of
+/// `PHP_INT_MAX` PHP has no next key, so a later append throws "Cannot add element to the array
+/// as the next element is already occupied" and the array stays undecided.
+fn appends_fit(items: &[ArrayEntry]) -> bool {
+    // PHP 8.3+ starts appending right after the largest int key, negative ones included.
+    let mut next: Option<i128> = None;
+    for item in items {
+        let slot = match item {
+            ArrayEntry::Value(_) => next.unwrap_or(0),
+            ArrayEntry::Keyed(key, _) => match literal_int_key(key) {
+                Some(key) => i128::from(key),
+                None => continue,
+            },
+            _ => return false,
+        };
+        if slot > i128::from(i64::MAX) { return false; }
+        next = Some(next.map_or(slot + 1, |next| next.max(slot + 1)));
+    }
+    true
+}
+
+/// The int key a clean literal key normalizes to, or `None` for a string key.
+fn literal_int_key(key: &Expr) -> Option<i64> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        // `clean_literal_key` already limited floats to integral in-range values.
+        ExprKind::FloatLiteral(value) => Some(*value as i64),
+        ExprKind::StringLiteral(value) if crate::types::is_php_integer_array_key(value) =>
+            value.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Whether a literal array key is one PHP accepts without an error or a diagnostic: an int,
+/// string or bool, or an integral float inside the `i64` range. An array key is a fatal
+/// "Illegal offset type", a fractional float or `null` key raises a deprecation and an
+/// out-of-range float a warning, so an array holding one stays undecided.
+fn clean_literal_key(key: &Expr) -> bool {
+    match &key.kind {
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) => true,
+        // The optimizer's array-key normalizer owns the exact silent range (`i64::MIN` included).
+        ExprKind::FloatLiteral(value) => crate::optimize::fold::float_key_is_silent(*value),
+        _ => false,
     }
 }
 
@@ -208,13 +271,26 @@ pub(crate) fn prune_literal_branches(expr: &mut Expr) {
                     *expr = Expr::new(ExprKind::BoolLiteral(false), expr.span),
                 BinOp::Or if literal_truthiness(left) == Some(true) =>
                     *expr = Expr::new(ExprKind::BoolLiteral(true), expr.span),
+                // The shared folder does not decide array operands (`[1] && ['k' => 1]`).
+                BinOp::And | BinOp::Or if literal_truthiness(left).is_some() => {
+                    if let Some(truthy) = literal_truthiness(right) {
+                        *expr = Expr::new(ExprKind::BoolLiteral(truthy), expr.span);
+                    }
+                }
                 _ => {}
+            }
+        }
+        ExprKind::Not(inner) | ExprKind::Cast { target: CastType::Bool, expr: inner } => {
+            prune_literal_branches(inner);
+            if let Some(truthy) = literal_truthiness(inner) {
+                let negate = matches!(expr.kind, ExprKind::Not(_));
+                *expr = Expr::new(ExprKind::BoolLiteral(truthy != negate), expr.span);
             }
         }
         ExprKind::ArrayAccess { array, index } => {
             prune_literal_branches(array); prune_literal_branches(index);
         }
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::Negate(inner) | ExprKind::BitNot(inner)
         | ExprKind::NamedArg { value: inner, .. } | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. } =>
             prune_literal_branches(inner),

@@ -19,6 +19,9 @@ pub(super) fn lower(
     let sig = crate::types::signatures::closure_factory_signature();
     let operands = lower_args_with_signature(ctx, Some(&sig), args);
     let value = LoweredValue { value: operands[0], ir_type: ctx.builder.value_type(operands[0]) };
+    // A declared `callable` source resolves runtime names exactly as invoking it would.
+    let declared_source = ctx.builder.value_php_type(value.value) == PhpType::DeclaredCallable
+        || matches!(args, [arg] if super::declared_callables::expr_is_declared_callable(ctx, arg));
     let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         value
     } else { ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span)) };
@@ -31,6 +34,7 @@ pub(super) fn lower(
     register_owned_call_operand(ctx, owner, expr.span);
     let value = ctx.load_local(&source_name, Some(expr.span));
     let dynamic = method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY;
+    let factory = if declared_source { Immediate::DeclaredCallableFactory(dynamic) } else { Immediate::Bool(dynamic) };
     let exception = if dynamic { "Error" } else { "TypeError" };
     let message = if dynamic { "Value is not callable" } else { "Failed to create closure from callable" };
     let target = crate::ir::RuntimeFnId::IsCallable;
@@ -92,14 +96,14 @@ pub(super) fn lower(
     let boxed_pair = ctx.emit_owned_value(Op::MixedBox, vec![pair.value], None,
         PhpType::Mixed, Op::MixedBox.default_effects(), Some(expr.span));
     let (boxed_pair, boxed_owner) = root_closure_bind_operand(ctx, boxed_pair, expr.span);
-    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![boxed_pair.value], Some(Immediate::Bool(dynamic)),
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![boxed_pair.value], Some(factory.clone()),
         PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
     ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
     if let Some(owner) = boxed_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     if let Some(owner) = pair_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     branch_to(ctx, merge);
     ctx.builder.position_at_end(other_block);
-    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], Some(Immediate::Bool(dynamic)),
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], Some(factory.clone()),
         PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
     ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
     branch_to(ctx, merge);

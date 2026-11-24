@@ -27,6 +27,11 @@ pub(super) fn collect_expr_reads(
     warnings: &mut Vec<CompileWarning>,
 ) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                collect_expr_reads(value, scope, warnings);
+            }
+        },
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

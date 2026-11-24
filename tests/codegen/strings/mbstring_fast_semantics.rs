@@ -150,6 +150,27 @@ foreach (["UTF-16LE", "UTF-8"] as $encoding) {
 "#, "0|0|0|61626364\n1|1|1|58\n");
 }
 
+/// A replacement ending in an incomplete multibyte lead copies no bytes past its length.
+#[test]
+fn test_mb_ereg_replace_does_not_overread_truncated_replacement() {
+    assert_mb_fast_cli_semantics(r#"<?php
+$repl = str_repeat('A', 6) . "\xF0";
+$out = mb_ereg_replace('a', $repl, 'a');
+echo strlen($repl), '|', strlen($out), '|', bin2hex($out), "\n";
+"#, "7|7|414141414141f0\n");
+}
+
+/// Numeric \k group references above PHP's int range stay literal instead of wrapping.
+#[test]
+fn test_mb_ereg_replace_rejects_wrapped_backreference_group_numbers() {
+    assert_mb_fast_cli_semantics(r#"<?php
+echo mb_ereg_replace('(X)(Y)', '[\k<4294967297>]', 'XY'), '|';
+echo mb_ereg_replace('(X)(Y)', '[\k<4294967298>]', 'XY'), '|';
+echo mb_ereg_replace('(X)(Y)', '[\k<2>]', 'XY'), '|';
+echo mb_ereg_replace('(X)(Y)', '[\k<99>]', 'XY'), "\n";
+"#, "[\\k<4294967297>]|[\\k<4294967298>]|[Y]|[\\k<99>]\n");
+}
+
 /// Length/count observers preserve non-default syntax, multibyte delimiters and later resets.
 #[test]
 fn test_mb_fast_semantics_regex_observer_state() {
@@ -335,6 +356,15 @@ mb_regex_set_options("b");
 echo strlen(mb_regex_set_options(null)),"|",mb_regex_set_options(),"\n";
 restore_error_handler();mb_substitute_character($previous);
 "#, "diagnostic|1\n63|63\n0|UTF-8\n1|b\n");
+}
+
+/// `mb_http_output()`'s `pass` token stays case-sensitive like PHP.
+#[test]
+fn test_mb_http_output_pass_token_is_case_sensitive() {
+    assert_mb_fast_semantics(r#"<?php
+echo mb_http_output("pass") ? "ok" : "bad", "|", mb_http_output(), "|";
+try { mb_http_output("PASS"); echo "accepted"; } catch (ValueError $error) { echo "rejected"; }
+"#, "ok|pass|rejected");
 }
 
 /// Observer specializations retain caller strictness for every shared fallback.

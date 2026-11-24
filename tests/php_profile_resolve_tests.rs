@@ -3,7 +3,7 @@
 //! binary, so `--php-version` is not something the user has to remember.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_resolve_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_resolve_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `php_profile::resolve`'s own unit tests cover every source, their precedence, the
@@ -62,7 +62,7 @@ fn build_and_run(dir: &Path, sub: &str, extra_args: &[&str]) -> String {
     let mut args: Vec<&str> = extra_args.to_vec();
     args.push(&rel);
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .args(&args)
         .current_dir(dir)
         .output()
@@ -102,7 +102,7 @@ fn a_malformed_manifest_compiles_and_explains_itself() {
     fs::write(dir.join("composer.json"), r#"{"config": {"platform": "#).unwrap();
     fs::write(dir.join("prog.php"), PROBE).unwrap();
 
-    let compile = Command::new(elephc_bin())
+    let compile = Command::new(elephc_bin()).arg("build")
         .arg("prog.php")
         .current_dir(&dir)
         .output()

@@ -43,7 +43,7 @@ jobs:
               cargo build --locked --example gen_builtins --features curl
               cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci \
                 -p elephc -p elephc-builtin-contract -p elephc-magician -p elephc-reference \
-                --lib --test builtin_parity_tests --features elephc/curl \
+                --lib --test integration --features elephc/curl \
                 --archive-file "target/ci-variant/$VARIANT/nextest-archive.tar.zst"
               ;;
             release-frame)

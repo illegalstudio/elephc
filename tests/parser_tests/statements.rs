@@ -49,6 +49,18 @@ fn test_multiple_statements() {
     assert_eq!(stmts.len(), 3);
 }
 
+/// Verifies PHP expression statements that discard a literal or unary result still parse.
+#[test]
+fn test_standalone_literal_expression_statements() {
+    let stmts = parse_source("<?php 1; \"text\"; true; null; -1; !false;");
+    assert_eq!(stmts.len(), 6);
+    for stmt in &stmts {
+        assert!(matches!(stmt.kind, StmtKind::ExprStmt(_)), "{:?}", stmt.kind);
+    }
+    assert!(matches!(stmts[0].kind, StmtKind::ExprStmt(ref expr) if matches!(expr.kind, ExprKind::IntLiteral(1))));
+    assert!(matches!(stmts[1].kind, StmtKind::ExprStmt(ref expr) if matches!(expr.kind, ExprKind::StringLiteral(ref text) if text == "text")));
+}
+
 // --- Parse errors ---
 
 /// Verifies that `<?php echo "hi"` (missing semicolon) fails during parsing.

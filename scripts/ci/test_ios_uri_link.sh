@@ -21,10 +21,21 @@ SDK_PATH="$(xcrun --sdk "$APPLE_SDK" --show-sdk-path)"
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-uri-link.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-(cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
-(cd "$PROJECT_DIR" && cargo build --locked -p elephc-uri --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
+fi
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_uri.a" || {
+        echo "Missing prebuilt URI bridge for $RUST_TARGET; restore the iOS producer artifact" >&2
+        exit 1
+    }
+else
+    (cd "$PROJECT_DIR" && cargo build --locked -p elephc-uri --target "$RUST_TARGET")
+fi
 cp "$SCRIPT_DIR/fixtures/ios-uri-link/main.php" "$SCRIPT_DIR/fixtures/ios-uri-link/host.c" "$WORK_DIR/"
-"$PROJECT_DIR/target/debug/elephc" --with-uri --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
+"$PROJECT_DIR/target/debug/elephc" build --with-uri --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 nm -u "$WORK_DIR/libmain.a" > "$WORK_DIR/undefined"
 grep -F elephc_uri_parse "$WORK_DIR/undefined"
 grep -F elephc_uri_component "$WORK_DIR/undefined"

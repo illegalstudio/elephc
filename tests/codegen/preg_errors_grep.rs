@@ -3,7 +3,7 @@
 //! the `PREG_*` / `PCRE_VERSION*` constants.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through `tests/codegen/mod.rs`.
+//! - `cargo test --test codegen_tests_ext` through the PCRE test module.
 //!
 //! Key details:
 //! - Expected output is PHP 8.5's, except `PCRE_VERSION*`, which report the managed
@@ -77,6 +77,8 @@ var_dump(@preg_grep('/(/', []));
 echo preg_last_error(), "\n";
 var_dump(preg_grep('/a/u', ['x' => 'a', 5 => "\xff", 7 => 'a']));
 echo preg_last_error(), "\n";
+var_dump(@preg_grep('/a/e', ['a']));
+echo preg_last_error(), "\n";
 "#);
     assert_eq!(
         out,
@@ -84,7 +86,8 @@ echo preg_last_error(), "\n";
          array(1) {\n  [1]=>\n  string(1) \"b\"\n}\n\
          array(1) {\n  [\"x\"]=>\n  string(3) \"abc\"\n}\n\
          bool(false)\n1\n\
-         array(1) {\n  [\"x\"]=>\n  string(1) \"a\"\n}\n4\n"
+         array(1) {\n  [\"x\"]=>\n  string(1) \"a\"\n}\n4\n\
+         bool(false)\n1\n"
     );
 }
 
@@ -372,12 +375,13 @@ echo preg_last_error(), "\n";
 "#;
 
 /// A nested error from an entry's `__toString()` is not `preg_grep()`'s own error: the scan
-/// keeps going in compiled code and in eval. Eval also keeps that nested error visible through
-/// `preg_last_error()` like php-src (4); the compiled prelude's next `preg_match()` resets it.
+/// keeps going, and the error stays visible through `preg_last_error()` after the call (4),
+/// because php-src resets the state once per call, not before each entry's match. Compiled
+/// code and eval agree.
 #[test]
 fn test_preg_grep_nested_to_string_error_keeps_scanning() {
     let compiled = compile_and_run_with_regex(&format!("<?php\n{GREP_NESTED_TO_STRING_ERROR}"));
-    assert!(compiled.starts_with("[{},\"x\"]\n"), "{compiled}");
+    assert_eq!(compiled, "[{},\"x\"]\n4\n");
     let eval = compile_and_run_with_regex(&opaque_eval(GREP_NESTED_TO_STRING_ERROR));
     assert_eq!(eval, "[{},\"x\"]\n4\n");
 }
@@ -402,15 +406,28 @@ echo json_encode(preg_grep('/a/', ['a', 'b'])), preg_last_error(), "\n";
 fn grep_nested_to_string_result(class: &str) -> String {
     format!(
         r#"class {class} {{ public function __toString(): string {{ preg_match('/./u', "\xff"); return 'x'; }} }}
-echo json_encode(preg_grep('/x/', [new {class}(), 'x', 'y'])), "\n";
+echo json_encode(preg_grep('/x/', [new {class}(), 'x', 'y'])), preg_last_error(), "\n";
+"#
+    )
+}
+
+/// Fixture: a later entry's `__toString()` runs a `preg_*` call that succeeds and so clears the
+/// nested error an earlier entry recorded; `prefix` names the two classes.
+fn grep_nested_error_cleared(prefix: &str) -> String {
+    format!(
+        r#"class {prefix}Bad {{ public function __toString(): string {{ preg_match('/./u', "\xff"); return 'x1'; }} }}
+class {prefix}Good {{ public function __toString(): string {{ preg_match('/a/', 'a'); return 'x2'; }} }}
+echo json_encode(preg_grep('/x/', [new {prefix}Bad(), new {prefix}Good(), 'y'])), preg_last_error(), "\n";
 "#
     )
 }
 
 /// From PHP 8.6 (php-src GH-11936) `preg_grep()` returns `false` instead of the entries
 /// collected so far whenever its error state is set at the end: by its own match error, and
-/// by a nested error an entry's `__toString()` recorded (php-src resets the state only once
-/// per call); in compiled code and in eval. The 8.5 cases live in the 8.5 bundle.
+/// by a nested error an entry's `__toString()` recorded, which `preg_last_error()` still
+/// reports (php-src resets the state only once per call). A later entry whose nested
+/// `preg_*` call succeeds clears that error, so the call returns its entries. Compiled code
+/// and eval agree. The 8.5 cases live in the 8.5 bundle.
 #[test]
 fn test_preg_grep_php_8_6_bundle() {
     let match_error = "false4\n[\"a\"]0\n";
@@ -419,13 +436,18 @@ fn test_preg_grep_php_8_6_bundle() {
         opaque_eval(GREP_MATCH_ERROR),
         format!("<?php\n{}", grep_nested_to_string_result("GrepNestedAot86")),
         opaque_eval(&grep_nested_to_string_result("GrepNestedEval86")),
+        format!("<?php\n{}", grep_nested_error_cleared("GrepClearedAot86")),
+        opaque_eval(&grep_nested_error_cleared("GrepClearedEval86")),
     ];
+    let cleared = "[{},{}]0\n";
     assert_bundle_with(
         &[
             BundleCase { name: "grep_match_error_aot", source: &sources[0], expected: match_error },
             BundleCase { name: "grep_match_error_eval", source: &sources[1], expected: match_error },
-            BundleCase { name: "grep_nested_to_string_aot", source: &sources[2], expected: "false\n" },
-            BundleCase { name: "grep_nested_to_string_eval", source: &sources[3], expected: "false\n" },
+            BundleCase { name: "grep_nested_to_string_aot", source: &sources[2], expected: "false4\n" },
+            BundleCase { name: "grep_nested_to_string_eval", source: &sources[3], expected: "false4\n" },
+            BundleCase { name: "grep_nested_error_cleared_aot", source: &sources[4], expected: cleared },
+            BundleCase { name: "grep_nested_error_cleared_eval", source: &sources[5], expected: cleared },
         ],
         |source| {
             compile_and_run_with_regex_and_php_version(

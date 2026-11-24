@@ -278,9 +278,11 @@ server reads the body frame-by-frame and, before
 your handler runs, writes a progress array into the session file so a concurrent
 poll request can observe how far the upload has advanced.
 
-Tracking activates when `session.upload_progress.enabled` is on, the request is
-a multipart upload, and it supplies a valid session ID. Non-cookie IDs are
-accepted when `session.use_only_cookies` is off. The progress key is
+Tracking is **off by default** since PHP 8.5.13 (the serializer-mismatch
+advisory, CVE-2026-115560). It activates only when
+`session.upload_progress.enabled` is on, the request is a multipart upload, and
+it supplies a valid session ID. Non-cookie IDs are accepted when
+`session.use_only_cookies` is off. The progress key is
 taken from a form field named `session.upload_progress.name` (default
 `PHP_SESSION_UPLOAD_PROGRESS`), which must appear **before** the file fields, as
 in PHP. The value is stored under `$_SESSION[session.upload_progress.prefix . $value]`
@@ -329,13 +331,22 @@ Because elephc has no `php.ini`, the `enabled` and `cleanup` directives can be
 seeded before the worker/broker/handler process tree is created from the
 `ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED` /
 `ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP` environment variables (mirroring
-`session.auto_start`); otherwise they use the PHP defaults. Configuration needed
+`session.auto_start`); when unset, progress tracking is **disabled** and cleanup
+is enabled, matching PHP 8.5.13. Configuration needed
 before the body drain can also be supplied through `ELEPHC_SESSION_NAME`,
 `ELEPHC_SESSION_SAVE_PATH`, `ELEPHC_SESSION_SERIALIZE_HANDLER`, and
 `ELEPHC_SESSION_USE_ONLY_COOKIES`. These deployment values seed both the
 pre-handler upload tracker and the request's later `session_start()`, so the
 cookie name, file path, serializer, and transport policy cannot diverge between
 the two phases.
+
+While `session.upload_progress.enabled` is on, PHP 8.5.13 rejects runtime
+changes to session ini settings, and elephc does the same: both `ini_set()` and
+`session_start([...])` options throw
+`Error: Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On`.
+Configure `session.serialize_handler` and the other session directives in the
+deployment environment before the worker starts instead of changing them from
+request code.
 
 Notes and limitations specific to elephc:
 
@@ -358,13 +369,17 @@ Notes and limitations specific to elephc:
   `__unserialize()` on stored objects. As in PHP, do not put untrusted data into
   `$_SESSION` in a shape that could hydrate an object, and never share a
   `save_path` with a deployment whose `ELEPHC_SESSION_SERIALIZE_HANDLER` differs.
+- Session IDs are validated as a whole, including embedded NUL bytes: a
+  client-supplied value such as `validprefix\0junk` is rejected instead of being
+  truncated to the valid prefix. Only `a-zA-Z0-9,-` IDs of 1-256 bytes are
+  accepted.
 - The `php` and `php_binary` readers refuse a file that is exactly one complete
   serialized value (the `php_serialize` layout) instead of splitting it into
   `key|value` entries. A file written by the wrong handler therefore cannot
   inject an object even when application data happens to contain `|`.
 - Prefer `session.use_strict_mode=1`, keep `save_path` outside the document root
-  and private to the server user, and leave `session.upload_progress.enabled=0`
-  when progress reporting is not used.
+  and private to the server user, and enable `session.upload_progress` only
+  when progress reporting is actually needed.
 
 ## URL rewriting (`session.use_trans_sid`)
 
@@ -420,7 +435,7 @@ Three runnable `--web` examples live under `examples/`:
   rewriting: same-origin links, forms, and a `Location:` redirect gain the
   session id while off-host and `mailto:` URLs are left untouched.
 
-Each compiles with `cargo run -- --web examples/<name>/main.php` and runs as a
+Each compiles with `cargo run -- build --web examples/<name>/main.php` and runs as a
 standalone server binary.
 
 ## Limitations

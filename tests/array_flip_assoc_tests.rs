@@ -3,7 +3,7 @@
 //! Pins key normalization, duplicate replacement, warnings and independent result ownership.
 //!
 //! Called from:
-//! - `cargo test --test array_flip_assoc_tests` through Rust's test harness.
+//! - `cargo test --test integration array_flip_assoc_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures compile and run in isolated directories on the host target.
@@ -49,7 +49,9 @@ fn compile_raw(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.args(extra_args);
     cmd.arg(&php);

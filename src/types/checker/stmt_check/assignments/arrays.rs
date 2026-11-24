@@ -51,6 +51,8 @@ pub(super) fn check_array_assign(
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        checker.record_element_value_view(value, &val_ty, env);
+        let val_ty = checker.element_storage_type(value, val_ty);
         let key_ty = normalized_array_key_type(index, idx_ty);
         let created = if key_ty == PhpType::Int {
             PhpType::Array(Box::new(val_ty))
@@ -65,6 +67,7 @@ pub(super) fn check_array_assign(
     }
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    checker.record_element_value_view(value, &val_ty, env);
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     // The write selects its container after index/RHS effects, which may rebind it.
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
@@ -77,6 +80,8 @@ pub(super) fn check_array_assign(
     if arr_ty == PhpType::Str {
         return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
+    // A boxed, volatile source (a global, a by-reference capture) is stored as the box it is.
+    let val_ty = checker.element_storage_type(value, val_ty);
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
         // A foreach loop key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
@@ -196,7 +201,7 @@ pub(super) fn check_array_assign(
             // `Mixed != Str` while `merge(Mixed, Str)` is still `Mixed`). Keying on the merge
             // is what keeps a bare `array` declaration writable.
             if merged_ty != **elem_ty {
-                reject_declared_element_widening(checker, array, &arr_ty, &val_ty, span)?;
+                reject_declared_element_widening(checker, array, &arr_ty, value, &val_ty, span)?;
             }
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
@@ -220,7 +225,7 @@ pub(super) fn check_array_assign(
         // `array<string, int>` rejects a string value instead of silently widening to
         // `array<string, mixed>` and boxing every slot.
         if merged_value != **existing_value {
-            reject_declared_element_widening(checker, array, &arr_ty, &val_ty, span)?;
+            reject_declared_element_widening(checker, array, &arr_ty, value, &val_ty, span)?;
         }
         env.insert(
             array.to_string(),
@@ -546,6 +551,7 @@ pub(super) fn check_array_push(
         return Ok(());
     }
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    checker.record_element_value_view(value, &val_ty, env);
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     // The write selects its container after index/RHS effects, which may rebind it.
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
@@ -560,6 +566,8 @@ pub(super) fn check_array_push(
         return Err(CompileError::new(span, "[] operator not supported for strings"));
     }
     record_array_append_element_type(checker, array, &arr_ty, value, &val_ty, span, env);
+    // A boxed, volatile source (a global, a by-reference capture) is appended as the box it is.
+    let val_ty = checker.element_storage_type(value, val_ty);
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker
@@ -645,6 +653,9 @@ fn record_array_append_element_type(
 /// `declared` is the whole container type rather than its element, so the diagnostic can name
 /// the form the programmer actually wrote — `array<string, int>`, not `array<int>`.
 ///
+/// `value` is the written expression, consulted only to word the diagnostic of a boxed,
+/// volatile source (see `Checker::element_storage_type`).
+///
 /// Callers must have established that the write genuinely widens; a bare `array` declaration
 /// is `Array(Mixed)` and absorbs every write without changing, so it never reaches here.
 /// Inferred containers are absent from `typed_local_names` and keep widening as before.
@@ -652,11 +663,26 @@ fn reject_declared_element_widening(
     checker: &Checker,
     array: &str,
     declared: &PhpType,
+    value: &Expr,
     val_ty: &PhpType,
     span: Span,
 ) -> Result<(), CompileError> {
     if !checker.typed_local_names.contains_key(array) {
         return Ok(());
+    }
+    // The checked type of a global or by-reference captured local may well match, but its
+    // boxed cell can be rewritten behind this write, so name the variable and the way out
+    // rather than report a `mixed` the programmer never wrote.
+    if let Some(source) = checker.boxed_volatile_element_source(value) {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "cannot store ${} into ${} declared as {}: a global or by-reference captured \
+                 variable is a boxed cell other code can replace, so cast it to the declared \
+                 element type first",
+                source, array, declared
+            ),
+        ));
     }
     Err(CompileError::new(
         span,

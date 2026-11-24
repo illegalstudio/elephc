@@ -251,14 +251,22 @@ pub(super) fn lower_lazy_empty_without_native(
     // slot is a declared one worth probing — the same decision `isset()` makes, reused rather than
     // re-derived so the two constructs cannot drift on which properties they consider declared.
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
-        if matches!(
-            property_isset_action(ctx, object, property, &args[0]),
-            Some(IssetPropertyAction::Initialized)
-        ) {
-            let object = lower_member_receiver(ctx, object, &args[0]);
-            return Some(lower_initialized_property_empty(
-                ctx, object, property, name, &args[0],
-            ));
+        match property_isset_action(ctx, object, property, &args[0]) {
+            Some(IssetPropertyAction::Initialized) => {
+                let object = lower_member_receiver(ctx, object, &args[0]);
+                return Some(lower_initialized_property_empty(
+                    ctx, object, property, name, &args[0],
+                ));
+            }
+            // A class with neither a declared slot nor a dynamic hash can never hold the
+            // name, so `empty()` answers true without reading (and without a warning). The
+            // receiver expression still runs, as PHP evaluates it before the probe.
+            Some(IssetPropertyAction::AlwaysFalse) => {
+                let receiver = lower_member_receiver(ctx, object, &args[0]);
+                crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(args[0].span));
+                return Some(lower_bool_literal(ctx, true, expr));
+            }
+            _ => {}
         }
         // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
         // never-created name answers `true` instead of raising.
@@ -312,6 +320,9 @@ pub(super) fn lower_lazy_empty_without_native(
         let value = lower_expr(ctx, &args[0]);
         return Some(lower_empty_of_probed_value(ctx, value, name, expr));
     }
+    if let Some(value) = lower_hash_aware_magic_property_empty(ctx, &args[0], name, expr) {
+        return Some(value);
+    }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
     Some(lower_empty_through_exists_then_get(
         ctx,
@@ -320,6 +331,39 @@ pub(super) fn lower_lazy_empty_without_native(
         name,
         expr,
     ))
+}
+
+/// Lowers `empty($object->property)` when a known class keeps dynamic properties in a hash
+/// and declares `__isset`: a stored entry answers from the hash, while a miss uses PHP's
+/// `(__isset, __get)` accessor pair.
+fn lower_hash_aware_magic_property_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    arg: &Expr,
+    name: &str,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+        return None;
+    };
+    let class_name = property_existence_magic_class(ctx, object, property, "__isset")?;
+    if !ctx
+        .classes
+        .get(&class_name)
+        .is_some_and(|info| info.dynamic_property_hash_is_name_addressable())
+    {
+        return None;
+    }
+    // The literal-name Empty fetch reaches the codegen runtime plan, which probes the
+    // per-instance hash before it asks `__isset`/`__get`.
+    let object = lower_member_receiver(ctx, object, arg);
+    let probed = super::property_access::lower_dynamic_property_fetch_from_value(
+        ctx,
+        object,
+        &Expr::new(ExprKind::StringLiteral(property.clone()), arg.span),
+        crate::ir::PropertyFetchMode::Empty,
+        arg,
+    );
+    Some(lower_empty_of_probed_value(ctx, probed, name, expr))
 }
 
 /// Lowers `empty($object[$index])` on an `ArrayAccess` receiver the way PHP does:

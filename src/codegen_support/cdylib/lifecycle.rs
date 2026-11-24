@@ -38,6 +38,9 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
             // `--with-apm`: the counters, and the I/O slots that charge a
             // call's queries to it. Once, however often the host calls this.
             if let Some(apm) = apm {
+                if apm.rules {
+                    crate::codegen_support::apm_init::emit_apm_rules_slot(emitter);
+                }
                 crate::codegen_support::apm_init::emit_apm_init_call(emitter, apm.collector, true);
                 crate::codegen_support::apm_init::emit_event_active_slot(emitter);
                 crate::codegen_support::apm_init::emit_probe_io_slots(emitter);

@@ -2,7 +2,7 @@
 //! Heap-debug regression coverage for `getenv()` whole-environment results.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests runtime_gc::getenv` through the runtime-GC suite.
+//! - `cargo test --test codegen_tests_runtime runtime_gc::getenv` through the runtime-GC suite.
 //!
 //! Key details:
 //! - `__rt_getenv_all` allocates a hash plus persisted keys and values, then boxes

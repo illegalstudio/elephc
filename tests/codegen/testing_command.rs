@@ -6,7 +6,7 @@
 //! diagnostics for empty runs and refused flags.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests testing_command` through Rust's test harness.
+//! - `cargo test --test codegen_tests_core testing_command` through Rust's test harness.
 //!
 //! Key details:
 //! - Every test builds its own project directory and runs the CLI from inside it, with the
@@ -97,7 +97,7 @@ final class StringsTest extends TestCase {
 
 /// Runs `elephc test` with `args` inside `dir`, returning stdout, stderr and the exit code.
 fn run_test_command(dir: &Path, args: &[&str]) -> (String, String, i32) {
-    let output = elephc_cli_command(dir)
+    let output = elephc_root_command(dir)
         .arg("test")
         .args(args)
         .output()
@@ -182,7 +182,7 @@ fn test_cli_test_accepts_a_directory_or_a_file_path() {
 fn test_cli_test_resolves_the_root_from_the_test_path() {
     let dir = make_cli_test_dir("elephc_cli_test_root");
     write_project(&dir);
-    let output = elephc_cli_command(&dir.join("tests/Unit"))
+    let output = elephc_root_command(&dir.join("tests/Unit"))
         .args(["test", "../../tests", "--filter", "testStartsAtZero"])
         .output()
         .expect("failed to run elephc test");
@@ -637,7 +637,7 @@ fn test_cli_test_concurrent_runs_do_not_share_a_binary() {
     let dir = make_cli_test_dir("elephc_cli_test_concurrent");
     write_project(&dir);
     let spawn = |filter: &str| {
-        elephc_cli_command(&dir)
+        elephc_root_command(&dir)
             .args(["test", "--filter", filter])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

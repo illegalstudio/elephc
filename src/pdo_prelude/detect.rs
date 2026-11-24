@@ -201,6 +201,7 @@ fn packed_field_refs_pdo(field: &PackedField) -> bool {
 /// exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_pdo(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_pdo),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

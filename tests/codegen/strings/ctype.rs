@@ -12,7 +12,7 @@
 //! - Diagnostics live on stderr; stdout assertions stay separate so the order of the
 //!   two streams cannot make the test flaky.
 
-use crate::codegen::ctype_php_src::locale_available;
+use crate::codegen::ctype_php_src::{locale_available, test_locales_required};
 use crate::support::*;
 
 /// Verifies `setlocale()` tries array elements and additional locale arguments in order.
@@ -45,7 +45,7 @@ if ($locale === false) {
     echo str_contains(strtoupper(nl_langinfo(CODESET)), "8859") ? "latin1" : "wrong:" . nl_langinfo(CODESET);
 }
 "#);
-    assert!(out == "latin1" || out == "skip", "{out}");
+    assert!(out == "latin1" || (out == "skip" && !test_locales_required()), "{out}");
 }
 
 /// Verifies eval locale calls share the host locale and the libc-backed ctype predicates.
@@ -64,7 +64,7 @@ if ($locale === false) {
     eval('var_dump(ctype_lower("\xe4")); var_dump(nl_langinfo(CODESET)); var_dump(setlocale(LC_CTYPE, ["missing", "C"]));');
 }
 "#);
-    if out == "skip" {
+    if out == "skip" && !test_locales_required() {
         return;
     }
     assert!(out.starts_with("bool(true)\n"), "{out}");

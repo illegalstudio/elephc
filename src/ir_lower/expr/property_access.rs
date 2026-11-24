@@ -818,20 +818,21 @@ fn property_result_type(
         };
     }
     let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
-        if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
-            return if nullable {
-                nullable_result_type(magic_ty)
-            } else {
-                magic_ty
-            };
-        }
-        // The clone-override hash answers an undeclared name exactly like the attribute's does,
-        // so both reserve the same boxed `mixed` result rather than a declared slot type.
+        // A stored dynamic entry wins over `__get()` and keeps the type it was assigned. The
+        // hash answers an undeclared name exactly like the attribute's or clone override's does,
+        // so all of them reserve the same boxed `mixed` result rather than the accessor's type.
         if class_info.dynamic_property_hash_is_name_addressable() {
             return if nullable {
                 nullable_result_type(PhpType::Mixed)
             } else {
                 PhpType::Mixed
+            };
+        }
+        if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
+            return if nullable {
+                nullable_result_type(magic_ty)
+            } else {
+                magic_ty
             };
         }
         // No slot, accessor or hash answers the name on the static class, so the checker

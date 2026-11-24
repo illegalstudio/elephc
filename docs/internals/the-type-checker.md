@@ -318,6 +318,99 @@ The widening is driven by evidence, not by the entry type alone: a loop that
 never assigns the local leaves it `null`, so a null local a loop only reads is
 untouched (issue #562).
 
+A keyed write does not widen the value payload of a local **declared**
+`array<K, V>` with a concrete `V`. The fixed point runs before the body's guards
+are known, so it can only type a guarded value `mixed`:
+`if (!is_bool($v)) { throw … } $map[$k] = $v;` used to record an
+`array<K, mixed>` contract and box the declared map for the whole loop, where the
+same write outside a loop is checked against the declaration. The body check
+decides instead: the value is the declared type at the write, or
+`check_array_assign` reports `cannot store … into $map declared as …`. Appends
+keep their widening rule.
+
+### Element value views
+
+A value can be one type to the checker and a boxed `Mixed` cell to EIR. The
+by-value binding of a `foreach` over a hash is always handed out boxed, a
+guard-narrowed `mixed` local keeps its boxed slot, and a branch merge
+(`$c ? $v : 0`) materializes in a boxed temp. Each is still `int`, `float`,
+`bool`, `string` or a concrete array in the type environment.
+
+Writing such a value as a container element is where the two layers used to part:
+EIR widened the container to boxed payloads for the boxed operand, the checker
+kept the concrete element type, and everything compiled against the checker's
+type read boxed cells as raw payloads. A typed property store was refused by the
+backend; a return, a parameter and a declared local were not, so
+`function f() { $src = ['a' => 5]; $out = []; foreach ($src as $v) { $out[] = $v; } return $out; }`
+returned a list `implode()` printed as pointers.
+
+`record_element_value_view()` (`src/types/checker/element_values.rs`) therefore
+records, for every value written by `$a[] = …`, `$a[$k] = …` or an array literal
+element, the type the checker proved for it
+(`CheckResult::element_value_views`). The key is the body scope, the value's
+span and the local the value reads, `None` when the value is not one plain
+variable: a synthesized node can share its span with its first operand, so the
+local is part of a site's identity. EIR lowering projects a boxed
+operand to that type before it is stored (see
+[The IR](the-ir.md#conversions-and-boxing)), so the container keeps the storage
+its checked type promises.
+
+The checked type of a local is not always a proof of what its cell holds. In
+permissive mode `$t = null; if ($c) { $t = "s"; }` reads `string` afterwards,
+while the boxed cell can still hold the `null`, and casting that box would store
+`""`. A view is therefore published only for a value the checker can prove:
+
+- **The type** is `int`, `float`, `bool` or `string`, or the value is a `foreach`
+  binding whose own storage is a concrete array or hash. A type guard proves a
+  value is an array, never which layout the array has.
+- **A plain local** must be flow-stable, definitely bound, and either
+  - the key or by-value value variable of an array `foreach` still being
+    checked, not stored to since it was bound (it holds an element of the
+    source), or
+  - read inside an open guard region that has not stored it, or after a guard
+    that exits on every other path (`if (!is_bool($v)) { throw … }`): the guard
+    tested the runtime tag.
+
+  The loop binding and the kept complement are recorded in
+  `Checker::proven_local_views` and end at the first store to the name; a loop
+  binding also ends with its loop, after which the name holds whatever it held
+  before a source that turned out to be empty. A plain copy (`$x = $v`) carries
+  the proof to the copy, which holds the same value. A closure body starts with
+  no proofs: a by-value capture is a boxed parameter there, and the closure's
+  signature is inferred from that storage.
+
+  A body that may not run (an `if` arm, a `switch` case, a `try` or `catch`
+  block, a loop body, a `for` update) is a proof scope. A proof recorded inside
+  it is dropped when the body ends, so the copy in
+  `if ($c) { $t = $v; } else { $out[] = $t; }` proves nothing in the `else` arm
+  or after the `if`; a proof the body ends stays ended for every enclosing
+  scope. The code after the statement keeps the proofs every path to it holds:
+  what all the arms of an `if` chain with an `else` that fall through ended
+  with, and what a `try` body and its `catch` blocks that complete ended with,
+  minus the names a `finally` block stores.
+- **A branch merge** (`?:`, `??`, `match`) is as proven as its arms, and a
+  literal arm is its own type. A scalar merge also publishes its type on each
+  proven local its arms read, each arm judged on its own, so the arms produce the
+  scalar themselves and the merge is concrete: a literal's storage is predicted
+  from its items before any of them is lowered, and a boxed merge temp would
+  have been stored raw. Reading a proven local as the scalar it holds is exact
+  whatever its sibling arm is, so `$c ? $v : strlen($s)` projects `$v` although
+  the call is not itself a proof. Any other expression publishes nothing: its
+  operand is concrete already, or boxed for a reason this pass cannot see.
+- **Every authoritative visit** to the site agrees. A conflicting visit disables
+  that key for good, and loop-storage probes publish nothing.
+
+A `global` binding and a local a closure captured by reference are boxed cells
+other code can rewrite, so their checked type is neither the stored operand nor
+a proof. `Checker::element_storage_type` makes such a source contribute `mixed`
+to the element type of the container it is written into, for scalar and array
+payloads: the checker's container widens exactly where lowering boxes it. A
+keyed write of one into a declared map is refused by name, with the cast that
+fixes it.
+
+A value the checker types `mixed`, or a type the container does not store, is
+not affected: both layers still widen the container together.
+
 ## Expression type inference
 
 The type checker computes the type of every expression:
@@ -854,6 +947,24 @@ Silent classification resolves instance and static property receiver types from 
 
 Static write chains fetch their receiver after evaluating the RHS and runtime name. Those effects can replace the object after an `instanceof` guard, so delayed interface receivers use a temporary boxed runtime view instead of applying the earlier concrete-class fact. The static slot keeps its declared interface type. Each selected child transfers the receiver lease to the next view, preserving cleanup on both normal and exceptional paths.
 
+#### Stores that narrow a union, and the joins that keep them
+
+A plain `=` into a union-typed local records the stored member as the read view (`store_narrowing::narrow_local_to_stored_value`, called from `check_assign_value_type`), exactly as a coalescing store does: `function z(DateTimeZone|string $tz): DateTimeZone { $tz = new DateTimeZone('UTC'); return $tz; }` returns the object. The union stays the slot's contract in `Checker::guarded_union_types`, so codegen keeps the boxed slot and a later store of another member is still measured against the union. The store qualifies only when it is proved non-null (a checker type alone is not a proof: `$x = $a[99]` reads null under a `string` type), strictly narrower than the union, and made to a local that passes `local_flow_read_is_stable`. The arithmetic `int|float` union is left alone: it is the checker's model of integer overflow rather than a choice of members, and the loop-storage analysis reads a counter reset by `$i = 0` with that type.
+
+Three joins carry that fact out of a conditional:
+
+- **`if` ... `else`.** No path skips the construct, so `exclude_conditional_read_entry` drops the entry view from the read join and the arms alone decide it. Physical storage still joins with the entry contract. `observe_flow_snapshot` marks a local changed whenever an arm's read differs from the entry view, even when the join equals it: the shared environment otherwise keeps the LAST arm's narrowed view, and `if ($b) { $tz = new DateTimeZone('UTC'); } else { $tz = 'x'; }` would read `string`.
+- **A single guarded `if`.** The then-branch exit joins with the guard complement, as in the lazy-initialization shape above, for any union a stable local holds.
+- **An `if`/`elseif` chain without `else`.** `stmt_check::chain_join::ChainJoin` joins what every clause that falls out of the chain left with the fall-through, which holds the complement of every guard instead of the entry type. `function wrap(int|string|array $v): array { if (is_int($v)) { $v = [$v]; } elseif (is_string($v)) { $v = [$v]; } return $v; }` leaves an array on all three paths. Its candidates are the union-typed stable locals the conditions name; one qualifies when a guard narrowed the union it entered the chain with (a condition that rebinds it first does not) and a falling-through clause left something other than the view it started with. A clause that cannot fall through contributes no exit, and a chain whose clauses all diverge keeps the complement itself.
+
+Every one of these publishes only a join strictly narrower than the union (`Checker::union_join_is_narrower`, judged by value so a reordered union is not narrower), and only as a read. `Checker::publish_narrowed_union_join` runs after the conditional flow is published and keeps a contract wider than the union the construct started with: after `if (is_string($x)) { return; }` the slot of an `A|B|string $x` still holds `A|B|string`, and a join over the remaining `A|B` must not turn a later `$x = 's'` into a rejected store.
+
+The chain join is also what carries a lazily initialized nullable local past its null arm: in `if ($layout === null) { $layout = new Layout(); } elseif ($resize) { $layout->resize(); }` the `elseif` body and the fall-through both start from the complement, so every exit is `Layout`. A property place is not a candidate. Property facts are not isolated between sibling clauses the way tracked local reads are, so a property keeps the single-clause join only.
+
+Guards see `iterable` as `array|Traversable` when it is a union member (`guard_true_part` / `guard_false_part` in `stmt_check::narrowing`): `is_array` keeps the array half and its complement keeps `Traversable`; an `instanceof` keeps the tested class, and the complement of `instanceof Traversable` keeps the array half. The complement of a narrower class keeps the whole member. A lone `iterable` VIEW of a boxed union slot splits the same way, since it is that union's one remaining member (`local_slot_is_boxed_union`); this is what the second guard of `if (is_string($v)) { ... } elseif (!is_array($v)) { ... }` tests. A local typed plain `iterable` is left alone: its raw slot is not read per member, so the backend could not read it as one half.
+
+Two things make the stores in those chains provable. `stored_value_is_non_null` accepts `explode()` and `iterator_to_array()` results: their catalog return is `mixed` because the element types depend on the arguments, while a successful call always returns an array (a zero-length separator and a non-traversable source raise instead). And the lowering hands `iterator_to_array()`, `iterator_count()` and `iterator_apply()` the raw payload of a boxed source (`ir_lower::expr::boxed_iterable_source`): a union-typed local stays in its boxed slot when a guard narrows it to `iterable` or to a `Traversable` object, while those helpers dispatch on a raw array, hash or object pointer, so an `Op::MixedUnbox` to `iterable` bridges the two on every target. `iterator_to_array()` qualifies only for the mixed-payload results its helper builds from an `iterable` source, so a source typed as an array with raw elements keeps its existing lowering.
+
 #### Assigning inside a guarded region
 
 A guard publishes its view by OVERWRITING the environment entry, which is right for reads but wrong for the store in `$g = glob($dir . "/*.meta"); if ($g === false) { $g = []; }`: `merge_local_assignment_type` saw `false` on the left, `array<never>` on the right, and reported `cannot reassign $g from false to array<never>` — on the commonest fallback idiom in PHP (issue #509). The binding is `array<string>|false`, which holds an empty array, and no slot is abandoned, so there was nothing to reject.
@@ -1023,6 +1134,7 @@ pub struct ClassInfo {
     pub abstract_methods: HashSet<String>,        // declared abstract; codegen trims method_impl_classes to EMITTED bodies, so absence there does not mean abstract
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
+    pub narrowed_vtable_slots: HashMap<String, NarrowedVtableSlot>, // slots retired by optional-parameter widening
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: HashMap<String, String>,
@@ -1035,7 +1147,7 @@ pub struct ClassInfo {
 }
 ```
 
-`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. When an instance override appends trailing optional parameters to the method it replaces (`f(bool $x = true)` over `f()`), callers compiled against the ancestor still pass the ancestor's argument count, so the override cannot take over the inherited slot. The checker instead *retires* that slot: it stays at the ancestor's index under a generated `vtable_methods` key (`f#abi<inherited param count>`, never a PHP identifier), recorded in `narrowed_vtable_slots` with the method key and the ancestor's signature, and the method key gets a new, wider slot that callers through the override's own type use. Codegen fills a retired slot with an EIR adapter (`ir_lower::function::lower_narrowed_vtable_adapters`) that has the ancestor's ABI and calls the override with only the arguments it received, so ordinary call lowering supplies the appended defaults and `func_num_args()` still counts what the caller passed. The adapter dispatches through the wider slot, so a deeper override that inherits the retired slot runs its own body. Reachability pruning keeps a retired slot exactly as long as its method's slot. Interface implementations get the same widening through their per-class interface method entries (`MethodAbiPlan::OptionalDefaults`). An interface that combines parent interfaces keeps an earlier parent's widened declaration over a later parent's narrower one (`K extends J, I` where `J` widens `I::f`); as in PHP, the reverse order is rejected. The accepted shape is `ParameterWidening::TrailingOptional` in `schema/validation.rs`: every inherited position matches exactly and each appended position has a default; static methods, magic methods and appended variadics keep the exact-shape rule, and only final enums use the full call-shape widening. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
 
 ### Declaring and implementing classes
 
@@ -1120,7 +1232,7 @@ For abstract methods, the checker keeps the inherited signature but intentionall
 
 A used trait's abstract methods are requirements on the class, not declarations of it. Right after trait flattening, the driver calls `collect_trait_method_requirements` (`src/types/checker/schema/classes/trait_requirements.rs`) and stores the result in `Checker::trait_method_requirements`: for each trait-using class, the method keys its traits declare abstract (through nested trait uses, plus the `as` aliases of those methods, which flattening makes abstract too) and the method keys its own body declares. While methods are applied to the schema, a flattened abstract method that is such a requirement, not re-declared by the class body, and already implemented by an inherited method is skipped instead of registered, so it reads neither as a re-abstraction nor as an override of a final method. The inherited signature is still checked against the requirement: parameters may only widen, a by-reference return must be kept, and a declared return type must be honoured. An inherited method with lower visibility still satisfies it, as in PHP. `#[\Override]` on a method that implements a trait requirement finds its target there as well.
 
-Flattening (`src/types/traits/expand.rs` and `merge.rs`) treats an abstract trait method as a requirement, never as a conflict with another trait's method. Within one `use A, B` or across separate `use` statements, a concrete method of the same name and kind (static or instance) satisfies it, and a second abstract declaration of it adds nothing. Each such pair goes through `merge::check_trait_requirement`, which for now accepts only an identical signature (parameter types, by-reference flags, optionality, variadic, return type and by-reference return; visibility is not compared, as in PHP). Any other pair is rejected rather than silently merged. An abstract method of the other kind is kept, so the schema reports the static/instance mismatch. The requirement walk follows the same composition. A requirement that another trait used in the same trait implements is satisfied for that trait's users, unless `insteadof` excludes that implementation. Only a class's own `use` list keeps such a requirement, so `#[\Override]` on the class method finds its target only there.
+Flattening (`src/types/traits/expand.rs` and `merge.rs`) treats an abstract trait method as a requirement, never as a conflict with another trait's method. Within one `use A, B` or across separate `use` statements, a concrete method of the same name and kind (static or instance) satisfies it, and a second abstract declaration of it adds nothing. Two abstract declarations go through `merge::check_abstract_redeclaration`, which for now accepts only an identical signature (parameter types, by-reference flags, optionality, variadic, return type and by-reference return; visibility is not compared, as in PHP), and rejects any other pair rather than merging it silently. A concrete implementation is checked later against every requirement it satisfies, with PHP's compatibility rules, by `validate_class_trait_requirements` and `validate_enum_trait_requirements` (`src/types/checker/schema/enum_traits.rs`). An abstract method of the other kind is kept, so the schema reports the static/instance mismatch. The requirement walk follows the same composition. A requirement that another trait used in the same trait implements is satisfied for that trait's users, unless `insteadof` excludes that implementation. Only a class's own `use` list keeps such a requirement, so `#[\Override]` on the class method finds its target only there.
 
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
@@ -1144,6 +1256,22 @@ When checking method calls, it verifies the method exists, enforces method visib
 Methods declared to return PHP's late-bound `static` type (alone, nullable, or inside a union) keep their exact return syntax in `late_static_method_returns` / `late_static_static_method_returns`. At each call site the checker re-resolves that preserved syntax against the concrete receiver: `$child->create()` on a method inherited from a parent that returns `static` types as the child class, not the declaring class. The nominal `FunctionSig` return type stays the concrete declaring class or interface for compatibility checks.
 
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
+
+### Backed enum case values
+
+Since PHP 8.2 a backed case's value may be a constant expression, not only a literal: `case Focused = Glyphs::BAR;`, `case Ns = PREFIX . 'ns';`, `case Big = 1 << K::SHIFT;`. `build_enum_info` (`src/types/checker/schema/enums.rs`) reduces each value to an int or string literal in three steps, and only then checks it against the backing type and for duplicates.
+
+1. **Forbidden forms first.** `validate_constant_expression` (`src/types/checker/schema/const_expr_forms.rs`) walks the expression as written, before any constant is bound. It goes pre-order and left to right, like php-src's `zend_compile_const_expr`, and reports PHP's own messages:
+   - "Constant expression contains invalid operations" for variables, calls, `match`, assignments, `instanceof` and other non-constant nodes;
+   - "New expressions are not supported in this context";
+   - `"static::" is not allowed in compile-time constants` and "static::class cannot be used for compile-time class name resolution";
+   - "Object casts are not supported in this context";
+   - "Closures in constant expressions must be static".
+
+   This check must run before folding. Folding prunes the branch a bound constant decides, and that would hide a forbidden form PHP rejects.
+2. **Which branches the check skips.** A branch of `?:`, short `?:`, `??`, `&&` or `||` is skipped only when PHP itself decides it at compile time. That is the case when the deciding operand folds from literals and predefined (persistent) constants alone, operators, casts, array reads and int/string concatenation included, and a literal array (list or keyed) counts as known, truthy when non-empty, as long as every key is an int, string, bool or integral float (an array key is PHP's fatal "Illegal offset type", a fractional float or `null` key a deprecation, and an unkeyed entry after the `PHP_INT_MAX` key throws "Cannot add element to the array as the next element is already occupied", so those arrays stay undecided), under `!`, `(bool)`, `&&` and `||` too: `true ? 1 : $x`, `['k' => 1] ? 1 : $x`, `('n' . 1) ? 1 : $x`, `PHP_INT_SIZE ? 2 : strlen('b')`. User `const`/`define()` constants never decide a branch. Class constants don't either, which matches php-src with opcache enabled (`ZEND_COMPILE_NO_CONSTANT_SUBSTITUTION`). Without opcache, php-src substitutes a class constant only when the class was declared earlier in the same file, so the result would depend on declaration order. elephc follows the order-independent rule, so `C::YES ? 1 : $x` is rejected.
+3. **Constant lookup.** `fold_backing_value` (`src/types/checker/schema/enum_backing.rs`) binds constants through the shared `property_default_selectors::bind_constants` pass that property defaults also use. That covers class and interface constants (inherited ones included), source `const` declarations collected by the driver (`collect_global_constants`, which also walks namespace blocks and `require_once` include guards), and predefined constants. Classes and interfaces are built before enums, so their constants exist at this point. The enum's own constants (`self::X`) do not exist yet.
+4. **Folding order.** `bind_constants` folds each node with the optimizer's PHP-equivalent constant folder and prunes literal branches. That folder joins only string literals, so `join_int_concats` then joins `.` concatenations with an int operand, bottom-up, and refolds each enclosing operator and array read (`['n' . C::ONE][0]`). Branches are pruned once more, because a just-joined condition can decide a ternary whose other branch is not a literal: `('n' . 1) ? 6 : $v`. A value that does not end as an int or string literal is rejected with "Enum int/string backing values must be integer/string literals". The literal then goes through the duplicate-value check.
 
 ### Built-in coroutine and iterator classes
 

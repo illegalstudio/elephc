@@ -236,6 +236,10 @@ pub enum Immediate {
     /// limited to user functions, static methods and the builtin names written as literals at
     /// declared callables (`Module::declared_callable_names`).
     DeclaredCallableNames,
+    /// Marks a callable-factory `NormalizeCallable` (`Closure::fromCallable()`, or the dynamic
+    /// factory when `true`) whose source is a value declared `callable`: its runtime names are
+    /// limited exactly like `DeclaredCallableNames`, so the conversion and `$callable()` agree.
+    DeclaredCallableFactory(bool),
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -859,6 +863,10 @@ pub enum CoreBuiltinOp {
     /// a synthetic `MT_RAND_PHP` constant-expression read uses it to match php-src's
     /// first-evaluation-only deprecation.
     DeprecatedOnceBegin = 23,
+    /// An internal prelude warning reported at an explicit source line.
+    BuiltinWarningAt = 24,
+    /// An internal prelude deprecation reported at an explicit source line.
+    BuiltinDeprecatedAt = 25,
 }
 
 impl CoreBuiltinOp {
@@ -887,7 +895,9 @@ impl CoreBuiltinOp {
             | Self::PublishCallStrictness
             | Self::CallStrictTypes
             | Self::DiagnosticCallerFile
-            | Self::DeprecatedOnceBegin => BuiltinResultOwnership::NonHeap,
+            | Self::DeprecatedOnceBegin
+            | Self::BuiltinWarningAt
+            | Self::BuiltinDeprecatedAt => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -923,6 +933,8 @@ impl CoreBuiltinOp {
             21 => Some(Self::CallStrictTypes),
             22 => Some(Self::DiagnosticCallerFile),
             23 => Some(Self::DeprecatedOnceBegin),
+            24 => Some(Self::BuiltinWarningAt),
+            25 => Some(Self::BuiltinDeprecatedAt),
             _ => None,
         }
     }
@@ -938,7 +950,11 @@ impl CoreBuiltinOp {
             | Self::GetResources => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
-            Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => 4,
+            Self::TriggerError
+            | Self::BuiltinWarning
+            | Self::BuiltinWarningAt
+            | Self::BuiltinDeprecatedAt
+            | Self::BuiltinDeprecated => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
@@ -982,7 +998,7 @@ impl CoreBuiltinOp {
                     | E::REFCOUNT_OP.bits()
                     | E::MAY_THROW.bits(),
             ),
-            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => E::all(),
+            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinWarningAt | Self::BuiltinDeprecatedAt | Self::BuiltinDeprecated => E::all(),
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }
@@ -1381,6 +1397,11 @@ pub enum Op {
     /// Immediate: `PropertyFetchMode`, php's read-vs-probe distinction; absent means `Read`.
     DynamicPropGet,
     DynamicPropSet,
+    /// Raises PHP's call-site `TypeError` for a property argument whose declared storage cannot
+    /// satisfy a typed by-reference parameter. Immediate: data id of the complete message.
+    /// The runtime unwinder transfers control, so the callee call emitted after this in the
+    /// same EIR block is unreachable but still well-formed.
+    ReferenceArgumentTypeError,
     NullsafePropGet,
     NullsafeMethodCall,
     /// Rejects an abstract instance target before evaluating call arguments.
@@ -1460,6 +1481,13 @@ pub enum Op {
     EvalClassExists,
     EvalConstantExists,
     EvalConstantFetch,
+    /// Reads a constant whose value may live in either the eval registry or native global
+    /// storage. Operand zero is the native `LoadGlobal` value that a compiled `define()`
+    /// writes; the immediate is the constant name. Codegen consumes the native operand only
+    /// when the compiled `define()` actually ran (its flag is set), and otherwise fetches
+    /// through the eval bridge, so a dead `define()` cannot hide an `eval()`-defined value.
+    /// Result: `Mixed`.
+    EvalConstantFetchOrGlobal,
     RuntimeCall,
     /// Reads through a boxed Mixed/ArrayAccess receiver for an imminent nested write.
     MixedArrayGetForWrite,
@@ -1797,6 +1825,7 @@ impl Op {
             // `TypeError` for a value a declared slot refuses, which is `MAY_THROW`. Advertising
             // `DynamicPropSet` as a bare heap write let the optimizer reorder or drop a store
             // that now diagnoses and can unwind.
+            ReferenceArgumentTypeError => E::all(),
             PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
                 | E::REFCOUNT_OP,
@@ -1856,7 +1885,7 @@ impl Op {
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
             EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
-            EvalConstantFetch => {
+            EvalConstantFetch | EvalConstantFetchOrGlobal => {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
             Call
@@ -2184,6 +2213,7 @@ impl Op {
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
+            ReferenceArgumentTypeError => "reference_argument_type_error",
             DynamicPropUnset => "dynamic_prop_unset",
             NullsafePropGet => "nullsafe_prop_get",
             NullsafeMethodCall => "nullsafe_method_call",
@@ -2217,6 +2247,7 @@ impl Op {
             EvalClassExists => "eval_class_exists",
             EvalConstantExists => "eval_constant_exists",
             EvalConstantFetch => "eval_constant_fetch",
+            EvalConstantFetchOrGlobal => "eval_constant_fetch_or_global",
             RuntimeCall => "runtime_call",
             MixedArrayGetForWrite => "mixed_array_get_for_write",
             ExternCall => "extern_call",

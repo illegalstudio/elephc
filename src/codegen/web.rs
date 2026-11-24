@@ -106,9 +106,17 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             module.required_runtime_features.native_reference_validation);
     }
     for name in &module.data.global_names {
-        if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
-            emit_ordinary_global_reset(emitter, &ir_global_symbol(name), &mut labels);
+        if superglobals::is_superglobal(name) || module.extern_globals.contains_key(name) {
+            continue;
         }
+        // Only names that own native global storage have a symbol to reset. An eval-aware
+        // constant fetch registers its name for the eval runtime but never writes the native
+        // `_eir_global_*` slot, so referencing it here would fail to link in `--web` builds.
+        let symbol = ir_global_symbol(name);
+        if !data.has_comm(&symbol) {
+            continue;
+        }
+        emit_ordinary_global_reset(emitter, &symbol, &mut labels);
     }
     // Runtime-created `$GLOBALS[$name]` entries are process-global storage. Drain them at the
     // request boundary so a name/value created by one request is not visible to the next.
@@ -424,6 +432,20 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_call_label(emitter, "__rt_heap_bins_clear");
+    // A request that called `ini_set('memory_limit', …)` moved `_heap_limit`; the next
+    // request must start from the compile-time ceiling again, exactly like PHP's INI reset.
+    abi::emit_load_symbol_to_reg(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_heap_limit_startup",
+        0,
+    );
+    abi::emit_store_reg_to_symbol(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_heap_limit",
+        0,
+    );
     // Bulk reclamation also retires every block that remained after typed cleanup.
     // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
     let value = abi::int_result_reg(emitter);
@@ -475,6 +497,9 @@ mod handler_reset_tests {
             let live = asm.find("_gc_live").unwrap();
             let peak = asm.find("_gc_peak").expect("the live-byte watermark is reset per request");
             assert!(heap_reset < allocs && allocs < frees && frees < live && live < peak, "{name}");
+            let startup_limit = asm.find("_heap_limit_startup").expect("the startup ceiling is restored");
+            let reset_limit = asm.rfind("_heap_limit").expect("the runtime ceiling is reset");
+            assert!(startup_limit < reset_limit, "{name}: the startup ceiling must feed the reset");
             assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc"), "{name}");
         }
@@ -500,8 +525,10 @@ mod handler_reset_tests {
             link_libs: vec![],
         });
         module.data.global_names.push("probe".into());
+        let mut data = DataSection::new();
+        data.add_comm(ir_global_symbol("probe"), 8);
         let mut emitter = Emitter::new(target);
-        emit_web_reset(&mut emitter, &module, &DataSection::new());
+        emit_web_reset(&mut emitter, &module, &data);
         let asm = emitter.output();
         let release = asm.find(crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL).unwrap();
         let global = asm.rfind(&ir_global_symbol("probe")).unwrap();

@@ -164,12 +164,23 @@ fn emit_dynamic_plan_write(
                 inst.span.map_or(0, |span| span.line),
             )
         }
-        PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
-            "property write resolved to a magic getter",
+        PropertyRuntimeAction::MagicRead { .. } => Err(CodegenIrError::invalid_module(
+            "property write resolved to a value read",
         )),
-        PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
-            "property dispatch handed a refusal arm to its action emitter",
+        PropertyRuntimeAction::MagicIsset { .. }
+        | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+            "property write resolved to a read probe",
         )),
+        // php refuses the creation from this scope (a `readonly` class, including php-src's
+        // internal URI classes). Raise the catchable `Error`; the terminating throw means no
+        // value is stored and the surrounding merge block is the only join.
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
+            "named property write resolved to a runtime-name refusal",
+        )),
+        PropertyRuntimeAction::Refuse { message } => {
+            super::super::exceptions::emit_error(ctx, message);
+            Ok(())
+        }
     }
 }
 

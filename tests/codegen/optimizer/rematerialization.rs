@@ -2,7 +2,7 @@
 //! Executes constant rematerialization and immediate operand regressions.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests rematerialization`.
+//! - `cargo test --test codegen_tests_core rematerialization`.
 //!
 //! Key details:
 //! - Runtime argc prevents constant folding of tested operations.

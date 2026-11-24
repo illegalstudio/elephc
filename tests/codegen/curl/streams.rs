@@ -4,7 +4,7 @@
 //! `CURLOPT_STDERR`. All four used to answer `false` + PHP's unsupported-option warning.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl::streams` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl::streams` through Rust's test harness.
 //!
 //! Key details:
 //! - THE OPTIONS ARE IMPLEMENTED BY COMPOSITION, not by a new ABI. libcurl never receives

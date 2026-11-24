@@ -12,7 +12,7 @@
 //!         -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 //!         -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
 //!     ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-//!         cargo test --test codegen_tests -- --ignored mysql
+//!         cargo test --test codegen_tests_ext -- --ignored mysql
 //!
 //! Key details:
 //! - Each fixture opens its connection from `getenv("ELEPHC_MY_DSN")` and uses
@@ -549,7 +549,7 @@ fn test_mysql_get_warning_count() {
 ///   cargo build -p elephc-pdo                         # TLS staticlib (ring)
 ///   ELEPHC_MY_TLS_DSN='mysql:host=127.0.0.1;port=33062;dbname=testdb;user=test;password=test' \
 ///       ELEPHC_MY_TLS_CA="$PWD/ca.pem" \
-///       cargo test --test codegen_tests -- --ignored mysql_tls_round_trip
+///       cargo test --test codegen_tests_ext -- --ignored mysql_tls_round_trip
 #[test]
 #[ignore]
 fn mysql_tls_round_trip() {
@@ -638,7 +638,7 @@ echo str_contains((string) $row[1], "AES128-GCM-SHA256") ? "cipher-ok" : (string
 ///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 ///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_exec_returns_affected_row_count
+///       cargo test --test codegen_tests_ext -- --ignored mysql_exec_returns_affected_row_count
 #[test]
 #[ignore]
 fn mysql_exec_returns_affected_row_count() {
@@ -719,7 +719,7 @@ $db->exec("DROP TABLE my_varbinary_col");
 ///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 ///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_call_stored_procedure_returns_rows
+///       cargo test --test codegen_tests_ext -- --ignored mysql_call_stored_procedure_returns_rows
 #[test]
 #[ignore]
 fn mysql_call_stored_procedure_returns_rows() {
@@ -753,7 +753,7 @@ $db->exec("DROP TABLE my_call_src");
 ///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
 ///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_quote_no_backslash_escapes_mode
+///       cargo test --test codegen_tests_ext -- --ignored mysql_quote_no_backslash_escapes_mode
 #[test]
 #[ignore]
 fn mysql_quote_no_backslash_escapes_mode() {
@@ -817,7 +817,7 @@ echo $db->quote("ab", PDO::PARAM_LOB);
 /// rather than crashing on an out-of-range index. Docker: same server as
 /// `mysql_call_stored_procedure_returns_rows` above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_call_behind_leading_comment_returns_rows
+///       cargo test --test codegen_tests_ext -- --ignored mysql_call_behind_leading_comment_returns_rows
 #[test]
 #[ignore]
 fn mysql_call_behind_leading_comment_returns_rows() {
@@ -859,7 +859,7 @@ $db->exec("DROP TABLE my_call_cmt_src");
 /// succeeds because the constructor arguments displaced them, not because the
 /// server would have let anyone in. Docker: same server as above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_ctor_credentials_override_dsn_credentials
+///       cargo test --test codegen_tests_ext -- --ignored mysql_ctor_credentials_override_dsn_credentials
 #[test]
 #[ignore]
 fn mysql_ctor_credentials_override_dsn_credentials() {
@@ -929,7 +929,7 @@ echo $db->query("SELECT 1")->fetchColumn();
 /// The plain connection doubles as the fixture's setup/teardown connection.
 /// Docker: same server as above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_attr_found_rows_reports_matched_rows
+///       cargo test --test codegen_tests_ext -- --ignored mysql_attr_found_rows_reports_matched_rows
 #[test]
 #[ignore]
 fn mysql_attr_found_rows_reports_matched_rows() {
@@ -1041,7 +1041,7 @@ try {
 /// no-ops on a persistent id (`lib.rs:600-604`), so neither destructor closes the
 /// session out from under the other. Docker: same server as above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_persistent_key_separates_pooled_connections
+///       cargo test --test codegen_tests_ext -- --ignored mysql_persistent_key_separates_pooled_connections
 #[test]
 #[ignore]
 fn mysql_persistent_key_separates_pooled_connections() {
@@ -1090,7 +1090,7 @@ echo (($idA !== $idB) ? "distinct" : "same") . ":" . (($idA === $idAgain) ? "reu
 /// `LONGTEXT` and would report `BLOB`, pinning the server's alias rather than the
 /// mapping. Docker: same server as the other MySQL fixtures, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_get_column_meta_native_types
+///       cargo test --test codegen_tests_ext -- --ignored mysql_get_column_meta_native_types
 #[test]
 #[ignore]
 fn mysql_get_column_meta_native_types() {
@@ -1164,7 +1164,7 @@ $db->exec("DROP TABLE my_native_meta");
 /// placeholder spellings are driven, since `:name` and `?` share the string-literal scan
 /// but not the slot bookkeeping. Docker: same server as above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_no_backslash_escapes_placeholder_scan
+///       cargo test --test codegen_tests_ext -- --ignored mysql_no_backslash_escapes_placeholder_scan
 #[test]
 #[ignore]
 fn mysql_no_backslash_escapes_placeholder_scan() {
@@ -1221,7 +1221,7 @@ $db->exec("DROP TABLE my_nbe");
 /// about PDO's grouping semantics instead of about that array-semantics gap. Docker:
 /// same server as above, e.g.:
 ///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
-///       cargo test --test codegen_tests -- --ignored mysql_fetch_all_group_and_unique
+///       cargo test --test codegen_tests_ext -- --ignored mysql_fetch_all_group_and_unique
 #[test]
 #[ignore]
 fn mysql_fetch_all_group_and_unique() {

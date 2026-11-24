@@ -7,7 +7,7 @@
 //! parameter a closure is bound to, not the position it is written at).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::handlers` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::handlers` through Rust's test harness.
 //!
 //! Key details:
 //! - The routing rules mirror php-src `ext/xml/compat.c`; expectations are PHP 8.5.10 output.

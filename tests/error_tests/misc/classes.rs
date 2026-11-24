@@ -1519,22 +1519,18 @@ fn test_error_array_element_write_to_a_scope_dynamic_property() {
     );
 }
 
-/// Verifies a `readonly` class refuses to CREATE the dynamic property a strict ancestor's private
-/// name resolves to, instead of storing one.
+/// Verifies a `readonly` class COMPILES the write a strict ancestor's private name resolves to.
 ///
 /// A `readonly` class carries php's no-dynamic-properties flag, so php answers this write with
-/// `Cannot create dynamic property ROChild::$p`, not with a creation. The scope-dynamic arm
-/// answers before the whole visibility and readonly ladder runs, so without its own check the arm
-/// would have created storage php forbids, and the reservation would have charged every instance
-/// a hash that no legal write can ever fill.
+/// `Cannot create dynamic property ROChild::$p`; the throw is a runtime `Error`, not a compile
+/// error. `tests/codegen/objects/property_access/mutations.rs` pins the thrown message.
 #[test]
-fn test_error_dynamic_property_creation_on_a_readonly_class() {
-    expect_error(
+fn test_readonly_class_compiles_dynamic_property_creation_for_a_runtime_error() {
+    expect_no_error(
         "<?php readonly class ROBase { private string $p; \
          public function __construct() { $this->p = 'base'; } } \
          readonly class ROChild extends ROBase {} \
          $c = new ROChild(); $c->p = 'x';",
-        "Cannot create dynamic property ROChild::$p",
     );
 }
 

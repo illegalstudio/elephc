@@ -15,7 +15,8 @@ exhaustive *what*.
 ## Synopsis
 
 ```text
-elephc [OPTIONS] <source-file>
+elephc build [OPTIONS] <source-file>
+elephc check [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
 elephc extension <COMMAND> [OPTIONS]
@@ -24,12 +25,16 @@ elephc repl [OPTIONS]
 elephc test [PATH] [OPTIONS] [COMPILE OPTIONS]
 ```
 
-For compilation, except for `--help` and `--version`, exactly one positional argument is required:
-the path to tagged `.php` or tagless `.lfc` source. The binary is written next
-to it, named after the source without its extension.
-Only an exact first argument of `native`, `extension`, `monitor`, `repl`, or `test` selects a
-subcommand family. Source files with those names must use an explicit path such as
-`./repl`.
+For `build` and `check`, exactly one positional argument is required: the path to
+tagged `.php` or tagless `.lfc` source. The binary is written next to it, named after
+the source without its extension. `check` runs the analysis of `build --check` and
+writes nothing.
+A command word is required: only an exact first argument of `build`, `check`, `native`,
+`extension`, `monitor`, `repl`, or `test` selects one. The pre-`build` form
+(`elephc app.php`, `elephc --web app.php`) fails and prints the rewritten
+`elephc build ...` command. `--help`, `--version`, and `--print-capabilities` work in
+any position. Source files named like a command must use an explicit path such as
+`./build`.
 
 ## Interactive REPL
 
@@ -130,7 +135,7 @@ automatically; see [Hosting PHP extensions](../beyond-php/php-extensions.md).
 | `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
 | `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and reads the process from the outside, so the target must have been built with `--keep-symbols` and the OS must permit tracing it. |
 | `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled — it answers from the ring — but on every platform: it launches the program, so it asks over the same control channel the exact path uses rather than reading it from the outside. |
-| `monitor --apm` | `<host:port\|socket> [--key <file>] [--live] [--duration <seconds>] [--route <label>] [--capture-every <seconds>] [--store <dir>] [--retention <days>] [--resolution <seconds>] [--serve <host:port>]`, or `<host:port\|socket> --reset-routes`, or `--listen <host:port> [--key <file>] [--live] [--store <dir>] [--serve <host:port>] [--alert ...]`, or `<program\|source.php> [--store <dir>] [--html <file>] [--route <label>] [-- <args>...]`, or `--store <dir> [--serve <host:port>]` | Transaction monitoring. Against a `--web` service built with `--with-monitoring` and started with `--apm`: per-route requests, rate, mean, p50/p95/p99, 4xx/5xx shares and share of wall time, with the service's CPU and memory; `--live` refreshes with per-route sparklines, `--route` adds a latency histogram, `--store` keeps a daily history, `--serve` serves the monitor page with a Transactions view and on-demand profile capture, plus Prometheus `/metrics`; `--capture-every <seconds>` keeps exact profiles of the slowest and failed requests of each route; `--alert <metric>:<route><op><value>` budgets are checked continuously with an `--alert-exec` hook, or once (exit 2 when broken) without a collector, where `--capture-every`, `--alert-exec` and `--alert-window` are refused; routes also carry database statements and wait. Against a program: records the run as `CLI <script> [<command>]` (failed when it does not exit 0), prints that transaction's runs, and exits with the program's code. `--reset-routes` empties the service's route table (the page has the same action). `--listen` receives the counters of programs built with `--apm-collector` (each proving the build key), as sources of one history. With only `--store`: the stored history in the terminal, or on the page with `--serve`. See [Transaction monitoring](../beyond-php/apm.md). |
+| `monitor --apm` | `<host:port\|socket> [--key <file>] [--live] [--duration <seconds>] [--route <label>] [--capture-every <seconds>] [--store <dir>] [--retention <days>] [--retention-full <days>] [--retention-minute <days>] [--resolution <seconds>] [--serve <host:port>]`, or `<host:port\|socket> --reset-routes`, or `--listen <host:port> [--key <file>] [--live] [--store <dir>] [--serve <host:port>] [--alert ...]`, or `<program\|source.php> [--store <dir>] [--html <file>] [--route <label>] [-- <args>...]`, or `--store <dir> [--serve <host:port>]` | Transaction monitoring. Against a `--web` service built with `--with-monitoring` and started with `--apm`: per-route requests, rate, mean, p50/p95/p99, 4xx/5xx shares and share of wall time, with the service's CPU and memory; `--live` refreshes with per-route sparklines, `--route` adds a latency histogram, `--otlp <endpoint>` pushes the counters as OTLP metrics, `--store` keeps a daily history, rolled up by the minute past `--retention-full` days and by the hour past `--retention-minute` days, `--serve` serves the monitor page with a Transactions view and on-demand profile capture, plus Prometheus `/metrics`; `--capture-every <seconds>` keeps exact profiles of the slowest and failed requests of each route; `--alert <metric>:<route><op><value>` budgets are checked continuously with an `--alert-exec` hook, or once (exit 2 when broken) without a collector, where `--capture-every`, `--alert-exec` and `--alert-window` are refused; routes also carry database statements and wait. Against a program: records the run as `CLI <script> [<command>]` (failed when it does not exit 0), prints that transaction's runs, and exits with the program's code. `--reset-routes` empties the service's route table (the page has the same action). `--listen` receives the counters of programs built with `--apm-collector` (each proving the build key), as sources of one history. With only `--store`: the stored history in the terminal, or on the page with `--serve`. See [Transaction monitoring](../beyond-php/apm.md). |
 | `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
 
 `elephc monitor` runs the program and renders what it measured: a per-function
@@ -161,7 +166,7 @@ because a degraded profile that looks like the real one is worse than none.
 | service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
 | launched `--live` | sampled CPU from the shared ring | none | none | none | request route tags for `--web`; otherwise untagged |
 | `--attach` | sampled CPU from outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
-| `--apm` | exact request wall time as a latency histogram; no OS CPU | requests per route, not calls | none | none | every request per route shape, with status classes |
+| `--apm` | exact request wall time as a latency histogram; no OS CPU | requests per route, not calls | none | DB statements and curl operations per route; DB and network wait; no file-I/O metrics | every request per route shape, with status classes |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -246,7 +251,7 @@ eight dimensions, and true edge counts instead of statistical shares.
 `network`, `network_wait_ms` and `time_pct`; the operator is one of `<=`, `>=`,
 `==`, `<`, `>`; `*` as the
 function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
-standing budget lives in a `.elephc` file found by walking up from the source,
+standing budget lives in the `[budgets]` table of its `elephc.toml`, found by walking up from the source,
 so `--assert` is for one-off checks and the file is for the ones you keep; both
 are reported in the page's ✓ Checks view. `--save <file.json>` writes the exact
 capture and `--baseline <file.json>` reads one back, colouring the graph red and
@@ -310,7 +315,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--export-constant NAME` / `--export-constant=NAME` | Fully qualified constant name; repeatable | None | Select a top-level source constant for `--emit phpext`. Exported classes include their public class constants automatically. |
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
-| `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
+| `--check` | — | off | Run checks and write nothing (`elephc check` is the same); exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
@@ -342,7 +347,7 @@ takes the first directory that declares one, trying these in order:
 | *(nothing)* | The newest maintained profile. |
 
 ```
-$ elephc src/app.php          # composer.json pins config.platform.php = "8.3.11"
+$ elephc build src/app.php          # composer.json pins config.platform.php = "8.3.11"
 php profile 8.3 (composer.json); 2 constructs depend on it
 ```
 
@@ -392,7 +397,7 @@ When a program *does* depend on the profile, the compiler says so and points at
 the construct responsible:
 
 ```
-$ elephc app.php
+$ elephc build app.php
 php profile 8.5 (default); 2 constructs depend on it — pin it with --php-version to make the choice explicit
   note[3:5]: PHP_VERSION_ID reports 80200 through 80500 depending on the profile
   note[6:6]: phpversion() returns the profile's version string
@@ -431,7 +436,7 @@ therefore rejected, so a binary cannot claim a version its source could never
 have run under:
 
 ```
-$ elephc --php-version 8.2 app.php
+$ elephc build --php-version 8.2 app.php
 error[app.php:3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
 ```
 
@@ -477,9 +482,9 @@ runtime arguments (not elephc compiler flags):
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
-elephc --web app.php
-elephc --web --web-isolation=pool app.php
-elephc --web --web-isolation=request app.php
+elephc build --web app.php
+elephc build --web --web-isolation=pool app.php
+elephc build --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ./app --listen unix:/run/elephc/app.sock
@@ -531,7 +536,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `openssl`, `bcmath`, `gmp`, `random`, `mbstring`, `iconv`, `pack`, `uri`, `phar`, `tz`, `image`, `pcntl`, `xml`, `tidy`, `fileinfo`, `tokenizer`, `eval`, `reference`, `regex`, `curl`, `mysqli`, `zend`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-gmp` force-links the pinned libgmp bridge and injects the `GMP` class plus all 51 functions for indirect calls and serialized class names; the project must declare the managed `gmp` package (`elephc native add gmp`). `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-openssl` force-links the OpenSSL symmetric-cipher bridge; the project must declare `openssl-crypto` (`elephc native add openssl-crypto`). `--with-mbstring`, `--with-iconv`, `--with-pack`, and `--with-pcntl` force-link their native support when static detection cannot see a call; `--with-pack` also injects the `pack()`/`unpack()` prelude for opaque dynamic eval source; `--with-uri` force-injects the `Uri\*` surface and links `elephc_uri` for opaque dynamic eval source. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-tidy` force-links the tidy bridge and injects the `tidy`/`tidyNode` prelude; the parser uses the managed `libtidy` package, so the project must declare it (`elephc native add libtidy`), exactly as auto-detected tidy use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-reference` force-links the native property-reference metadata and validation bridge; it exposes no additional PHP functions or classes. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-zend` force-links `libelephc_zend.a`, the engine [hosted PHP extensions](../beyond-php/php-extensions.md) run on; a project that declares extensions links it without the flag. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `openssl`, `bcmath`, `gmp`, `random`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `tidy`, `fileinfo`, `tokenizer`, `eval`, `reference`, `regex`, `curl`, `mysqli`, `zend`, `uri`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-gmp` force-links the pinned libgmp bridge and injects the `GMP` class plus all 51 functions for indirect calls and serialized class names; the project must declare the managed `gmp` package (`elephc native add gmp`). `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-uri` force-links the URI bridge and injects the `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` surface; static detection already links it when a program names `Uri\`. It requires `--php-version 8.5` or later, because ext/uri does not exist in older PHP profiles and the combination is rejected. `--with-openssl` force-links the OpenSSL symmetric-cipher bridge; the project must declare `openssl-crypto` (`elephc native add openssl-crypto`). `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-tidy` force-links the tidy bridge and injects the `tidy`/`tidyNode` prelude; the parser uses the managed `libtidy` package, so the project must declare it (`elephc native add libtidy`), exactly as auto-detected tidy use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-reference` force-links the native property-reference metadata and validation bridge; it exposes no additional PHP functions or classes. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-zend` force-links `libelephc_zend.a`, the engine [hosted PHP extensions](../beyond-php/php-extensions.md) run on; a project that declares extensions links it without the flag. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -539,7 +544,7 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--heap-size=BYTES` | integer ≥ 65536 | `134217728` (128 MB, PHP's default `memory_limit`) | Size of the program's runtime heap. It is reserved as zero-filled memory, so pages the program never touches cost nothing. Also sizes the shared string-result arena, so string-producing builtins are bounded by this budget rather than a fixed 64 KiB cap. |
+| `--heap-size=BYTES` | integer ≥ 65536, at most 1073741824 | `134217728` (128 MB, PHP's default `memory_limit`) | Size of the program's runtime heap. It is reserved as zero-filled memory, so pages the program never touches cost nothing. Also sizes the shared string-result arena, so string-producing builtins are bounded by this budget rather than a fixed 64 KiB cap. The 1 GiB maximum keeps the emitted heap and side tables inside AArch64's ±4 GiB `ADRP` window; a larger value is rejected at compile time instead of failing in the linker. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
 ## Strict PHP mode
@@ -804,11 +809,11 @@ overrides through environment variables.
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | OPcache settings, mbstring startup settings, core encoding and query defaults | none | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the first `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | `memory_limit`, OPcache settings, mbstring startup settings, core encoding and query defaults | none | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the first `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. `memory_limit=8M` lowers the runtime heap ceiling below `--heap-size`; a higher value than an explicitly requested `--heap-size` is a compile-time error. Without an explicit `--heap-size`, a startup value above 1 GiB keeps PHP's reported string but reserves the largest supported 1 GiB arena. Startup quantities follow PHP's INI parser, including hexadecimal/octal/binary prefixes and `K`/`M`/`G` suffixes. A finite startup value below PHP's 2 MiB startup allocation is refused with PHP's warning and keeps the previous limit, exactly like `php -d memory_limit=…`; a malformed quantity warns and uses its PHP overflow result instead of failing the compile. The compiled binary also answers runtime `ini_get('memory_limit')`, honours `ini_set('memory_limit', …)`, restores the startup value with `ini_restore('memory_limit')`, resets the ceiling at each `--web` request boundary, and includes the dynamic row in `ini_get_all()`, with the same raw-string reporting PHP uses. A finite runtime raise above the reserved arena is refused with PHP's `Failed to set memory limit …` warning and leaves both `ini_get()` and the allocator ceiling unchanged; rebuild with a larger `--heap-size` to allow it. |
 | `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
-elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
+elephc build --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
 ```
 
 For OPcache, `--ini` moves both `ini_get()` (the raw
@@ -825,7 +830,7 @@ setting-function calls in one request do not change the next request's defaults.
 
 ```bash
 elephc native add pcre2
-elephc --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
+elephc build --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
 ```
 
 The contract-owned default mbstring MIME expression needs no native package.
@@ -884,6 +889,14 @@ A `--ini` on the command line wins over the file for the same directive. String
 values are passed through unchanged, so a relative path means what it means
 with `--ini`. `examples/project-ini` is a program compiled this way; it prints
 what PHP prints with the same values given as `-d` flags.
+
+The same file holds a project's monitoring: `[monitoring]` and `[apm]` stand for
+`--with-monitoring`, `--with-apm`, `--apm-collector` and `--apm-transaction`,
+with route and command `include`/`exclude` patterns and per-entry
+`[entry."<path>"]` overrides (see [Transaction monitoring](../beyond-php/apm.md#in-the-project-file)),
+and `[budgets]` holds the rules `elephc monitor` checks a run against (see
+[Profiling](../beyond-php/profiling.md#a-budget-per-project)). There too the
+command line wins.
 
 ### Runtime overrides: `ELEPHC_INI_*`
 
@@ -966,7 +979,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 | `--with-monitoring=<names>` | comma list, or `@file` | — | Embed the capability for **only** the named functions; a trailing `*` matches by prefix (`PDOStatement::*`) and `{main}` explicitly selects the top-level root. `@file` reads one name per line, `#` comments allowed. Everything else runs at full speed, which is what makes exact profiling affordable on a service under load. The trade is reported rather than hidden — without `{main}`, or when callees are omitted, self values no longer partition one root and an uninstrumented callee's time lands in its instrumented caller's **self**. The run prints `note: selective instrumentation` saying so. |
 | `--with-apm` | — | off | Embed transaction monitoring alone (`elephc-probe`'s counters and transports, and a build key): no instrumentation and no sampling signal. A `--web` service counts with `--apm`; a library counts every export call from `elephc_init` (`CALL <export>`); Symfony Messenger's `Worker::handleMessage` counts each message (`MSG <class>`). Allowed for `--emit cdylib` and `staticlib`, refused for `phpext`. See [Transaction monitoring](../beyond-php/apm.md#beyond-http-messages-library-calls-named-boundaries). |
 | `--apm-collector` | `<host:port>` | — | Send the transaction counters to `elephc monitor --apm --listen <host:port>` every five seconds and at exit, after a mutual build-key proof; counting starts with the program. Implies `--with-apm` unless `--with-monitoring` is given. |
-| `--apm-transaction` | `<Class::method>` or `<function>` | — | Count each call of the method or function as a transaction of its own, `TXN <name>`, failed when an exception leaves it. Repeatable; implies `--with-apm`. |
+| `--apm-transaction` | `<Class::method>` or `<function>` | — | Count each call of the method or function as a transaction of its own, `TXN <name>`, failed when an exception leaves it. An inherited method is named by its declaring class or trait; a generator is refused. Repeatable; implies `--with-apm`. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
@@ -995,9 +1008,9 @@ changes size only, never behavior.
 
 | Invocation | Symbol table | DWARF |
 |---|---|---|
-| `elephc app.php` | stripped | — |
-| `elephc --keep-symbols app.php` | kept | — |
-| `elephc --debug-info app.php` | kept | emitted |
+| `elephc build app.php` | stripped | — |
+| `elephc build --keep-symbols app.php` | kept | — |
+| `elephc build --debug-info app.php` | kept | emitted |
 
 Use `--keep-symbols` when a profiler needs function names but the full DWARF of
 `--debug-info` is unwanted. Shared libraries built with `--emit cdylib` are
@@ -1017,15 +1030,33 @@ overrides. Native-package variables select the cache and target C toolchain:
 | `ELEPHC_REGALLOC` | `linear`, `stack` | `--regalloc=` |
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
 | `ELEPHC_NATIVE_CACHE` | absolute or invocation-relative directory | Native artifact/source cache root |
+| `ELEPHC_RUNTIME_CACHE_DIR` | absolute or invocation-relative directory | Prepared runtime objects only (default `$XDG_CACHE_HOME/elephc`); REPL hosts and `elephc test` outputs stay under the cache root |
+| `ELEPHC_TOKEN_VIEW` | `text`, `off`, `0` | No flag; forces the legacy text parser view for `TOKEN_PARSE` validation. Supported sources otherwise use the source-spanned token view, with automatic fallback for unsupported shapes. The embedded tokenizer also reads it at runtime in compiled programs. |
 | `ELEPHC_NATIVE_CC` | executable | Host or explicit cross C compiler fallback |
 | `ELEPHC_NATIVE_AR` | executable | Host or explicit cross archiver fallback |
 | `ELEPHC_NATIVE_RANLIB` | executable | Host or explicit cross archive indexer fallback |
 | `ELEPHC_NATIVE_CC_<TARGET_ENV>` | executable | Target-specific C compiler; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_AR_<TARGET_ENV>` | executable | Target-specific archiver; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` | executable | Target-specific archive indexer; takes precedence over the unsuffixed value |
+| `ELEPHC_WARN_UNREBUILDABLE_BRIDGE` | any non-empty value | None; opts into a diagnostic |
+
+A bridge archive found outside the build's own output directory cannot be
+refreshed there, which is normal for a compiler unpacked from a CI archive but
+also what a custom `build.target-dir` looks like. Setting
+`ELEPHC_WARN_UNREBUILDABLE_BRIDGE` reports each such archive once, and only when
+its sources are newer than it.
 
 `TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
 as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
+
+A build that links the probe (`--with-monitoring`, `--with-apm`) also reads these. They
+have no flag:
+
+| Variable | Values | Effect |
+|---|---|---|
+| `ELEPHC_PROBE_KEY` | 64 hex characters | The build key, in place of a random one per build |
+| `ELEPHC_BUILD_ID` | text, one line | The build's label in what it reports, which marks [deploys](../beyond-php/apm.md#deploys); defaults to the git checkout's short commit |
+| `SOURCE_DATE_EPOCH` | Unix seconds | The build's time in that identity, for reproducible builds |
 
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see

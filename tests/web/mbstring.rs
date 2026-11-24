@@ -28,7 +28,7 @@ echo $all["mbstring.language"], ":", $all["session.name"], ":";
 ini_restore("mbstring.language");
 echo ini_get("mbstring.language");
 "#).unwrap();
-    let compiled = Command::new(elephc_bin()).current_dir(&dir)
+    let compiled = Command::new(elephc_bin()).arg("build").current_dir(&dir)
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .args(["--web", "--ini", "default_charset=8bit", "--ini", "mbstring.strict_detection=1"])
         .arg(&php).output().unwrap();

@@ -532,7 +532,7 @@ pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Boxes a loaded value while keeping borrowed string-offset bytes outside managed heap headers.
-fn box_loaded_value_as_mixed(
+pub(in crate::codegen::lower_inst) fn box_loaded_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     box_ty: &PhpType,

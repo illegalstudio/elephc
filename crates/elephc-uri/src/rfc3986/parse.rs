@@ -203,9 +203,14 @@ pub(crate) fn is_valid_ipvfuture(value: &str) -> bool {
     {
         return false;
     }
-    is_valid_component(&value[dot + 1..], |byte| {
-        is_unreserved(byte) || is_sub_delim(byte) || byte == b':'
-    })
+    // RFC 3986's IPvFuture tail is `1*( unreserved / sub-delims / ":" )`: a percent escape
+    // is NOT allowed there, unlike the general component grammar, so this cannot reuse
+    // `is_valid_component` (which accepts complete `%XX` sequences).
+    let tail = &value[dot + 1..];
+    !tail.is_empty()
+        && tail
+            .bytes()
+            .all(|byte| is_unreserved(byte) || is_sub_delim(byte) || byte == b':')
 }
 
 /// Validates a path for the authority/scheme shape it appears in.
@@ -298,4 +303,20 @@ pub(crate) fn is_valid_path_for_write(path: &str, has_authority: bool) -> bool {
         return false;
     }
     validate_path(path, has_authority, true).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Focused bridge-level coverage for RFC 3986 host syntax.
+
+    use super::*;
+
+    /// Verifies IPvFuture rejects percent escapes while accepting its allowed character set.
+    #[test]
+    fn ipvfuture_rejects_percent_escapes() {
+        assert!(!is_valid_ipvfuture("v1.%41"));
+        assert!(!is_valid_ipvfuture("v1."));
+        assert!(is_valid_ipvfuture("v1.abc"));
+        assert!(is_valid_ipvfuture("vF.a:b"));
+    }
 }

@@ -35,6 +35,18 @@ fn test_arithmetic_precedence() {
     assert_eq!(stmts, vec![expected]);
 }
 
+/// `<=>` groups with equality, below ordering: `1 <=> 2 < 3` is `1 <=> (2 < 3)`.
+#[test]
+fn test_spaceship_groups_with_equality() {
+    let stmts = parse_source("<?php echo 1 <=> 2 < 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(1),
+        BinOp::Spaceship,
+        Expr::binop(Expr::int_lit(2), BinOp::Lt, Expr::int_lit(3)),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
 /// Verifies that `<?php echo "a" . "b";` parses as a binary concat operation.
 /// The `.` operator concatenates two string literals.
 #[test]

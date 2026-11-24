@@ -8,6 +8,9 @@
 //! Key details:
 //! - `setlocale()` is a prelude because PHP accepts a variadic list of locale names;
 //!   each name is tried in order through the internal `__elephc_setlocale_set` builtin.
+//! - Every top-level argument is checked against `array|string|null` with weak coercion
+//!   before the first libc call; strict files get the same contract at compile time through
+//!   the checker's prelude strict adapter.
 //! - The `LC_*` and `CODESET` constants are predefined, target-dependent catalog entries;
 //!   the prelude injects only the function declarations.
 //! - A global user declaration (including a libc `extern`) wins; a declaration inside a
@@ -17,167 +20,145 @@
 
 use crate::codegen_support::platform::Platform;
 use crate::opcache_prelude::detect::{program_has_bridge_eval, program_references};
-use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::*;
 
+/// PHP refuses a locale name of this many bytes or more before calling libc.
+const LOCALE_NAME_LIMIT: i64 = 255;
+
 /// Builds `setlocale(int $category, mixed $locales, mixed ...$rest): string|false`.
+///
+/// Mirrors php-src's `PHP_FUNCTION(setlocale)` in two passes. The first pass checks every
+/// top-level argument against `array|string|null` with weak-mode coercion before any locale
+/// changes, so an invalid later argument throws even when an earlier candidate would apply.
+/// The second pass tries each candidate in order: array elements are expanded in place,
+/// `null` and `""` take the locale from the environment, only `"0"` queries the current
+/// locale, and a name of 255 bytes or more warns and moves on to the next candidate.
 fn setlocale_function() -> Stmt {
-    let is_query = e_binop(
-        e_binop(e_var("locale"), BinOp::StrictEq, e_int(0)),
+    let coercible_scalar = e_binop(
+        e_binop(
+            e_call("is_string", vec![e_var("argument")]),
+            BinOp::Or,
+            e_call("is_int", vec![e_var("argument")]),
+        ),
         BinOp::Or,
         e_binop(
-            e_binop(e_var("locale"), BinOp::StrictEq, e_str("0")),
-            BinOp::Or,
-            e_binop(e_var("locale"), BinOp::StrictEq, e_null()),
-        ),
-    );
-    let add_candidate = |value: Expr| s_array_push("candidates", value);
-    let flatten_into_candidates = |array: Expr, item: &str| {
-        s_foreach(
-            array,
-            None,
-            item,
-            vec![add_candidate(e_var(item))],
-        )
-    };
-    let php86 = || {
-        e_bool(
-            crate::codegen_support::compile_php_version()
-                >= crate::php_version::PhpVersion::Php86,
-        )
-    };
-    let body = vec![
-        // PHP 8.6: an array $locales cannot be followed by additional arguments.
-        s_if(
             e_binop(
-                php86(),
+                e_call("is_float", vec![e_var("argument")]),
+                BinOp::Or,
+                e_call("is_bool", vec![e_var("argument")]),
+            ),
+            BinOp::Or,
+            e_binop(
+                e_call("is_object", vec![e_var("argument")]),
                 BinOp::And,
-                e_binop(
-                    e_call("is_array", vec![e_var("locales")]),
-                    BinOp::And,
-                    e_binop(e_call("count", vec![e_var("rest")]), BinOp::Gt, e_int(0)),
+                e_call(
+                    "is_callable",
+                    vec![e_array(vec![e_var("argument"), e_str("__toString")])],
                 ),
             ),
-            vec![s_throw(e_new(
-                "ArgumentCountError",
-                vec![e_str(
-                    "setlocale() expects exactly 2 arguments when argument #2 ($locales) is an array",
+        ),
+    );
+    // Weak coercion accepts every scalar and Stringable object, so only objects without
+    // `__toString()` and resources reach the error. PHP names only the declared `$locales`
+    // parameter; variadic positions have no parameter name in the message.
+    let type_error = s_throw(e_new(
+        "TypeError",
+        vec![e_concat_all(vec![
+            e_str("setlocale(): Argument #"),
+            e_binop(e_var("position"), BinOp::Add, e_int(2)),
+            e_ternary(
+                e_binop(e_var("position"), BinOp::StrictEq, e_int(0)),
+                e_str(" ($locales)"),
+                e_str(""),
+            ),
+            e_str(" must be of type array|string|null, "),
+            e_ternary(
+                e_call("is_object", vec![e_var("argument")]),
+                e_call("get_class", vec![e_var("argument")]),
+                e_str("resource"),
+            ),
+            e_str(" given"),
+        ])],
+    ));
+    let validate_argument = s_if(
+        e_call("is_array", vec![e_var("argument")]),
+        vec![s_foreach(
+            e_var("argument"),
+            None,
+            "element",
+            vec![s_array_push("candidates", e_var("element"))],
+        )],
+        vec![
+            (
+                e_binop(e_var("argument"), BinOp::StrictEq, e_null()),
+                vec![s_array_push("candidates", e_str(""))],
+            ),
+            (
+                coercible_scalar,
+                vec![s_array_push(
+                    "candidates",
+                    e_cast(CastType::String, e_var("argument")),
                 )],
+            ),
+        ],
+        Some(vec![type_error]),
+    );
+    let try_candidate = vec![
+        // Array elements convert here, in order, like php-src's `try_setlocale_zval()`:
+        // `null` becomes "", a nested array warns and becomes "Array", and an object without
+        // `__toString()` throws.
+        s_assign("name", e_cast(CastType::String, e_var("locale"))),
+        s_if(
+            e_binop(e_var("name"), BinOp::StrictEq, e_str("0")),
+            vec![s_return(e_call(
+                "__elephc_setlocale_query",
+                vec![e_var("category")],
             ))],
             vec![],
             None,
         ),
-        // PHP 8.6: only the first candidate may be an array.
-        s_foreach(
-            e_var("rest"),
+        s_if(
+            e_binop(
+                e_call("strlen", vec![e_var("name")]),
+                BinOp::GtEq,
+                e_int(LOCALE_NAME_LIMIT),
+            ),
+            vec![
+                s_expr(e_call(
+                    "__elephc_builtin_warning",
+                    vec![e_str("setlocale(): Specified locale name is too long")],
+                )),
+                s_continue(1),
+            ],
+            vec![],
             None,
-            "extra",
-            vec![s_if(
-                e_binop(php86(), BinOp::And, e_call("is_array", vec![e_var("extra")])),
-                vec![s_throw(e_new(
-                    "TypeError",
-                    vec![e_str(
-                        "setlocale(): Argument #3 must be of type string|null, array given",
-                    )],
-                ))],
-                vec![],
-                None,
-            )],
         ),
-        // PHP 8.6: locale names cannot contain NUL bytes.
+        s_assign(
+            "applied",
+            e_call(
+                "__elephc_setlocale_set",
+                vec![e_var("category"), e_var("name")],
+            ),
+        ),
+        s_if(
+            e_binop(e_var("applied"), BinOp::StrictNotEq, e_bool(false)),
+            vec![s_return(e_var("applied"))],
+            vec![],
+            None,
+        ),
+    ];
+    let body = vec![
+        s_assign("arguments", e_array(vec![e_var("locales")])),
         s_foreach(
             e_var("rest"),
             None,
             "extra",
-            vec![s_if(
-                e_binop(
-                    php86(),
-                    BinOp::And,
-                    e_binop(
-                        e_call("strpos", vec![e_cast(CastType::String, e_var("extra")), e_str("\0")]),
-                        BinOp::StrictNotEq,
-                        e_bool(false),
-                    ),
-                ),
-                vec![s_throw(e_new(
-                    "ValueError",
-                    vec![e_str(
-                        "setlocale(): Argument #3 ($rest) must not contain any null bytes",
-                    )],
-                ))],
-                vec![],
-                None,
-            )],
+            vec![s_array_push("arguments", e_var("extra"))],
         ),
         s_assign("candidates", e_array(vec![])),
-        s_if(
-            e_call("is_array", vec![e_var("locales")]),
-            vec![flatten_into_candidates(e_var("locales"), "locale")],
-            vec![],
-            Some(vec![add_candidate(e_var("locales"))]),
-        ),
-        s_foreach(
-            e_var("rest"),
-            None,
-            "extra",
-            vec![s_if(
-                e_call("is_array", vec![e_var("extra")]),
-                vec![flatten_into_candidates(e_var("extra"), "extra_locale")],
-                vec![],
-                Some(vec![add_candidate(e_var("extra"))]),
-            )],
-        ),
-        s_foreach(
-            e_var("candidates"),
-            None,
-            "locale",
-            vec![
-                s_if(
-                    is_query,
-                    vec![s_return(e_call(
-                        "__elephc_setlocale_query",
-                        vec![e_var("category")],
-                    ))],
-                    vec![],
-                    None,
-                ),
-                s_if(
-                    e_binop(
-                        php86(),
-                        BinOp::And,
-                        e_binop(
-                            e_call(
-                                "strpos",
-                                vec![e_cast(CastType::String, e_var("locale")), e_str("\0")],
-                            ),
-                            BinOp::StrictNotEq,
-                            e_bool(false),
-                        ),
-                    ),
-                    vec![s_throw(e_new(
-                        "ValueError",
-                        vec![e_str(
-                            "setlocale(): Argument #2 ($locales) must not contain any null bytes",
-                        )],
-                    ))],
-                    vec![],
-                    None,
-                ),
-                s_assign(
-                    "applied",
-                    e_call(
-                        "__elephc_setlocale_set",
-                        vec![e_var("category"), e_cast(CastType::String, e_var("locale"))],
-                    ),
-                ),
-                s_if(
-                    e_binop(e_var("applied"), BinOp::StrictNotEq, e_bool(false)),
-                    vec![s_return(e_var("applied"))],
-                    vec![],
-                    None,
-                ),
-            ],
-        ),
+        s_foreach(e_var("arguments"), Some("position"), "argument", vec![validate_argument]),
+        s_foreach(e_var("candidates"), None, "locale", try_candidate),
         s_return(e_bool(false)),
     ];
     function("setlocale")

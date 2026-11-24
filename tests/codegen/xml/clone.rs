@@ -5,7 +5,7 @@
 //! throwing, the original keeps working after the failed clone.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::clone` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::clone` through Rust's test harness.
 //!
 //! Key details:
 //! - Expected output is what PHP 8.5.10 prints for the same program.

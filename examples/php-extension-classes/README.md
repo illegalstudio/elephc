@@ -4,7 +4,7 @@ Compile a class into an extension and instantiate it directly from normal PHP.
 Use the PHP 8.5 SDK matching the interpreter that loads the module:
 
 ```sh
-elephc --emit phpext --heap-size=1048576 \
+elephc build --emit phpext --heap-size=1048576 \
   --export-constant='PippoDemo\VERSION' \
   --export-constant='PippoDemo\DEFAULT_OPTIONS' main.php
 php -n -d extension=./main.so driver.php

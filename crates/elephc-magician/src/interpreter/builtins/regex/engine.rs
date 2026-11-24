@@ -136,12 +136,16 @@ impl Regex {
 
     /// Returns whether this regex matches the subject.
     pub(in crate::interpreter) fn is_match(&self, subject: &[u8]) -> bool {
-        self.captures(subject).is_some()
+        self.captures_at(subject, 0).is_some()
     }
 
-    /// Returns the first capture set for this regex and subject.
-    pub(in crate::interpreter) fn captures<'a>(&self, subject: &'a [u8]) -> Option<Captures<'a>> {
-        self.exec_at(subject, 0)
+    /// Returns the first capture set at or after `start`, matching against the whole subject.
+    pub(in crate::interpreter) fn captures_at<'a>(
+        &self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> Option<Captures<'a>> {
+        self.exec_at(subject, start)
     }
 
     /// Returns every non-overlapping capture set for this regex and subject.
@@ -152,10 +156,21 @@ impl Regex {
         &'r self,
         subject: &'a [u8],
     ) -> CapturesIter<'r, 'a> {
+        self.captures_iter_from(subject, 0)
+    }
+
+    /// Returns every non-overlapping capture set at or after `start`, lazily like
+    /// [`Self::captures_iter`].
+    pub(in crate::interpreter) fn captures_iter_from<'r, 'a>(
+        &'r self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> CapturesIter<'r, 'a> {
         CapturesIter {
             regex: self,
             subject,
             subject_c: CString::new(subject).ok(),
+            start,
             continuation: false,
         }
     }
@@ -237,6 +252,8 @@ pub(in crate::interpreter) struct CapturesIter<'r, 'a> {
     subject: &'a [u8],
     /// The C-string copy of the subject; `None` once matching has ended.
     subject_c: Option<CString>,
+    /// The byte offset the first match starts searching from.
+    start: usize,
     continuation: bool,
 }
 
@@ -248,7 +265,7 @@ impl<'a> Iterator for CapturesIter<'_, 'a> {
         let subject_c = self.subject_c.as_deref()?;
         let next = self
             .regex
-            .exec_subject(self.subject, subject_c, 0, self.continuation)
+            .exec_subject(self.subject, subject_c, self.start, self.continuation)
             .filter(|captures| captures.get(0).is_some());
         if next.is_none() {
             self.subject_c = None;

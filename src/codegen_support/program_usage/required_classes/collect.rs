@@ -331,6 +331,11 @@ fn collect_instantiated_type_names(ty: &TypeExpr, names: &mut HashSet<String>) {
 /// Collects required class references recursively from an expression and its nested operands.
 fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                collect_required_class_names_in_expr(value, names);
+            }
+        },
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

@@ -1,0 +1,377 @@
+//! Purpose:
+//! Parses elephc extern declarations and C-facing type syntax.
+//! Handles extern functions, globals, classes, structs, and buffers outside standard PHP syntax.
+//!
+//! Called from:
+//! - `crate::syntax::parser::stmt::parse_extern_stmts()`.
+//!
+//! Key details:
+//! - FFI syntax is compiler-specific and should remain clearly separated from PHP-compatible parsing.
+
+use crate::syntax::errors::CompileError;
+use crate::syntax::lexer::{SpannedToken, Token};
+use crate::syntax::parser::ast::{CIntWidth, CType, ExternField, ExternParam, Stmt, StmtKind};
+use crate::syntax::span::Span;
+
+use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
+
+/// Parses a C type token and returns the corresponding CType variant.
+/// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
+/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), the C `float` width (`f32`,
+/// with `f64` an alias of `float`), pointer types including ptr and ptr<TypeName>, and the
+/// nullable `?string` (a `char*` that may be NULL). `?` before any other type is rejected: a
+/// `ptr` already carries NULL as the address 0. Advances `pos` on success.
+fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
+    let span = if *pos < tokens.len() {
+        tokens[*pos].1.span
+    } else {
+        Span::dummy()
+    };
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+        *pos += 1; // consume ?
+        return match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) if name == "string" => {
+                *pos += 1;
+                Ok(CType::NullableStr)
+            }
+            _ => Err(CompileError::new(
+                span,
+                "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+            )),
+        };
+    }
+    match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            *pos += 1;
+            match name.as_str() {
+                "int" | "integer" | "i64" => Ok(CType::Int),
+                "i8" => Ok(CType::IntWidth(CIntWidth::I8)),
+                "u8" => Ok(CType::IntWidth(CIntWidth::U8)),
+                "i16" => Ok(CType::IntWidth(CIntWidth::I16)),
+                "u16" => Ok(CType::IntWidth(CIntWidth::U16)),
+                "i32" => Ok(CType::IntWidth(CIntWidth::I32)),
+                "u32" => Ok(CType::IntWidth(CIntWidth::U32)),
+                "u64" => Ok(CType::IntWidth(CIntWidth::U64)),
+                "float" | "double" | "f64" => Ok(CType::Float),
+                "f32" => Ok(CType::F32),
+                "string" => Ok(CType::Str),
+                "bool" | "boolean" => Ok(CType::Bool),
+                "void" => Ok(CType::Void),
+                "callable" => Ok(CType::Callable),
+                "ptr" => {
+                    // `ptr<>` lexes as the single `<>` token (PHP's `!=` alias), so the
+                    // empty type list is recognized here to keep the diagnostic accurate.
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+                        return Err(CompileError::new(span, "Expected type name after 'ptr<'"));
+                    }
+                    // Check for ptr<TypeName>
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
+                        let mut closes = super::params::AngleCloses::default();
+                        let type_name = parse_pointer_target(tokens, pos, span, &mut closes)?;
+                        if closes.pending_count() != 0 {
+                            return Err(CompileError::new(span, "Unbalanced '>' in pointer type"));
+                        }
+                        Ok(CType::TypedPtr(type_name))
+                    } else {
+                        Ok(CType::Ptr)
+                    }
+                }
+                _ => Err(CompileError::new(
+                    span,
+                    &format!("Unknown C type: {}", name),
+                )),
+            }
+        }
+        _ => Err(CompileError::new(span, "Expected type name")),
+    }
+}
+
+/// Parses a pointer target and its enclosing angle brackets, including nested pointer targets.
+fn parse_pointer_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut super::params::AngleCloses,
+) -> Result<String, CompileError> {
+    *pos += 1; // consume <
+    let target = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            *pos += 1;
+            name.clone()
+        }
+        _ => return Err(CompileError::new(span, "Expected type name after 'ptr<'")),
+    };
+    let target = if target == "ptr"
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Less))
+    {
+        format!("ptr<{}>", parse_pointer_target(tokens, pos, span, closes)?)
+    } else {
+        target
+    };
+    super::params::expect_type_list_close(
+        tokens, pos, span, closes, "Expected '>' after ptr<T",
+    )?;
+    Ok(target)
+}
+
+/// Parses extern function parameters inside parentheses: `($param1: CType, $param2: CType)`.
+/// Each parameter is a C type followed by a PHP-style variable name. Advances `pos` to the closing `)`.
+/// Returns the list of ExternParam nodes, each with a name and CType.
+fn parse_extern_params(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Vec<ExternParam>, CompileError> {
+    let mut params = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !params.is_empty() {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(
+                    tokens[*pos].1.span,
+                    "Expected ',' between extern parameters",
+                ));
+            }
+            *pos += 1;
+        }
+        let c_type = parse_c_type(tokens, pos)?;
+        let name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                let n = n.clone();
+                *pos += 1;
+                n
+            }
+            _ => {
+                return Err(CompileError::new(
+                    if *pos < tokens.len() {
+                        tokens[*pos].1.span
+                    } else {
+                        Span::dummy()
+                    },
+                    "Expected $parameter_name after type",
+                ))
+            }
+        };
+        params.push(ExternParam { name, c_type });
+    }
+    Ok(params)
+}
+
+/// Parses an `extern function` declaration: `extern function name(params) -> ReturnType;`.
+/// Consumes the `function` keyword, then reads the identifier, parameter list, optional return type,
+/// and trailing semicolon. Advances `pos` to the token after the semicolon.
+fn parse_extern_function(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    library: Option<String>,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'function'
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected function name after 'extern function'",
+            ))
+        }
+    };
+    expect_token(
+        tokens,
+        pos,
+        &Token::LParen,
+        "Expected '(' after extern function name",
+    )?;
+    let params = parse_extern_params(tokens, pos)?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' after extern parameters",
+    )?;
+
+    // Parse return type: ': type'
+    let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        parse_c_type(tokens, pos)?
+    } else {
+        CType::Void
+    };
+
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(
+        StmtKind::ExternFunctionDecl {
+            name,
+            params,
+            return_type,
+            library,
+        },
+        span,
+    ))
+}
+
+/// Parse extern declarations. Returns Vec<Stmt> because extern "lib" { } blocks produce multiple stmts.
+/// Called from parse() in mod.rs, not from parse_stmt.
+pub fn parse_extern_stmts(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Vec<Stmt>, CompileError> {
+    let span = tokens[*pos].1.span;
+    *pos += 1; // consume 'extern'
+
+    match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Function) => Ok(vec![parse_extern_function(tokens, pos, span, None)?]),
+
+        Some(Token::StringLiteral(lib)) => {
+            let library = lib.clone();
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+                // extern "lib" function name(): type;
+                return Ok(vec![parse_extern_function(
+                    tokens,
+                    pos,
+                    span,
+                    Some(library),
+                )?]);
+            }
+            // extern "lib" { function ...; function ...; }
+            expect_token(
+                tokens,
+                pos,
+                &Token::LBrace,
+                "Expected '{' or 'function' after extern library name",
+            )?;
+            let mut stmts = Vec::new();
+            let mut errors = Vec::new();
+            while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+                if tokens[*pos].0 != Token::Function {
+                    errors.push(CompileError::new(
+                        tokens[*pos].1.span,
+                        "Expected 'function' inside extern block",
+                    ));
+                    recover_to_statement_boundary(tokens, pos);
+                    continue;
+                }
+                match parse_extern_function(
+                    tokens,
+                    pos,
+                    span,
+                    Some(library.clone()),
+                ) {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        recover_to_statement_boundary(tokens, pos);
+                    }
+                }
+            }
+            expect_token(
+                tokens,
+                pos,
+                &Token::RBrace,
+                "Expected '}' after extern block",
+            )?;
+            if stmts.is_empty() {
+                errors.push(CompileError::new(span, "Empty extern block"));
+            }
+            if errors.is_empty() {
+                Ok(stmts)
+            } else {
+                Err(CompileError::from_many(errors))
+            }
+        }
+
+        Some(Token::Class) => {
+            *pos += 1; // consume 'class'
+            let name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected class name after 'extern class'",
+                    ))
+                }
+            };
+            expect_token(
+                tokens,
+                pos,
+                &Token::LBrace,
+                "Expected '{' after extern class name",
+            )?;
+            let mut fields = Vec::new();
+            while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+                if tokens[*pos].0 == Token::Public {
+                    *pos += 1;
+                }
+                let c_type = parse_c_type(tokens, pos)?;
+                let field_name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Variable(n)) => {
+                        let n = n.clone();
+                        *pos += 1;
+                        n
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            if *pos < tokens.len() {
+                                tokens[*pos].1.span
+                            } else {
+                                Span::dummy()
+                            },
+                            "Expected $field_name in extern class",
+                        ))
+                    }
+                };
+                expect_semicolon(tokens, pos)?;
+                fields.push(ExternField {
+                    name: field_name,
+                    c_type,
+                });
+            }
+            expect_token(
+                tokens,
+                pos,
+                &Token::RBrace,
+                "Expected '}' after extern class body",
+            )?;
+            Ok(vec![Stmt::new(
+                StmtKind::ExternClassDecl { name, fields },
+                span,
+            )])
+        }
+
+        Some(Token::Global) => {
+            *pos += 1; // consume 'global'
+            let c_type = parse_c_type(tokens, pos)?;
+            let name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected $variable_name after extern global type",
+                    ))
+                }
+            };
+            expect_semicolon(tokens, pos)?;
+            Ok(vec![Stmt::new(
+                StmtKind::ExternGlobalDecl { name, c_type },
+                span,
+            )])
+        }
+
+        _ => Err(CompileError::new(
+            span,
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'",
+        )),
+    }
+}

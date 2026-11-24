@@ -159,6 +159,26 @@ echo $p->k . "|" . $q->k;
     assert_eq!(out, "hook;1|11;5|9");
 }
 
+/// Verifies reversed named `clone()` overrides still widen a runtime callable's untyped slots.
+///
+/// The runtime string callable cannot name its callee, so the widening has to see the
+/// `withProperties:` argument wherever it appears — PHP matches named arguments by name, not by
+/// source position. An untyped property that keeps its inferred `int` slot coerces `"hello"` to
+/// `0`, which is the regression this test pins.
+#[test]
+fn test_clone_callable_widens_untyped_properties_with_reversed_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $u = 0; }
+$f = 'clone';
+$o = new U();
+$copy = $f(withProperties: ["u" => "hello"], object: $o);
+echo $copy->u;
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
 /// Verifies `clone(...)` reaches the same lowering through a runtime callable, with and
 /// without an explicit empty override array.
 #[test]
@@ -1118,6 +1138,25 @@ var_dump($plain->fromInt);
             "string(5) \"hello\"\n",
         )
     );
+}
+
+/// A single unpack can carry the object AND its overrides through one runtime argument.
+///
+/// The widening gate must keep that shape on the conservative path: reading only the arguments
+/// after the first one misses `$f(...$args)` entirely, so the untyped slot kept its inferred
+/// `int` storage and answered `int(0)` for the string override.
+#[test]
+fn test_clone_function_writes_untyped_properties_through_a_single_unpack() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public $fromInt = 0; }
+$args = [new U(), ["fromInt" => "hello"]];
+$f = 'clone';
+$c = $f(...$args);
+var_dump($c->fromInt);
+"#,
+    );
+    assert_eq!(out, "string(5) \"hello\"\n");
 }
 
 /// Verifies a DECLARED array, associative-array and nullable slot materializes a runtime override
@@ -2166,6 +2205,7 @@ fn emit_clone_dynamic_property_assembly(dir: &std::path::Path, target: &str) -> 
     let mut command = std::process::Command::new(binary);
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
     command.current_dir(dir);
+    command.arg("build");
     command.args(["--emit-asm", "--target", target]);
     if target.starts_with("ios") {
         command.args(["--emit", "staticlib"]);

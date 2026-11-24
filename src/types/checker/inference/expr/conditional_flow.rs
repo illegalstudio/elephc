@@ -281,6 +281,15 @@ impl Checker {
         flow.bound_joined = None;
     }
 
+    /// Joins reads over the alternatives alone when no implicit skip path reaches the join.
+    ///
+    /// `if (…) { $m = 'a'; } else { $m = 'b'; }` leaves `$m` a string even when it was `null`
+    /// on entry: every path that reaches the code after the `if` stored it. Physical storage
+    /// still joins with the entry contract.
+    pub(in crate::types::checker) fn exclude_conditional_read_entry(&self, flow: &mut ConditionalFlow) {
+        flow.joined.clear();
+    }
+
     /// Includes an implicit skip path in a statement branch binding join.
     pub(in crate::types::checker) fn observe_conditional_binding_exit(&self, flow: &mut ConditionalFlow) {
         if let Some(bound) = &mut flow.bound_joined {
@@ -367,7 +376,11 @@ impl Checker {
             let joined = if reads { previous.map_or_else(|| exit_view.clone(), |previous|
                 self.join_flow_views(previous, exit_view)) }
                 else { previous.unwrap_or(entry_view).clone() };
-            if &joined != entry_view || storage_changed || origin_changed {
+            // A store can narrow an arm's read below the entry view while the join stays equal
+            // to it. The shared env still holds the last arm's view, so the join must publish.
+            if &joined != entry_view || storage_changed || origin_changed
+                || (reads && exit_view != entry_view)
+            {
                 flow.changed.insert(name.clone());
             }
             if reads || previous.is_some() { flow.joined.insert(name.clone(), joined); }

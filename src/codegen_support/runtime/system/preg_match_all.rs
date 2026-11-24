@@ -91,7 +91,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 
     // -- strip delimiters --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
-    emitter.instruction("tbnz x3, #30, __rt_preg_match_all_fail");              // the removed /e modifier is invalid in PHP 8
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_all_fail");              // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
     // -- materialize the PCRE pattern as a C string --
@@ -189,9 +189,9 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
-    emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
-    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
-    emitter.instruction("jc __rt_preg_match_all_fail_linux_x86_64");            // PHP 8 rejects /e as an unknown modifier
+    emitter.instruction("call __rt_preg_strip");                                // strip delimiters and gather supported regex flags from the pattern literal
+    emitter.instruction("bt rcx, 30");                                          // did delimiter parsing reject the pattern?
+    emitter.instruction("jc __rt_preg_match_all_fail_linux_x86_64");            // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the delimiter-strip helper flags for the later regcomp() call
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern C string across compilation and loop setup
