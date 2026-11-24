@@ -221,7 +221,9 @@ pub(super) fn lower(
         }
         let notice = needs_name.then(|| overloaded_notice(ctx, &name, property, span));
         let name_value = string(ctx, property, span);
-        fetched(ctx, object, name_value, notice, needs_name, index, value, compound, span, diagnosed);
+        let writeback = flavor == FLAVOR_INACCESSIBLE && (ctx.has_local_slot(crate::names::CLOSURE_SCOPE_LOCAL)
+            || ctx.has_local_slot(crate::names::ERASED_WRITE_SCOPE_LOCAL));
+        fetched(ctx, object, name_value, notice, needs_name, writeback, index, value, compound, span, diagnosed);
         if by_id && needs_name { crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span); }
         merge(ctx, done, &mut merged);
     }
@@ -320,7 +322,8 @@ pub(super) fn park_hash_cell(
 /// Reads inaccessible and magic names through the complete runtime class dispatcher.
 fn fetched(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, notice: Option<LoweredValue>,
-    magic: bool, index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+    magic: bool, writeback: bool, index: LoweredValue, value: LoweredValue,
+    compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
     let current = ctx.emit_owned_value(Op::DynamicPropGet, vec![object.value, name.value],
         Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::Read)), PhpType::Mixed,
@@ -347,6 +350,23 @@ fn fetched(
         ctx.builder.position_at_end(supported);
     }
     mutate(ctx, array, index, value, compound, span, diagnosed);
+    if writeback {
+        // The read succeeded, so the slot is accessible from the scope the body runs in at run
+        // time (a closure bound to a class): the detached copy is stored back, unless it is an
+        // object (`ArrayAccess`), which the write changed in place.
+        let is_object = ctx.emit_value(Op::TypePredicate, vec![array.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let store = ctx.builder.create_named_block("property.index.writeback", vec![]);
+        let done = ctx.builder.create_named_block("property.index.in_place", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
+            then_target: done, then_args: vec![], else_target: store, else_args: vec![] });
+        ctx.builder.position_at_end(store);
+        ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, array.value], None,
+            Op::DynamicPropSet.default_effects(), Some(span));
+        ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+        ctx.builder.position_at_end(done);
+    }
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
 

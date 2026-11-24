@@ -818,3 +818,36 @@ stdClass
 {"items":{"0":7,"1":7,"k":"7z"}}
 "####, "{}", out.stderr);
 }
+
+/// Element writes to private and protected properties from closures bound to a class (the scope is an object, a class name or `null` with a scope class): the write reaches the object's array, not a detached copy of it. php -n output.
+#[test]
+fn test_bound_closure_writes_reach_private_array_properties() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+set_error_handler(function($n,$s,$f,$l){ echo "E[$n] $s @$l\n"; return true; });
+class Holder {
+    public int $n = 7;
+    private array $options = ['exceptions' => true];
+    private array $list = [1];
+    protected array $prot = [];
+    public function shown(): string { return var_export($this->options['exceptions'], true) . json_encode($this->list) . json_encode($this->prot); }
+}
+function makeHolder(): mixed { return new Holder(); }
+$gradual = makeHolder();
+\Closure::bind(function () { $this->options['exceptions'] = false; }, $gradual, $gradual)();
+echo $gradual->shown(), "\n";
+\Closure::bind(function () { $this->list[] = 2; $this->list[0] .= 'x'; $this->prot['a'] = 1; $this->options['n']['m'] = 2; }, $gradual, Holder::class)();
+echo $gradual->shown(), "\n";
+\Closure::bind(function () { $this->list[0] .= "y"; unset($this->options['exceptions']); $this->prot[] = 9; $this->prot['a'] ??= 4; }, $gradual, Holder::class)();
+echo $gradual->shown(), "\n";
+$f = function ($o) { $o->list[] = 'viaarg'; return $o; };
+echo \Closure::bind($f, null, Holder::class)($gradual)->shown(), "\n";
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"false[1][]
+false["1x",2]{"a":1}
+E[2] Undefined array key "exceptions" @8
+NULL["1xy",2]{"a":1,"0":9}
+E[2] Undefined array key "exceptions" @8
+NULL["1xy",2,"viaarg"]{"a":1,"0":9}
+"####, "{}", out.stderr);
+}
