@@ -100,3 +100,21 @@ viaMixed(fn($v) => $v, mkXml());
 }
 
 supported_target_cases!(closed_world_passing_mode_query_declares_no_eval_context, verify_closed_world_passing_mode_query_declares_no_eval_context);
+
+/// Lowers the Symfony Demo's passing-mode query shapes (plus the compiler's own `usort`/`uasort`
+/// comparator helpers) in a closed world: no function declares an eval context and the
+/// interpreter bridge is not requested for `target`.
+fn verify_closed_world_demo_shapes_request_no_interpreter(target: &str) {
+    let source = include_str!("../../../tests/fixtures/closed_world_by_ref_demo_shapes.php");
+    crate::closed_world::set_enabled(true);
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    crate::closed_world::set_enabled(false);
+    for function in &module.functions {
+        assert!(!function.locals.iter().any(|local| matches!(local.kind, crate::ir::LocalKind::EvalContext)),
+            "{target}: {} must declare no eval context in a closed world", function.name);
+    }
+    assert!(!module.required_runtime_features.eval_bridge, "{target}: no interpreter requested");
+}
+
+supported_target_cases!(closed_world_demo_shapes_request_no_interpreter, verify_closed_world_demo_shapes_request_no_interpreter);

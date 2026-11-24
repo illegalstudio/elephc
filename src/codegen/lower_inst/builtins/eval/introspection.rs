@@ -105,7 +105,11 @@ pub(in crate::codegen::lower_inst) fn lower_callable_parameter_is_by_ref(
     let position = expect_operand(inst, 2)?;
     // Without the interpreter no callable is interpreter-owned, so the descriptor every compiled
     // callable carries answers the query; the bridge is only asked when it is linked.
-    if !ctx.module.required_runtime_features.eval_bridge {
+    // A function lowering gave no eval context (a closed world, even one whose other functions
+    // link the bridge) has no interpreter-owned callable to ask either.
+    let has_eval_context = ctx.function.locals.iter()
+        .any(|local| local.kind == crate::ir::LocalKind::EvalContext);
+    if !ctx.module.required_runtime_features.eval_bridge || !has_eval_context {
         return crate::codegen::lower_inst::callables::lower_native_callable_parameter_is_by_ref(
             ctx, inst, callback, name, position,
         );

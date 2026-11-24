@@ -288,3 +288,25 @@ fn test_callable_parameter_query_answers_every_callable_form_natively() {
     assert!(!asm.contains("__elephc_eval_callable_parameter_is_by_ref"), "the query must not reach the bridge");
     assert!(asm.contains("__rt_callable_param_is_by_ref"), "the shared native routine answers it");
 }
+
+/// The Symfony Demo's passing-mode query shapes (an unknown callable handed an array element or a
+/// property, SimpleXMLElement in the program, compiler `usort`/`uasort` helpers) compile as a
+/// closed world, which never silently falls back to the interpreter: the harness compiles closed
+/// first and links the interpreter only on need, so a bridge symbol in the assembly means the
+/// fallback happened. Output matches `php -n` and the heap stays clean.
+#[test]
+fn test_closed_world_demo_query_shapes_link_no_interpreter() {
+    if skip_without_xml_native("test_closed_world_demo_query_shapes_link_no_interpreter") { return; }
+    let source = include_str!("../../fixtures/closed_world_by_ref_demo_shapes.php");
+    let path = std::env::temp_dir().join(format!("elephc_by_ref_demo_{}.php", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let php = std::process::Command::new("php").arg("-n").arg(&path).output().expect("php -n reference");
+    let _ = std::fs::remove_file(&path);
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, String::from_utf8_lossy(&php.stdout));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    for forbidden in ["__elephc_eval_callable_parameter_is_by_ref", "__elephc_eval_execute", "elephc_magician"] {
+        assert!(!asm.contains(forbidden), "closed-world assembly mentions {forbidden}");
+    }
+}
