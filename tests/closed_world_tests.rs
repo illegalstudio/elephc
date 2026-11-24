@@ -2747,3 +2747,51 @@ echo $r->$m(), "\n";
     compile_ok(&dir, &["--closed-world"]);
     assert_eq!(text(&run(&dir).stdout), "Foo\n");
 }
+
+/// Runs the elephc CLI in `dir` with the user's real cache (the managed libxml2 package lives
+/// there), in the strict closed world; returns the compiler's output.
+fn elephc_strict_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(elephc_bin())
+        .env("ELEPHC_CLOSED_WORLD", "strict")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("failed to spawn elephc")
+}
+
+/// Declares the managed libxml2 native package in `dir` and installs its lock for the host;
+/// `false` means the host has no such package cached (the test then skips).
+fn install_xml_native(dir: &Path) -> bool {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-aarch64",
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        _ => return false,
+    };
+    fs::write(dir.join("elephc.toml"), "[native]\nschema = 1\n\n[native.dependencies]\nlibxml2 = \"2.15.3\"\n").unwrap();
+    elephc_strict_in(dir, &["native", "install", "--target", target]).status.success()
+}
+
+/// The Symfony Demo's passing-mode query shapes and the loop/element matrix compile with the real
+/// CLI in the strict closed world, with SimpleXMLElement in the program: no interpreter is linked
+/// and the output is what php prints, with a clean heap.
+#[test]
+fn closed_world_strict_cli_compiles_passing_mode_query_shapes_with_simplexml() {
+    for (prefix, source) in [
+        ("cw_strict_demo", include_str!("fixtures/closed_world_by_ref_demo_shapes.php")),
+        ("cw_strict_loops", include_str!("fixtures/descriptor_element_arguments_in_loops.php")),
+    ] {
+        let dir = make_test_dir(prefix);
+        fs::write(dir.join("main.php"), source).unwrap();
+        if !install_xml_native(&dir) {
+            eprintln!("skipping {prefix}: managed native libxml2 is not installed for this host");
+            continue;
+        }
+        let compiled = elephc_strict_in(&dir, &["--heap-debug", "--php-version", "8.5", "main.php"]);
+        assert!(compiled.status.success(), "{prefix}: {}{}", text(&compiled.stdout), text(&compiled.stderr));
+        let output = run(&dir);
+        assert_eq!(text(&output.stdout), php_stdout(&dir), "{prefix}");
+        assert!(text(&output.stderr).contains("leak summary: clean"), "{prefix}: {}", text(&output.stderr));
+        assert!(!links_interpreter(&dir), "{prefix}: the by-reference query is answered from the descriptor");
+    }
+}

@@ -310,3 +310,22 @@ fn test_closed_world_demo_query_shapes_link_no_interpreter() {
         assert!(!asm.contains(forbidden), "closed-world assembly mentions {forbidden}");
     }
 }
+
+/// An unknown callable called with an erased element or property argument inside loops, while
+/// SimpleXMLElement is in the program: scalar, string, array, object and null elements, nested
+/// dimensions, property receivers, ArrayAccess and SimpleXML receivers, by-value and by-reference
+/// callees and a throwing callee. Each execution of a call site starts from a fresh selection
+/// cell (a retired cell used to be reused: free-list corruption, or a leaked cell).
+#[test]
+fn test_descriptor_element_arguments_in_loops_match_php_with_a_clean_heap() {
+    if skip_without_xml_native("test_descriptor_element_arguments_in_loops_match_php_with_a_clean_heap") { return; }
+    let source = include_str!("../../fixtures/descriptor_element_arguments_in_loops.php");
+    let path = std::env::temp_dir().join(format!("elephc_elem_loops_{}.php", std::process::id()));
+    std::fs::write(&path, source).unwrap();
+    let php = std::process::Command::new("php").arg("-n").arg(&path).output().expect("php -n reference");
+    let _ = std::fs::remove_file(&path);
+    let (out, _asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, String::from_utf8_lossy(&php.stdout));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
