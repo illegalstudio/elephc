@@ -429,7 +429,8 @@ mod tests {
         // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
         // compiled-pattern helpers, and the internal unserialize property store and
         // PHAR validity probe.
-        assert_eq!(aot_registry, 849);
+        // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
+        assert_eq!(aot_registry, 856);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.

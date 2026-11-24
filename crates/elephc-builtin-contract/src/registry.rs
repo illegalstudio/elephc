@@ -190,7 +190,9 @@ mod tests {
         // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
         // +2: the internal `__elephc_unserialize_store_property` and
         // `__elephc_phar_archive_valid` helpers.
-        assert_eq!(contracts().len(), 1326 + curl_surface);
+        // +7: the ext/posix bridge builtins `posix_kill`, `posix_isatty`, `posix_geteuid`,
+        // `posix_getpgrp`, `posix_get_last_error`, `posix_errno` and `posix_strerror`.
+        assert_eq!(contracts().len(), 1333 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
