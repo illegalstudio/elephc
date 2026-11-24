@@ -681,7 +681,16 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
+            if crate::codegen::shared_static_throw::raises_on_calling_site(ctx) {
+                // A shared helper has no PHP line of its own: the throwable takes the line of the
+                // statement that called it, published in `_php_site`.
+                let site = abi::php_site_symbol(&ctx.emitter.target);
+                abi::emit_load_symbol_to_reg(ctx.emitter, "x9", &site, 0);
+                ctx.emitter.instruction("ldr x9, [x9, #8]");                    // the calling statement's line
+                abi::emit_store_to_address(ctx.emitter, "x9", "x0", crate::codegen_support::throwable_layout::LINE_OFFSET);
+            } else {
+                crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
+            }
             ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
@@ -701,7 +710,14 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
+            if crate::codegen::shared_static_throw::raises_on_calling_site(ctx) {
+                let site = abi::php_site_symbol(&ctx.emitter.target);
+                abi::emit_load_symbol_to_reg(ctx.emitter, "r10", &site, 0);
+                ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");        // the calling statement's line
+                abi::emit_store_to_address(ctx.emitter, "r10", "rax", crate::codegen_support::throwable_layout::LINE_OFFSET);
+            } else {
+                crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
+            }
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);

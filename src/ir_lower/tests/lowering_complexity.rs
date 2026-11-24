@@ -1622,9 +1622,9 @@ fn dynamic_write_sites_do_not_grow_with_magic_classes() {
         let many = emitted_lines(&dynamic_writes_over_magic_classes(magic, 12));
         (many - few) / 10
     };
-    let small = per_site(1);
+    let small = per_site(10);
     let large = per_site(40);
-    assert_eq!(small, large, "a site cost {small} lines with 1 magic class, {large} with 40");
+    assert_eq!(small, large, "a site cost {small} lines with 10 magic classes, {large} with 40");
     // Three small functions: their frames and cleanups are most of it; the writes are calls.
     assert!(large < 2300, "a group of three writes costs {large} lines");
 }

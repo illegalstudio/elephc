@@ -794,7 +794,22 @@ pub(super) fn magic_set_tail_applies(ctx: &FunctionContext<'_>, value: ValueId) 
     Ok(!outlining_disabled()
         && !inside_magic_set_tail(ctx)
         && !inside_function_helper(ctx, SET_PREFIX)
-        && ctx.value_php_type(value)?.codegen_repr() != PhpType::Void)
+        && ctx.value_php_type(value)?.codegen_repr() != PhpType::Void
+        && ctx.shared.magic_set_tail_worthwhile(|| magic_set_tail_is_worthwhile(ctx.module)))
+}
+
+/// Classes with a `__set` method or a name-addressable hash from which a site stops carrying its own
+/// arms: a call into the tail costs a frame, which a handful of arms inline does not.
+const MAGIC_SET_TAIL_MIN_CLASSES: usize = 8;
+
+/// Whether the module has enough classes with `__set` or a per-instance hash to share their arms.
+fn magic_set_tail_is_worthwhile(module: &Module) -> bool {
+    let magic = module
+        .class_infos
+        .iter()
+        .filter(|(_, info)| info.methods.contains_key(&crate::names::php_symbol_key("__set")))
+        .count();
+    magic + module.name_addressable_hash_classes().len() >= MAGIC_SET_TAIL_MIN_CLASSES
 }
 
 /// Calls the module-wide tail of a runtime-name write: the classes with a `__set` method and the
