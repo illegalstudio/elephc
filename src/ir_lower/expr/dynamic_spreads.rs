@@ -160,6 +160,10 @@ pub(super) fn lower_boxed_spread_args(
         if check_in_order {
             // The rooted slot keeps the value alive if the check throws; the check borrows it.
             let value = ctx.load_local(&state.slots[index], Some(span));
+            // An object parameter is checked at its turn too, so an earlier scalar parameter's
+            // refusal (or `Stringable` conversion) comes first, as in PHP.
+            let slot = Expr::new(ExprKind::Variable(state.slots[index].clone()), span);
+            super::call_arg_coercion::check_runtime_object_param(ctx, sig, index, value, &slot);
             let source = super::scalar_param_guards::GuardSource::Unrecorded;
             if super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, value.value, source).is_some() {
                 guarded[index] = true;

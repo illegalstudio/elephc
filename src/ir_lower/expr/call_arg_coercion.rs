@@ -901,13 +901,13 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
         return value;
     };
     let depth = ctx.expression_depth;
-    if ctx.object_guard_deferral.as_ref().is_some_and(|(deferral_depth, _)| *deferral_depth == depth)
-        && object_param_guard(ctx, sig, index, value.value, arg).is_some()
-    {
-        // Checked with the scalar parameters, in parameter order, once every argument was
-        // evaluated (`coerce_operands_to_params_guarded`).
-        if let Some((_, deferred)) = ctx.object_guard_deferral.as_mut() {
-            deferred.push((index, arg.clone()));
+    let earlier_deferred = ctx.object_guard_deferral.as_ref()
+        .is_some_and(|deferral| deferral.depth == depth && deferral.earlier_deferred);
+    if earlier_deferred && object_param_guard(ctx, sig, index, value.value, arg).is_some() {
+        // An earlier parameter's check waits for the guarded parameter pass, so this one
+        // waits too and runs after it (`coerce_operands_to_params_guarded_with_objects`).
+        if let Some(deferral) = ctx.object_guard_deferral.as_mut() {
+            deferral.guards.push((index, arg.clone()));
         }
         return value;
     }
@@ -923,6 +923,12 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
             if super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, value.value, source)
                 .is_some()
             {
+                // A later object parameter's check now waits for this one.
+                if let Some(deferral) = ctx.object_guard_deferral.as_mut()
+                    .filter(|deferral| deferral.depth == depth)
+                {
+                    deferral.earlier_deferred = true;
+                }
                 return value;
             }
         } else if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
@@ -1467,6 +1473,57 @@ fn guard_union_object_param(
     arg: &Expr,
 ) -> LoweredValue {
     let span = Some(arg.span);
+    let value = emit_object_param_check(ctx, sig, index, value, class_name, given, arg, true);
+    let object_ty = PhpType::Object(class_name.to_string());
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![value.value],
+        None,
+        object_ty.clone(),
+        Op::mixed_unbox_effects(&object_ty),
+        span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
+}
+
+/// Checks a boxed `mixed`/union value bound to an object parameter without unboxing it: a call
+/// whose binding unboxes the value itself (a runtime spread's slots) refuses it here, in
+/// parameter order with the scalar checks. `arg` names the value in the message; the value
+/// stays owned by its caller, also when the check throws.
+pub(super) fn check_runtime_object_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        || !matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+    {
+        return;
+    }
+    let Some(PhpType::Object(class_name)) = sig.params.get(index).map(|(_, ty)| ty.codegen_repr()) else {
+        return;
+    };
+    emit_object_param_check(ctx, sig, index, value, &class_name, None, arg, false);
+}
+
+/// Emits the `instanceof` test of [`guard_union_object_param`] and its refusal, leaving the
+/// builder in the accepting block; returns the (boxed) value tested. With `release`, an owned
+/// value is released before the refusal throws.
+#[allow(clippy::too_many_arguments)]
+fn emit_object_param_check(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    class_name: &str,
+    given: Option<&str>,
+    arg: &Expr,
+    release: bool,
+) -> LoweredValue {
+    let span = Some(arg.span);
     // `InstanceOf` and the accepted branch's unbox both expect boxed storage. A
     // statically-known object (a subclass or a literal optimized from a union) keeps its
     // raw representation, so box it first instead of feeding Object where Mixed is required.
@@ -1505,7 +1562,7 @@ fn guard_union_object_param(
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(rejected);
-    if ctx.value_needs_release_after_use(value) {
+    if release && ctx.value_needs_release_after_use(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, span);
     }
     let param_name = sig
@@ -1561,17 +1618,7 @@ fn guard_union_object_param(
         value: exception.value,
     });
     ctx.builder.position_at_end(accepted);
-    let object_ty = PhpType::Object(class_name.to_string());
-    let result = ctx.emit_owned_value(
-        Op::MixedUnbox,
-        vec![value.value],
-        None,
-        object_ty.clone(),
-        Op::mixed_unbox_effects(&object_ty),
-        span,
-    );
-    release_coerced_source_if_owned(ctx, value, span);
-    result
+    value
 }
 
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
@@ -1625,7 +1672,7 @@ pub(super) fn coerce_operands_to_params_guarded(
 /// [`coerce_operands_to_params_guarded`] with the object-parameter checks positional lowering
 /// deferred (`(parameter index, argument)`): each runs at its parameter's turn, so the first
 /// refused parameter in declaration order throws, as in PHP.
-fn coerce_operands_to_params_guarded_with_objects(
+pub(super) fn coerce_operands_to_params_guarded_with_objects(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
@@ -2301,16 +2348,15 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     let previous_object_deferral = ctx.object_guard_deferral.take();
     if !capture_values {
         ctx.scalar_guard_deferral = Some((ctx.expression_depth, expanded_spread || unrecorded_sources));
-        ctx.object_guard_deferral = Some((ctx.expression_depth, Vec::new()));
+        crate::ir_lower::context::begin_object_guard_deferral(ctx, ctx.expression_depth);
     }
     let operands = lower_positional_operands(
         ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         regular_param_count, fixed_arg_count,
     );
     ctx.scalar_guard_deferral = previous_deferral;
-    let object_guards = std::mem::replace(&mut ctx.object_guard_deferral, previous_object_deferral)
-        .map(|(_, guards)| guards)
-        .unwrap_or_default();
+    let object_guards =
+        crate::ir_lower::context::finish_object_guard_deferral(ctx, previous_object_deferral);
     let sources = (!capture_values).then_some(guard_sources.as_slice());
     let mut operands = coerce_operands_to_params_guarded_with_objects(
         ctx, sig, operands, sources, true, &object_guards,

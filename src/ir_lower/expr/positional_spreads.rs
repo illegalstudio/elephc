@@ -50,8 +50,12 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // A call through a callable alias (`$f = 'take'; $f($v, ...$rows)`) has no checker record
     // for its prefix, so the prefix is then checked from its values.
     let previous_deferral = ctx.scalar_guard_deferral;
+    let previous_object_deferral = ctx.object_guard_deferral.take();
     if !capture_values {
         ctx.scalar_guard_deferral = Some((ctx.expression_depth, unrecorded_sources));
+        // A prefix object check after a deferred one waits with it, so the prefix is checked
+        // in parameter order once the spread was read.
+        crate::ir_lower::context::begin_object_guard_deferral(ctx, ctx.expression_depth);
     }
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
@@ -67,6 +71,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
         }
     }
     ctx.scalar_guard_deferral = previous_deferral;
+    let prefix_object_guards =
+        crate::ir_lower::context::finish_object_guard_deferral(ctx, previous_object_deferral);
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
@@ -86,7 +92,9 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 super::scalar_param_guards::GuardSource::Recorded(arg.span)
             })
             .collect::<Vec<_>>();
-        operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true);
+        operands = super::call_arg_coercion::coerce_operands_to_params_guarded_with_objects(
+            ctx, sig, operands, Some(&sources), true, &prefix_object_guards,
+        );
         // A deferred check converts without rooting its result (a `Stringable`'s string), but
         // the spread elements and defaults lowered next can still throw: root what it made.
         for (index, arg) in args[..spread_idx].iter().enumerate() {

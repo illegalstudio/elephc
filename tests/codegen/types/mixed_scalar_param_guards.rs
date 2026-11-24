@@ -1307,6 +1307,38 @@ run(new Name(), new C(), new C(), new C());
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
 
+/// Spread calls check object and scalar parameters in parameter order after every argument
+/// (the spread included) was evaluated: an indexed spread's prefix and a runtime spread's
+/// bound slots refuse the first failing parameter, and an accepted `Stringable` is converted
+/// before a later object parameter is refused. The values are released.
+#[test]
+fn test_spread_calls_check_object_and_scalar_parameters_in_order() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {}
+class Name { public function __toString(): string { echo "toString ran\n"; return "n"; } }
+function so(string $s, C $a, int $n) { echo "so body ", $s, " ", $n, "\n"; }
+function os(C $a, string $s, int $n) { echo "os body ", $s, " ", $n, "\n"; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function run(mixed $s, ?C $a, int $i, array $rows) {
+    echo "-- indexed spread\n";
+    $local = [[1], [2], [3]];
+    try { so($s, $a, ...$local[$i]); } catch (Throwable $e) { show($e); }
+    try { os($a, $s, ...$local[$i]); } catch (Throwable $e) { show($e); }
+    echo "-- runtime spread\n";
+    try { so($s, $a, ...$rows); } catch (Throwable $e) { show($e); }
+    try { os($a, $s, ...$rows); } catch (Throwable $e) { show($e); }
+    try { so(...[$s, $a, $i]); } catch (Throwable $e) { show($e); }
+}
+run(null, null, 0, [1]);
+run(new Name(), null, 1, [2]);
+run(new Name(), new C(), 2, [3]);
+"#,
+    );
+    assert_eq!(output.stdout, "-- indexed spread\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\n-- runtime spread\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\nTypeError: so(): Argument #1 ($s) must be of type string, null given\n-- indexed spread\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\n-- runtime spread\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, null given\n-- indexed spread\ntoString ran\nso body n 3\ntoString ran\nos body n 3\n-- runtime spread\ntoString ran\nso body n 3\ntoString ran\nos body n 3\ntoString ran\nso body n 2\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// A builtin's callback and a call through a callable value bind each value through the
 /// callable invoker's scalar checks, whose precision deprecation runs the error handler: a
 /// global it writes must not be read back from a value the optimizer saved before the call
