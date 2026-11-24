@@ -96,6 +96,9 @@ pub(crate) struct SharedCodegenState {
     /// Every module class's ancestors, nearest first: asked by the callable-array scope checks,
     /// which walked the parent chain with one class-table lookup per hop at every question.
     class_ancestors: std::cell::OnceCell<std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>>>,
+    /// Every by-reference physical method implementation, by method key: `entries` asked it of
+    /// every class of the module at every resolved method call.
+    reference_return_index: std::cell::OnceCell<super::lower_inst::reference_return_dispatch::ReferenceReturnIndex>,
     /// `types::class_inherits_from` inverted over the module: each class name -> the classes that
     /// inherit from it. Property plans asked it of every class of the module per question.
     class_descendants: std::cell::OnceCell<std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>>>,
@@ -733,6 +736,14 @@ impl SharedCodegenState {
         self.class_ancestors.get_or_init(|| std::sync::Arc::new(build()))
     }
 
+    /// The by-reference implementation index, built once by `build`; see the field.
+    pub(super) fn reference_return_index(
+        &self,
+        build: impl FnOnce() -> super::lower_inst::reference_return_dispatch::ReferenceReturnIndex,
+    ) -> &super::lower_inst::reference_return_dispatch::ReferenceReturnIndex {
+        self.reference_return_index.get_or_init(build)
+    }
+
     /// The class ids satisfying each class or interface name, built once by `build`; see the
     /// field.
     pub(crate) fn is_a_index(
@@ -865,6 +876,7 @@ impl SharedCodegenState {
             dynamic_new_class_candidates: Default::default(),
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),
+            reference_return_index: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),

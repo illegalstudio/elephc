@@ -4578,7 +4578,7 @@ fn class_descends_from_module_class_name(
 /// Every module class's parent chain, nearest first, with each name normalized as the walk it
 /// replaces compared them; a chain ends at a parent the module does not declare. A chain longer
 /// than the class table can only be a cycle, which ends it.
-fn module_class_ancestors(module: &crate::ir::Module) -> crate::fast_hash::FastMap<String, Vec<String>> {
+pub(super) fn module_class_ancestors(module: &crate::ir::Module) -> crate::fast_hash::FastMap<String, Vec<String>> {
     #[cfg(test)]
     CLASS_ANCESTOR_BUILDS.with(|count| count.set(count.get() + 1));
     let mut chains = crate::fast_hash::FastMap::default();

@@ -1583,3 +1583,45 @@ fn maybe_missing_reads_are_flagged_without_lowering_the_body_twice() {
     assert_eq!(small_replays, 0, "bodies lowered twice for 10 maybe-missing reads");
     assert_eq!(large_replays, 0, "bodies lowered twice for 40 maybe-missing reads");
 }
+
+/// Source with `classes` unrelated classes, one by-reference `items()` family of two classes, and
+/// `sites` calls of `items()` and `size()` through typed receivers.
+fn by_reference_family_with_many_classes(classes: usize, sites: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..classes {
+        source.push_str(&format!("class U{index} {{ public function size(): int {{ return {index}; }} }}\n"));
+    }
+    source.push_str("class Base { private array $a = [1]; public function &items(): array { return $this->a; } public function size(): int { return 1; } }\n");
+    source.push_str("class Child extends Base { public function &items(): array { return parent::items(); } }\n");
+    for site in 0..sites {
+        source.push_str(&format!("function s{site}(Base $b) {{ return count($b->items()) + $b->size(); }}\n"));
+    }
+    source.push_str("echo s0($argc > 1 ? new Base() : new Child()), \"\\n\";\n");
+    source
+}
+
+/// Reference-return adaptation of resolved method calls reads one index of the module's by-ref
+/// implementations: examined candidates follow the by-ref family and the call sites, never the
+/// number of classes of the module.
+#[test]
+fn reference_return_entries_do_not_scan_every_class() {
+    let measure = |classes: usize| {
+        let module = lower_source(&by_reference_family_with_many_classes(classes, 20));
+        crate::codegen::REFERENCE_RETURN_INDEX_BUILDS.with(|count| count.set(0));
+        crate::codegen::REFERENCE_RETURN_CANDIDATES.with(|count| count.set(0));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+        (
+            crate::codegen::REFERENCE_RETURN_INDEX_BUILDS.with(|count| count.get()),
+            crate::codegen::REFERENCE_RETURN_CANDIDATES.with(|count| count.get()),
+        )
+    };
+    let (small_builds, small_candidates) = measure(5);
+    let (large_builds, large_candidates) = measure(200);
+    assert_eq!(small_builds, 1, "index built {small_builds} times");
+    assert_eq!(large_builds, 1, "index built {large_builds} times");
+    assert_eq!(
+        small_candidates, large_candidates,
+        "candidates examined grew with the classes: {small_candidates} then {large_candidates}"
+    );
+    assert!(large_candidates <= 20 * 8, "{large_candidates} candidates for 20 sites");
+}

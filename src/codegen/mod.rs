@@ -61,6 +61,8 @@ pub(crate) use lower_inst::callables::{CLASS_ANCESTOR_BUILDS, INSTANCE_REACH_CHE
 #[cfg(test)]
 pub(crate) use lower_inst::MIXED_READ_SEARCHES;
 #[cfg(test)]
+pub(crate) use lower_inst::reference_return_dispatch::{REFERENCE_RETURN_CANDIDATES, REFERENCE_RETURN_INDEX_BUILDS};
+#[cfg(test)]
 pub(crate) use lower_inst::CLASS_DESCENDANT_BUILDS;
 #[cfg(test)]
 pub(crate) use lower_inst::IS_A_INDEX_BUILDS;
