@@ -231,8 +231,13 @@ impl Instruction {
                             | crate::builtins::semantics::BuiltinResultOwnership::Independent
                     ) || matches!(target, RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
                 }
+                // `implode($array)` persists its join (`emit_owned_implode`) exactly like the
+                // two-operand `RuntimeFnId` form, so its string is an owner to release: skipping it
+                // leaked one block per `"q" . implode($a)`.
                 Some(Immediate::RuntimeCall(
-                    RuntimeCallTarget::UnaryString(_) | RuntimeCallTarget::StringOffsetSet,
+                    RuntimeCallTarget::UnaryString(_)
+                    | RuntimeCallTarget::StringOffsetSet
+                    | RuntimeCallTarget::PositionalImplode,
                 )) => true,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::ExecutablePath)) => true,
                 // An included file's `return` value is an owned string, not scratch.
