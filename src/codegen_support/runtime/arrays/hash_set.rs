@@ -242,12 +242,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after the boxing helper
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after the boxing helper
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the managed reference cell this entry owns
-    emitter.instruction("str x0, [sp, #56]");                                   // save the cell across the payload release
-    emitter.instruction("bl __rt_reference_cell_value_release");                // release the value the reference set currently holds
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the managed reference cell
+    emitter.instruction("ldr x9, [x12, #24]");                                  // load the managed reference cell this entry owns
     emitter.instruction("ldr x13, [sp, #24]");                                  // load the boxed replacement payload
-    emitter.instruction("str x13, [x0]");                                       // publish the replacement to every alias in the reference set
+    elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "x9", "x13", "x10");
     emitter.instruction("b __rt_hash_set_done");                                // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value");
@@ -505,12 +502,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the boxing helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the cell across the payload release
-    emitter.instruction("call __rt_reference_cell_value_release");              // release the value the reference set currently holds
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the managed reference cell
+    emitter.instruction("mov r10, QWORD PTR [r12 + 24]");                       // load the managed reference cell this entry owns
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the boxed replacement payload
-    emitter.instruction("mov QWORD PTR [rax], r13");                            // publish the replacement to every alias in the reference set
+    elephc_memoir::reference_cells::emit_replace_boxed_child(emitter, "r10", "r13", "r11");
     emitter.label("__rt_hash_set_reference_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after a write-through
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path

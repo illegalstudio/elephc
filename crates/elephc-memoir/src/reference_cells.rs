@@ -49,6 +49,19 @@ pub fn emit_new(emitter: &mut impl Emitter) {
     abi::emit_return(emitter);
 }
 
+/// Publishes an owned Mixed child before retiring the displaced child.
+///
+/// The managed reference cell must have the Mixed payload descriptor. The displaced
+/// child can invoke a destructor, so the caller must not write to the cell again.
+pub fn emit_replace_boxed_child(
+    emitter: &mut impl Emitter, cell: &str, replacement: &str, previous: &str,
+) {
+    emitter.emit_load_from_address(previous, cell, 0);
+    emitter.emit_store_to_address(replacement, cell, 0);
+    emitter.emit_reg_move(emitter.int_result_reg(), previous);
+    emitter.emit_call_label("__rt_decref_any");
+}
+
 /// Releases the typed payload of a final-owner cell inside the existing cleanup boundary.
 pub fn emit_value_release(emitter: &mut impl Emitter) {
     emitter.blank();
