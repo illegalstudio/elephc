@@ -56,9 +56,16 @@ fn test_strict_nullability_public_opaque_eval_contracts_bundle() {
 fn test_strict_nullability_public_source_probes_and_profile_identity() {
     for source in ["<?php function f(int $value=null){}", "<?php if(false){echo null[0];}",
         "<?php eval('function f(int $value=null){}');",
+        "<?php class User {} function f(User $value=null){}",
+        "<?php class User {} function f(User|int $value=null){}",
+        "<?php eval('class User {} function f(User $value=null){}');",
         "<?php function f(string $value){} f(value:null);", "<?php if(false){strlen(null);}"] {
         StrictFixture::new(source).assert_error(&["--strict-nullability"], "strict-nullability");
     }
+    let nullable = StrictFixture::new(
+        "<?php class User {} function f(?User $user=null,mixed $value=null,ptr $p=null):void{} f();",
+    );
+    nullable.assert_compiles(&["--strict-nullability", "--check"]);
     let fixture = StrictFixture::new("<?php function probe(mixed $value):mixed{return $value[0];} try{echo gettype(probe(null));}catch(TypeError $error){echo 'N';}echo null[0]??'q';");
     assert_eq!(fixture.run(&["--strict-nullability", "--no-strict-nullability"]), "NULLq");
     assert_eq!(fixture.run(&["--strict-nullability"]), "Nq");

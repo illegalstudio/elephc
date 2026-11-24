@@ -41,10 +41,12 @@ impl AstVisitor for OriginalDeclarationValidator {
         {
             return;
         }
-        let Some(expected) = super::conversions::context_free_hint(annotation) else {
-            return;
-        };
-        if non_null_contract(&expected) {
+        // The syntax knows which annotations PHP would widen, including nominal
+        // types whose checker representation requires class resolution.
+        if annotation.implicitly_nullable().is_some()
+            || super::conversions::context_free_hint(annotation)
+                .is_some_and(|expected| non_null_contract(&expected))
+        {
             self.error = Some(CompileError::new(value.span, NON_NULL_MESSAGE));
         }
     }
@@ -122,20 +124,23 @@ mod tests {
     /// Original implicit-null syntax remains rejectable after PHP normalization would widen it.
     #[test]
     fn strict_nullability_rejects_original_implicit_nullable_parameters() {
-        let source = "<?php function rejected(int $value = null) {}";
-        let program = crate::parser::parse_with_mode(
-            &crate::lexer::tokenize(source).unwrap(),
-            SourceMode::Php,
-        )
-        .unwrap();
         let profile = SemanticProfile::PERMISSIVE
             .with(elephc_semantics::StrictFeature::Nullability, true);
-        assert!(validate_original_declarations(&program, profile).is_err());
+        for source in [
+            "<?php function rejected(int $value = null) {}",
+            "<?php class User {} function rejected(User $value = null) {}",
+            "<?php class User {} function rejected(User|int $value = null) {}",
+            "<?php class Box<T> {} function rejected(Box<int> $value = null) {}",
+        ] {
+            let program = crate::parser::parse_with_mode(
+                &crate::lexer::tokenize(source).unwrap(), SourceMode::Php,
+            ).unwrap();
+            assert!(validate_original_declarations(&program, profile).is_err(), "{source}");
 
-        let normalized = crate::magic_constants::substitute_file_and_scope_constants(
-            program,
-            std::path::Path::new("strict.php"),
-        );
-        assert!(crate::semantics::validate_source(&normalized, profile).is_ok());
+            let normalized = crate::magic_constants::substitute_file_and_scope_constants(
+                program, std::path::Path::new("strict.php"),
+            );
+            assert!(crate::semantics::validate_source(&normalized, profile).is_ok(), "{source}");
+        }
     }
 }
