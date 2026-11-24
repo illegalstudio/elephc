@@ -72,6 +72,39 @@ fn test_strict_nullability_public_source_probes_and_profile_identity() {
     assert_eq!(fixture.run(&["--strict-nullability", "--no-strict-nullability"]), "NULLq");
 }
 
+/// A global rebinding loses the local non-null proof and uses the class return guard.
+#[test]
+fn test_global_rebinding_checks_a_class_return_after_local_coalescing() {
+    let fixture = StrictFixture::new(r#"<?php
+final class Service {}
+function selectService(?Service $value): Service {
+    $value ??= new Service();
+    global $value;
+    return $value;
+}
+function publishService(mixed $incoming): void {
+    global $value;
+    $value = $incoming;
+}
+publishService(null);
+try { selectService(null); echo 'bad-null'; }
+catch (TypeError $error) { echo 'null:'; }
+publishService(new stdClass());
+try { selectService(null); echo 'bad-class'; }
+catch (TypeError $error) { echo 'class:'; }
+publishService(new Service());
+echo get_class(selectService(null));
+"#);
+    for optimization in ["--ir-opt=on", "--ir-opt=off"] {
+        assert_eq!(fixture.run(&["--php-only", optimization]), "null:class:Service");
+        assert_eq!(
+            fixture.run(&["--php-only", "--strict-nullability", optimization]),
+            "null:class:Service",
+        );
+    }
+    fixture.assert_error(&["--php-only", "--strict-mixed"], "--strict-mixed: narrow mixed");
+}
+
 /// Included LFC declarations and the PHP-only example retain independent non-null contracts.
 #[test]
 fn test_strict_nullability_public_lfc_and_example() {

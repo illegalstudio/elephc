@@ -1474,14 +1474,13 @@ fn test_nullable_fallback_flow_review_widening_contract() {
     check_source("<?php final class P { public string $p = 'ok'; } function run(?int $value, mixed $other): void { $value ??= 0; $value = $other; echo $value->p; }").unwrap();
 }
 
-/// Aliases and global/static rebinding cannot retain a coalescing non-null guarantee.
+/// Local aliases and static rebinding expose the known nullable return to the checker.
 #[test]
 fn test_nullable_fallback_flow_review_alias_barriers() {
     let _strict = elephc::php_only::scoped_enable();
     for body in [
         "$value ??= new Service(); $alias =& $value; $alias = null; return $value;",
         "$alias =& $value; $value ??= new Service(); $alias = null; return $value;",
-        "$value ??= new Service(); global $value; return $value;",
         "$value ??= new Service(); static $value = null; return $value;",
     ] {
         expect_error(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
