@@ -217,7 +217,7 @@ fn write_host(uri: &mut RfcUri, value: Option<&str>) -> Result<(), String> {
 }
 
 /// Parses a host supplied to `withHost`, accepting bracketed IPv6/IPvFuture literals.
-fn parse_host_value(value: &str) -> Result<Host, String> {
+pub(crate) fn parse_host_value(value: &str) -> Result<Host, String> {
     if let Some(rest) = value.strip_prefix('[') {
         let Some(close) = rest.find(']') else {
             return Err("The specified host is malformed".to_string());

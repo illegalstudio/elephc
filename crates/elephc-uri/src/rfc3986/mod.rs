@@ -15,7 +15,7 @@
 
 mod mutate;
 mod normalize;
-mod parse;
+pub(crate) mod parse;
 
 pub use mutate::{with_component, with_port};
 pub use parse::parse;
@@ -373,6 +373,35 @@ impl RfcUri {
         target.query = reference.query.clone();
         Ok(target)
     }
+
+    /// Returns the `Uri\Rfc3986\UriType` case ordinal, matching the enum's declaration order.
+    pub fn uri_type(&self) -> i64 {
+        if self.scheme.is_some() {
+            3
+        } else if self.authority.is_some() {
+            2
+        } else if self.path.starts_with('/') {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// Returns the `Uri\Rfc3986\UriHostType` case ordinal, or `None` without a host.
+    pub fn host_type(&self) -> Option<i64> {
+        let host = &self.authority.as_ref()?.host;
+        Some(match host.kind {
+            HostKind::Ipv6 => 1,
+            HostKind::IpvFuture => 2,
+            HostKind::RegName => {
+                if is_ipv4_address(&host.text) {
+                    0
+                } else {
+                    3
+                }
+            }
+        })
+    }
 }
 
 /// Applies RFC 3986 dot-segment removal to a resolved absolute path.
@@ -386,6 +415,30 @@ fn split_username(userinfo: &str) -> &str {
         Some(index) => &userinfo[..index],
         None => userinfo,
     }
+}
+
+/// Parses a host supplied by a builder or `withHost`, accepting bracketed literals.
+pub(crate) fn parse_host_text(value: &str) -> Result<Host, String> {
+    mutate::parse_host_value(value)
+}
+
+/// Returns whether `text` is a dotted-quad IPv4 address as uriparser accepts it.
+fn is_ipv4_address(text: &str) -> bool {
+    let mut parts = text.split('.');
+    let mut count = 0usize;
+    for part in parts.by_ref() {
+        count += 1;
+        if count > 4 || part.is_empty() || part.len() > 3 {
+            return false;
+        }
+        if !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        if part.parse::<u16>().map_or(true, |value| value > 255) {
+            return false;
+        }
+    }
+    count == 4
 }
 
 /// Splits a userinfo value at the first colon and returns its password half.

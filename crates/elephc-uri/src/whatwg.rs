@@ -58,6 +58,12 @@ pub struct WhatWgUri {
     /// yields a URL whose path setter is inert: every `withPath()` returns the same URL.
     /// Absolute file URLs do not have that state.
     path_write_locked: bool,
+    /// Serialized opaque path installed by `Uri\WhatWg\UrlBuilder::build()`.
+    ///
+    /// php-src initializes an opaque path directly rather than reparsing the assembled URL,
+    /// so leading and trailing spaces the `url` crate trims survive there. Every read and
+    /// serialization uses this value verbatim while it is set.
+    opaque_path: Option<String>,
 }
 
 /// Validation log that shares the parsed input instead of copying one suffix per warning.
@@ -118,6 +124,20 @@ pub fn parse(
     collect_trim_warnings(input, trimmed, &mut log);
     if base_is_file {
         append_drive_warnings(input, trimmed, &mut log);
+    }
+
+    // An empty reference keeps the base's scheme, authority, path, query, and overrides but
+    // drops its fragment. The `url` crate refuses this shape against an opaque base, while
+    // WHATWG and php-src accept it.
+    if let Some(base) = base {
+        if trimmed.0 == trimmed.1 {
+            let mut base = base.clone();
+            base.url.set_fragment(None);
+            return Ok((
+                base,
+                log.into_entries().into_iter().rev().collect::<Vec<_>>(),
+            ));
+        }
     }
 
     // Parse the reference lexbor actually sees. A leading C0/space is trimmed before the
@@ -310,6 +330,7 @@ fn finish_parsed_url(
         long_host,
         file_path,
         path_write_locked,
+        opaque_path: None,
     };
     inherit_base_overrides(&mut parsed, reference, base);
     parsed
@@ -760,21 +781,6 @@ fn append_host_warnings(
                 }
             }
         }
-        // Path backslashes are reverse solidi; query/fragment bytes are handled by the
-        // component scanner as InvalidUrlUnit instead.
-        let path_end = rest[separators..]
-            .find(['?', '#'])
-            .map(|offset| separators + offset)
-            .unwrap_or(rest.len());
-        for (offset, character) in rest[separators..path_end].char_indices() {
-            if character == '\\' {
-                log.suffix(
-                    start + rest_start + separators + offset,
-                    INVALID_REVERSE_SOLIDUS,
-                    false,
-                );
-            }
-        }
     }
     if let Some((authority_start, authority_end)) = authority_bounds_with_base(trimmed) {
         let authority = &trimmed[authority_start..authority_end];
@@ -795,6 +801,25 @@ fn append_host_warnings(
                 network_relative,
                 log,
             );
+        }
+    }
+    // Path backslashes are reverse solidi; query/fragment bytes are handled by the
+    // component scanner as InvalidUrlUnit instead. Host warnings come first so the
+    // detection order matches php-src's host-then-path validation log.
+    if special && run_special_block {
+        let separators = rest.bytes().take_while(|byte| *byte == b'/' || *byte == b'\\').count();
+        let path_end = rest[separators..]
+            .find(['?', '#'])
+            .map(|offset| separators + offset)
+            .unwrap_or(rest.len());
+        for (offset, character) in rest[separators..path_end].char_indices() {
+            if character == '\\' {
+                log.suffix(
+                    start + rest_start + separators + offset,
+                    INVALID_REVERSE_SOLIDUS,
+                    false,
+                );
+            }
         }
     }
 }
@@ -1708,8 +1733,9 @@ impl WhatWgUri {
                 }
             }
             COMPONENT_PATH => Some(
-                self.file_path
+                self.opaque_path
                     .clone()
+                    .or_else(|| self.file_path.clone())
                     .unwrap_or_else(|| self.url.path().to_string()),
             ),
             COMPONENT_QUERY => self.url.query().map(str::to_string),
@@ -1718,9 +1744,37 @@ impl WhatWgUri {
         }
     }
 
+    /// Returns the `Uri\WhatWg\UrlHostType` case ordinal, or `None` without a host.
+    pub fn host_type(&self) -> Option<i64> {
+        if self.long_host.is_some() {
+            return Some(2);
+        }
+        let special = is_special(self.url.scheme());
+        match self.url.host() {
+            Some(Host::Ipv4(_)) => Some(0),
+            Some(Host::Ipv6(_)) => Some(1),
+            Some(Host::Domain(domain)) => Some(if !special {
+                3
+            } else if domain.is_empty() {
+                4
+            } else {
+                2
+            }),
+            None => {
+                if special {
+                    Some(4)
+                } else if self.url.cannot_be_a_base() {
+                    None
+                } else {
+                    Some(3)
+                }
+            }
+        }
+    }
+
     /// Returns the number of path segments PHP's parser retains for this URL.
     pub fn charge_units(&self) -> i64 {
-        let path = self.url.path();
+        let path = self.opaque_path.as_deref().unwrap_or_else(|| self.url.path());
         let segments = path.split('/').count() as i64;
         let non_empty = path.split('/').filter(|part| !part.is_empty()).count() as i64;
         // The per-segment node estimate plus the path's real retained bytes: a single huge
@@ -1780,9 +1834,24 @@ impl WhatWgUri {
             && !exclude_fragment
             && self.long_host.is_none()
             && self.file_path.is_none()
+            && self.opaque_path.is_none()
             && !crate::charge::within_php_uri_len(self.url.as_str().len())
         {
             return None;
+        }
+        if let Some(path) = &self.opaque_path {
+            let mut text = format!("{}:{}", self.url.scheme(), path);
+            if let Some(query) = self.url.query() {
+                text.push('?');
+                text.push_str(query);
+            }
+            if !exclude_fragment {
+                if let Some(fragment) = self.url.fragment() {
+                    text.push('#');
+                    text.push_str(fragment);
+                }
+            }
+            return crate::charge::within_php_uri_len(text.len()).then_some(text);
         }
         let mut text = if unicode {
             self.unicode_string()
@@ -1862,12 +1931,14 @@ impl WhatWgUri {
                 if next.url.path() != previous_path {
                     next.file_path = None;
                 }
+                next.opaque_path = None;
             }
             COMPONENT_USERNAME => write_username(&mut next.url, value.unwrap_or("")),
             COMPONENT_PASSWORD => write_password(&mut next.url, value.unwrap_or("")),
             COMPONENT_HOST => {
                 // Host writes never alter the path component; the saved path is independent.
                 next.long_host = write_host(&mut next.url, value)?;
+                next.opaque_path = None;
             }
             COMPONENT_PATH => {
                 // PHP leaves an opaque (cannot-be-a-base) path unchanged, and lexbor keeps
@@ -1876,6 +1947,7 @@ impl WhatWgUri {
                     next.url.set_path(value.unwrap_or(""));
                     normalize_path_encoding(&mut next.url);
                     next.file_path = None;
+                    next.opaque_path = None;
                 }
             }
             COMPONENT_QUERY => {
@@ -1900,6 +1972,11 @@ impl WhatWgUri {
             }
         }
         Ok(next)
+    }
+
+    /// Stores the builder-normalized serialized opaque path.
+    pub fn set_opaque_path(&mut self, path: String) {
+        self.opaque_path = Some(path);
     }
 
     /// Writes the port into a clone of this URL.

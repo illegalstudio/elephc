@@ -105,6 +105,7 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     ]),
             )
             .build(),
+        enum_declaration("UrlHostType", &["IpV4", "IpV6", "Domain", "Opaque", "Empty"]),
         class("Url").span(Span::new(1, 1))
             .final_()
             .private_prop("__elephc_uri_handle", t_nullable(TypeExpr::Int), Some(e_null()))
@@ -602,10 +603,7 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     .body(vec![
                         s_assign("errors", e_array(vec![])),
                         s_assign("count", e_call("\\elephc_uri_error_count", vec![])),
-                        s_for(Some(s_assign("index", e_int(0))), Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("index"))), vec![
-                            s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
-                            s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
-                        ]),
+                        error_loop(),
                         s_return(e_var("errors")),
                     ]),
             )
@@ -899,6 +897,60 @@ pub(super) fn whatwg_declaration() -> Stmt {
                         )])),
                     ]),
             )
+            .method(
+                method("getHostType")
+                    .returns(t_nullable(t_class("\\Uri\\WhatWg\\UrlHostType")))
+                    .body(vec![
+                        s_assign("type", e_call("\\elephc_uri_host_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
+                        s_return(e_match(e_var("type"), vec![
+                            (vec![e_int(0)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "IpV4")),
+                            (vec![e_int(1)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "IpV6")),
+                            (vec![e_int(2)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Domain")),
+                            (vec![e_int(3)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Opaque")),
+                            (vec![e_int(4)], e_class_const("\\Uri\\WhatWg\\UrlHostType", "Empty")),
+                        ], Some(e_null()))),
+                    ]),
+            )
+            .method(
+                method("isSpecialScheme")
+                    .returns(TypeExpr::Bool)
+                    .body(vec![
+                        s_return(e_call("\\in_array", vec![e_method_call(e_this(), "getScheme", vec![]), e_array(vec![e_str("http"), e_str("https"), e_str("ws"), e_str("wss"), e_str("ftp"), e_str("file")]), e_bool(true)])),
+                    ]),
+            )
+            .method(
+                method("__elephc_override_opaque_path")
+                    .param("path", TypeExpr::Str)
+                    .returns(TypeExpr::Void)
+                    .body(vec![
+                        s_expr(e_call("\\elephc_uri_set_opaque_path", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_call("\\bin2hex", vec![e_var("path")])])),
+                    ]),
+            )
             .build()
     ])
+}
+/// Builds the validation-error collection loop for the active PHP profile.
+///
+/// `whatwg::parse` exposes the bridge log in reverse detection order (the pre-8.6
+/// presentation). PHP 8.6 reports detection order, so it walks that list backwards here.
+fn error_loop() -> Stmt {
+    let body = vec![
+        s_assign("context", e_call("\\elephc_uri_error_context", vec![e_var("index")])),
+        s_array_push("errors", e_new_fq("Uri\\WhatWg\\UrlValidationError", vec![e_ternary(e_binop(e_var("context"), BinOp::StrictEq, e_null()), e_str(""), e_cast(CastType::String, e_call("\\hex2bin", vec![e_var("context")]))), e_self_call("__elephc_type", vec![e_call("\\elephc_uri_error_type", vec![e_var("index")])]), e_binop(e_call("\\elephc_uri_error_failure", vec![e_var("index")]), BinOp::StrictNotEq, e_int(0))])),
+    ];
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        s_for(
+            Some(s_assign("index", e_binop(e_var("count"), BinOp::Sub, e_int(1)))),
+            Some(e_binop(e_var("index"), BinOp::GtEq, e_int(0))),
+            Some(s_expr(e_post_dec("index"))),
+            body,
+        )
+    } else {
+        s_for(
+            Some(s_assign("index", e_int(0))),
+            Some(e_binop(e_var("index"), BinOp::Lt, e_var("count"))),
+            Some(s_expr(e_post_inc("index"))),
+            body,
+        )
+    }
 }

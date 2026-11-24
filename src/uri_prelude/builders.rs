@@ -301,11 +301,23 @@ namespace Uri\WhatWg {
             $builderWarnings = $this->warnings;
             $this->warnings = [];
             $normalizedHost = $this->host === null ? null : \trim($this->host, "\t\n\r");
+            if ($normalizedHost !== null && self::__elephc_has_invalid_percent_encoding($normalizedHost)) {
+                throw new \Uri\WhatWg\InvalidUrlException(
+                    'The specified host is malformed (DomainInvalidCodePoint)',
+                    [
+                        new \Uri\WhatWg\UrlValidationError(
+                            (string) $normalizedHost,
+                            \Uri\WhatWg\UrlValidationErrorType::DomainInvalidCodePoint,
+                            true,
+                        ),
+                    ],
+                );
+            }
             $special = \in_array($this->scheme, ['http', 'https', 'ws', 'wss', 'ftp', 'file'], true);
             $hostErrors = [];
             if ($this->host !== null && $this->host !== '' && $normalizedHost === '') {
                 $hostErrors[] = new \Uri\WhatWg\UrlValidationError(
-                    $this->host,
+                    (string) $this->host,
                     \Uri\WhatWg\UrlValidationErrorType::InvalidUrlUnit,
                     false,
                 );
@@ -596,6 +608,23 @@ namespace Uri\WhatWg {
             $value = \str_replace("\n", '', $value);
             $value = \str_replace("\r", '', $value);
             return $value;
+        }
+
+        private static function __elephc_has_invalid_percent_encoding(string $value): bool
+        {
+            $length = \strlen($value);
+            for ($index = 0; $index < $length; $index++) {
+                if ($value[$index] !== '%') {
+                    continue;
+                }
+                if ($index + 2 >= $length
+                    || !\str_contains('0123456789abcdefABCDEF', $value[$index + 1])
+                    || !\str_contains('0123456789abcdefABCDEF', $value[$index + 2])) {
+                    return true;
+                }
+                $index += 2;
+            }
+            return false;
         }
 
         private static function __elephc_validate_host(string $host): void

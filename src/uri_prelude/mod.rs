@@ -15,6 +15,7 @@
 //! - Injection is pay-for-use: a program that never names `Uri\` neither declares the
 //!   classes nor links the bridge.
 
+mod builders;
 mod rfc3986;
 mod types;
 mod whatwg;
@@ -39,6 +40,7 @@ pub(crate) fn uri_declarations() -> Program {
             declarations.push(types::uri_types_declaration());
             declarations.push(rfc3986::rfc3986_declaration());
             declarations.push(whatwg::whatwg_declaration());
+            declarations.extend(builders::declarations());
             declarations
         },
     )
@@ -75,6 +77,30 @@ fn bridge_externs() -> Vec<Stmt> {
             .param("component", CType::Int)
             .param("value", CType::Str)
             .param("is_null", CType::Int)
+            .returns(CType::Int)
+            .build(),
+        extern_fn("elephc_uri_percent_encode", "elephc_uri")
+            .param("mode", CType::Int)
+            .param("input", CType::Str)
+            .returns(CType::NullableStr)
+            .build(),
+        extern_fn("elephc_uri_validate", "elephc_uri")
+            .param("kind", CType::Int)
+            .param("component", CType::Int)
+            .param("input", CType::Str)
+            .returns(CType::Int)
+            .build(),
+        extern_fn("elephc_uri_uri_type", "elephc_uri")
+            .param("handle", CType::Int)
+            .returns(CType::Int)
+            .build(),
+        extern_fn("elephc_uri_host_type", "elephc_uri")
+            .param("handle", CType::Int)
+            .returns(CType::Int)
+            .build(),
+        extern_fn("elephc_uri_set_opaque_path", "elephc_uri")
+            .param("handle", CType::Int)
+            .param("path", CType::Str)
             .returns(CType::Int)
             .build(),
         extern_fn("elephc_uri_charge_units", "elephc_uri")

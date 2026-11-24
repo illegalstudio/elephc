@@ -116,6 +116,18 @@ fn with_handle<R>(handle: u64, action: impl FnOnce(&UriValue) -> R) -> Option<R>
     })
 }
 
+/// Runs `action` against one live handle mutably without removing it.
+fn with_handle_mut<R>(handle: u64, action: impl FnOnce(&mut UriValue) -> R) -> Option<R> {
+    if handle == 0 {
+        return None;
+    }
+    let index = (handle - 1) as usize;
+    HANDLES.with(|handles| {
+        let mut handles = handles.borrow_mut();
+        handles.get_mut(index)?.as_mut().map(action)
+    })
+}
+
 /// Copies bytes into the thread-local return buffer and returns their hex text.
 fn return_hex(bytes: &[u8]) -> *const c_char {
     let hex = hex_encode(bytes);
@@ -458,6 +470,168 @@ pub extern "C" fn elephc_uri_with(
             0
         }
     }
+}
+
+/// Reads the RFC 3986 URI type ordinal, or `-1` for a non-RFC handle.
+#[no_mangle]
+pub extern "C" fn elephc_uri_uri_type(handle: u64) -> i64 {
+    clear_last();
+    with_handle(handle, |value| match value {
+        UriValue::Rfc(uri) => uri.uri_type(),
+        UriValue::WhatWg(_) => -1,
+    })
+    .unwrap_or(-1)
+}
+
+/// Reads the host type ordinal, or `-1` when the URI has no host.
+#[no_mangle]
+pub extern "C" fn elephc_uri_host_type(handle: u64) -> i64 {
+    clear_last();
+    with_handle(handle, |value| match value {
+        UriValue::Rfc(uri) => uri.host_type(),
+        UriValue::WhatWg(uri) => uri.host_type(),
+    })
+    .flatten()
+    .unwrap_or(-1)
+}
+
+/// Validates one builder component without mutating any value.
+///
+/// Returns `0` when the value is valid, `1` for a malformed component, and `2` for a
+/// WHATWG port that is outside the 16-bit range. `kind` selects the RFC 3986 (`0`) or
+/// WHATWG (`1`) rules; `component` uses the same ordinals as `elephc_uri_component`.
+#[no_mangle]
+pub extern "C" fn elephc_uri_validate(kind: i64, component: i64, input: *const c_char) -> i64 {
+    clear_last();
+    let Some(bytes) = (unsafe { read_hex(input) }) else {
+        return 1;
+    };
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return 1;
+    };
+    match kind {
+        0 => {
+            let valid = match component {
+                rfc3986::COMPONENT_SCHEME => rfc3986::parse::is_valid_scheme(value),
+                rfc3986::COMPONENT_USERINFO => rfc3986::parse::is_valid_userinfo(value),
+                rfc3986::COMPONENT_HOST => rfc3986::parse_host_text(value).is_ok(),
+                rfc3986::COMPONENT_PATH => {
+                    rfc3986::parse::is_valid_path_for_write(value, false)
+                }
+                rfc3986::COMPONENT_QUERY | rfc3986::COMPONENT_FRAGMENT => {
+                    rfc3986::parse::is_valid_query_or_fragment(value)
+                }
+                _ => false,
+            };
+            i64::from(!valid)
+        }
+        1 => {
+            let valid = match component {
+                rfc3986::COMPONENT_SCHEME => is_whatwg_scheme(value),
+                _ => true,
+            };
+            i64::from(!valid)
+        }
+        _ => 1,
+    }
+}
+
+/// Returns whether `value` matches the WHATWG scheme production.
+fn is_whatwg_scheme(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    match bytes.next() {
+        Some(first) if first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
+/// Applies the WHATWG percent-encode set selected by `mode` and returns the ASCII result.
+///
+/// The input arrives hex-encoded; the result is hex-encoded too so the caller can rebuild the
+/// exact byte string. `mode` matches `Uri\WhatWg\UrlPercentEncodingMode`'s declaration order.
+#[no_mangle]
+pub extern "C" fn elephc_uri_percent_encode(mode: i64, input: *const c_char) -> *const c_char {
+    clear_last();
+    let Some(bytes) = (unsafe { read_hex(input) }) else {
+        return std::ptr::null();
+    };
+    let mut out = String::with_capacity(bytes.len());
+    for byte in bytes {
+        let encode = match mode {
+            0 | 1 => userinfo_encode(byte),
+            2 | 4 => c0_encode(byte),
+            3 => path_encode(byte),
+            5 => path_encode(byte) || byte == b'/',
+            6 => query_encode(byte),
+            7 => query_encode(byte) || byte == b'\'',
+            8 => {
+                if byte == b' ' {
+                    out.push('+');
+                    continue;
+                }
+                !(byte.is_ascii_alphanumeric() || matches!(byte, b'*' | b'-' | b'.' | b'_'))
+            }
+            9 => fragment_encode(byte),
+            _ => return std::ptr::null(),
+        };
+        if encode {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        } else {
+            out.push(byte as char);
+        }
+    }
+    return_hex(out.as_bytes())
+}
+
+/// C0 control percent-encode set.
+fn c0_encode(byte: u8) -> bool {
+    byte < 0x20 || byte > 0x7E
+}
+
+/// Fragment percent-encode set.
+fn fragment_encode(byte: u8) -> bool {
+    c0_encode(byte) || matches!(byte, b' ' | b'"' | b'<' | b'>' | b'`')
+}
+
+/// Query percent-encode set.
+fn query_encode(byte: u8) -> bool {
+    c0_encode(byte) || matches!(byte, b' ' | b'"' | b'#' | b'<' | b'>')
+}
+
+/// Path percent-encode set.
+fn path_encode(byte: u8) -> bool {
+    query_encode(byte) || matches!(byte, b'?' | b'^' | b'`' | b'{' | b'}')
+}
+
+/// Userinfo percent-encode set.
+fn userinfo_encode(byte: u8) -> bool {
+    path_encode(byte)
+        || matches!(byte, b'/' | b':' | b';' | b'=' | b'@' | b'[' | b'\\' | b']' | b'|')
+}
+
+/// Installs the builder-normalized serialized opaque path on a WHATWG URL.
+///
+/// Input: `handle` = live WHATWG URL handle, `path` = hex-encoded serialized path.
+/// Output: 1 when the handle names a WHATWG URL, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_uri_set_opaque_path(handle: u64, path: *const c_char) -> i64 {
+    clear_last();
+    let Some(bytes) = (unsafe { read_hex(path) }) else {
+        return 0;
+    };
+    let Ok(path) = String::from_utf8(bytes) else {
+        return 0;
+    };
+    with_handle_mut(handle, |value| match value {
+        UriValue::WhatWg(uri) => {
+            uri.set_opaque_path(path);
+            1
+        }
+        UriValue::Rfc(_) => 0,
+    })
+    .unwrap_or(0)
 }
 
 /// Returns the PHP-side memory charge units for one URI handle, or zero when invalid.

@@ -36,10 +36,6 @@ struct Phpt {
 
 /// Runs the vendored PHP 8.6 `ext/uri` fixture matrix.
 ///
-/// Ignored while the 8.6 builder surface is ported onto the mainline `elephc-uri` rewrite:
-/// the new crate has no `elephc_uri_validate`/`elephc_uri_percent_encode`/`getHostType`
-/// entry points yet, so the builders are not declared. See the PHP 8.6 page's deferred row.
-#[ignore = "8.6 URI builders await the mainline elephc-uri port"]
 #[test]
 fn test_uri86_php_src_bundle() {
     let root = fixture_root();

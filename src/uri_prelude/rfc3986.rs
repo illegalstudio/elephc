@@ -18,6 +18,18 @@ use crate::synthetic_class::*;
 /// Builds one URI prelude declaration.
 pub(super) fn rfc3986_declaration() -> Stmt {
     s_namespace("Uri\\Rfc3986", vec![
+        enum_declaration("UriType", &[
+            "AbsolutePathReference",
+            "RelativePathReference",
+            "NetworkPathReference",
+            "Uri",
+        ]),
+        enum_declaration("UriHostType", &[
+            "IpV4",
+            "IpV6",
+            "IpVFuture",
+            "RegisteredName",
+        ]),
         class("Uri").span(Span::new(1, 1))
             .final_()
             .private_prop("__elephc_uri_handle", t_nullable(TypeExpr::Int), Some(e_null()))
@@ -555,6 +567,32 @@ pub(super) fn rfc3986_declaration() -> Stmt {
                             e_self_static_prop("__elephc_handle_owner"),
                             e_cast(CastType::String, e_call("\\spl_object_id", vec![e_var("object")])),
                         )])),
+                    ]),
+            )
+            .method(
+                method("getUriType")
+                    .returns(t_nullable(t_class("\\Uri\\Rfc3986\\UriType")))
+                    .body(vec![
+                        s_assign("type", e_call("\\elephc_uri_uri_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
+                        s_return(e_match(e_var("type"), vec![
+                            (vec![e_int(0)], e_class_const("\\Uri\\Rfc3986\\UriType", "AbsolutePathReference")),
+                            (vec![e_int(1)], e_class_const("\\Uri\\Rfc3986\\UriType", "RelativePathReference")),
+                            (vec![e_int(2)], e_class_const("\\Uri\\Rfc3986\\UriType", "NetworkPathReference")),
+                            (vec![e_int(3)], e_class_const("\\Uri\\Rfc3986\\UriType", "Uri")),
+                        ], Some(e_null()))),
+                    ]),
+            )
+            .method(
+                method("getHostType")
+                    .returns(t_nullable(t_class("\\Uri\\Rfc3986\\UriHostType")))
+                    .body(vec![
+                        s_assign("type", e_call("\\elephc_uri_host_type", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0))])),
+                        s_return(e_match(e_var("type"), vec![
+                            (vec![e_int(0)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpV4")),
+                            (vec![e_int(1)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpV6")),
+                            (vec![e_int(2)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "IpVFuture")),
+                            (vec![e_int(3)], e_class_const("\\Uri\\Rfc3986\\UriHostType", "RegisteredName")),
+                        ], Some(e_null()))),
                     ]),
             )
             .build()

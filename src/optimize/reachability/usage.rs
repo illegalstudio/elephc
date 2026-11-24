@@ -777,6 +777,13 @@ impl Scanner<'_> {
             for attribute in &group.attributes {
                 let class = self.record_class(attribute.name.as_str());
                 self.usage.instantiated_classes.insert(class);
+                // A `#[\SensitiveParameter]` activation wraps the argument in the Core value
+                // class when a trace is materialized; the class is otherwise pruned because
+                // the attribute reference alone does not name it.
+                if crate::names::php_symbol_key(attribute.name.as_str()) == "sensitiveparameter" {
+                    let value = self.record_class("SensitiveParameterValue");
+                    self.usage.instantiated_classes.insert(value);
+                }
                 for argument in &attribute.args { self.scan_expr(argument); }
             }
         }

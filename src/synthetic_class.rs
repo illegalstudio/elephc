@@ -62,8 +62,8 @@ pub(crate) mod oracle;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     Attribute, AttributeGroup, BinOp, CType, CastType, CatchClause, ClassConst, ClassMethod,
-    ClassProperty, Expr, ExprKind, ExternParam, Program, PropertyHooks, StaticReceiver, Stmt,
-    StmtKind, TypeExpr, Visibility,
+    ClassProperty, EnumCaseDecl, Expr, ExprKind, ExternParam, Program, PropertyHooks,
+    StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::source::{SourceMode, SourceProfile};
 use crate::span::Span;
@@ -2784,6 +2784,30 @@ impl InterfaceBuilder {
     }
 }
 
+/// Builds a unit enum declaration with one case per name.
+pub fn enum_declaration(name: &str, cases: &[&str]) -> Stmt {
+    Stmt::new(
+        StmtKind::EnumDecl {
+            name: name.to_string(),
+            generics: None,
+            backing_type: None,
+            cases: cases
+                .iter()
+                .map(|case| EnumCaseDecl {
+                    name: (*case).to_string(),
+                    value: None,
+                    span: Span::dummy(),
+                    attributes: Vec::new(),
+                })
+                .collect(),
+            implements: Vec::new(),
+            trait_uses: Vec::new(),
+            methods: Vec::new(),
+            constants: Vec::new(),
+        },
+        Span::dummy(),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;

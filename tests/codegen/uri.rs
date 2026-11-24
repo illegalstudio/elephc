@@ -1492,7 +1492,7 @@ echo count($whatwg->getMethods()), "|", count($whatwg->getProperties()), "|",
     );
     assert_eq!(
         out,
-        "33|0|0|0|0|0|0\n26|0|0|0|0|0|0\n"
+        "35|0|0|0|0|0|0\n28|0|0|0|0|0|0\n"
     );
 }
 
