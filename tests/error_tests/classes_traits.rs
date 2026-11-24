@@ -1935,6 +1935,28 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
         assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
     }
+    // PHP checks a requirement a trait satisfied itself when it declares that trait: in trait
+    // declaration order, whatever the `use` order or the class sharing an error slot, and also
+    // for a trait no class uses.
+    let two_traits = "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\n";
+    for (source, message) in [
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\necho 1;".to_string(), "bar"),
+        (format!("{two_traits}class C {{ use U, T; }}"), "bar"),
+        (format!("{two_traits}enum E {{ use U, T; case X; }}"), "bar"),
+        (format!("{two_traits}trait A {{ abstract public function foo(); }}\ninterface I {{ public function foo(); }}\nclass Base implements I {{}}\nclass C extends Base {{ use A, U {{ A::foo as final; }} public function foo() {{}} }}\nclass E extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "bar"),
+        ("trait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C { use T; }".to_string(), "baz"),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+    // An unused trait whose own requirement is satisfied compatibly is valid.
+    assert!(
+        check_source_full("<?php\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): string { return 'x'; } }\necho 1;\n").is_ok(),
+        "compatible unused trait should be accepted"
+    );
     // PHP compiles a class body before it early-binds the parent, binds only a parent declared
     // earlier, and rejects an earlier trait or an internal final class as a parent while
     // compiling.
