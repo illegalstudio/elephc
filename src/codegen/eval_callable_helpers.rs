@@ -1172,6 +1172,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         sig,
     );
     let invoker = RuntimeCallableInvoker {
+        internal_arity: None,
         label: PENDING_INVOKER_LABEL,
         sig,
         captures,

@@ -1253,7 +1253,13 @@ pub fn inject_if_used(
         combined.extend(declarations);
     }
     if needs_invalid_callback {
-        let declarations = crate::invalid_callback_prelude::declarations(&program);
+        // Asking a class about its methods by name keeps every class and method alive in a closed
+        // world; the helper pays that only for a program that already does.
+        let deep = ["class_exists", "interface_exists", "method_exists", "is_callable",
+            "class_parents", "get_parent_class", "is_subclass_of"]
+            .iter()
+            .any(|name| usage.references(name));
+        let declarations = crate::invalid_callback_prelude::declarations(&program, deep);
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

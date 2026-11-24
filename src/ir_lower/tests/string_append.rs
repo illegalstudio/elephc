@@ -11,8 +11,13 @@
 use crate::ir::{Immediate, LocalKind, Op, Ownership, ValidationError};
 
 /// Counts admitted append transactions across the source functions and closures.
+///
+/// The compiler's own reserved helpers (`__elephc_*`, such as the invalid-callback message
+/// builder a dynamic call pulls in) build their messages with concatenations of their own; the
+/// fixtures state what the PHP source does, so those helpers are left out.
 fn appends(module: &crate::ir::Module) -> usize {
     module.functions.iter().chain(&module.closures).chain(&module.class_methods)
+        .filter(|function| !function.name.starts_with("__elephc_"))
         .flat_map(|function| &function.instructions).filter(|inst| inst.op == Op::StrAppend).count()
 }
 

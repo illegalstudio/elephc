@@ -1,0 +1,17 @@
+outside r1: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+outside r2: ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+outside r3: ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+outside r4: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+outside r5: ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+outside r6: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+outside r7: ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+private-scope r1: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+private-scope r2: ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+private-scope r3: ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+private-scope r4: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+private-scope r5: ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+private-scope r6: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+private-scope r7: ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+private-scope inline: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+private-scope inline map: TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+private-scope inline direct: ArgumentCountError: strlen() expects exactly 1 argument, 0 given

@@ -41,12 +41,21 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_in_class(
-                ctx, sig, &[], owns_string_return,
-                descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_BUILTIN
-                    && descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
-                default_scope.as_deref(),
-            ));
+            .map(|sig| {
+                // An internal function refuses a wrong argument count like php does
+                // (`strlen() expects exactly 1 argument, 0 given`), which only its own invoker
+                // body, keyed by the name, can word.
+                if descriptor.kind == callable_descriptor::CALLABLE_DESC_KIND_BUILTIN {
+                    return super::runtime_wrappers::emit_runtime_builtin_invoker_inline(
+                        ctx, target.trim_start_matches('\\'), sig,
+                    );
+                }
+                emit_runtime_callable_invoker_in_class(
+                    ctx, sig, &[], owns_string_return,
+                    descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
+                    default_scope.as_deref(),
+                )
+            });
         let descriptor_label = match descriptor.entry_label.as_deref() {
             Some(entry_label) => {
                 callable_descriptor::static_descriptor_with_optional_invoker_meta(

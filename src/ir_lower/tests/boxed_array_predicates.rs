@@ -95,8 +95,12 @@ echo count($first), count($second), count($third);
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         // The first-class descriptor also emits one synthetic wrapper directly into assembly.
         // It is not part of the six source call sites in the original EIR module.
-        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 7,
-            "{name}: six source calls and one first-class descriptor wrapper");
+        // The merged build also shares one `_eir_shared_callable_builtin_*` ladder for the builtin
+        // names a string callable (`call_user_func("array_filter", ...)`) can select, and that
+        // ladder reaches the boxed runtime once: six source calls, the first-class descriptor
+        // wrapper and the shared ladder.
+        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 8,
+            "{name}: six source calls, one first-class descriptor wrapper, one shared builtin ladder");
         assert!(!asm.contains("__rt_array_filter"), "{name}: no scalar-only filter runtime");
     }
 }

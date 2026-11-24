@@ -47,10 +47,18 @@ pub(super) fn reflection_parameter_default_value(
             })
             .filter(helper_for_default)
     };
-    if let Some(helper) = helpers()
-        .find(|function| crate::ir_lower::is_reflection_default_helper(&function.name))
-        .or_else(|| helpers().next())
-    {
+    // One pass over the helpers at this span: the reflection twin wins, any other match is kept as
+    // the fallback, so no candidate is examined twice.
+    let mut fallback = None;
+    let mut chosen = None;
+    for function in helpers() {
+        if crate::ir_lower::is_reflection_default_helper(&function.name) {
+            chosen = Some(function);
+            break;
+        }
+        fallback.get_or_insert(function);
+    }
+    if let Some(helper) = chosen.or(fallback) {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }
     if let Some(value) =

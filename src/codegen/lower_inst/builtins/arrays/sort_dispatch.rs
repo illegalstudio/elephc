@@ -420,6 +420,43 @@ pub(super) fn lower_user_sort_static_callback(
             store_if_result(ctx, inst)?;
             return Ok(());
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            // A callback of unknown type resolves at run time like the boxed `array_map` one:
+            // a descriptor, or php's catchable TypeError naming the argument.
+            let message: &'static str = match name {
+                "uasort" => "uasort(): Argument #2 ($callback) must be a valid callback",
+                "uksort" => "uksort(): Argument #2 ($callback) must be a valid callback",
+                _ => "usort(): Argument #2 ($callback) must be a valid callback",
+            };
+            let wrapper_label = emit_descriptor_callback_wrapper(
+                ctx, callback_arg_types.to_vec(), PhpType::Int,
+            );
+            crate::codegen::lower_inst::callables::emit_runtime_mixed_callable_descriptor_value_with_type_error(
+                ctx, callback, name, message,
+            )?;
+            let result = abi::int_result_reg(ctx.emitter);
+            let owner = abi::tertiary_scratch_reg(ctx.emitter);
+            let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, result);
+            abi::emit_temporary_stack_address(ctx.emitter, owner, 0);
+            abi::emit_push_call_operand_owner(ctx.emitter, owner, true);
+            let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+            let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+            abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
+            ctx.load_value_to_reg(array, array_arg_reg)?;
+            abi::emit_temporary_stack_address(ctx.emitter, env_arg_reg, abi::CALL_OPERAND_OWNER_RECORD_BYTES);
+            abi::emit_call_label(ctx.emitter, sort_helper);
+            if retain_owed {
+                ctx.retain_receiver_after_callback(array)?;
+            }
+            abi::emit_pop_call_operand_owner(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+            callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+            abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+            abi::emit_load_int_immediate(ctx.emitter, result, 1);
+            store_if_result(ctx, inst)?;
+            return Ok(());
+        }
         PhpType::Str => {
             lower_runtime_string_descriptor_callback(
                 ctx,

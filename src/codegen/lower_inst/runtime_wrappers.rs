@@ -63,6 +63,9 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
             && (super::builtin_returns_owned_string(name)
                 || builtin_wrapper_string_cast_is_owning(name, sig));
+        if let Some(label) = emit_internal_arity_invoker(ctx, name, sig, owns_string_return) {
+            return label;
+        }
         return emit_runtime_callable_invoker_with_string_owner(
             ctx,
             sig,
@@ -77,6 +80,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             ctx.module, None, sig,
         );
         let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        internal_arity: None,
             label: &label,
             sig,
             captures: &[],
@@ -100,6 +104,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         ctx.module, None, sig,
     );
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        internal_arity: None,
         label: &label,
         sig,
         captures: &[],
@@ -117,6 +122,73 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
     );
     ctx.emitter.end_out_of_line(scope);
     label
+}
+
+/// Emits the invoker of an internal function that refuses a wrong argument count like php.
+///
+/// A user function ignores surplus arguments and words a missing one its own way, but php
+/// raises `ArgumentCountError: strlen() expects exactly 1 argument, 2 given` for an internal one.
+/// The body is keyed by the function's name, since its message names it. Returns `None` when the
+/// program carries no arity helper or the signature has named-only shapes the check cannot cover.
+fn emit_internal_arity_invoker(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    sig: &FunctionSig,
+    owns_string_return: bool,
+) -> Option<String> {
+    let helper = crate::invalid_callback_prelude::ARITY_ERROR_HELPER_NAME;
+    if !ctx.module.has_function_named(helper) {
+        return None;
+    }
+    let helper_collector = ctx.callable_function_by_name(helper)?.params.last().is_some_and(|param| {
+        param.name == crate::func_args::HIDDEN_ARGS_PARAM
+    });
+    let regular = sig.params.len();
+    let min = (0..regular)
+        .filter(|index| sig.defaults.get(*index).and_then(Option::as_ref).is_none())
+        .map(|index| index + 1)
+        .max()
+        .unwrap_or(0);
+    let max = sig.variadic.is_none().then_some(regular);
+    if crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig) {
+        ctx.shared.require_callable_argument_normalizer();
+    }
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(ctx.module, None, sig);
+    // The name rides in a marker "capture" so the per-worker cache tells two builtins of the same
+    // signature apart; the invoker itself captures nothing.
+    let marker = [(format!("internal:{name}"), PhpType::Void, false)];
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, &marker, owns_string_return, false, &defaults) {
+        return Some(label);
+    }
+    let key = format!("callable_invoker:internal:{name}:{:?}:{owns_string_return}:{:?}", sig, defaults);
+    let label = ctx.keyed_global_label(&key, "callable_invoker");
+    let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        internal_arity: Some(super::super::runtime_callable_invoker::InternalArity {
+            name,
+            min,
+            max,
+            helper_collector,
+        }),
+        label: &label,
+        sig,
+        captures: &[],
+        mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
+        owns_string_return,
+        php_return_status: false,
+        defaults: &defaults,
+    };
+    let scope = ctx.emitter.begin_out_of_line();
+    ctx.emit_keyed_helper(&key, |ctx| {
+        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+            ctx.emitter,
+            ctx.data,
+            &invoker,
+        );
+    });
+    ctx.emitter.end_out_of_line(scope);
+    ctx.shared.cache_runtime_callable_invoker(sig, &marker, owns_string_return, false, &defaults, &label);
+    Some(label)
 }
 
 /// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
@@ -218,6 +290,7 @@ fn emit_runtime_callable_invoker_inline_impl(
         ctx.keyed_global_label(&key, "callable_invoker")
     };
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        internal_arity: None,
         label: &label,
         sig,
         captures,

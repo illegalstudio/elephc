@@ -28,10 +28,103 @@ use crate::synthetic_class::{
 /// Reserved name of the helper, shared with the lowering that calls it.
 pub(crate) const INVALID_CALLBACK_HELPER_NAME: &str = "__elephc_invalid_callback";
 
+/// Reserved name of the helper that raises an internal function's argument-count error.
+pub(crate) const ARITY_ERROR_HELPER_NAME: &str = "__elephc_internal_arity_error";
+
+/// Builds `__elephc_internal_arity_error(string $name, int $min, int $max, int $given)`.
+///
+/// php refuses a wrong argument count for an internal function with
+/// `strlen() expects exactly 1 argument, 0 given` (`at least` / `at most` when the function
+/// accepts a range; `$max` is -1 for a variadic). The descriptor invokers of builtins call it.
+fn arity_error_helper() -> Stmt {
+    let exact = e_binop(e_var("max"), BinOp::StrictEq, e_var("min"));
+    function(ARITY_ERROR_HELPER_NAME)
+        .param("name", TypeExpr::Str)
+        .param("min", TypeExpr::Int)
+        .param("max", TypeExpr::Int)
+        .param("given", TypeExpr::Int)
+        .returns(t_mixed())
+        .body(vec![
+            s_if(
+                e_binop(e_var("given"), BinOp::Lt, e_var("min")),
+                vec![
+                    s_assign("kind", e_ternary(exact.clone(), e_str("exactly"), e_str("at least"))),
+                    s_assign("count", e_var("min")),
+                ],
+                vec![],
+                Some(vec![
+                    s_assign("kind", e_ternary(exact, e_str("exactly"), e_str("at most"))),
+                    s_assign("count", e_var("max")),
+                ]),
+            ),
+            s_throw(e_new_fq(
+                "ArgumentCountError",
+                vec![e_concat_all(vec![
+                    e_var("name"),
+                    e_str("() expects "),
+                    e_var("kind"),
+                    e_str(" "),
+                    e_var("count"),
+                    e_str(" argument"),
+                    e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(1)), e_str(""), e_str("s")),
+                    e_str(", "),
+                    e_var("given"),
+                    e_str(" given"),
+                ])],
+            )),
+            s_return(e_null()),
+        ])
+        .build()
+}
+
 /// Returns the helper declaration for injection, listing the program's abstract methods.
-pub(crate) fn declarations(program: &Program) -> Program {
+///
+/// `deep` asks the program's own classes about their methods (`method_exists`, `class_exists`,
+/// `class_parents`). A name-keyed introspection builtin makes the closed world keep every class
+/// and method alive (hundreds of functions: the Reflection classes among them), so the helper
+/// only pays that when the program already calls such a builtin. Without it the reasons that
+/// need no class tables stay exact, an unknown class is judged against the program's declared
+/// names, and a missing method is reported as such.
+pub(crate) fn declarations(program: &Program, deep: bool) -> Program {
     let abstract_methods = abstract_method_keys(program);
-    php_semantics_declarations(|| vec![helper(&abstract_methods)])
+    let classes = declared_class_names(program);
+    php_semantics_declarations(|| vec![helper(&abstract_methods, &classes, deep), arity_error_helper()])
+}
+
+/// Lower-cased names of the classes and interfaces the program declares.
+fn declared_class_names(program: &Program) -> Vec<String> {
+    let mut names = Vec::new();
+    crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+        if let StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } = &stmt.kind {
+            names.push(name.trim_start_matches('\\').to_ascii_lowercase());
+        }
+    });
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// `true` when `$first` (a class-name string) names no class: the introspection builtins when
+/// `deep`, otherwise the program's declared names (everything is assumed to exist when the
+/// program declares more classes than the list is worth).
+fn class_is_unknown(deep: bool, classes: &[String]) -> Expr {
+    if deep {
+        return e_binop(
+            e_not(e_call("class_exists", vec![e_var("first")])),
+            BinOp::And,
+            e_not(e_call("interface_exists", vec![e_var("first")])),
+        );
+    }
+    if classes.is_empty() || classes.len() > 256 {
+        return e_bool(classes.is_empty());
+    }
+    e_not(e_call(
+        "in_array",
+        vec![
+            e_call("strtolower", vec![e_call("ltrim", vec![e_var("first"), e_str("\\")])]),
+            e_array(classes.iter().map(|name| e_str(name)).collect()),
+        ],
+    ))
 }
 
 /// Lower-cased `class::method` keys of every abstract class method and interface method.
@@ -80,7 +173,7 @@ fn quoted(lead: &str, middle: Expr, tail: &str) -> Expr {
 }
 
 /// Builds `__elephc_invalid_callback(mixed $callback, string $prefix): mixed`.
-fn helper(abstract_methods: &[String]) -> Stmt {
+fn helper(abstract_methods: &[String], classes: &[String], deep: bool) -> Stmt {
     let not_string_or_object = e_binop(
         e_not(e_call("is_string", vec![e_var("first")])),
         BinOp::And,
@@ -121,11 +214,7 @@ fn helper(abstract_methods: &[String]) -> Stmt {
             e_binop(
                 e_call("is_string", vec![e_var("first")]),
                 BinOp::And,
-                e_binop(
-                    e_not(e_call("class_exists", vec![e_var("first")])),
-                    BinOp::And,
-                    e_not(e_call("interface_exists", vec![e_var("first")])),
-                ),
+                class_is_unknown(deep, classes),
             ),
             fail(
                 quoted("Class \"", e_var("first"), "\" not found"),
@@ -142,38 +231,19 @@ fn helper(abstract_methods: &[String]) -> Stmt {
                 e_var("first"),
             ),
         ),
-        s_if(
-            e_not(e_call("method_exists", vec![e_var("first"), e_var("method")])),
-            fail(
-                e_concat_all(vec![
-                    e_str("Call to undefined method "),
-                    e_var("class"),
-                    e_str("::"),
-                    e_var("method"),
-                    e_str("()"),
-                ]),
-                e_concat_all(vec![
-                    e_str("class "),
-                    e_var("class"),
-                    e_str(" does not have a method \""),
-                    e_var("method"),
-                    e_str("\""),
-                ]),
-            ),
-            vec![],
-            None,
-        ),
     ];
     if !abstract_methods.is_empty() {
         let keys = e_array(abstract_methods.iter().map(|key| e_str(key)).collect());
         // The class and its ancestors, nearest first: the declaring class names the method.
         array_arm.push(s_assign("chain", e_array(vec![e_var("class")])));
-        array_arm.push(s_foreach(
-            e_call("class_parents", vec![e_var("class")]),
-            None,
-            "ancestor",
-            vec![s_array_push("chain", e_var("ancestor"))],
-        ));
+        if deep {
+            array_arm.push(s_foreach(
+                e_call("class_parents", vec![e_var("class")]),
+                None,
+                "ancestor",
+                vec![s_array_push("chain", e_var("ancestor"))],
+            ));
+        }
         array_arm.push(s_foreach(
             e_var("chain"),
             None,
@@ -213,6 +283,34 @@ fn helper(abstract_methods: &[String]) -> Stmt {
             ],
         ));
     }
+    // A method the class does not have. Without the introspection builtins this is the answer for
+    // every method that is not abstract, which is the common failure of a callable array.
+    let method_missing = if deep {
+        e_not(e_call("method_exists", vec![e_var("first"), e_var("method")]))
+    } else {
+        e_bool(true)
+    };
+    array_arm.push(s_if(
+        method_missing,
+        fail(
+            e_concat_all(vec![
+                e_str("Call to undefined method "),
+                e_var("class"),
+                e_str("::"),
+                e_var("method"),
+                e_str("()"),
+            ]),
+            e_concat_all(vec![
+                e_str("class "),
+                e_var("class"),
+                e_str(" does not have a method \""),
+                e_var("method"),
+                e_str("\""),
+            ]),
+        ),
+        vec![],
+        None,
+    ));
     // Reachable only for a method that exists, is not abstract and is not reached from the
     // caller's scope as a static call: php words it as a non-static method called statically.
     array_arm.extend(fail(

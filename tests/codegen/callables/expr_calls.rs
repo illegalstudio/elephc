@@ -2537,6 +2537,25 @@ fn test_unresolvable_boxed_callables_raise_php_catchable_errors() {
     assert_eq!(run_invalid_callbacks(""), include_str!("invalid_callbacks.expected.txt"));
 }
 
+/// `strlen(...)` held as an opaque callable refuses a wrong argument count like php: an
+/// `ArgumentCountError` "strlen() expects exactly 1 argument, N given" for a missing argument and,
+/// because it is an internal function, for a surplus one, through `call_user_func`,
+/// `call_user_func_array`, `array_map`, `usort` (a `mixed` callback) and `$f()`, from outside and
+/// from a class scope. Oracle: `php -n` printed `internal_arity.expected.txt`.
+#[test]
+fn test_internal_function_callable_refuses_a_wrong_argument_count_like_php() {
+    let source = include_str!("internal_arity.php").replace("EVAL_LINE", "");
+    assert_eq!(compile_and_run(&source), include_str!("internal_arity.expected.txt"));
+}
+
+/// The same program with the eval bridge linked.
+#[test]
+fn test_internal_function_callable_refuses_a_wrong_argument_count_with_eval_linked() {
+    let source = include_str!("internal_arity.php")
+        .replace("EVAL_LINE", "$code = $argc > 9 ? 'return 1;' : ''; eval($code);");
+    assert_eq!(compile_and_run(&source), include_str!("internal_arity.expected.txt"));
+}
+
 /// The same matrix in a program that links the eval bridge, where the module-wide callback
 /// normalizer (not the scope-aware dispatcher) serves the unrestricted sites.
 #[test]

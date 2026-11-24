@@ -143,6 +143,22 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
     pub(super) defaults: &'a [Option<InvokerDefaultValue>],
+    /// Set for a builtin reached through a descriptor: a wrong argument count raises php's
+    /// `ArgumentCountError` (`strlen() expects exactly 1 argument, 0 given`) instead of the generic one.
+    pub(super) internal_arity: Option<InternalArity<'a>>,
+}
+
+/// The argument-count contract of an internal function an invoker body adapts.
+#[derive(Clone, Copy)]
+pub(super) struct InternalArity<'a> {
+    /// The function's php name, as `strlen`.
+    pub(super) name: &'a str,
+    /// Fewest arguments php accepts.
+    pub(super) min: usize,
+    /// Most arguments php accepts; `None` for a variadic.
+    pub(super) max: Option<usize>,
+    /// Whether the error helper carries the hidden surplus-argument collector parameter.
+    pub(super) helper_collector: bool,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -171,6 +187,8 @@ struct InvokerEmitContext {
     literal_parameter: Option<(usize, String)>,
     /// The declared parameter being bound, for the refusal php raises on a boxed argument.
     declared_parameter: Option<(usize, String)>,
+    /// Arity contract of the internal function this body adapts, when it is one.
+    internal_arity: Option<(String, usize, Option<usize>, bool)>,
 }
 
 impl InvokerEmitContext {
@@ -195,6 +213,7 @@ impl InvokerEmitContext {
             literal_parameter: None,
             declared_parameter: None,
             normalizes_assoc: false,
+            internal_arity: None,
         }
     }
 
@@ -509,6 +528,9 @@ fn emit_runtime_callable_invoker_impl(
     ctx.normalizes_assoc = normalizes_assoc;
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
+    ctx.internal_arity = invoker.internal_arity.as_ref().map(|arity| {
+        (arity.name.to_string(), arity.min, arity.max, arity.helper_collector)
+    });
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -1470,6 +1492,10 @@ fn emit_indexed_required_arg_count_check(
         emit_mbstring_argument_count_check(operation, len_reg, emitter, ctx);
         return;
     }
+    if let Some((name, min, max, collector)) = ctx.internal_arity.clone() {
+        emit_internal_arity_check(&name, min, max, collector, len_reg, emitter, ctx, data);
+        return;
+    }
     let required_count = (0..regular_param_count)
         .filter(|idx| sig.defaults.get(*idx).and_then(Option::as_ref).is_none())
         .map(|idx| idx + 1)
@@ -1482,6 +1508,62 @@ fn emit_indexed_required_arg_count_check(
     emit_compare_len_ge(emitter, len_reg, required_count, &ok_label);
     emit_call_user_func_array_missing_arg_error(emitter, data);
     emitter.label(&ok_label);
+}
+
+/// Raises php's `ArgumentCountError` for an internal function reached through a descriptor.
+///
+/// php refuses both too few and too many arguments for an internal function
+/// (`strlen() expects exactly 1 argument, 2 given`), where a user function ignores surplus ones.
+/// The wording needs the supplied count, so the prelude helper builds it from the contract.
+#[allow(clippy::too_many_arguments)]
+fn emit_internal_arity_check(
+    name: &str,
+    min: usize,
+    max: Option<usize>,
+    collector: bool,
+    len_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    data: &mut DataSection,
+) {
+    let fail = ctx.next_label("internal_arity_fail");
+    let ok = ctx.next_label("internal_arity_ok");
+    let a64 = emitter.target.arch == Arch::AArch64;
+    if min > 0 {
+        emitter.instruction(&format!("cmp {len_reg}, {}{min}", if a64 { "#" } else { "" })); // compare the supplied count with php's minimum
+        emitter.instruction(&format!("{} {fail}", if a64 { "b.lt" } else { "jl" })); // too few arguments
+    }
+    if let Some(max) = max {
+        emitter.instruction(&format!("cmp {len_reg}, {}{max}", if a64 { "#" } else { "" })); // compare the supplied count with php's maximum
+        emitter.instruction(&format!("{} {ok}", if a64 { "b.le" } else { "jle" })); // an accepted count adapts normally
+    } else {
+        abi::emit_jump(emitter, &ok);
+    }
+    emitter.label(&fail);
+    if collector {
+        let (capacity, size) = if a64 { ("x0", "x1") } else { ("rdi", "rsi") };
+        abi::emit_load_int_immediate(emitter, capacity, 1);
+        abi::emit_load_int_immediate(emitter, size, 8);
+        abi::emit_call_label(emitter, "__rt_array_new");
+        let result = abi::int_result_reg(emitter).to_string();
+        crate::codegen::emit_array_value_type_stamp(emitter, &result, &PhpType::Mixed);
+        abi::emit_push_reg(emitter, &result);
+    }
+    let target = emitter.target;
+    let (label, length) = data.add_string(name.as_bytes());
+    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(target, 0), &label);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 1), length as i64);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 2), min as i64);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(target, 3), max.map_or(-1, |max| max as i64));
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(target, 4), len_reg);
+    if collector {
+        abi::emit_pop_reg(emitter, abi::int_arg_reg_name(target, 5));
+    }
+    abi::emit_call_label(
+        emitter,
+        &crate::names::function_symbol(crate::invalid_callback_prelude::ARITY_ERROR_HELPER_NAME),
+    );
+    emitter.label(&ok);
 }
 
 /// Lets the shared mbstring coordinator report invalid arity before typed argument adaptation.
@@ -4238,6 +4320,7 @@ mod tests {
             let mut data = DataSection::new();
             for label in ["first_owner_invoker", "second_owner_invoker"] {
                 let invoker = RuntimeCallableInvoker {
+        internal_arity: None,
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
@@ -4394,6 +4477,7 @@ mod tests {
             is_generator: false,
         };
         let invoker = RuntimeCallableInvoker {
+        internal_arity: None,
             label: "owned_invoker",
             sig: &sig,
             captures: &[],
@@ -4795,6 +4879,7 @@ mod tests {
         // Resolve through the shared folder so the emitted body sees exactly what codegen ships.
         let defaults = resolve_invoker_defaults(&crate::ir::Module::new(target), None, sig);
         let invoker = RuntimeCallableInvoker {
+        internal_arity: None,
             label,
             sig,
             captures: &[],

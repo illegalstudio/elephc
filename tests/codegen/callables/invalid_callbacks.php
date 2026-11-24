@@ -30,4 +30,6 @@ foreach (["viaCuf", "viaCufa", "viaMap", "viaDirect"] as $route) {
         catch (Throwable $e) { echo "$route $i: ", get_class($e), ": ", $e->getMessage(), "\n"; }
     }
 }
+// A program that asks classes about their methods by name gets the helper's exact class reasons (non-static, inherited abstract); one that never does keeps the closed world small.
+if ($argc > 99) { var_dump(method_exists("H", "greet")); }
 EVAL_LINE

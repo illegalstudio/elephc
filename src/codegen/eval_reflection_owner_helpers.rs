@@ -2826,9 +2826,18 @@ mod tests {
             let output = emitter.output();
             let release = output.find("__rt_decref_object").unwrap();
             assert_eq!(output.matches("__rt_decref_object").count(), 1, "{output}");
-            assert!(output[..release].contains("str") || output[..release].contains("push"), "{output}");
+            // The merged ABI spells a push as `sub rsp, 16` + `mov QWORD PTR [rsp], rax` and a pop
+            // as a load from `[rsp]` + `add rsp, 16`: the same save/restore around the release.
             assert!(
-                output[release..].contains("ldr") || output[release..].contains("pop"),
+                output[..release].contains("str")
+                    || output[..release].contains("push")
+                    || output[..release].contains("[rsp], rax"),
+                "{output}"
+            );
+            assert!(
+                output[release..].contains("ldr")
+                    || output[release..].contains("pop")
+                    || output[release..].contains("rax, QWORD PTR [rsp]"),
                 "{output}"
             );
         }
