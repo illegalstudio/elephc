@@ -16,8 +16,6 @@ mod dominators;
 
 use dominators::DominatorTree;
 
-use std::collections::HashSet;
-
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
 use crate::ir::effects::Effects;
 use crate::ir::function::{Function, LocalKind, LocalSlotId};
@@ -355,13 +353,13 @@ fn check_descriptor_from_buffer_resolve(
 
 /// Validates instruction IDs are placed once and point into the instruction table.
 fn validate_instruction_placement(function: &Function) -> Result<(), ValidationError> {
-    let mut seen = HashSet::new();
+    let mut seen = vec![false; function.instructions.len()];
     for block in &function.blocks {
         for inst_id in &block.instructions {
-            if function.instruction(*inst_id).is_none() {
+            let Some(visited) = seen.get_mut(inst_id.as_raw() as usize) else {
                 return Err(ValidationError::UnknownInstruction(*inst_id));
-            }
-            if !seen.insert(*inst_id) {
+            };
+            if std::mem::replace(visited, true) {
                 return Err(ValidationError::DuplicateInstructionInBlocks(*inst_id));
             }
         }
@@ -384,7 +382,7 @@ fn validate_instructions(
                 .operands
                 .first()
                 .and_then(|value| function.value(*value))
-                .map(|value| value.php_type.clone());
+                .map(|value| &value.php_type);
             validate_instruction_effects_with_operand(*inst_id, inst, operand_type)?;
             validate_instruction_immediate(*inst_id, inst)?;
             validate_instruction_operands(
@@ -458,7 +456,7 @@ fn validate_instruction_effects(
 fn validate_instruction_effects_with_operand(
     inst_id: InstId,
     inst: &Instruction,
-    operand_type: Option<PhpType>,
+    operand_type: Option<&PhpType>,
 ) -> Result<(), ValidationError> {
     // `(int)` over an int or bool is a representation re-stamp: it cannot warn,
     // fail, allocate, or observe heap state. The operand may already have been
@@ -602,16 +600,16 @@ mod instruction_effect_tests {
         let id = InstId::from_raw(0);
         for ty in [PhpType::Int, PhpType::Bool] {
             assert_eq!(
-                validate_instruction_effects_with_operand(id, &instruction, Some(ty)),
+                validate_instruction_effects_with_operand(id, &instruction, Some(&ty)),
                 Ok(())
             );
         }
         for ty in [PhpType::Float, PhpType::Str, PhpType::Mixed] {
-            assert!(validate_instruction_effects_with_operand(id, &instruction, Some(ty)).is_err());
+            assert!(validate_instruction_effects_with_operand(id, &instruction, Some(&ty)).is_err());
         }
         instruction.effects = Effects::MAY_WARN;
         assert!(
-            validate_instruction_effects_with_operand(id, &instruction, Some(PhpType::Bool)).is_err()
+            validate_instruction_effects_with_operand(id, &instruction, Some(&PhpType::Bool)).is_err()
         );
     }
 

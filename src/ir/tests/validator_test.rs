@@ -123,6 +123,29 @@ fn well_formed_function_passes() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// Instruction placement distinguishes duplicate IDs from IDs outside the function table.
+#[test]
+fn instruction_placement_reports_duplicate_and_unknown_ids() {
+    use crate::ir::InstId;
+
+    let mut function = Function::new("placement".into(), IrType::Void, PhpType::Void);
+    let entry = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(Op::Nop, vec![], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: None });
+        entry
+    };
+    let duplicate = function.block(entry).unwrap().instructions[0];
+    function.block_mut(entry).unwrap().instructions.push(duplicate);
+    assert_eq!(validate_function(&function), Err(ValidationError::DuplicateInstructionInBlocks(duplicate)));
+    let missing = InstId::from_raw(function.instructions.len() as u32);
+    *function.block_mut(entry).unwrap().instructions.last_mut().unwrap() = missing;
+    assert_eq!(validate_function(&function), Err(ValidationError::UnknownInstruction(missing)));
+}
+
 /// A returned value must match the function's EIR return type.
 #[test]
 fn return_type_mismatch_fails() {
