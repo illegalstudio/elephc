@@ -218,11 +218,23 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_value(
             // the runtime descriptor decides whether the marker binds by value or by reference.
             // Canonicalize eligible caller locals before capturing their address. The runtime
             // invoker adapts this boxed storage when the selected target has a concrete ref type.
-            if ctx.boxed_reference_promotion_is_authorized(name, arg.span)
-                && !ctx.is_ref_bound_local(name)
-                && ctx.local_is_promotable_to_ref_cell(name)
-            {
+            let authorized = ctx.boxed_reference_promotion_is_authorized(name, arg.span);
+            if authorized && !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {
                 ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+            } else if !ctx.is_ref_bound_local(name)
+                && !ctx.local_is_promotable_to_ref_cell(name)
+                && ctx.local_can_own_reference_cell(name)
+            {
+                // A local the call itself brings into existence (`f($out)` with `$out` never
+                // assigned) is boxed whether or not the checker authorized the promotion: the
+                // unknown target writes any type into it, and a marker over the raw null slot
+                // reaches the invoker as a layout it refuses ("caller storage does not match
+                // the selected parameter layout"). PHP creates the variable as null at the call,
+                // so the null is stored first: a Mixed cell then holds a real boxed null the
+                // invoker can adapt to the selected parameter.
+                let null = super::scalar_literals::lower_null(ctx, arg);
+                ctx.store_local(name, null, PhpType::Void, Some(arg.span));
+                return lower_invoker_ref_variadic_arg_marker(ctx, name, arg.span);
             }
             lower_invoker_ref_arg_marker(ctx, name, arg.span)
         }
