@@ -325,7 +325,7 @@ impl Store {
     /// Each day file is read once and then only for what was appended since:
     /// the monitor page asks on every refresh and event-stream heartbeat, under
     /// the history's lock, and parsing a full day of windows each time held
-    /// every other request up behind it (review G6). The latest `t` is kept,
+    /// every other request up behind it. The latest `t` is kept,
     /// not the last line's: several collectors and script runs append to one
     /// file, so its lines are not strictly ordered.
     pub(crate) fn newest_ms(&self) -> Option<u64> {
@@ -505,11 +505,15 @@ thread_local! {
     /// Bytes `read_day` read on this thread, for the tests that prove a call
     /// reads only what was appended.
     pub(crate) static DAY_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The time `now_ms` answers on this thread instead of the wall clock, for
+    /// the tests whose windows must all fall on one day whenever they run
+    /// (#2513: in the first minute after UTC midnight, "recent" windows
+    /// landed on the previous day).
+    pub(crate) static PINNED_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 /// Drops what was read of the days whose file is gone — retention deleted it —
-/// so a page left open for weeks does not keep every day's runs it ever read
-/// (review G14).
+/// so a page left open for weeks does not keep every day's runs it ever read.
 fn forget_deleted_days(reads: &mut std::collections::HashMap<u64, DayRead>, days: &[u64]) {
     reads.retain(|day, _| days.contains(day));
 }
@@ -662,8 +666,12 @@ fn starts_with(file: &mut std::fs::File, head: &[u8]) -> bool {
     file.seek(SeekFrom::Start(0)).is_ok() && file.read_exact(&mut start).is_ok() && start == head
 }
 
-/// Unix milliseconds now.
+/// Unix milliseconds now (in a test, the time `PINNED_NOW_MS` pins).
 pub(crate) fn now_ms() -> u64 {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_NOW_MS.with(|now| now.get()) {
+        return pinned;
+    }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)

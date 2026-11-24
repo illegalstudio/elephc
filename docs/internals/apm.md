@@ -303,7 +303,7 @@ A library counts from `elephc_init` to `elephc_shutdown`. Its shutdown sends the
 
 A library opens no `ELEPHC_PROBE_ADDR` endpoint. It is followed through its collector only.
 
-A program hosting PHP extensions sends at exit what it counted up to its last periodic send, because the extensions' shutdown has the exit hook.
+A program hosting PHP extensions shares the exit hook with their shutdown. The hook runs the extensions' shutdown first and then the last send, so the counts of the extensions' work are sent too.
 
 ## Push transport
 
@@ -313,7 +313,7 @@ A program built with `--apm-collector HOST:PORT` sends its counters instead of w
 - The counters travel encrypted, each send under keys of its own.
 - Counters are cumulative, so a lost connection loses nothing. The program reconnects and the next send carries everything since.
 - The program sends every five seconds and once more at exit.
-- Each program is a source of its own. Its name combines the program, the address it sent from, its pid and a number it draws at start, as in `worker@10.0.0.7 pid 1 #3fa2c1d0`. Two containers running one build as pid 1 behind one address stay apart.
+- Each program is a source of its own. Its name combines the program, the address it sent from, its pid and a number it draws at start, as in `worker@10.0.0.7 pid 1 #3fa2c1d0`. Two containers running one build as pid 1 behind one address stay apart. Without OS randomness the number mixes the start time, the pid and a stack address, and the name keeps both halves of it folded, so processes started in the same second still differ.
 - A collector restarted while a program runs counts that program from its next send, as a collector reading a service counts from its first poll.
 - A listening collector serves up to 256 programs at once. A connection that has not proven the key within five seconds is closed.
 - A program silent for ten minutes is forgotten. One silent for fifteen seconds is time in which no transaction was seen.
@@ -339,7 +339,9 @@ The endpoint is plain HTTP, as for the traces `--otlp` exports from instrumented
 
 ## Project file rules
 
-An `[entry."<path>"]` table applies to the build whose entry file is that path, relative to the file's directory. This serves a web front and a console of one project, each with its own rules.
+An `[entry."<path>"]` table applies to the build whose entry file is that path, relative to the file's directory. This serves a web front and a console of one project, each with its own rules. A table whose path names no file is reported on every build: a typo would otherwise drop its rules with nothing said. A path that names another entry file is not reported, because the file serves every build of the project.
+
+`enabled = false` wins over the keys that otherwise imply `enabled`: `functions` for `[monitoring]`, `collector` and `transactions` for `[apm]`.
 
 A library build skips `[monitoring]`, because a library has no `main` to start the profiler. A PHP extension skips `[apm]`, because PHP counts its own requests. Each skip is a note rather than an error, because the same file serves the project's other builds.
 

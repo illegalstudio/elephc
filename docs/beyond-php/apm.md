@@ -76,7 +76,8 @@ exclude = ["CLI console cache:*", "CLI console messenger:stats"]
 
 - elephc reads the nearest `elephc.toml` above the compiled PHP file and prints a note about what it turned on.
 - The command line wins. The file only fills what the command line left unset.
-- `[entry."<path>"]` applies to the build whose entry file is that path, relative to the file's directory. Use it for a web front and a console in one project.
+- `[entry."<path>"]` applies to the build whose entry file is that path, relative to the file's directory. Use it for a web front and a console in one project. A path that names no file, such as a typo, prints a warning on every build.
+- `functions`, `collector` and `transactions` each turn their table on. An explicit `enabled = false` wins over them, so an entry can switch monitoring off without deleting its keys.
 - A library build skips `[monitoring]`. A PHP extension skips `[apm]`. Each prints a note, not an error.
 - An unknown key, an invalid collector or an invalid transaction name fails the compile with a message naming the file.
 
@@ -576,7 +577,7 @@ elephc build --with-apm --apm-collector 10.0.0.5:9412 \
 ```
 
 - **Messenger messages** need no setup. In a build that counts transactions, `Worker::handleMessage` is a transaction named after the message's class. The `WorkerMessageFailedEvent` marks it failed. Neither the application nor its vendors change.
-- **`--apm-transaction Class::method`** (or a function name; repeatable) makes each call of that method a transaction. A trait's method is named by its trait (`Trait::method`) and counts in every class that uses it. A name not declared in the program gives a warning.
+- **`--apm-transaction Class::method`** (or a function name; repeatable) makes each call of that method a transaction. A trait's method is named by its trait (`Trait::method`) and counts in every class that uses it. A method a class inherits is named by the class that declares it, and counts on every class that inherits it. A name not declared in the program gives a warning, which names the declaring class or trait of an inherited method. A generator function or method is refused: a call only creates the generator, and its body runs while the caller iterates it. Name the method that iterates it.
 - **Library exports** are counted from `elephc_init` on. Every call the host makes through the C ABI is a transaction named after the export.
 
 ### Send to a collector
@@ -662,7 +663,6 @@ Other limits:
 
 - **Script runs** are recorded through `monitor` or a build with `--apm-collector`. A script started any other way records nothing. Its argv belongs to PHP and an environment variable never turns monitoring on.
 - **A library** counts from `elephc_init` to `elephc_shutdown`. One the host never initializes counts nothing. Its shutdown sends the last counts and stops the sending thread, so the host may unload it. A later `elephc_init` starts sending again. A library is followed through its collector only. It opens no `ELEPHC_PROBE_ADDR` endpoint. A static library's host links `libelephc_probe.a` with the other bridge archives.
-- **A program hosting PHP extensions** sends at exit what it counted up to its last periodic send.
 - **Captures** profile the next request each time and keep what turned out slow or failed. A rare slow request is caught in proportion to how often it happens. Profile one on purpose with `--exact` or a signed `X-Elephc-Query` header.
 - **Route shapes** are the server's. Two endpoints whose paths differ only in an identifier share a row.
 - **The route table** empties only when asked. A service that answers `200` to arbitrary paths for hours counts new paths under `<other>` until `--reset-routes`.

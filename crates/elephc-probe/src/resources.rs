@@ -473,7 +473,7 @@ mod tests {
     }
 
     /// Linux memory is the proportional set size of `smaps_rollup`, in bytes;
-    /// `statm`'s resident-minus-shared is the fallback (review G11).
+    /// `statm`'s resident-minus-shared is the fallback.
     #[test]
     fn memory_is_read_proportionally() {
         let rollup = "55d1c0000000-7ffd2a3f1000 ---p 00000000 00:00 0 [rollup]\nRss: 30000 kB\nPss: 12345 kB\nPss_Anon: 9000 kB\nShared_Clean: 400 kB\n";
@@ -597,8 +597,7 @@ mod tests {
 
     /// A worker reaped between reading the master and reading it is neither
     /// lost nor counted twice: the master's reaped time moved, the walk is
-    /// redone, and the total is the same as if nothing had happened (review
-    /// G12).
+    /// redone, and the total is the same as if nothing had happened.
     #[test]
     fn a_worker_reaped_mid_walk_is_counted_once() {
         let tree = || {
