@@ -152,12 +152,7 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
     // -- publish descriptor ownership before a close hook can escape --
     abi::emit_frame_prologue(emitter, 64);
     abi::emit_store_to_address(emitter, arg, frame, 0);
-    abi::emit_store_to_address(emitter, arg, frame, 40);
-    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "__rt_user_filter_close_unwind");
-    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, frame, 24);
-    emitter.instruction(if arm { "add x0, sp, #16" } else { "lea rdi, [rsp + 16]" }); // identify the stack-local descriptor cleanup guard
-    emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // publish this guard as a new activation group
-    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+    abi::emit_guard_owned_at_stack(emitter, arg, "__rt_user_filter_close_unwind", 16);
     abi::emit_load_from_address(emitter, arg, frame, 0);
     abi::emit_call_label(emitter, "__rt_user_filter_release_fd");
     // -- normal completion leaves the final native close to the existing fclose lowerer --
@@ -168,9 +163,9 @@ fn emit_close_fd_guard(emitter: &mut Emitter) {
 
     // -- exceptional completion retires filter state and closes the descriptor without PHP --
     emitter.label_global("__rt_user_filter_close_unwind");
-    abi::emit_load_from_address(emitter, if arm { "x1" } else { "rax" }, arg, 24);
-    abi::emit_load_int_immediate(emitter, if arm { "x9" } else { "r9" }, -1);
-    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, arg, 24);
+    elephc_memoir::guarded_owners::emit_take_resource(
+        emitter, arg, if arm { "x1" } else { "rax" }, if arm { "x9" } else { "r9" }, -1,
+    );
     emitter.instruction(if arm { "mov x0, x1" } else { "mov rdi, rax" });       // transfer the descriptor into the native close ABI
     for symbol in ["_stream_read_filters", "_stream_write_filters"] {
         abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, symbol);

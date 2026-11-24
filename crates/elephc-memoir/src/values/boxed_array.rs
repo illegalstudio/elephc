@@ -10,6 +10,116 @@
 use crate::{abi, Arch, Emitter};
 use crate::layout::{emit_branch_if_null_container, x86_64_heap_kind_word, MIXED_HEAP_KIND};
 
+/// Selects payload-only survival for an append whose cell has no stored owner.
+pub fn emit_pending_append_mode(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("str xzr, [sp, #48]");                          // ordinary writes and stored-cell survivors keep normal COW
+            emitter.instruction("cbz x3, __rt_mixed_array_gfw_mode_ready");     // only pending appends inspect payload-only survival
+            emitter.instruction("cbz x0, __rt_mixed_array_gfw_mode_ready");     // absent cells have no payload identity to preserve
+            emitter.instruction("ldr x9, [x0]");                                // load the candidate cell tag
+            emitter.instruction("cmp x9, #4");                                  // indexed arrays can have a separately boxed payload owner
+            emitter.instruction("b.eq __rt_mixed_array_gfw_mode_array");        // inspect their cell and payload counts
+            emitter.instruction("cmp x9, #5");                                  // hashes follow the same ownership rule
+            emitter.instruction("b.ne __rt_mixed_array_gfw_mode_ready");        // scalar and object receivers use ordinary semantics
+            emitter.label("__rt_mixed_array_gfw_mode_array");
+            crate::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
+            emitter.instruction("cmp w9, #1");                                  // the compiler lease is the one expected cell owner
+            emitter.instruction("b.hi __rt_mixed_array_gfw_mode_ready");        // a stored cell owner keeps ordinary write-through semantics
+            emitter.instruction("ldr x9, [x0, #8]");                            // load the selected array or hash payload
+            crate::heap_refcount::emit_load_owner_count(emitter, "w9", "x9");
+            emitter.instruction("cmp w9, #2");                                  // one selected-cell lease and exactly one PHP payload owner
+            emitter.instruction("cset x9, eq");                                 // multiple independent copies must never share the detached write
+            emitter.instruction("str x9, [sp, #48]");                           // preserve it through conversion, lookup, and insertion
+            emitter.label("__rt_mixed_array_gfw_mode_ready");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov QWORD PTR [rbp - 56], 0");                 // ordinary writes and stored-cell survivors keep normal COW
+            emitter.instruction("test rcx, rcx");                               // is this a parent selected by a pending append?
+            emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");          // no, retain ordinary write semantics
+            emitter.instruction("test rdi, rdi");                               // absent cells have no payload identity to preserve
+            emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");          // keep the detached-null path unchanged
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the candidate cell tag
+            emitter.instruction("cmp r10, 4");                                  // indexed arrays can have separately boxed payload owners
+            emitter.instruction("je __rt_mixed_array_gfw_mode_array");          // inspect their cell and payload counts
+            emitter.instruction("cmp r10, 5");                                  // hashes follow the same ownership rule
+            emitter.instruction("jne __rt_mixed_array_gfw_mode_ready");         // scalar and object receivers use ordinary semantics
+            emitter.label("__rt_mixed_array_gfw_mode_array");
+            crate::heap_refcount::emit_compare_owner_count_x86_64(emitter, "rdi", 1);
+            emitter.instruction("ja __rt_mixed_array_gfw_mode_ready");          // a stored cell owner keeps ordinary write-through semantics
+            emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                // load the selected array or hash payload
+            crate::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 2);
+            emitter.instruction("sete r10b");                                   // multiple independent copies must never share the detached write
+            emitter.instruction("movzx r10, r10b");                             // materialize a complete mode word
+            emitter.instruction("mov QWORD PTR [rbp - 56], r10");               // preserve it through conversion, lookup, and insertion
+            emitter.label("__rt_mixed_array_gfw_mode_ready");
+        }
+    }
+}
+
+/// Promotes a uniquely owned packed payload in its existing Mixed cell and returns the new hash.
+pub fn emit_promote_unique_indexed_payload(emitter: &mut impl Emitter, failed: &str, done: &str) {
+    let arm = emitter.arch() == Arch::AArch64;
+    if arm {
+        emitter.instruction("sub sp, sp, #48");                                 // retain the terminal cell and both container owners across conversion
+        emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve linkage for allocation and release helpers
+        emitter.instruction("str x0, [sp]");                                    // keep the exact cell whose representation will change
+        emitter.instruction("ldr x0, [x0, #8]");                                // borrow its current indexed payload
+        emitter.instruction("str x0, [sp, #8]");                                // retain the old payload address until ownership transfers
+    } else {
+        emitter.instruction("push rbp");                                        // preserve linkage and align nested helper calls
+        emitter.instruction("mov rbp, rsp");                                    // establish the conversion frame
+        emitter.instruction("sub rsp, 32");                                     // retain the terminal cell and both container owners
+        emitter.instruction("mov QWORD PTR [rsp], rax");                        // keep the exact terminal cell for in-place publication
+        emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // borrow its current indexed payload
+        emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the old payload until conversion completes
+    }
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    emitter.instruction(if arm { "cmp x0, #2" } else { "cmp eax, 2" });         // require a real indexed allocation before inspecting its ownership
+    emitter.instruction(&if arm { format!("b.ne {failed}") } else { format!("jne {failed}") }); // preserve the old cell when the payload cannot be promoted
+    if arm {
+        emitter.instruction("ldr x0, [sp, #8]");                                // recover the verified indexed allocation
+        crate::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
+        emitter.instruction("cmp w9, #1");                                      // promotion can preserve all observers only for a unique payload
+    } else {
+        emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                    // adapt the verified allocation to the indexed conversion ABI
+        crate::heap_refcount::emit_compare_owner_count_x86_64(emitter, "rdi", 1);
+    }
+    emitter.instruction(&if arm { format!("b.ne {failed}") } else { format!("jne {failed}") }); // preserve the old cell when the payload cannot be promoted
+    abi::emit_call_label(emitter, "__rt_array_to_hash");
+    if arm {
+        emitter.instruction("str x0, [sp, #16]");                               // preserve the new owned hash across old-container release
+        emitter.instruction("mov x9, #7");                                      // subsequent captures can mix strings, false, and preserved elements
+        emitter.instruction("str x9, [x0, #16]");                               // declare heterogeneous hash payloads
+        emitter.instruction("ldr x9, [sp]");                                    // recover the existing terminal Mixed cell
+        crate::layout::emit_store_mixed_low(emitter, "x0", "x9");
+        crate::layout::emit_store_mixed_tag_immediate(emitter, 5, "x9");
+        crate::layout::emit_clear_mixed_high(emitter, "x9");
+        emitter.instruction("ldr x0, [sp, #8]");                                // consume the old container after all children acquired new owners
+    } else {
+        emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the new owned hash across old-container release
+        emitter.instruction("mov QWORD PTR [rax + 16], 7");                     // subsequent captures use heterogeneous entry tags
+        emitter.instruction("mov r10, QWORD PTR [rsp]");                        // recover the existing terminal Mixed cell
+        crate::layout::emit_store_mixed_low(emitter, "rax", "r10");
+        crate::layout::emit_store_mixed_tag_immediate(emitter, 5, "r10");
+        crate::layout::emit_clear_mixed_high(emitter, "r10");
+        emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // consume the old indexed owner after every child was retained
+    }
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.instruction(if arm { "ldr x0, [sp, #16]" } else { "mov rax, QWORD PTR [rsp + 16]" }); // borrow the published hash for the current capture write
+    emitter.emit_jump(done);
+    emitter.label(failed);
+    emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });       // return unsupported without changing the original cell or payload
+    emitter.label(done);
+    if arm {
+        emitter.instruction("ldp x29, x30, [sp, #32]");                         // restore linkage after conversion or an unchanged failure
+        emitter.instruction("add sp, sp, #48");                                 // retire only local conversion storage
+    } else {
+        emitter.instruction("leave");                                           // restore the caller while preserving the selected hash or zero
+    }
+    emitter.instruction("ret");                                                 // return the borrowed destination without an extra owner
+}
+
 /// Emits empty-cell construction and hash payload preparation in runtime order.
 pub fn emit_storage_helpers(emitter: &mut impl Emitter) {
     match emitter.arch() {
@@ -395,13 +505,13 @@ pub fn emit_acquire_entry_result(emitter: &mut impl Emitter, box_value: &str, ow
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction("cmp x0, #7");                                  // a nested Mixed already has its own cell
-            emitter.instruction(&format!("b.ne {box_value}"));                 // box a concrete payload
+            emitter.instruction(&format!("b.ne {box_value}"));                  // box a concrete payload
             emitter.instruction("mov x0, x1");                                  // acquire an independent owner of the existing cell
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, 7");                                  // a nested Mixed already has its own cell
-            emitter.instruction(&format!("jne {box_value}"));                  // box a concrete payload
-            emitter.instruction("mov rax, rdi");                                 // acquire an independent owner of the existing cell
+            emitter.instruction(&format!("jne {box_value}"));                   // box a concrete payload
+            emitter.instruction("mov rax, rdi");                                // acquire an independent owner of the existing cell
         }
     }
     emitter.emit_call_label("__rt_incref");

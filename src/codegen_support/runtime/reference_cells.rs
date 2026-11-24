@@ -36,7 +36,6 @@ mod static_cells;
 pub(crate) use static_cells::{BINDING_BYTES as STATIC_BINDING_BYTES, load_mixed_value as load_mixed_static_value};
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
 pub(super) use source_lifecycle::require_success as require_source_success;
-pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;

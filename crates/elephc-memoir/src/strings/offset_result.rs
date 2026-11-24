@@ -46,6 +46,43 @@ impl OffsetResult {
         emitter.label(owned);
     }
 
+    /// Drops a pending offset write if its retained cell is the last remaining owner.
+    pub fn emit_cancel_if_detached(&self, emitter: &mut impl Emitter, retained: usize, cast: usize) {
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.emit_load_from_address("x9", "sp", retained);                                   // reload the retained-cell flag
+                emitter.instruction("cbz x9, __rt_mixed_array_set_string_publish"); // no warning could have run a handler
+                emitter.emit_load_from_address("x10", "sp", self.cell);                                   // reload the target Mixed cell
+                crate::heap_refcount::emit_load_owner_count(emitter, "w11", "x10");
+                emitter.instruction("cmp w11, #1");                             // is the retained reference the last one?
+                emitter.instruction("b.ne __rt_mixed_array_set_string_publish"); // the variable still holds the cell: write it
+                emitter.emit_load_from_address("x0", "sp", self.pointer);                                   // a handler replaced the variable: drop the updated string
+                emitter.instruction("bl __rt_heap_free_safe");                  // php abandons the write in that case
+                emitter.emit_load_from_address("x0", "sp", cast);                                   // the cast value string
+                emitter.instruction("bl __rt_heap_free_safe");                  // release it (no-op for scratch)
+                emitter.emit_load_from_address("x0", "sp", self.cell);                                    // the abandoned cell
+                emitter.instruction("bl __rt_decref_mixed");                    // release the last reference, freeing it
+                emitter.instruction("b __rt_mixed_array_set_done");             // the value was already consumed
+                emitter.label("__rt_mixed_array_set_string_publish");
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp QWORD PTR [rbp - {retained}], 0")); // was the cell retained?
+                emitter.instruction("je __rt_mixed_array_set_string_publish");  // no warning could have run a handler
+                emitter.load_at_offset("r10", self.cell);                        // reload the target Mixed cell
+                crate::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 1);
+                emitter.instruction("jne __rt_mixed_array_set_string_publish"); // the variable still holds the cell: write it
+                emitter.load_at_offset("rax", self.pointer);                       // a handler replaced the variable: drop the updated string
+                emitter.instruction("call __rt_heap_free_safe");                // php abandons the write in that case
+                emitter.load_at_offset("rax", cast);                       // the cast value string
+                emitter.instruction("call __rt_heap_free_safe");                // release it (no-op for scratch)
+                emitter.load_at_offset("rax", self.cell);                        // the abandoned cell
+                emitter.instruction("call __rt_decref_mixed");                  // release the last reference, freeing it
+                emitter.instruction("jmp __rt_mixed_array_set_done");           // the value was already consumed
+                emitter.label("__rt_mixed_array_set_string_publish");
+            }
+        }
+    }
+
     /// Replaces the cell's exclusive string payload with the staged owner pair.
     pub fn emit_publish(&self, emitter: &mut impl Emitter) {
         let result = emitter.int_result_reg();

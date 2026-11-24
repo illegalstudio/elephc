@@ -10,6 +10,73 @@
 
 use crate::{Arch, AssemblyEmitter, Emitter, TargetAbi};
 
+/// Returns the object identity that the next release of a borrowed Mixed box would retire.
+pub fn emit_final_object_identity(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");   // null handles cannot release an object
+        emitter.label("__elephc_eval_value_final_object_loop");
+        emit_load_owner_count(emitter, "w9", "x0");
+        emitter.instruction("cmp w9, #1");                                      // only the last Mixed owner can free the wrapped payload
+        emitter.instruction("b.ne __elephc_eval_value_final_object_none");      // non-final wrapper releases cannot run destructors yet
+        emitter.instruction("ldr x9, [x0]");                                    // load the current Mixed runtime tag
+        emitter.instruction("cmp x9, #7");                                      // tag 7 means the payload is another boxed Mixed
+        emitter.instruction("b.ne __elephc_eval_value_final_object_check_object"); // concrete payloads can be tested for object ownership
+        emitter.instruction("ldr x0, [x0, #8]");                                // follow the nested Mixed payload pointer
+        emitter.instruction("cbnz x0, __elephc_eval_value_final_object_loop");  // continue while nested Mixed payloads are present
+        emitter.instruction("b __elephc_eval_value_final_object_none");         // null nested payloads cannot release an object
+        emitter.label("__elephc_eval_value_final_object_check_object");
+        emitter.instruction("cmp x9, #6");                                      // tag 6 means the concrete payload is a PHP object
+        emitter.instruction("b.ne __elephc_eval_value_final_object_none");      // non-object releases have no dynamic destructor
+        emitter.instruction("ldr x9, [x0, #8]");                                // load the object payload pointer from the Mixed cell
+        crate::layout::emit_branch_if_null_container(
+            emitter,
+            "x9",
+            "x10",
+            "__elephc_eval_value_final_object_none",
+        );
+        emit_load_owner_count(emitter, "w10", "x9");
+        emitter.instruction("cmp w10, #1");                                     // only the final object owner can run the destructor
+        emitter.instruction("csel x0, x9, xzr, eq");                            // return object identity only for the final release
+        emitter.instruction("ret");                                             // return the candidate object identity to Rust
+        emitter.label("__elephc_eval_value_final_object_none");
+        emitter.instruction("mov x0, xzr");                                     // report that no dynamic destructor should run
+        emitter.instruction("ret");                                             // return zero to Rust
+    } else {
+        emitter.instruction("mov rax, rdi");                                    // inspect the C boxed Mixed argument without changing refcounts
+        emitter.instruction("test rax, rax");                                   // null handles cannot release an object
+        emitter.instruction("jz __elephc_eval_value_final_object_none_x86");    // report no final object for null handles
+        emitter.label("__elephc_eval_value_final_object_loop_x86");
+        emit_load_owner_count(emitter, "r10d", "rax");
+        emitter.instruction("cmp r10d, 1");                                     // only the last Mixed owner can free the wrapped payload
+        emitter.instruction("jne __elephc_eval_value_final_object_none_x86");   // non-final wrapper releases cannot run destructors yet
+        emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the current Mixed runtime tag
+        emitter.instruction("cmp r10, 7");                                      // tag 7 means the payload is another boxed Mixed
+        emitter.instruction("jne __elephc_eval_value_final_object_check_object_x86"); // concrete payloads can be tested for object ownership
+        emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // follow the nested Mixed payload pointer
+        emitter.instruction("test rax, rax");                                   // null nested payloads cannot release an object
+        emitter.instruction("jnz __elephc_eval_value_final_object_loop_x86");   // continue while nested Mixed payloads are present
+        emitter.instruction("jmp __elephc_eval_value_final_object_none_x86");   // return zero for null nested payloads
+        emitter.label("__elephc_eval_value_final_object_check_object_x86");
+        emitter.instruction("cmp r10, 6");                                      // tag 6 means the concrete payload is a PHP object
+        emitter.instruction("jne __elephc_eval_value_final_object_none_x86");   // non-object releases have no dynamic destructor
+        emitter.instruction("mov r10, QWORD PTR [rax + 8]");                    // load the object payload pointer from the Mixed cell
+        crate::layout::emit_branch_if_null_container(
+            emitter,
+            "r10",
+            "r11",
+            "__elephc_eval_value_final_object_none_x86",
+        );
+        emit_load_owner_count(emitter, "r11d", "r10");
+        emitter.instruction("cmp r11d, 1");                                     // only the final object owner can run the destructor
+        emitter.instruction("jne __elephc_eval_value_final_object_none_x86");   // defer destructor execution until object refcount is final
+        emitter.instruction("mov rax, r10");                                    // return the object identity pointer to Rust
+        emitter.instruction("ret");                                             // finish the final-object query
+        emitter.label("__elephc_eval_value_final_object_none_x86");
+        emitter.instruction("xor eax, eax");                                    // report that no dynamic destructor should run
+        emitter.instruction("ret");                                             // return zero to Rust
+    }
+}
+
 /// Reads the unmasked count of a known-live allocation into a 32-bit register.
 pub fn emit_load_owner_count(emitter: &mut impl Emitter, count: &str, payload: &str) {
     match emitter.arch() {
@@ -20,7 +87,7 @@ pub fn emit_load_owner_count(emitter: &mut impl Emitter, count: &str, payload: &
 
 /// Compares a known-live x86-64 allocation's raw count without clobbering a register.
 pub fn emit_compare_owner_count_x86_64(emitter: &mut impl Emitter, payload: &str, count: u32) {
-    emitter.instruction(&format!("cmp DWORD PTR [{payload} - 12], {count}"));    // check the complete physical owner count
+    emitter.instruction(&format!("cmp DWORD PTR [{payload} - 12], {count}"));   // check the complete physical owner count
 }
 
 /// Drops the collector-only pin from a physical owner count with no native call.
@@ -33,7 +100,7 @@ pub fn emit_subtract_collector_pin(
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction(&format!("ubfx {word}, {word}, #18, #1"));      // isolate the collector-only owner bit
-            emitter.instruction(&format!("sub {count}, {count}, {low}"));      // keep only the externally assigned owners
+            emitter.instruction(&format!("sub {count}, {count}, {low}"));       // keep only the externally assigned owners
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("shr {word}, 18"));                    // position the collector-only owner bit
@@ -41,6 +108,22 @@ pub fn emit_subtract_collector_pin(
             emitter.instruction(&format!("sub {count}, {low}"));                // keep only the externally assigned owners
         }
     }
+}
+
+/// Loads the number of reference owners visible to PHP after excluding internal leases.
+pub fn emit_load_logical_reference_owners(
+    emitter: &mut impl Emitter,
+    reference: &str,
+    count: (&str, &str),
+    flags: (&str, &str),
+    scan: (&str, &str),
+    prefix: &str,
+) {
+    emit_load_owner_count(emitter, count.1, reference);
+    emit_subtract_collector_pin(emitter, reference, count.1, flags);
+    crate::reference_cells::validation_pins::subtract(
+        emitter, reference, count.0, scan.0, scan.1, prefix,
+    );
 }
 
 /// Drops the original allocation owner after a fresh boxed owner has retained it.

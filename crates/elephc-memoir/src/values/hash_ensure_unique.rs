@@ -13,6 +13,25 @@ use crate::Emitter;
 use crate::Arch;
 use crate::hash_layout::PINS_OFFSET;
 
+/// Compares a hash's logical owners to one, excluding internal cursor pins.
+pub fn emit_compare_logical_owner_count(
+    emitter: &mut impl Emitter, hash: &str, count: (&str, &str), arm_scratch: &str,
+) {
+    let (wide, narrow) = count;
+    crate::heap_refcount::emit_load_owner_count(emitter, narrow, hash);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {arm_scratch}, [{hash}, #{PINS_OFFSET}]")); // load the internal cursor pin count
+            emitter.instruction(&format!("sub {wide}, {wide}, {arm_scratch}")); // keep only PHP-visible hash owners
+            emitter.instruction(&format!("cmp {wide}, #1"));                    // distinguish a uniquely owned hash
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("sub {wide}, QWORD PTR [{hash} + {PINS_OFFSET}]")); // keep only PHP-visible hash owners
+            emitter.instruction(&format!("cmp {wide}, 1"));                     // distinguish a uniquely owned hash
+        }
+    }
+}
+
 /// hash_ensure_unique: split a shared hash table before mutation.
 /// Null hashes and the in-band null-container sentinel that missed reads materialize
 /// (issue #556) are returned unchanged: neither carries a heap header to split.

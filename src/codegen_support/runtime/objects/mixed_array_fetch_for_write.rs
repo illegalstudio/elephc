@@ -93,24 +93,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the receiver cell
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
-    emitter.instruction("str xzr, [sp, #48]");                                  // ordinary writes and stored-cell survivors keep normal COW
-    emitter.instruction("cbz x3, __rt_mixed_array_gfw_mode_ready");             // only pending appends inspect payload-only survival
-    emitter.instruction("cbz x0, __rt_mixed_array_gfw_mode_ready");             // absent cells have no payload identity to preserve
-    emitter.instruction("ldr x9, [x0]");                                        // load the candidate cell tag
-    emitter.instruction("cmp x9, #4");                                          // indexed arrays can have a separately boxed payload owner
-    emitter.instruction("b.eq __rt_mixed_array_gfw_mode_array");                // inspect their cell and payload counts
-    emitter.instruction("cmp x9, #5");                                          // hashes follow the same ownership rule
-    emitter.instruction("b.ne __rt_mixed_array_gfw_mode_ready");                // scalar and object receivers use ordinary semantics
-    emitter.label("__rt_mixed_array_gfw_mode_array");
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
-    emitter.instruction("cmp w9, #1");                                          // the compiler lease is the one expected cell owner
-    emitter.instruction("b.hi __rt_mixed_array_gfw_mode_ready");                // a stored cell owner keeps ordinary write-through semantics
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load the selected array or hash payload
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x9");
-    emitter.instruction("cmp w9, #2");                                          // one selected-cell lease and exactly one PHP payload owner
-    emitter.instruction("cset x9, eq");                                         // multiple independent copies must never share the detached write
-    emitter.instruction("str x9, [sp, #48]");                                   // preserve it through conversion, lookup, and insertion
-    emitter.label("__rt_mixed_array_gfw_mode_ready");
+    elephc_memoir::values::boxed_array::emit_pending_append_mode(emitter);
 
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_detached_null");          // null receivers yield a detached Mixed(null); the set drops the write
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed payload tag
@@ -328,25 +311,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the receiver cell
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
-    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // ordinary writes and stored-cell survivors keep normal COW
-    emitter.instruction("test rcx, rcx");                                       // is this a parent selected by a pending append?
-    emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");                  // no, retain ordinary write semantics
-    emitter.instruction("test rdi, rdi");                                       // absent cells have no payload identity to preserve
-    emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");                  // keep the detached-null path unchanged
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the candidate cell tag
-    emitter.instruction("cmp r10, 4");                                          // indexed arrays can have separately boxed payload owners
-    emitter.instruction("je __rt_mixed_array_gfw_mode_array");                  // inspect their cell and payload counts
-    emitter.instruction("cmp r10, 5");                                          // hashes follow the same ownership rule
-    emitter.instruction("jne __rt_mixed_array_gfw_mode_ready");                 // scalar and object receivers use ordinary semantics
-    emitter.label("__rt_mixed_array_gfw_mode_array");
-    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "rdi", 1);
-    emitter.instruction("ja __rt_mixed_array_gfw_mode_ready");                  // a stored cell owner keeps ordinary write-through semantics
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the selected array or hash payload
-    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 2);
-    emitter.instruction("sete r10b");                                           // multiple independent copies must never share the detached write
-    emitter.instruction("movzx r10, r10b");                                     // materialize a complete mode word
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve it through conversion, lookup, and insertion
-    emitter.label("__rt_mixed_array_gfw_mode_ready");
+    elephc_memoir::values::boxed_array::emit_pending_append_mode(emitter);
 
     emitter.instruction("test rdi, rdi");                                       // null receivers yield a detached Mixed(null); the set drops the write
     emitter.instruction("je __rt_mixed_array_gfw_detached_null");               // branch to the detached-null fallback

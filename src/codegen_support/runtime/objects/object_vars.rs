@@ -254,10 +254,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x9, x12]");                                  // distinguish an owned native cell from inline or borrowed storage
     emitter.instruction("cmp w9, #11");                                         // only owned kind-eight cells have a managed cell header
     emitter.instruction("b.ne __rt_object_to_hash_wrapper_owners");             // inspect only the wrapper for other storage shapes
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x17");
-    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "x17", "w9", ("x10", "w10"));
-    super::super::reference_cells::subtract_validation_pins(
-        emitter, "x17", "x9", "x10", "x11", "__rt_object_to_hash_cell",
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "x17", ("x9", "w9"), ("x10", "w10"), ("x10", "x11"), "__rt_object_to_hash_cell",
     );
     emitter.instruction("cmp w9, #1");                                          // a live native alias keeps the projected reference shared
     emitter.instruction("b.ls __rt_object_to_hash_wrapper_owners");             // singleton native cells need an independently shared wrapper
@@ -273,10 +271,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x1, #16]");                                   // inspect the reference identity marker
     emitter.instruction("cmp x9, #1");                                          // only a persistent PHP reference preserves its binding
     emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // nested value boxes remain ordinary copies
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x1");
-    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "x1", "w9", ("x10", "w10"));
-    super::super::reference_cells::subtract_validation_pins(
-        emitter, "x1", "x9", "x10", "x11", "__rt_object_to_hash_wrapper",
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "x1", ("x9", "w9"), ("x10", "w10"), ("x10", "x11"), "__rt_object_to_hash_wrapper",
     );
     emitter.instruction("cmp w9, #1");                                          // singleton references project as ordinary copied values
     emitter.instruction("b.ls __rt_object_to_hash_copy_value");                 // avoid creating an alias after its last external owner disappeared
@@ -548,10 +544,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 4");                                          // convert the byte offset to a property index
     emitter.instruction("cmp BYTE PTR [r9 + r11], 11");                         // only owned kind-eight cells have a managed cell header
     emitter.instruction("jne __rt_object_to_hash_wrapper_owners_x");            // inspect only the wrapper for other storage shapes
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r9d", "r10");
-    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "r10", "r9d", ("r11", "r11d"));
-    super::super::reference_cells::subtract_validation_pins(
-        emitter, "r10", "r9", "r11", "rcx", "__rt_object_to_hash_cell_x",
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "r10", ("r9", "r9d"), ("r11", "r11d"), ("r11", "rcx"), "__rt_object_to_hash_cell_x",
     );
     emitter.instruction("cmp r9d, 1");                                          // a live native alias keeps the projected reference shared
     emitter.instruction("jbe __rt_object_to_hash_wrapper_owners_x");            // singleton native cells need an independently shared wrapper
@@ -565,10 +559,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // ordinary values get independent zval storage
     emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                         // inspect the reference identity marker
     emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // nested value boxes remain ordinary copies
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r9d", "rdi");
-    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "rdi", "r9d", ("r11", "r11d"));
-    super::super::reference_cells::subtract_validation_pins(
-        emitter, "rdi", "r9", "r10", "r11", "__rt_object_to_hash_wrapper",
+    elephc_memoir::heap_refcount::emit_load_logical_reference_owners(
+        emitter, "rdi", ("r9", "r9d"), ("r11", "r11d"), ("r10", "r11"), "__rt_object_to_hash_wrapper",
     );
     emitter.instruction("cmp r9d, 1");                                          // singleton references project as ordinary copied values
     emitter.instruction("jbe __rt_object_to_hash_copy_value_x");                // avoid creating an alias after its last external owner disappeared

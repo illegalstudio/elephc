@@ -574,19 +574,13 @@ fn emit_get_pop_op(
     output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x2");
     emitter.instruction("bl __rt_str_persist");                                 // copy the raw contents into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the raw contents pair
-    emitter.instruction("str x1, [sp, #48]");                                   // transfer exceptional ownership of the copied string into its guard
-    abi::emit_symbol_address(emitter, "x9", "__rt_exception_release_owned");
-    emitter.instruction("str x9, [sp, #32]");                                   // register the existing protected heap-owner cleanup callback
-    emitter.instruction("add x0, sp, #24");                                     // pass the stack-local result guard to the activation chain
-    emitter.instruction("mov x1, #0");                                          // insert this result owner at the current cleanup chain head
-    emitter.instruction("bl __rt_exception_guard_owned");                       // release the raw copy if handler execution or callback retirement throws
+    elephc_memoir::guarded_owners::emit_publish_frame_owner(emitter, "x1", 24, 64);
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("ldr x0, [sp, #0]");                                    // process the saved top slot
     emitter.instruction(&format!("mov x1, #{}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov x2, #{}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and clean/flush the buffer
-    emitter.instruction("add x0, sp, #24");                                     // identify the completed result's exact cleanup guard
-    emitter.instruction("bl __rt_exception_unguard_owned");                     // transfer the copied string to the normal return path
+    elephc_memoir::guarded_owners::emit_detach_in_frame(emitter, 24, 64);
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // return the raw contents pair
     emitter.instruction(&format!("b {done}"));                                  // finish
     emitter.label(&fail);
@@ -650,19 +644,13 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction("call __rt_str_persist");                               // copy the raw contents into an owned heap string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the raw contents pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the raw contents length
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // transfer exceptional ownership of the persisted string to the result guard
-    abi::emit_symbol_address(emitter, "r10", "__rt_exception_release_owned");
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // reuse the protected heap-owner cleanup callback
-    emitter.instruction("lea rdi, [rbp - 64]");                                 // pass the aligned stack-local ownership record
-    emitter.instruction("xor esi, esi");                                        // insert the result owner at the activation chain head
-    emitter.instruction("call __rt_exception_guard_owned");                     // guard the copy throughout handler execution and buffer retirement
+    elephc_memoir::guarded_owners::emit_publish_in_frame(emitter, 24, 64);
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // process the saved top slot
     emitter.instruction(&format!("mov esi, {}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov edx, {}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and clean/flush the buffer
-    emitter.instruction("lea rdi, [rbp - 64]");                                 // identify the exact result guard after successful callback retirement
-    emitter.instruction("call __rt_exception_unguard_owned");                   // remove exceptional ownership before transferring the raw result
+    elephc_memoir::guarded_owners::emit_detach_in_frame(emitter, 24, 64);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the raw contents pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // return the raw contents length
     emitter.instruction(&format!("jmp {done}"));                                // finish

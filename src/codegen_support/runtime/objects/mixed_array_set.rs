@@ -741,20 +741,7 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     offset_write_guard::emit_unlink(emitter, 0, 0);
     let replacement = elephc_memoir::strings::offset_result::OffsetResult { cell: 0, pointer: 48 };
     replacement.emit_persist(emitter, "__rt_mixed_array_set_string_owned");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
-    emitter.instruction("cbz x9, __rt_mixed_array_set_string_publish");         // no warning could have run a handler
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w11", "x10");
-    emitter.instruction("cmp w11, #1");                                         // is the retained reference the last one?
-    emitter.instruction("b.ne __rt_mixed_array_set_string_publish");            // the variable still holds the cell: write it
-    emitter.instruction("ldr x0, [sp, #48]");                                   // a handler replaced the variable: drop the updated string
-    emitter.instruction("bl __rt_heap_free_safe");                              // php abandons the write in that case
-    emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
-    emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
-    emitter.instruction("ldr x0, [sp, #0]");                                    // the abandoned cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release the last reference, freeing it
-    emitter.instruction("b __rt_mixed_array_set_done");                         // the value was already consumed
-    emitter.label("__rt_mixed_array_set_string_publish");
+    replacement.emit_cancel_if_detached(emitter, 16, 32);
     replacement.emit_publish(emitter);
     emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
     emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
@@ -827,19 +814,7 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     offset_write_guard::emit_unlink(emitter, 56, 64);
     let replacement = elephc_memoir::strings::offset_result::OffsetResult { cell: 8, pointer: 56 };
     replacement.emit_persist(emitter, "__rt_mixed_array_set_string_owned");
-    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?
-    emitter.instruction("je __rt_mixed_array_set_string_publish");              // no warning could have run a handler
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
-    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 1);
-    emitter.instruction("jne __rt_mixed_array_set_string_publish");             // the variable still holds the cell: write it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // a handler replaced the variable: drop the updated string
-    emitter.instruction("call __rt_heap_free_safe");                            // php abandons the write in that case
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
-    emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the abandoned cell
-    emitter.instruction("call __rt_decref_mixed");                              // release the last reference, freeing it
-    emitter.instruction("jmp __rt_mixed_array_set_done");                       // the value was already consumed
-    emitter.label("__rt_mixed_array_set_string_publish");
+    replacement.emit_cancel_if_detached(emitter, 24, 40);
     replacement.emit_publish(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
     emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)

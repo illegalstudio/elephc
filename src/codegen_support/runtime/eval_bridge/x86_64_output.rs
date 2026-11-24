@@ -197,38 +197,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the null pointer already held in rax
 
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
-    emitter.instruction("mov rax, rdi");                                        // inspect the C boxed Mixed argument without changing refcounts
-    emitter.instruction("test rax, rax");                                       // null handles cannot release an object
-    emitter.instruction("jz __elephc_eval_value_final_object_none_x86");        // report no final object for null handles
-    emitter.label("__elephc_eval_value_final_object_loop_x86");
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r10d", "rax");
-    emitter.instruction("cmp r10d, 1");                                         // only the last Mixed owner can free the wrapped payload
-    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-final wrapper releases cannot run destructors yet
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the current Mixed runtime tag
-    emitter.instruction("cmp r10, 7");                                          // tag 7 means the payload is another boxed Mixed
-    emitter.instruction("jne __elephc_eval_value_final_object_check_object_x86"); // concrete payloads can be tested for object ownership
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the nested Mixed payload pointer
-    emitter.instruction("test rax, rax");                                       // null nested payloads cannot release an object
-    emitter.instruction("jnz __elephc_eval_value_final_object_loop_x86");       // continue while nested Mixed payloads are present
-    emitter.instruction("jmp __elephc_eval_value_final_object_none_x86");       // return zero for null nested payloads
-    emitter.label("__elephc_eval_value_final_object_check_object_x86");
-    emitter.instruction("cmp r10, 6");                                          // tag 6 means the concrete payload is a PHP object
-    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-object releases have no dynamic destructor
-    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the object payload pointer from the Mixed cell
-    emit_branch_if_null_container(
-        emitter,
-        "r10",
-        "r11",
-        "__elephc_eval_value_final_object_none_x86",
-    );
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r11d", "r10");
-    emitter.instruction("cmp r11d, 1");                                         // only the final object owner can run the destructor
-    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // defer destructor execution until object refcount is final
-    emitter.instruction("mov rax, r10");                                        // return the object identity pointer to Rust
-    emitter.instruction("ret");                                                 // finish the final-object query
-    emitter.label("__elephc_eval_value_final_object_none_x86");
-    emitter.instruction("xor eax, eax");                                        // report that no dynamic destructor should run
-    emitter.instruction("ret");                                                 // return zero to Rust
+    elephc_memoir::heap_refcount::emit_final_object_identity(emitter);
 
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning

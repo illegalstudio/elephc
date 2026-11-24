@@ -40,12 +40,7 @@ pub(super) fn begin_unconstructed_object(emitter: &mut Emitter) -> usize {
 
 /// Removes a raw-object construction guard after the constructor returns normally.
 pub(super) fn end_unconstructed_object(emitter: &mut Emitter, bytes: usize) {
-    abi::emit_temporary_stack_address(
-        emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
-        0,
-    );
-    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
+    abi::emit_unguard_owned_at_stack(emitter, 0);
     abi::emit_release_temporary_stack(emitter, bytes);
 }
 

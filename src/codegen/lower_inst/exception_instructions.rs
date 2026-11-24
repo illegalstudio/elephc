@@ -120,21 +120,18 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
         (Arch::AArch64, _) => "x0",
         (Arch::X86_64, _) => "rax",
     };
-    abi::store_at_offset(ctx.emitter, owner,
-        offset - crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
     let cleanup = if matches!(ty, PhpType::Callable { .. }) {
         "__rt_exception_release_callable"
     } else {
         "__rt_exception_release_owned"
     };
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_symbol_address(ctx.emitter, scratch, cleanup);
-    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    let record = elephc_memoir::FrameOffset::new(offset);
+    elephc_memoir::guarded_owners::emit_prepare_anchored(ctx.emitter, record, owner, cleanup, scratch);
     let anchor = expect_operand(inst, 1)?;
     ctx.load_value_to_result(anchor)?;
     abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), abi::int_result_reg(ctx.emitter));
-    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
-    abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
+    elephc_memoir::guarded_owners::emit_link_anchored(ctx.emitter, record);
     store_if_result(ctx, inst)
 }
 
@@ -142,7 +139,7 @@ pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instructio
 pub(super) fn lower_unguard_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let token = expect_operand(inst, 0)?;
     load_value_to_first_int_arg(ctx, token)?;
-    abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+    elephc_memoir::guarded_owners::emit_detach_addressed(ctx.emitter);
     Ok(())
 }
 

@@ -172,16 +172,10 @@ fn select_existing(emitter: &mut Emitter) {
     branch(emitter, "ne", "jne", "fresh");
     emitter.instruction(if arm { "cmp x12, #0" } else { "test edx, edx" });     // any shared ordinary wrapper requires a separate child value
     branch(emitter, "ne", "jne", "clone");
-    if arm {
-        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w13", "x10");
-        emitter.instruction("ldr x14, [x10, #48]");                             // exclude cursor pins from logical PHP ownership
-        emitter.instruction("sub x13, x13, x14");                               // preserve unique identity while nested cursors keep the hash alive
-        emitter.instruction("cmp x13, #1");                                     // shared or actively destroyed children require a value copy
-    } else {
-        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "ecx", "r10");
-        emitter.instruction("sub rcx, QWORD PTR [r10 + 48]");                   // remove cursor pins from the logical owner count
-        emitter.instruction("cmp rcx, 1");                                      // preserve identity only for exactly one live PHP owner
-    }
+    let (hash, count) = if arm { ("x10", ("x13", "w13")) } else { ("r10", ("rcx", "ecx")) };
+    elephc_memoir::values::hash_ensure_unique::emit_compare_logical_owner_count(
+        emitter, hash, count, "x14",
+    );
     branch(emitter, "eq", "je", "unique");
     jump(emitter, "clone");
 }

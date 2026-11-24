@@ -111,7 +111,7 @@ pub fn emit_publish_at_stack(
 ) {
     emitter.emit_store_to_sp(owner, record.bytes() + owner_field.bytes());
     emitter.emit_symbol_address(scratch, cleanup);
-    emitter.emit_store_to_sp(scratch, record.bytes() + 8);
+    emitter.emit_store_to_sp(scratch, record.bytes() + CLEANUP);
     emitter.emit_temporary_stack_address(emitter.int_arg_reg_name(0), record.bytes());
     emitter.emit_load_int_immediate(emitter.int_arg_reg_name(1), 0);
     emitter.emit_call_label("__rt_exception_guard_owned");
@@ -121,6 +121,43 @@ pub fn emit_publish_at_stack(
 pub fn emit_detach_at_stack(emitter: &mut impl TargetAbi, record: RecordOffset) {
     emitter.emit_temporary_stack_address(emitter.int_arg_reg_name(0), record.bytes());
     emitter.emit_call_label("__rt_exception_unguard_owned");
+}
+
+/// Writes a fixed frame guard's owner and cleanup while the caller loads its anchor.
+pub fn emit_prepare_anchored(
+    emitter: &mut impl TargetAbi,
+    record: FrameOffset,
+    owner: &str,
+    cleanup: &str,
+    scratch: &str,
+) {
+    emitter.store_at_offset(owner, record.bytes() - GUARD_OWNER);
+    emitter.emit_symbol_address(scratch, cleanup);
+    emitter.store_at_offset(scratch, record.bytes() - CLEANUP);
+}
+
+/// Installs a prepared guard after the caller has loaded the anchor into argument one.
+pub fn emit_link_anchored(emitter: &mut impl TargetAbi, record: FrameOffset) {
+    emitter.emit_frame_slot_address(emitter.int_arg_reg_name(0), record.bytes());
+    emitter.emit_call_label("__rt_exception_guard_owned");
+}
+
+/// Unlinks the guard addressed by native argument zero.
+pub fn emit_detach_addressed(emitter: &mut impl TargetAbi) {
+    emitter.emit_call_label("__rt_exception_unguard_owned");
+}
+
+/// Takes a resource payload whose empty value differs from a null heap owner.
+pub fn emit_take_resource(
+    emitter: &mut impl TargetAbi,
+    record: &str,
+    result: &str,
+    scratch: &str,
+    empty: i64,
+) {
+    emitter.emit_load_from_address(result, record, GUARD_OWNER);
+    emitter.emit_load_int_immediate(scratch, empty);
+    emitter.emit_store_to_address(scratch, record, GUARD_OWNER);
 }
 
 /// Borrows the current owner of a pointer-word slot for a caller's detach decision.
@@ -141,8 +178,13 @@ pub fn emit_clear_indexed_owner(emitter: &mut impl Emitter, table: &str, index: 
 
 /// Registers the native result-register owner in a 32-byte stack record at the supplied offsets.
 pub fn emit_publish_in_frame(emitter: &mut impl Emitter, arm: usize, x86: usize) {
+    emit_publish_frame_owner(emitter, "x0", arm, x86);
+}
+
+/// Publishes a frame guard for an ARM64 owner register or the x86-64 result register.
+pub fn emit_publish_frame_owner(emitter: &mut impl Emitter, arm_owner: &str, arm: usize, x86: usize) {
     if emitter.arch() == Arch::AArch64 {
-        emitter.instruction(&format!("str x0, [sp, #{}]", arm + GUARD_OWNER));  // publish exceptional ownership before running PHP
+        emitter.instruction(&format!("str {arm_owner}, [sp, #{}]", arm + GUARD_OWNER)); // publish exceptional ownership before running PHP
         abi::emit_symbol_address(emitter, "x9", "__rt_exception_release_owned");
         emitter.instruction(&format!("str x9, [sp, #{}]", arm + CLEANUP));      // use the protected heap-owner release callback
         emitter.instruction(&format!("add x0, sp, #{arm}"));                    // provide the aligned activation record

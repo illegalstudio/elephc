@@ -172,34 +172,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return null for an empty AOT table entry
 
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
-    emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");       // null handles cannot release an object
-    emitter.label("__elephc_eval_value_final_object_loop");
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
-    emitter.instruction("cmp w9, #1");                                          // only the last Mixed owner can free the wrapped payload
-    emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-final wrapper releases cannot run destructors yet
-    emitter.instruction("ldr x9, [x0]");                                        // load the current Mixed runtime tag
-    emitter.instruction("cmp x9, #7");                                          // tag 7 means the payload is another boxed Mixed
-    emitter.instruction("b.ne __elephc_eval_value_final_object_check_object");  // concrete payloads can be tested for object ownership
-    emitter.instruction("ldr x0, [x0, #8]");                                    // follow the nested Mixed payload pointer
-    emitter.instruction("cbnz x0, __elephc_eval_value_final_object_loop");      // continue while nested Mixed payloads are present
-    emitter.instruction("b __elephc_eval_value_final_object_none");             // null nested payloads cannot release an object
-    emitter.label("__elephc_eval_value_final_object_check_object");
-    emitter.instruction("cmp x9, #6");                                          // tag 6 means the concrete payload is a PHP object
-    emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-object releases have no dynamic destructor
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer from the Mixed cell
-    emit_branch_if_null_container(
-        emitter,
-        "x9",
-        "x10",
-        "__elephc_eval_value_final_object_none",
-    );
-    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w10", "x9");
-    emitter.instruction("cmp w10, #1");                                         // only the final object owner can run the destructor
-    emitter.instruction("csel x0, x9, xzr, eq");                                // return object identity only for the final release
-    emitter.instruction("ret");                                                 // return the candidate object identity to Rust
-    emitter.label("__elephc_eval_value_final_object_none");
-    emitter.instruction("mov x0, xzr");                                         // report that no dynamic destructor should run
-    emitter.instruction("ret");                                                 // return zero to Rust
+    elephc_memoir::heap_refcount::emit_final_object_identity(emitter);
 
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
