@@ -599,7 +599,16 @@ fn lower_method_call_with_binding(
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
     // argument and receiver cleanup, so its staging is published before the arguments.
-    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    // A receiver whose class is only known at run time may be any class declaring the method, so the
+    // signature found for it is one candidate's: the callee is not known to transfer a reference
+    // cell, and the dispatch hands the by-value caller a snapshot when it finds one that does.
+    let erased_receiver = match ctx.builder.value_php_type(object.value) {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Mixed)),
+        _ => false,
+    };
+    let reference_sig = if erased_receiver { None } else { sig.as_ref() };
+    let reference_staging = begin_reference_return_call(ctx, reference_sig, expr.span);
     // An ordinary owned result gets the same protection as the reference lease: argument roots,
     // evaluation intermediates and an owning receiver all retire after the call and run PHP
     // destructors that can throw. Receiver and method alone decide the result type and the alias
@@ -686,7 +695,7 @@ fn lower_method_call_with_binding(
         Some(expr.span),
     );
     let call = finish_reference_return_call(
-        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+        ctx, call, reference_sig, reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
     release_owned_call_arg_temporaries_with_roots(
