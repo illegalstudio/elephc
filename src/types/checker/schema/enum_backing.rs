@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use crate::optimize::fold_constant_expression;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, BinOp, Expr, ExprKind};
 
 use super::super::Checker;
 use super::property_default_selectors::bind_constants;
@@ -100,6 +100,14 @@ pub(super) fn join_int_concats(expr: &mut Expr) {
         ExprKind::ArrayLiteralAssoc(items) => items.iter_mut().for_each(|(key, value)| {
             join_int_concats(key);
             join_int_concats(value);
+        }),
+        ExprKind::ArrayLiteralMixed(items) => items.iter_mut().for_each(|item| match item {
+            ArrayEntry::Value(value) | ArrayEntry::Spread(value) => join_int_concats(value),
+            ArrayEntry::Keyed(key, value) => {
+                join_int_concats(key);
+                join_int_concats(value);
+            }
+            ArrayEntry::Reference(_) | ArrayEntry::KeyReference(..) => {}
         }),
         _ => return,
     }
