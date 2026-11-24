@@ -19,6 +19,7 @@
 use super::super::super::*;
 use super::super::*;
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 eval_builtin! {
     contract: "preg_replace_callback",
@@ -37,10 +38,12 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
     let [pattern, callback, subject] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let pattern = eval_expr(pattern, context, scope, values)?;
-    let callback = eval_expr(callback, context, scope, values)?;
-    let subject = eval_expr(subject, context, scope, values)?;
-    eval_preg_replace_callback_result_from_scope(pattern, callback, subject, Some(scope), context, values)
+    with_eval_operands(&[pattern, callback, subject], context, scope, values,
+        |operands, context, scope, values| {
+            eval_preg_replace_callback_result_from_scope(
+                operands[0], operands[1], operands[2], Some(scope), context, values,
+            )
+        })
 }
 
 /// Replaces regex matches with optional lexical scope for callback names.
@@ -92,11 +95,20 @@ fn eval_preg_replace_callback_result_from_scope(
             };
             result.extend_from_slice(&subject[cursor..matched.start()]);
             let matches = eval_preg_capture_array(&subject, Some(&captures), false, false, values)?;
-            let callback_result =
-                eval_evaluated_callable_with_values(&callback, vec![matches], context, values)?;
-            let callback_result = values.cast_string(callback_result)?;
-            let callback_bytes = values.string_bytes(callback_result)?;
-            result.extend_from_slice(&callback_bytes);
+            let matches = RuntimeOwnerSlot::new(matches);
+            let callback_result = with_runtime_owners(&matches, || {
+                let result = eval_evaluated_callable_with_values(
+                    &callback, vec![matches.borrowed()], context, values,
+                );
+                finish_eval_argument_values(result, [matches.take()], context, values)
+            })?;
+            with_eval_value_lease(callback_result, context, values, |callback_result, context, values| {
+                let converted = values.cast_string(callback_result)?;
+                with_eval_value_lease(converted, context, values, |converted, _, values| {
+                    result.extend_from_slice(&values.string_bytes(converted)?);
+                    Ok(())
+                })
+            })?;
             cursor = matched.end();
         };
         if own_error != 0 {

@@ -9,6 +9,7 @@
 //! - Array reads use runtime iteration order and PHP integer coercion.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use elephc_pcntl::{ElephcPcntlRUsage, ElephcPcntlSigInfo};
 
 /// Describes the numeric prefix PHP accepts while coercing a string signal value.
@@ -159,47 +160,67 @@ pub(super) fn eval_pcntl_int_array(
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let tag = values.type_tag(value)?;
-        let integer = if tag == EVAL_TAG_STRING {
-            eval_pcntl_numeric_string_to_int(
-                &values.string_bytes(value)?,
-                name,
-                argument,
-                parameter,
-                element_name,
-                context,
-                values,
-            )?
-        } else if tag == EVAL_TAG_OBJECT {
-            let identity = values.object_identity(value)?;
-            let class_name = match context.dynamic_object_class_name(identity) {
-                Some(name) => name,
-                None => runtime_object_class_name(value, values)?,
-            };
-            let _: RuntimeCellHandle = eval_throw_type_error(
-                &format!(
-                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, {class_name} given"
-                ),
-                context,
-                values,
-            )?;
-            return Err(EvalStatus::RuntimeFatal);
-        } else if tag == EVAL_TAG_CALLABLE {
-            let _: RuntimeCellHandle = eval_throw_type_error(
-                &format!(
-                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, Closure given"
-                ),
-                context,
-                values,
-            )?;
-            return Err(EvalStatus::RuntimeFatal);
-        } else {
-            eval_int_value(value, values)?
-        };
-        result.push(integer);
+        with_eval_value_lease(key, context, values, |key, context, values| {
+            let value = values.array_get(array, key)?;
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                let integer = eval_pcntl_int_array_element(
+                    value, name, argument, parameter, element_name, context, values,
+                )?;
+                result.push(integer);
+                Ok(())
+            })
+        })?;
     }
     Ok(result)
+}
+
+/// Coerces an owned array read while its caller tracks the element lease.
+fn eval_pcntl_int_array_element(
+    value: RuntimeCellHandle,
+    name: &str,
+    argument: usize,
+    parameter: &str,
+    element_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_STRING {
+        eval_pcntl_numeric_string_to_int(
+            &values.string_bytes(value)?,
+            name,
+            argument,
+            parameter,
+            element_name,
+            context,
+            values,
+        )
+    } else if tag == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        let class_name = match context.dynamic_object_class_name(identity) {
+            Some(name) => name,
+            None => runtime_object_class_name(value, values)?,
+        };
+        let _: RuntimeCellHandle = eval_throw_type_error(
+            &format!(
+                "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, {class_name} given"
+            ),
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::RuntimeFatal)?;
+    } else if tag == EVAL_TAG_CALLABLE {
+        let _: RuntimeCellHandle = eval_throw_type_error(
+            &format!(
+                "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, Closure given"
+            ),
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::RuntimeFatal)?;
+    } else {
+        eval_int_value(value, values)
+    }
 }
 
 /// Builds a fresh indexed PHP integer array from a native slice.
@@ -207,13 +228,11 @@ pub(super) fn eval_pcntl_indexed_int_array(
     input: &[i64],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(input.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, input.len())?;
     for (position, value) in input.iter().copied().enumerate() {
-        let key = values.int(position as i64)?;
-        let value = values.int(value)?;
-        result = values.array_set(result, key, value)?;
+        result.index(position, |values| values.int(value))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds PHP's 17-field resource-usage associative array.
@@ -261,17 +280,15 @@ pub(super) fn eval_pcntl_siginfo_array(
         ("band", info.band, elephc_pcntl::SIGINFO_BAND, false),
         ("fd", info.fd, elephc_pcntl::SIGINFO_FD, false),
     ];
-    let mut result = values.assoc_new(candidates.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, candidates.len())?;
     for (key, value, bit, is_float) in candidates {
         if info.present & bit != 0 {
-            result = if is_float {
-                eval_pcntl_assoc_set_float(result, key, value as f64, values)?
-            } else {
-                eval_pcntl_assoc_set_int(result, key, value, values)?
-            };
+            result.string(key, |values| {
+                if is_float { values.float(value as f64) } else { values.int(value) }
+            })?;
         }
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds an associative integer array from a static field list.
@@ -279,33 +296,9 @@ fn eval_pcntl_assoc_int_fields(
     fields: &[(&str, i64)],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(fields.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, fields.len())?;
     for (key, value) in fields.iter().copied() {
-        result = eval_pcntl_assoc_set_int(result, key, value, values)?;
+        result.string(key, |values| values.int(value))?;
     }
-    Ok(result)
-}
-
-/// Inserts one string-keyed integer into an eval associative array.
-fn eval_pcntl_assoc_set_int(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.int(value)?;
-    values.array_set(array, key, value)
-}
-
-/// Inserts one string-keyed float into an eval associative array.
-fn eval_pcntl_assoc_set_float(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: f64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.float(value)?;
-    values.array_set(array, key, value)
+    Ok(result.finish())
 }

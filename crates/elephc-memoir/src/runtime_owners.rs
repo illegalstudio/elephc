@@ -268,6 +268,17 @@ impl StagedRuntimeOwners {
         release_staged_cells(operation, cells, release)
     }
 
+    /// Detaches each temporary immediately before release, with an explicit error policy.
+    pub fn release_with_policy<E>(
+        &self,
+        errors: CleanupErrorPolicy,
+        release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let count = self.0.borrow().len();
+        let cells = (0..count).filter_map(|index| self.0.borrow()[index].take_optional());
+        release_in_order(cells, errors, release)
+    }
+
     /// Drains the temporaries, transferring the result only if construction and cleanup succeed.
     pub fn finish<E>(
         &self,
@@ -368,8 +379,8 @@ pub fn release_all<T, E>(
     release_in_order(owners, errors, release)
 }
 
-/// Retires owners in their supplied order without reallocating their storage.
-fn release_in_order<T, E>(
+/// Retires owners in their supplied order, acquiring each immediately before release.
+pub fn release_in_order<T, E>(
     owners: impl IntoIterator<Item = T>,
     errors: CleanupErrorPolicy,
     mut release: impl FnMut(T) -> Result<(), E>,
@@ -474,6 +485,27 @@ mod tests {
         assert_eq!(outcome, Err("construction"));
         assert_eq!(released, [first, second, cell(24usize)]);
         assert!(output.is_empty());
+    }
+
+    /// The last release error wins while all later leases remain visible until retirement.
+    #[test]
+    fn staged_last_error_keeps_unretired_owners_visible() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let owners = StagedRuntimeOwners::default();
+        owners.stage(first);
+        owners.stage(second);
+        let mut order = Vec::new();
+
+        let cleanup = owners.release_with_policy(CleanupErrorPolicy::Last, |cell| {
+            order.push(cell);
+            let mut live = Vec::new();
+            owners.visit_owned_slots(&mut |field| live.push(field));
+            assert_eq!(live.len(), usize::from(cell == first));
+            Err(cell)
+        });
+        assert_eq!(cleanup, Err(second));
+        assert_eq!(order, [first, second]);
     }
 
     /// Reentrant release callbacks can publish a second batch without leaking it.

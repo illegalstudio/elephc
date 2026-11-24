@@ -134,7 +134,7 @@ pub(super) fn pin_native_call_evaluation_owners(
 ) -> Result<(), EvalStatus> {
     if arguments.evaluation_owners.is_empty() { return Ok(()); }
     let managed = arguments.ref_slots.iter().filter_map(|slot| match slot {
-        BoundNativeFunctionRefSlot::ManagedMixed { original, cell, pin } => Some((original.as_ptr() as usize, (*cell, pin.get().cast()))),
+        BoundNativeFunctionRefSlot::ManagedMixed { original, cell, pin } => Some((original.as_ptr() as usize, (*cell, pin.as_ptr()))),
         _ => None,
     }).collect::<std::collections::HashMap<_, _>>();
     for owner in &arguments.evaluation_owners {

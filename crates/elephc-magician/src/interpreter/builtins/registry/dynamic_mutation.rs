@@ -342,8 +342,7 @@ fn eval_dynamic_preg_match_call(
     let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
         eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
-    eval_write_preg_matches_target(target, matches_array, context, values)?;
-    Ok(Some(result))
+    eval_write_preg_matches_target(target, result, matches_array, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `preg_match_all()` call when `$matches` is a writable lvalue.
@@ -375,8 +374,7 @@ fn eval_dynamic_preg_match_all_call(
     let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, offset, values)?;
-    eval_write_preg_matches_target(target, matches_array, context, values)?;
-    Ok(Some(result))
+    eval_write_preg_matches_target(target, result, matches_array, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `flock()` call when `$would_block` is a writable lvalue.

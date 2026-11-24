@@ -17,7 +17,9 @@
 
 use super::*;
 use crate::context::push_native_frame_context;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
 
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 pub(in crate::interpreter) fn eval_native_function(
@@ -42,7 +44,7 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let _native_context = push_native_frame_context(context);
-    let result = with_runtime_owners(&bound_args.values, ||
+    let result = with_runtime_owners(&(&bound_args.values, &bound_args.ref_slots), ||
         invoke_native_function_with_staged_args(&function, &bound_args, context, values));
     finish_eval_argument_values(result, bound_args.values, context, values)
 }
@@ -81,19 +83,29 @@ fn invoke_native_function_with_staged_args(
         let result = unsafe { function.call(arg_array.borrowed()) };
         // Transfer a native exception before any cleanup can run another destructor.
         let result = values.native_call_result(result);
-        let writeback = write_back_native_function_ref_args(bound_args, context, values);
-        let result = match (result, writeback) {
-            (Err(status), _) => Err(status),
-            (Ok(value), Err(status)) => {
-                let _ = eval_release_value(context, values, value);
-                Err(status)
-            }
-            (Ok(value), Ok(())) => Ok(value),
-        };
-        let result = finish_eval_argument_values(result, [arg_array.take()], context, values)?;
+        let result = finish_native_invocation(result, bound_args, &arg_array, context, values)?;
         eval_declared_native_return_value(
             Some(function.name()), function.return_type(), None, None, result, context, values,
         )
+    })
+}
+
+/// Keeps a native return visible during reference writeback and argument retirement.
+pub(in crate::interpreter) fn finish_native_invocation(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    bound_args: &BoundNativeFunctionArgs,
+    arg_array: &RuntimeOwnerSlot,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = result.and_then(|value| promote_borrowed_result(value, values))
+        .map(RuntimeOwnerSlot::new);
+    with_runtime_owners(&result.as_ref().ok(), || {
+        let writeback = write_back_native_function_ref_args(bound_args, context, values);
+        let result = result.as_ref().map_err(|status| *status).and_then(|slot| {
+            slot.finish(writeback, |cell| eval_release_value(context, values, cell))
+        });
+        finish_eval_argument_values(result, [arg_array.take()], context, values)
     })
 }
 
@@ -109,31 +121,26 @@ pub(in crate::interpreter) fn build_native_function_arg_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let named = bound_args.named_keys.iter().any(Option::is_some);
-    let arg_array = if named {
-        values.assoc_new(bound_args.values.len())?
+    let capacity = bound_args.values.len();
+    let mut arg_array = if named {
+        EvalArrayBuilder::assoc(values, capacity)?
     } else {
-        values.array_new(bound_args.values.len())?
+        EvalArrayBuilder::indexed(values, capacity)?
     };
     for (index, value) in bound_args.values.iter().copied().enumerate() {
-        let key = match bound_args.named_keys.get(index).and_then(Option::as_deref) {
-            Some(name) => values.string(name),
-            None => values.int(index as i64),
-        };
-        let key = match key {
-            Ok(key) => key,
-            Err(status) => {
-                values.release(arg_array)?;
-                return Err(status);
-            }
-        };
-        let inserted = values.array_set(arg_array, key, value);
-        let released = values.release(key);
-        if let Err(status) = inserted.and(released) {
-            values.release(arg_array)?;
+        let inserted = arg_array.entry_key_first(
+            |values| match bound_args.named_keys.get(index).and_then(Option::as_deref) {
+                Some(name) => values.string(name),
+                None => values.int(index as i64),
+            },
+            |_| Ok(value.borrowed()),
+        );
+        if let Err(status) = inserted {
+            arg_array.discard()?;
             return Err(status);
         }
     }
-    Ok(arg_array)
+    Ok(arg_array.finish())
 }
 
 /// Releases current staging owners; native replacement has already consumed each old slot value.
@@ -141,28 +148,25 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for ref_slot in &bound_args.ref_slots {
-        let released = match ref_slot {
+    release_in_order(&bound_args.ref_slots, CleanupErrorPolicy::First, |slot| {
+        match slot {
             BoundNativeFunctionRefSlot::ManagedMixed { cell, pin, .. } => {
-                values.release_native_mixed_reference_cell(*cell, pin.get().cast())
+                pin.retire(|record| values.release_native_mixed_reference_cell(*cell, record))
             }
             BoundNativeFunctionRefSlot::RawString { slot, .. } => {
-                let words = slot.as_ref().snapshot();
+                let words = slot.as_ref().take();
                 values.release_raw_string_words(words.word, words.high)
             }
             BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
-                let word = slot.as_ref().snapshot().word;
+                let word = slot.as_ref().take().word;
                 values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
-                values.release(RuntimeCellHandle::from_raw(**slot))
+                slot.take().map_or(Ok(()), |cell| values.release(cell))
             }
             BoundNativeFunctionRefSlot::RawWord { .. } | BoundNativeFunctionRefSlot::TaggedScalar { .. } => Ok(()),
-        };
-        if result.is_ok() { result = released; }
-    }
-    result
+        }
+    })
 }
 
 /// Writes changed staged native-function by-reference slots back to eval caller targets.
@@ -171,12 +175,8 @@ pub(in crate::interpreter) fn write_back_native_function_ref_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for ref_slot in &bound_args.ref_slots {
-        let written = write_back_native_function_ref_slot(ref_slot, context, values);
-        if result.is_ok() { result = written; }
-    }
-    result
+    release_in_order(&bound_args.ref_slots, CleanupErrorPolicy::First,
+        |slot| write_back_native_function_ref_slot(slot, context, values))
 }
 
 /// Consumes one staging owner, publishing changed values before releasing displaced storage.
@@ -188,20 +188,22 @@ fn write_back_native_function_ref_slot(
     match ref_slot {
         // Native stores already published through the caller's live PHPRef. Only
         // retire staging's cell lease; constructors may have retained another one.
-        BoundNativeFunctionRefSlot::ManagedMixed { cell, pin, .. } => values.release_native_mixed_reference_cell(*cell, pin.get().cast()),
+        BoundNativeFunctionRefSlot::ManagedMixed { cell, pin, .. } => {
+            pin.retire(|record| values.release_native_mixed_reference_cell(*cell, record))
+        }
         BoundNativeFunctionRefSlot::Mixed {
             original,
             slot,
             target,
         } => {
-            let value = RuntimeCellHandle::from_raw(**slot);
+            let Some(value) = slot.take() else { return Ok(()); };
             if value == *original {
                 return eval_release_value(context, values, value);
             }
             let Some(target) = target else {
                 return eval_release_value(context, values, value);
             };
-            publish_native_function_ref_value(target, value, context, values)
+            write_back_owned_ref_target(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::RawWord {
             tag,
@@ -218,7 +220,7 @@ fn write_back_native_function_ref_slot(
                 return Ok(());
             };
             let value = values.raw_word_value(*tag, word)?;
-            publish_native_function_ref_value(target, value, context, values)
+            write_back_owned_ref_target(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target } => {
             let words = slot.as_ref().snapshot();
@@ -229,7 +231,7 @@ fn write_back_native_function_ref_slot(
                 EVAL_TAG_NULL => values.null()?,
                 _ => return Err(EvalStatus::RuntimeFatal),
             };
-            publish_native_function_ref_value(target, value, context, values)
+            write_back_owned_ref_target(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::RawString {
             original,
@@ -237,7 +239,7 @@ fn write_back_native_function_ref_slot(
             target,
             force_writeback,
         } => {
-            let words = slot.as_ref().snapshot();
+            let words = slot.as_ref().take();
             let Some(target) = target else {
                 return values.release_raw_string_words(words.word, words.high);
             };
@@ -245,15 +247,16 @@ fn write_back_native_function_ref_slot(
                 return values.release_raw_string_words(words.word, words.high);
             }
             let value = values.raw_string_value(words.word, words.high);
-            let released = values.release_raw_string_words(words.word, words.high);
-            publish_native_function_ref_conversion(target, value, released, context, values)
+            publish_native_function_ref_conversion(target, value, context, values, |values| {
+                values.release_raw_string_words(words.word, words.high)
+            })
         }
         BoundNativeFunctionRefSlot::OwnedRawWord {
             original,
             slot,
             target,
         } => {
-            let word = slot.as_ref().snapshot().word;
+            let word = slot.as_ref().take().word;
             let Some(target) = target else {
                 return values.release_raw_heap_word(word);
             };
@@ -261,51 +264,26 @@ fn write_back_native_function_ref_slot(
                 return values.release_raw_heap_word(word);
             }
             let value = values.raw_heap_word_value(word);
-            let released = values.release_raw_heap_word(word);
-            publish_native_function_ref_conversion(target, value, released, context, values)
+            publish_native_function_ref_conversion(target, value, context, values, |values| {
+                values.release_raw_heap_word(word)
+            })
         }
     }
 }
 
 /// Discards a fresh box if retiring its raw staging owner failed before publication.
-fn publish_native_function_ref_conversion(
+fn publish_native_function_ref_conversion<V: RuntimeValueOps>(
     target: &EvalReferenceTarget,
     value: Result<RuntimeCellHandle, EvalStatus>,
-    released: Result<(), EvalStatus>,
     context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
+    values: &mut V,
+    release: impl FnOnce(&mut V) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
-    match (value, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => publish_native_function_ref_value(target, value, context, values),
-    }
-}
-
-/// Transfers a staged box to variable storage, or lends it to a retaining container setter.
-fn publish_native_function_ref_value(
-    target: &EvalReferenceTarget,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if let EvalReferenceTarget::Variable { scope, name } = target {
-        let Some(scope) = (unsafe { scope.as_mut() }) else {
-            let _ = eval_release_value(context, values, value);
-            return Err(EvalStatus::RuntimeFatal);
-        };
-        let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
-        let mut result = Ok(());
-        for replaced in replaced {
-            let released = eval_release_value(context, values, replaced);
-            if result.is_ok() { result = released; }
-        }
-        return result;
-    }
-    let written = write_back_method_ref_target(target, value.borrowed(), context, values);
-    let released = eval_release_value(context, values, value);
-    written.and(released)
+    let value = value.map(RuntimeOwnerSlot::new);
+    with_runtime_owners(&value.as_ref().ok(), || {
+        let released = release(values);
+        let value = value.as_ref().map_err(|status| *status)?
+            .finish(released, |cell| eval_release_value(context, values, cell))?;
+        write_back_owned_ref_target(target, value, context, values)
+    })
 }

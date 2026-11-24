@@ -10,6 +10,8 @@
 //! - Entries reflect shared handler state; every constructed key, value, and nested array has an owner.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::{CleanupErrorPolicy, StagedRuntimeOwners};
 
 eval_builtin! {
     contract: "ob_get_status",
@@ -27,18 +29,8 @@ pub(in crate::interpreter) fn eval_builtin_ob_get_status(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
         [] => eval_ob_get_status_result(&[], context, values),
-        [full_status] => {
-            let full_status = eval_owned_expr(full_status, context, scope, values)?;
-            let result = eval_ob_get_status_result(&[full_status], context, values);
-            match (result, eval_release_value(context, values, full_status)) {
-                (Ok(value), Ok(())) => Ok(value),
-                (Err(status), _) => Err(status),
-                (Ok(value), Err(status)) => {
-                    let _ = eval_release_value(context, values, value);
-                    Err(status)
-                }
-            }
-        }
+        [full_status] => with_eval_operands(&[full_status], context, scope, values,
+            |operands, context, _, values| eval_ob_get_status_result(operands, context, values)),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -62,19 +54,14 @@ pub(in crate::interpreter) fn eval_ob_get_status_result(
         return eval_ob_status_entry(level - 1, values);
     }
     let capacity = usize::try_from(level).unwrap_or(0).max(1);
-    let mut result = values.assoc_new(capacity)?;
-    let mut owners = Vec::new();
-    let built = (|| {
+    build_status_array(capacity, values, |result, owners, values| {
         for index in 0..level {
-            let entry = eval_ob_status_entry(index, values)?;
-            owners.push(entry);
-            let key = values.int(index)?;
-            owners.push(key);
-            result = values.array_set(result, key, entry)?;
+            let entry = owners.stage(eval_ob_status_entry(index, values)?);
+            let key = owners.stage(values.int(index)?);
+            result.update_receiver(values.array_set(result.borrowed(), key, entry)?);
         }
         Ok(())
-    })();
-    finish_status_array(result, built, owners, values)
+    })
 }
 
 /// Builds the PHP status entry for one buffer level from its stored metadata.
@@ -94,41 +81,33 @@ fn eval_ob_status_entry(
     if is_user {
         flags |= 1;
     }
-    let mut entry = values.assoc_new(8)?;
-    let mut owners = Vec::new();
-    let built = (|| {
-        let key = values.string("name")?;
-        owners.push(key);
-        let name = values.string(&name)?;
-        owners.push(name);
-        entry = values.array_set(entry, key, name)?;
+    build_status_array(8, values, |entry, owners, values| {
+        let key = owners.stage(values.string("name")?);
+        let name = owners.stage(values.string(&name)?);
+        entry.update_receiver(values.array_set(entry.borrowed(), key, name)?);
         for (key, value) in [
             ("type", i64::from(is_user)), ("flags", flags), ("level", index),
             ("chunk_size", chunk_size), ("buffer_size", buffer_size), ("buffer_used", buffer_used),
         ] {
-            let key = values.string(key)?;
-            owners.push(key);
-            let value = values.int(value)?;
-            owners.push(value);
-            entry = values.array_set(entry, key, value)?;
+            let key = owners.stage(values.string(key)?);
+            let value = owners.stage(values.int(value)?);
+            entry.update_receiver(values.array_set(entry.borrowed(), key, value)?);
         }
         Ok(())
-    })();
-    finish_status_array(entry, built, owners, values)
+    })
 }
 
-/// Releases temporary scalar or nested-array owners and transfers only a fully built result.
-fn finish_status_array(
-    array: RuntimeCellHandle,
-    mut result: Result<(), EvalStatus>,
-    owners: Vec<RuntimeCellHandle>,
-    values: &mut impl RuntimeValueOps,
+/// Builds a status array and gives the last temporary-release failure precedence.
+fn build_status_array<V: RuntimeValueOps>(
+    capacity: usize,
+    values: &mut V,
+    build: impl FnOnce(&RuntimeOwnerSlot, &StagedRuntimeOwners, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    for owner in owners {
-        if let Err(status) = values.release(owner) { result = Err(status); }
-    }
-    match result {
-        Ok(()) => Ok(array),
-        Err(status) => { let _ = values.release(array); Err(status) },
-    }
+    let array = RuntimeOwnerSlot::new(values.assoc_new(capacity)?);
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&(&array, &owners), || {
+        let built = build(&array, &owners, values);
+        let cleanup = owners.release_with_policy(CleanupErrorPolicy::Last, |cell| values.release(cell));
+        array.finish(cleanup.and(built), |cell| values.release(cell))
+    })
 }

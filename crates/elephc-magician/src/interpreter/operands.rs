@@ -339,7 +339,10 @@ pub(in crate::interpreter) fn with_eval_value_lease<V: RuntimeValueOps>(
     consume: impl FnOnce(RuntimeCellHandle, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let value = if value.is_borrowed() { values.retain(value)? } else { value };
-    let result = consume(value, context, values);
-    let released = eval_release_value(context, values, value);
-    result.and(released)
+    let owner = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&owner, || {
+        let result = consume(value, context, values);
+        let released = eval_release_value(context, values, owner.take());
+        result.and(released)
+    })
 }

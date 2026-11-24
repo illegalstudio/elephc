@@ -31288,3 +31288,27 @@ eval($code);
         "caught:EvalStrictAotMethodBox::read(): Argument #1 ($value) must be of type int, string given\n"
     );
 }
+
+
+/// Repeated eval date and nested chunk results relinquish all temporary cells.
+#[test]
+fn test_eval_date_and_nested_chunk_builders_leave_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function probe(string $source, int $runs): void { eval($source); }
+probe('for ($i = 0; $i < $runs; $i++) {
+    $date = getdate(0);
+    $local = localtime(0, true);
+    $now = hrtime(false);
+    $chunks = array_chunk([101, 102, 103, 104], 2);
+    $keyed = array_chunk(["a" => 1, 7 => 2, "b" => 3], 2, true);
+    if ($i === 0) {
+        echo $date[0], ":", count($local), ":", count($now), ":";
+        echo json_encode($chunks), ":", json_encode($keyed);
+    }
+    unset($date, $local, $now, $chunks, $keyed);
+}', 16);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, r#"0:9:2:[[101,102],[103,104]]:[{"a":1,"7":2},{"b":3}]"#);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

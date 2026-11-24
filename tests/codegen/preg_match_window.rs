@@ -311,3 +311,34 @@ fn opaque_eval(body: &str) -> String {
     let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
     format!("<?php\neval('{quoted}' . ' // ' . $argc);\n")
 }
+
+
+/// Eval capture matrices and split pairs are fully owned and leave no temporary cells.
+#[test]
+fn test_eval_preg_capture_and_split_builders_leave_heap_clean() {
+    let out = compile_and_run_with_heap_debug_and_regex(r#"<?php
+function probe(string $source, int $runs): void { eval($source); }
+probe('for ($i = 0; $i < $runs; $i++) {
+    $one = [];
+    preg_match("/(a)(x)?/", "ba", $one, PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL);
+    $set = [];
+    preg_match_all("/(a)(x)?/", "baax", $set, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+    $pattern = [];
+    preg_match_all("/(a)/", "aa", $pattern, PREG_PATTERN_ORDER);
+    $parts = preg_split("/,/", "a,b", -1, PREG_SPLIT_OFFSET_CAPTURE);
+    $picked = preg_grep("/a/", ["x" => "a", "y" => "b"]);
+    $replaced = preg_replace_callback("/a/", function ($matches) { return "x"; }, "aba");
+    if ($i === 0) {
+        echo json_encode($one), ":", json_encode($set), ":", json_encode($pattern), ":";
+        echo json_encode($parts), ":", json_encode($picked), ":", $replaced;
+    }
+    unset($one, $set, $pattern, $parts, $picked, $replaced);
+}', 8);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        r#"[["a",1],["a",1],[null,-1]]:[[["a",1],["a",1]],[["ax",2],["a",2],["x",3]]]:"#,
+        r#"[["a","a"],["a","a"]]:[["a",0],["b",2]]:{"x":"a"}:xbx"#,
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -5,9 +5,10 @@
 //! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - `getdate` owns the shared timestamp coercion and array-entry helpers.
+//! - `getdate` owns shared timestamp coercion.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "localtime",
@@ -30,15 +31,10 @@ pub(in crate::interpreter) fn eval_builtin_localtime(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
         [] => eval_localtime_result(None, None, context, values),
-        [timestamp] => {
-            let timestamp = eval_expr(timestamp, context, scope, values)?;
-            eval_localtime_result(Some(timestamp), None, context, values)
-        }
-        [timestamp, associative] => {
-            let timestamp = eval_expr(timestamp, context, scope, values)?;
-            let associative = eval_expr(associative, context, scope, values)?;
-            eval_localtime_result(Some(timestamp), Some(associative), context, values)
-        }
+        [timestamp] => with_eval_operands(&[timestamp], context, scope, values,
+            |operands, context, _, values| eval_localtime_result(Some(operands[0]), None, context, values)),
+        [timestamp, associative] => with_eval_operands(&[timestamp, associative], context, scope, values,
+            |operands, context, _, values| eval_localtime_result(Some(operands[0]), Some(operands[1]), context, values)),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -68,15 +64,15 @@ pub(in crate::interpreter) fn eval_localtime_result(
         tm.tm_isdst,
     ];
     if associative {
-        let mut result = values.assoc_new(fields.len())?;
+        let mut result = EvalArrayBuilder::assoc(values, fields.len())?;
         for (key, value) in EVAL_LOCALTIME_KEYS.iter().zip(fields) {
-            result = eval_array_set_string_int(result, key, i64::from(value), values)?;
+            result.string(key, |values| values.int(i64::from(value)))?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
-    let mut result = values.array_new(fields.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, fields.len())?;
     for (index, value) in fields.into_iter().enumerate() {
-        result = eval_array_set_int_int(result, index as i64, i64::from(value), values)?;
+        result.index(index, |values| values.int(i64::from(value)))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

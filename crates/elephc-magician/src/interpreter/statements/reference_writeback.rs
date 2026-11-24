@@ -291,6 +291,31 @@ pub(super) fn write_back_owned_variable_ref_target(
     result
 }
 
+/// Transfers a staged box to variable storage, or lends it to a retaining container setter.
+pub(in crate::interpreter) fn write_back_owned_ref_target(
+    target: &EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let EvalReferenceTarget::Variable { scope, name } = target {
+        let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let _ = eval_release_value(context, values, value);
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+        let mut result = Ok(());
+        for replaced in replaced {
+            let released = eval_release_value(context, values, replaced);
+            if result.is_ok() { result = released; }
+        }
+        return result;
+    }
+    with_eval_value_lease(value, context, values, |value, context, values| {
+        write_back_method_ref_target(target, value.borrowed(), context, values)
+    })
+}
+
 /// Stores one by-reference result in the original caller-side target.
 pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,

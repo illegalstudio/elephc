@@ -14,7 +14,10 @@
 //!   `named_keys` vector stays index-aligned with `values`.
 
 use super::*;
-use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
+use elephc_memoir::{
+    owner_layout::InvokerSlotWords,
+    runtime_invoker_slots::{InvokerMixedSlot, InvokerSlot, InvokerValidationPin},
+};
 
 /// Identifies native parameters whose retaining consumers need a persistent boxed reference.
 pub(super) fn native_reference_uses_boxed_staging(
@@ -104,13 +107,13 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
             }
             if let BoundNativeFunctionRefSlot::Mixed { original: first, slot, target: Some(_) } = existing {
                 if first.as_ptr() == original.as_ptr() {
-                    return values.invoker_ref_cell(slot.as_mut()).map(|marker| (marker, None));
+                    return values.invoker_ref_cell(slot.as_ptr()).map(|marker| (marker, None));
                 }
             }
         }
         if !guarded_writeback {
-            let pin = Box::new(std::cell::UnsafeCell::new(elephc_memoir::owner_layout::ValidationPin::default()));
-            let record = pin.get().cast();
+            let pin = InvokerValidationPin::default();
+            let record = pin.as_ptr();
             if let Some(cell) = values.native_mixed_reference_cell(original, record)? {
                 let marker = match values.invoker_ref_cell(cell as *mut *mut crate::value::RuntimeCell) {
                     Ok(marker) => marker,
@@ -208,8 +211,8 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             let retained = if guarded_writeback && values.is_reference(original)? {
                 values.copy_value(original)?
             } else { values.retain(original)? };
-            let mut slot = Box::new(retained.as_ptr());
-            let marker = match values.invoker_ref_cell(slot.as_mut()) {
+            let slot = InvokerMixedSlot::new(retained);
+            let marker = match values.invoker_ref_cell(slot.as_ptr()) {
                 Ok(marker) => marker,
                 Err(status) => {
                     let _ = values.release(retained);

@@ -96,10 +96,19 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         key: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
         value: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
     ) -> Result<(), EvalStatus> {
+        self.entry_from_key(key, |values, _| value(values))
+    }
+
+    /// Materializes a value using the rooted entry key.
+    pub(in crate::interpreter) fn entry_from_key(
+        &mut self,
+        key: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+        value: impl FnOnce(&mut V, RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>,
+    ) -> Result<(), EvalStatus> {
         self.stage_entry(|values, key_owner, value_owner| {
             let key = key(values)?;
             key_owner.replace(Some(key));
-            let value = value(values)?;
+            let value = value(values, key)?;
             value_owner.replace(Some(value));
             Ok((key, value))
         })
@@ -140,6 +149,12 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
             });
             release_staged_cells(appended, [owner.take()], |cell| self.values.release(cell))
         })
+    }
+
+    /// Abandons the builder and returns the release status to the caller.
+    pub(in crate::interpreter) fn discard(self) -> Result<(), EvalStatus> {
+        let cell = self.cell.take();
+        self.values.release(cell)
     }
 
     /// Transfers the finished array to the caller without releasing its entries.

@@ -11,7 +11,11 @@
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
-use elephc_memoir::{owner_layout::InvokerSlotWords, runtime_invoker_slots::InvokerSlot};
+use elephc_memoir::{
+    owner_layout::InvokerSlotWords,
+    runtime_invoker_slots::{InvokerMixedSlot, InvokerSlot, InvokerValidationPin},
+    runtime_owners::RuntimeOwners,
+};
 use std::pin::Pin;
 use super::argument_value_owners::ArgumentValueOwner;
 
@@ -74,11 +78,11 @@ pub(super) enum BoundNativeFunctionRefSlot {
         original: RuntimeCellHandle,
         cell: u64,
         /// Stable foreign-mutable record remains allocated until native pin retirement completes.
-        pin: Box<std::cell::UnsafeCell<elephc_memoir::owner_layout::ValidationPin>>,
+        pin: InvokerValidationPin,
     },
     Mixed {
         original: RuntimeCellHandle,
-        slot: Box<*mut crate::value::RuntimeCell>,
+        slot: InvokerMixedSlot,
         target: Option<EvalReferenceTarget>,
     },
     RawWord {
@@ -104,6 +108,15 @@ pub(super) enum BoundNativeFunctionRefSlot {
         slot: Pin<Box<InvokerSlot>>,
         target: Option<EvalReferenceTarget>,
     },
+}
+
+impl RuntimeOwners for BoundNativeFunctionRefSlot {
+    /// Exposes detached Mixed owners; managed pins are visited by the native chain.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut crate::value::RuntimeCell)) {
+        if let Self::Mixed { slot, .. } = self {
+            slot.visit_owned_slots(visit);
+        }
+    }
 }
 
 /// How a callable binder should handle by-reference parameters without caller storage.

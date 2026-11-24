@@ -23,6 +23,7 @@
 
 use super::super::super::*;
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// `PREG_GREP_INVERT`: keep the entries that do not match.
 const EVAL_PREG_GREP_INVERT: i64 = 1;
@@ -41,11 +42,10 @@ pub(in crate::interpreter) fn eval_builtin_preg_grep(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated = args
-        .iter()
-        .map(|arg| eval_expr(arg, context, scope, values))
-        .collect::<Result<Vec<_>, _>>()?;
-    eval_preg_grep_values_result(&evaluated, context, values)
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&operands, context, scope, values, |operands, context, _, values| {
+        eval_preg_grep_values_result(operands, context, values)
+    })
 }
 
 /// Dispatches by-value `preg_grep()` calls after argument binding.
@@ -78,24 +78,18 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
         EvalPregCallbackPattern::UnsupportedModifier => return Err(EvalStatus::RuntimeFatal),
     };
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
-    match eval_preg_grep_fill(&regex, array, len, invert, &mut result, context, values) {
-        // PHP 8.6 (php-src GH-11936) returns `false`, not the partial result, whenever the
-        // scan leaves an error in `preg_last_error()`.
-        Ok(()) if eval_preg_last_error_code() != 0
-            && crate::eval_php_profile::eval_php_version_id() >= 80600 =>
+    let result = RuntimeOwnerSlot::new(values.assoc_new(len)?);
+    with_runtime_owners(&result, || {
+        let filled = eval_preg_grep_fill(&regex, array, len, invert, &result, context, values);
+        // PHP 8.6 (php-src GH-11936) returns false when the scan leaves an error.
+        if filled.is_ok() && eval_preg_last_error_code() != 0
+            && crate::eval_php_profile::eval_php_version_id() >= 80600
         {
-            eval_release_value(context, values, result)?;
-            values.bool_value(false)
+            eval_release_value(context, values, result.take())?;
+            return values.bool_value(false);
         }
-        Ok(()) => Ok(result),
-        // A throwing `__toString()` (or a failed runtime op) abandons the partial result; the
-        // release keeps the original status, so the pending exception stays the one thrown.
-        Err(status) => {
-            let _ = eval_release_value(context, values, result);
-            Err(status)
-        }
-    }
+        result.finish(filled, |cell| eval_release_value(context, values, cell))
+    })
 }
 
 /// Copies the matching entries of `array` into `result`, stopping at a match error.
@@ -107,7 +101,7 @@ fn eval_preg_grep_fill(
     array: RuntimeCellHandle,
     len: usize,
     invert: bool,
-    result: &mut RuntimeCellHandle,
+    result: &RuntimeOwnerSlot,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -128,7 +122,7 @@ fn eval_preg_grep_fill(
                     eval_preg_set_last_error(nested_error);
                 }
                 if !failed && matched != invert {
-                    *result = values.array_set(*result, key, value)?;
+                    result.update_receiver(values.array_set(result.borrowed(), key, value)?);
                 }
                 Ok(())
             })

@@ -24,7 +24,7 @@ pub(super) fn eval_native_descriptor_with_call_args(
         .ok_or(EvalStatus::UnsupportedConstruct)?;
     let mut staged = stage_native_descriptor_args(&signature, evaluated_args, context, values)?;
     let _native_context = crate::context::push_native_frame_context(context);
-    let result = with_runtime_owners(&staged.values, || {
+    let result = with_runtime_owners(&(&staged.values, &staged.ref_slots), || {
         let arg_array = match build_native_function_arg_array(&staged, values) {
             Ok(arguments) => arguments,
             Err(status) => {
@@ -41,16 +41,7 @@ pub(super) fn eval_native_descriptor_with_call_args(
             // Encoded weak-global invocation profile: the raw `-1` scope would set the
             // invoker's private by-reference warning bit and silently copy by-ref args.
             let result = values.invoke_native_callable(callback, arg_array.borrowed(), -4);
-            let writeback = write_back_native_function_ref_args(&staged, context, values);
-            let result = match (result, writeback) {
-                (Err(status), _) => Err(status),
-                (Ok(value), Err(status)) => {
-                    let _ = eval_release_value(context, values, value);
-                    Err(status)
-                }
-                (Ok(value), Ok(())) => Ok(value),
-            };
-            finish_eval_argument_values(result, [arg_array.take()], context, values)
+            finish_native_invocation(result, &staged, &arg_array, context, values)
         })
     });
     finish_eval_argument_values(result, staged.values.drain(..), context, values)
