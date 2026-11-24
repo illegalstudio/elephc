@@ -298,12 +298,17 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
 ///
 /// The checker and lowering share `PhpType::widen_array_branch_element`, so
 /// empty-array placeholders defer to populated branches while real element-type
-/// disagreements widen to `Mixed`. This keeps the result valid for by-ref `array`
-/// parameters, array builtins, and spread. Returns `None` for pairs outside the
-/// indexed/indexed or associative/associative shapes, leaving the caller's existing
-/// object-union and `Mixed` handling untouched.
+/// disagreements widen to `Mixed`. A declared PHP array already covers both native layouts,
+/// so joining it with a concrete array keeps the declared contract. Other pairs fall back to
+/// the caller's object-union and `Mixed` handling.
 fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
     match (acc, next) {
+        (array, PhpType::Array(_) | PhpType::AssocArray { .. }) if array.is_php_array() => {
+            Some(array.clone())
+        }
+        (PhpType::Array(_) | PhpType::AssocArray { .. }, array) if array.is_php_array() => {
+            Some(array.clone())
+        }
         (PhpType::Array(acc_elem), PhpType::Array(next_elem)) => Some(PhpType::Array(Box::new(
             PhpType::widen_array_branch_element(
                 (**acc_elem).clone(),
