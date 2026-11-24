@@ -771,3 +771,50 @@ fn test_redeclared_slot_writes_match_php_with_eval_linked() {
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, REDECLARED_SLOT_OUTPUT, "{}", out.stderr);
 }
+
+/// Classes whose dynamic property hash sits at different offsets (0, 2 and 5 declared properties, stdClass) written through one erased receiver: push, index set and compound. A shared arm read the hash of a class at the offset of another (the property count is part of an arm's identity).
+#[test]
+fn test_dynamic_hash_writes_use_the_layout_of_each_class() {
+    let out = compile_and_run_with_heap_debug(r####"<?php
+#[AllowDynamicProperties]
+class HashNone {}
+#[AllowDynamicProperties]
+class HashTwo { public int $a = 1; public string $b = "x"; }
+#[AllowDynamicProperties]
+class HashFive { public $a = 1; public $b = 2; public $c = 3; public $d = 4; public array $e = []; }
+set_error_handler(function($no, $str) { echo "E[$no] $str\n"; return true; });
+function pushIt(mixed $o) { $o->items[] = 7; return $o; }
+function setIt(mixed $o) { $o->items['k'] = 7; return $o; }
+function catIt(mixed $o) { $o->items['k'] .= 'z'; return $o; }
+function t(callable $f) { try { $f(); } catch (Throwable $x) { echo get_class($x), ": ", $x->getMessage(), "\n"; } }
+foreach ([new HashNone, new HashTwo, new HashFive, new stdClass] as $o) {
+    echo get_class($o), "\n";
+    t(function() use ($o) { echo json_encode(pushIt($o)), "\n"; });
+    t(function() use ($o) { echo json_encode(pushIt($o)), "\n"; });
+    t(function() use ($o) { echo json_encode(setIt($o)), "\n"; });
+    t(function() use ($o) { echo json_encode(catIt($o)), "\n"; });
+}
+"####);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, r####"HashNone
+{"items":[7]}
+{"items":[7,7]}
+{"items":{"0":7,"1":7,"k":7}}
+{"items":{"0":7,"1":7,"k":"7z"}}
+HashTwo
+{"a":1,"b":"x","items":[7]}
+{"a":1,"b":"x","items":[7,7]}
+{"a":1,"b":"x","items":{"0":7,"1":7,"k":7}}
+{"a":1,"b":"x","items":{"0":7,"1":7,"k":"7z"}}
+HashFive
+{"a":1,"b":2,"c":3,"d":4,"e":[],"items":[7]}
+{"a":1,"b":2,"c":3,"d":4,"e":[],"items":[7,7]}
+{"a":1,"b":2,"c":3,"d":4,"e":[],"items":{"0":7,"1":7,"k":7}}
+{"a":1,"b":2,"c":3,"d":4,"e":[],"items":{"0":7,"1":7,"k":"7z"}}
+stdClass
+{"items":[7]}
+{"items":[7,7]}
+{"items":{"0":7,"1":7,"k":7}}
+{"items":{"0":7,"1":7,"k":"7z"}}
+"####, "{}", out.stderr);
+}

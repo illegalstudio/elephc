@@ -213,11 +213,15 @@ fn dispatch(
         let info = &ctx.classes[&class];
         let key = if include_dynamic && (dynamic_slot(info, &class, property)
             || magic_append::is_candidate(ctx, &class, info, property)) {
-            // Dynamic storage and overloaded names are written by name through the runtime, never
-            // through a layout: one arm per behaviour serves every class that has it.
+            // Dynamic storage and overloaded names are written by name through the runtime, but
+            // the hash sits at an offset of the class layout (its property count) and the creation
+            // diagnostic names the class: classes share an arm only when both are the same.
             let hashed = info.dynamic_property_hash_is_name_addressable()
                 || crate::types::checker::builtin_stdclass::is_stdclass(&class);
-            Some(if dynamic_slot(info, &class, property) { "dynamic" } else if hashed { "magic-hash" } else { "magic-bare" }.to_string())
+            let layout = if crate::types::checker::builtin_stdclass::is_stdclass(&class) { 0 } else { info.properties.len() };
+            let diagnostic = if info.dynamic_property_creation_is_deprecated() { class.as_str() } else { "" };
+            let kind = if dynamic_slot(info, &class, property) { "dynamic" } else if hashed { "magic-hash" } else { "magic-bare" };
+            Some(if kind == "magic-bare" { kind.to_string() } else { format!("{kind}|{layout}|{diagnostic}") })
         } else {
             let declaring = info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class.clone());
             let shape = object_type_property_type(ctx, &PhpType::Object(class.clone()), property);
