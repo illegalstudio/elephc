@@ -3614,6 +3614,178 @@ foreach (['DateTime', 'DateTimeImmutable'] as $class) {
     );
 }
 
+/// PHP-shaped hydration validates the timelib zone type and identifier.
+#[test]
+fn test_datetime_unserialize_validates_php_zone_type_and_identifier() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 'O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:%d;s:8:"timezone";s:%d:"%s";}';
+foreach ([[4, 'UTC'], [0, 'UTC'], [3, 'Nope/Nope'], [1, '+02:00'], [2, 'CEST'], [3, 'UTC']] as [$type, $zone]) {
+    $wire = sprintf($base, $type, strlen($zone), $zone);
+    try {
+        $d = unserialize($wire);
+        echo $d->format('Y-m-d H:i:s'), '|';
+    } catch (Error $error) {
+        echo 'rejected|';
+    }
+}
+try {
+    unserialize('O:17:"DateTimeImmutable":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:4;s:8:"timezone";s:3:"UTC";}');
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "rejected|rejected|rejected|2020-01-01 00:00:00|2020-01-01 00:00:00|2020-01-01 00:00:00|Invalid serialization data for DateTimeImmutable object"
+    );
+}
+
+/// PHP-shaped hydration ignores integer keys and keeps colliding subclass props.
+#[test]
+fn test_datetime_unserialize_keeps_colliding_subclass_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class D extends DateTime {
+    public string $timestamp = 'default-ts';
+    public string $timezone_name = 'default-tz';
+    public string $microsecond = 'default-us';
+}
+$wire = 'O:1:"D":6:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";s:9:"timestamp";s:6:"got-ts";s:13:"timezone_name";s:6:"got-tz";s:11:"microsecond";s:6:"got-us";}';
+$d = unserialize($wire);
+echo $d->format('Y-m-d H:i:s'), '|', $d->timestamp, '|', $d->timezone_name, '|', $d->microsecond, '|';
+$e = unserialize('O:1:"D":4:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";i:0;s:5:"extra";}');
+echo $e->format('Y-m-d'), '|', $e->timestamp;
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020-01-01 00:00:00|got-ts|got-tz|got-us|2020-01-01|default-ts"
+    );
+}
+
+/// Compat and lower-case identifiers validate against the full tz database.
+#[test]
+fn test_datetime_unserialize_accepts_compat_and_lowercase_identifiers() {
+    let out = compile_and_run(
+        r#"<?php
+function wire(string $zone): string {
+    return 'O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:' . strlen($zone) . ':"' . $zone . '";}';
+}
+foreach (['Europe/Kiev', 'Europe/Kyiv', 'US/Eastern', 'CET', 'GMT', 'Etc/GMT+1', 'Asia/Calcutta', 'europe/rome'] as $zone) {
+    $d = unserialize(wire($zone));
+    echo $d->getTimestamp(), '|', $d->format('P'), '|', $d->format('e'), '|', $d->format('T'), '|', $d->getTimezone()->getName(), ';';
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1577829600|+02:00|Europe/Kiev|EET|Europe/Kiev;1577829600|+02:00|Europe/Kyiv|EET|Europe/Kyiv;1577854800|-05:00|US/Eastern|EST|US/Eastern;1577833200|+01:00|CET|CET|CET;1577836800|+00:00|GMT|GMT|GMT;1577840400|-01:00|Etc/GMT+1|-01|Etc/GMT+1;1577817000|+05:30|Asia/Calcutta|IST|Asia/Calcutta;1577833200|+01:00|europe/rome|CET|europe/rome;"
+    );
+}
+
+/// Numeric offsets validate their range, zero sign, and invalid-data class.
+#[test]
+fn test_datetime_unserialize_validates_numeric_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+function wire(string $zone): string {
+    return 'O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:1;s:8:"timezone";s:' . strlen($zone) . ':"' . $zone . '";}';
+}
+foreach (['+99:99', '+02:99', '+15:00', '+24:00', '+00:00', '-00:00'] as $zone) {
+    try {
+        $d = unserialize(wire($zone));
+        echo $zone, ':', $d->format('P'), '|', $d->format('T'), '|', $d->format('e'), '|', $d->getTimestamp(), ';';
+    } catch (Error $error) {
+        echo $zone, ':rejected;';
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "+99:99:rejected;+02:99:rejected;+15:00:+15:00|GMT+1500|+15:00|1577782800;+24:00:+24:00|GMT+2400|+24:00|1577750400;+00:00:+00:00|GMT+0000|+00:00|1577836800;-00:00:+00:00|GMT+0000|+00:00|1577836800;"
+    );
+}
+
+/// A lower-case abbreviation is stored and displayed in upper case.
+#[test]
+fn test_datetime_unserialize_normalizes_abbreviation_case() {
+    let out = compile_and_run(
+        r#"<?php
+$wire = 'O:8:"DateTime":3:{s:4:"date";s:26:"2020-01-01 00:00:00.000000";s:13:"timezone_type";i:2;s:8:"timezone";s:4:"cest";}';
+$d = unserialize($wire);
+echo $d->getTimestamp(), '|', $d->format('P'), '|', $d->format('e'), '|', $d->format('T'), '|', $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "1577829600|+02:00|CEST|CEST|CEST");
+}
+
+/// Comparisons use the private instant fields, not same-named subclass properties.
+///
+/// The typed helper is deliberate: direct relational comparison of a DateTime
+/// subclass is still rejected by the checker, but a subclass instance reaching the
+/// DateTime-typed comparison path must read DateTime's private slots.
+#[test]
+fn test_datetime_comparison_ignores_same_named_subclass_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends DateTime {
+    public int $timestamp = 1;
+    public int $microsecond = 2;
+}
+function cmp(DateTime $a, DateTime $b): string {
+    return ($a > $b ? 'gt' : ($a < $b ? 'lt' : 'eq')) . '|' . ($a == $b ? 'eq' : 'ne');
+}
+$a = new A('2020-01-02 00:00:00 UTC');
+$b = new DateTime('2020-01-01 00:00:00 UTC');
+echo cmp($a, $b), ';', cmp($b, $a), ';', cmp($a, $a);
+"#,
+    );
+    assert_eq!(out, "gt|ne;lt|ne;eq|eq");
+}
+
+/// A default-zone CET identifier keeps DST; an explicit DateTimeZone('CET') is fixed.
+#[test]
+fn test_datetime_display_zone_distinguishes_identifier_from_abbreviation() {
+    let out = compile_and_run(
+        r#"<?php
+function show(DateTime $d): void {
+    echo $d->format('P|T|e'), '|', $d->getOffset(), ';';
+}
+date_default_timezone_set('CET');
+show(new DateTime('2020-07-01'));
+show(new DateTime('2020-01-01'));
+date_default_timezone_set('WET');
+show(new DateTime('2020-07-01'));
+date_default_timezone_set('UTC');
+show(new DateTime('2020-07-01', new DateTimeZone('CET')));
+show(new DateTime('2020-07-01', new DateTimeZone('cest')));
+show(new DateTime('2020-07-01', new DateTimeZone('Europe/Rome')));
+"#,
+    );
+    assert_eq!(
+        out,
+        "+02:00|CEST|CET|7200;+01:00|CET|CET|3600;+01:00|WEST|WET|3600;+01:00|CET|CET|3600;+02:00|CEST|CEST|7200;+02:00|CEST|Europe/Rome|7200;"
+    );
+}
+
+/// The fixed-zone flag survives elephc's own serialize/unserialize wire shape.
+#[test]
+fn test_datetime_fixed_zone_survives_serialize_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new DateTime('2020-07-01', new DateTimeZone('CET'));
+date_default_timezone_set('CET');
+$identifier = new DateTime('2020-07-01');
+echo unserialize(serialize($fixed))->format('P|T|e'), ';';
+echo unserialize(serialize($identifier))->format('P|T|e'), ';';
+"#,
+    );
+    assert_eq!(out, "+01:00|CET|CET;+02:00|CEST|CET;");
+}
+
 /// A subclass constructor never runs while __unserialize() restores the date.
 #[test]
 fn test_datetime_unserialize_skips_subclass_constructor() {
@@ -3630,6 +3802,27 @@ echo $d->format('Y-m-d H:i:s'), '|', $d->getTimezone()->getName();
 "#,
     );
     assert_eq!(out, "2020-01-01 00:00:00|UTC");
+}
+
+/// Same-typed subclass properties must not select the old plain elephc shape.
+#[test]
+fn test_datetime_unserialize_keeps_same_typed_colliding_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class D extends DateTime {
+    public int $timestamp = 1;
+    public string $timezone_name = 'tz';
+    public int $microsecond = 2;
+}
+$d = new D('2020-01-01 00:00:00', new DateTimeZone('UTC'));
+$d->timestamp = 42;
+$d->timezone_name = 'subtz';
+$d->microsecond = 7;
+$u = unserialize(serialize($d));
+echo $u->format('Y-m-d H:i:s'), '|', $u->timestamp, '|', $u->timezone_name, '|', $u->microsecond;
+"#,
+    );
+    assert_eq!(out, "2020-01-01 00:00:00|42|subtz|7");
 }
 
 /// PHP-shaped numeric offsets restore the right instant and wall clock.

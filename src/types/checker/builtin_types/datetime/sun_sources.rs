@@ -1,5 +1,6 @@
 //! Purpose:
-//! Parsed-PHP solar calculations and timezone-abbreviation lookup sources.
+//! Test-only transcribed PHP oracles for the AST-built solar calculations and
+//! timezone-abbreviation lookup bodies.
 //!
 //! Called from:
 //! - DateTime procedural helper method assembly.

@@ -1685,6 +1685,27 @@ fn session_ini_changes_are_rejected_while_upload_progress_is_enabled() {
                  $tags = ini_set('session.trans_sid_tags', 'a=href'); \
                  $hosts = ini_set('session.trans_sid_hosts', 'example.com'); \
                  echo 'trans:' . (is_string($tags) ? 'tags' : 'bad') . ':' . (is_string($hosts) ? 'hosts' : 'bad'); \
+             }} elseif ($mode === 'name') {{ \
+                 echo 'name:' . var_export(session_name('OTHER'), true); \
+             }} elseif ($mode === 'savepath') {{ \
+                 echo 'savepath:' . var_export(session_save_path('/tmp/elephc-alt'), true); \
+             }} elseif ($mode === 'limiter') {{ \
+                 echo 'limiter:' . var_export(session_cache_limiter('public'), true); \
+             }} elseif ($mode === 'expire') {{ \
+                 echo 'expire:' . var_export(session_cache_expire(60), true); \
+             }} elseif ($mode === 'cookie') {{ \
+                 echo 'cookie:' . var_export(session_set_cookie_params(['lifetime' => 60, 'path' => '/']), true); \
+             }} elseif ($mode === 'module') {{ \
+                 echo 'module:' . var_export(session_module_name('files'), true); \
+             }} elseif ($mode === 'savehandler') {{ \
+                 echo 'savehandler:' . var_export(session_set_save_handler(new SessionHandler()), true); \
+             }} elseif ($mode === 'restore') {{ \
+                 ini_restore('session.name'); \
+                 echo 'restore:' . session_name(); \
+             }} elseif ($mode === 'restore_after') {{ \
+                 try {{ ini_set('session.name', 'OTHER'); }} catch (Error $e) {{}} \
+                 ini_restore('session.name'); \
+                 echo 'restore-after:' . session_name(); \
              }} elseif ($mode === 'active') {{ \
                  session_start(); \
                  $old = ini_set('session.name', 'OTHER'); \
@@ -1712,6 +1733,12 @@ fn session_ini_changes_are_rejected_while_upload_progress_is_enabled() {
     let options_response = http_get(&enabled_addr, "/?mode=options");
     let trans_response = http_get(&enabled_addr, "/?mode=trans");
     let active_response = http_get(&enabled_addr, "/?mode=active");
+    let restore_response = http_get(&enabled_addr, "/?mode=restore");
+    let setters = [
+        "name", "savepath", "limiter", "expire", "cookie", "module", "savehandler",
+        "restore_after",
+    ]
+    .map(|mode| (mode, http_get(&enabled_addr, &format!("/?mode={mode}"))));
     let _ = enabled.kill();
     let _ = enabled.wait();
 
@@ -1728,9 +1755,19 @@ fn session_ini_changes_are_rejected_while_upload_progress_is_enabled() {
         "url_scanner trans_sid options must stay accepted while upload progress is on: {trans_response:?}"
     );
     assert!(
-        active_response.contains("active:false") && !active_response.contains("Error:"),
-        "an active session must reject the change with false before the upload-progress Error: {active_response:?}"
+        restore_response.ends_with("restore:PHPSESSID"),
+        "ini_restore() must be a no-op until its entry was modified: {restore_response:?}"
     );
+    assert!(
+        active_response.ends_with(&format!("Error:{message}")),
+        "an active session must reach the upload-progress Error before its own false path: {active_response:?}"
+    );
+    for (mode, response) in setters {
+        assert!(
+            response.ends_with(&format!("Error:{message}")),
+            "{mode}() must throw while upload progress is on: {response:?}"
+        );
+    }
 
     let disabled_port = free_port();
     let disabled_addr = format!("127.0.0.1:{}", disabled_port);

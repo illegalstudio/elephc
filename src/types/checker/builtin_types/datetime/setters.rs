@@ -10,6 +10,7 @@
 //!   immutable, so a subclass receiver gets its own class (and properties) back as in PHP.
 
 use super::*;
+use crate::synthetic_class::{e_call, e_ternary};
 
 /// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp.
 pub(super) fn make_set_timestamp(mutable: bool) -> ClassMethod {
@@ -132,9 +133,18 @@ pub(super) fn var_property(var: &str, property: &str) -> Expr {
 /// returns a clone of `$this` (same timestamp) carrying the new timezone name.
 pub(super) fn make_set_timezone(mutable: bool) -> ClassMethod {
     let tz_name = var_property("timezone", "name");
+    let fixed = super::bodies::zone_is_fixed(tz_name.clone());
+    // A fixed abbreviation is stored upper-cased (`cest` -> `CEST`); an identifier
+    // keeps the spelling timelib resolved, which may be lower-case.
+    let stored_name = e_ternary(
+        fixed.clone(),
+        e_call("strtoupper", vec![tz_name.clone()]),
+        tz_name,
+    );
     let body = if mutable {
         vec![
-            assign_this_property("timezone_name", tz_name),
+            assign_this_property("timezone_name", stored_name),
+            assign_this_property("__elephc_fixed_zone", fixed),
             return_expr(Expr::new(ExprKind::This, dummy())),
         ]
     } else {
@@ -145,7 +155,15 @@ pub(super) fn make_set_timezone(mutable: bool) -> ClassMethod {
                 StmtKind::PropertyAssign {
                     object: Box::new(new_var()),
                     property: "timezone_name".to_string(),
-                    value: tz_name,
+                    value: stored_name,
+                },
+                dummy(),
+            ),
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(new_var()),
+                    property: "__elephc_fixed_zone".to_string(),
+                    value: fixed,
                 },
                 dummy(),
             ),
@@ -310,7 +328,7 @@ $__ts = $__ts + $__carry;
 
 /// Builds DateTime modification with microsecond carry and mutable or immutable result semantics.
 pub(super) fn make_modify(mutable: bool) -> ClassMethod {
-    // Parsed-PHP preamble (parsing lives in static helpers to keep this frame
+    // AST-built preamble (parsing lives in static helpers to keep this frame
     // small): pull any `<±N> microsecond[s]|usec[s]` clauses out of the modifier,
     // strtotime() the remainder, then apply the microsecond delta with a carry into
     // the whole-second timestamp. result_tail_micro emits the new instant.
@@ -344,7 +362,7 @@ pub(super) fn datetime_setter_methods(mutable: bool) -> Vec<ClassMethod> {
 
 /// Builds the shared instance method set used by both `DateTime` and `DateTimeImmutable`
 /// (construct from `"now"`/string, `format`, `getTimestamp`, `getTimezone`).
-pub(super) fn datetime_shared_methods() -> Vec<ClassMethod> {
+pub(super) fn datetime_shared_methods(class_name: &str) -> Vec<ClassMethod> {
     vec![
         datetime_immutable_constructor(),
         datetime_immutable_get_timestamp(),
@@ -352,11 +370,12 @@ pub(super) fn datetime_shared_methods() -> Vec<ClassMethod> {
         datetime_immutable_get_timezone(),
         datetime_immutable_format(),
         datetime_display_timezone(),
+        datetime_tz_identifier(),
         datetime_abbr_offset(),
         datetime_offset_zone(),
         datetime_zone_label(),
         datetime_get_offset(),
         datetime_diff_method(),
-        datetime_unserialize(),
+        datetime_unserialize(class_name),
     ]
 }

@@ -5,14 +5,15 @@
 //! - Shared DateTime and DateTimeImmutable method assembly.
 //!
 //! Key details:
-//! - Parsed PHP bodies preserve object-local timezone and sub-second state.
+//! - AST-built bodies preserve object-local timezone and sub-second state; the `*_SRC`
+//!   strings in this file are test-only transcribed oracles.
 
 use super::*;
 use crate::parser::ast::CastType;
 use crate::synthetic_class::{
     e_binop, e_bool, e_call, e_cast, e_index, e_int, e_new, e_not, e_null, e_null_coalesce,
-    e_static_call, e_str, e_this, e_var, s_assign, s_break, s_continue, s_expr, s_for, s_foreach,
-    s_if, s_return_void, s_throw,
+    e_self_call, e_static_call, e_str, e_this, e_var, s_assign, s_break, s_continue, s_expr, s_for,
+    s_foreach, s_if, s_return_void, s_throw, s_try,
 };
 
 /// PHP source backing the `DateTime`/`DateTimeImmutable` constructor. With no timezone, parses the
@@ -39,13 +40,16 @@ if ($timezone === null) {
         $this->timestamp = $__ts;
     }
     $this->timezone_name = date_default_timezone_get();
+    $this->__elephc_fixed_zone = false;
 } else {
     $tzname = $timezone->getName();
+    $__fixed = $tzname !== "UTC" && self::__elephc_abbr_offset($tzname) !== -2147483648;
+    $__tzdisplay = self::__elephc_display_timezone($tzname, $__fixed);
     if ($datetime === "now") {
         $this->timestamp = time();
     } else {
         $saved = date_default_timezone_get();
-        date_default_timezone_set($tzname);
+        date_default_timezone_set($__tzdisplay);
         $__ts = strtotime($datetime);
         if ($__ts === false) {
             date_default_timezone_set($saved);
@@ -54,16 +58,18 @@ if ($timezone === null) {
         $this->timestamp = $__ts;
         date_default_timezone_set($saved);
     }
-    $this->timezone_name = $tzname;
+    $this->timezone_name = $__fixed ? strtoupper($tzname) : $tzname;
+    $this->__elephc_fixed_zone = $__fixed;
 }
 "#;
 
 /// `DateTime`/`DateTimeImmutable::__construct(string $datetime = "now", ?DateTimeZone $timezone = null)`
 /// — stores a UNIX timestamp and the object's display zone.
 ///
-/// The body is the parsed `CONSTRUCT_SRC`. `$timezone` is typed `?DateTimeZone` (defaulting to
-/// `null`); the `=== null` discriminator selects the form and `$timezone->getName()` reads the
-/// zone on the non-null arm. A later `setTimezone()` still overrides the zone. (A `mixed` default
+/// The body is built as AST by `bodies::construct()`; `CONSTRUCT_SRC` is its test-only
+/// transcribed oracle. `$timezone` is typed `?DateTimeZone` (defaulting to `null`); the
+/// `=== null` discriminator selects the form and `$timezone->getName()` reads the zone on the
+/// non-null arm. A later `setTimezone()` still overrides the zone. (A `mixed` default
 /// of `null` here miscompiled when the constructor was called more than once per frame, so the
 /// nullable-object typing is used instead — it also matches PHP's signature.)
 pub(super) fn datetime_immutable_constructor() -> ClassMethod {
@@ -126,7 +132,7 @@ pub(super) fn datetime_immutable_get_timezone() -> ClassMethod {
 #[cfg(test)]
 pub(super) const FORMAT_SRC: &str = r#"<?php
 $saved = date_default_timezone_get();
-date_default_timezone_set(self::__elephc_display_timezone($this->timezone_name));
+date_default_timezone_set(self::__elephc_display_timezone($this->timezone_name, $this->__elephc_fixed_zone));
 $us = $this->microsecond;
 $fmt = "";
 $flen = strlen($format);
@@ -178,7 +184,7 @@ while ($k < $flen) {
     $k = $k + 1;
 }
 $r = date($fmt, $this->timestamp);
-$trepl = self::__elephc_zone_label($this->timezone_name, $this->timestamp);
+$trepl = self::__elephc_zone_label($this->timezone_name, $this->timestamp, $this->__elephc_fixed_zone);
 $r = str_replace("\x01", $this->timezone_name, $r);
 $r = str_replace("\x02", $trepl, $r);
 date_default_timezone_set($saved);
@@ -197,7 +203,8 @@ pub(super) fn datetime_immutable_format() -> ClassMethod {
     )
 }
 
-/// Builds the internal static `DateTime::__elephc_display_timezone(string $name): string`.
+/// Builds the internal static
+/// `DateTime::__elephc_display_timezone(string $name, bool $fixed): string`.
 pub(super) fn datetime_display_timezone() -> ClassMethod {
     ClassMethod {
         type_params: Vec::new(),
@@ -207,7 +214,10 @@ pub(super) fn datetime_display_timezone() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        params: vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("fixed".to_string(), Some(TypeExpr::Bool), None, false),
+        ],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
@@ -220,7 +230,8 @@ pub(super) fn datetime_display_timezone() -> ClassMethod {
     }
 }
 
-/// Builds the internal static `DateTime::__elephc_zone_label(string $name, int $timestamp): string`.
+/// Builds the internal static
+/// `DateTime::__elephc_zone_label(string $name, int $timestamp, bool $fixed): string`.
 pub(super) fn datetime_zone_label() -> ClassMethod {
     ClassMethod {
         type_params: Vec::new(),
@@ -233,6 +244,7 @@ pub(super) fn datetime_zone_label() -> ClassMethod {
         params: vec![
             ("name".to_string(), Some(TypeExpr::Str), None, false),
             ("timestamp".to_string(), Some(TypeExpr::Int), None, false),
+            ("fixed".to_string(), Some(TypeExpr::Bool), None, false),
         ],
         param_attributes: Vec::new(),
         variadic: None,
@@ -241,6 +253,30 @@ pub(super) fn datetime_zone_label() -> ClassMethod {
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
         body: super::bodies::zone_label(),
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the internal static
+/// `DateTime::__elephc_tz_identifier(string $name): string|false`.
+pub(super) fn datetime_tz_identifier() -> ClassMethod {
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "__elephc_tz_identifier".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::False])),
+        by_ref_return: false,
+        body: super::bodies::tz_identifier(),
         span: dummy(),
         attributes: Vec::new(),
     }
@@ -297,44 +333,23 @@ pub(super) fn datetime_offset_zone() -> ClassMethod {
 ///
 /// The backing slots are initialized by the constructor, not by PHP property defaults, so a
 /// hostile payload using PHP's field names used to leave them unset and crash the next
-/// `format()`/`getTimestamp()`. Both supported shapes validate their field types before use,
-/// and every other shape throws PHP's own `Invalid serialization data` Error. The PHP-shaped
-/// fields are restored directly instead of through `__construct()`, so a subclass constructor
-/// never runs during hydration.
-pub(super) fn datetime_unserialize() -> ClassMethod {
-    let mut valid_wire_shape = e_binop(
-        e_binop(
-            e_call("is_int", vec![e_var("timestamp")]),
-            BinOp::And,
-            e_call("is_string", vec![e_var("timezone")]),
-        ),
-        BinOp::And,
-        e_call("is_int", vec![e_var("microsecond")]),
-    );
-    valid_wire_shape = e_binop(
-        valid_wire_shape,
-        BinOp::And,
-        e_binop(e_call("strlen", vec![e_var("timezone")]), BinOp::Gt, e_int(0)),
-    );
-    for whitespace in [" ", "\t", "\n", "\r"] {
-        valid_wire_shape = e_binop(
-            valid_wire_shape,
-            BinOp::And,
-            e_not(e_call(
-                "str_contains",
-                vec![e_var("timezone"), e_str(whitespace)],
-            )),
-        );
-    }
-    valid_wire_shape = e_binop(
-        valid_wire_shape,
-        BinOp::And,
-        e_binop(
-            e_binop(e_var("microsecond"), BinOp::GtEq, e_int(0)),
-            BinOp::And,
-            e_binop(e_var("microsecond"), BinOp::LtEq, e_int(999_999)),
-        ),
-    );
+/// `format()`/`getTimestamp()`. Both supported shapes validate their field types and values
+/// before use, and every other shape throws PHP's own `Invalid serialization data` Error. The
+/// PHP-shaped fields are restored directly instead of through `__construct()`, so a subclass
+/// constructor never runs during hydration. The backing properties are private, so a subclass
+/// property named `timestamp`, `timezone_name`, or `microsecond` stays independent.
+pub(super) fn datetime_unserialize(class_name: &str) -> ClassMethod {
+    let mangled = |property: &str| format!("\0{class_name}\0{property}");
+    let invalid = || {
+        s_throw(e_new(
+            "Error",
+            vec![e_str(&format!(
+                "Invalid serialization data for {class_name} object"
+            ))],
+        ))
+    };
+    let plain_shape = valid_wire_values("timestamp", "timezone", "microsecond");
+    let mangled_shape = valid_wire_values("wire_timestamp", "wire_timezone", "wire_microsecond");
     method(
         "__unserialize",
         vec![(
@@ -345,33 +360,8 @@ pub(super) fn datetime_unserialize() -> ClassMethod {
         )],
         Some(TypeExpr::Void),
         vec![
-            s_assign(
-                "timestamp",
-                e_null_coalesce(e_index(e_var("data"), e_str("timestamp")), e_null()),
-            ),
-            s_assign(
-                "timezone",
-                e_null_coalesce(e_index(e_var("data"), e_str("timezone_name")), e_null()),
-            ),
-            s_assign(
-                "microsecond",
-                e_null_coalesce(e_index(e_var("data"), e_str("microsecond")), e_null()),
-            ),
-            s_if(
-                valid_wire_shape,
-                {
-                    let mut body = vec![
-                        assign_this_property("timestamp", e_var("timestamp")),
-                        assign_this_property("timezone_name", e_var("timezone")),
-                        assign_this_property("microsecond", e_var("microsecond")),
-                    ];
-                    body.extend(restore_leftover_unserialize_properties());
-                    body.push(s_return_void());
-                    body
-                },
-                Vec::new(),
-                None,
-            ),
+            // Read PHP's fields first: a payload carrying them must never be mistaken
+            // for elephc's timestamp/timezone_name/microsecond shape.
             s_assign(
                 "date",
                 e_null_coalesce(e_index(e_var("data"), e_str("date")), e_null()),
@@ -384,20 +374,130 @@ pub(super) fn datetime_unserialize() -> ClassMethod {
                 "zone",
                 e_null_coalesce(e_index(e_var("data"), e_str("timezone")), e_null()),
             ),
-            s_if(
+            s_assign(
+                "php_shape",
                 e_binop(
                     e_binop(
-                        e_not(e_call("is_string", vec![e_var("date")])),
-                        BinOp::Or,
-                        e_not(e_call("is_int", vec![e_var("type")])),
+                        e_call("is_string", vec![e_var("date")]),
+                        BinOp::And,
+                        e_call("is_int", vec![e_var("type")]),
                     ),
-                    BinOp::Or,
-                    e_not(e_call("is_string", vec![e_var("zone")])),
+                    BinOp::And,
+                    e_call("is_string", vec![e_var("zone")]),
                 ),
-                vec![s_throw(e_new(
-                    "Error",
-                    vec![e_str("Invalid serialization data for DateTime object")],
-                ))],
+            ),
+            // Old public-property wire shape and the current private-property shape.
+            s_assign(
+                "timestamp",
+                e_null_coalesce(e_index(e_var("data"), e_str("timestamp")), e_null()),
+            ),
+            s_assign(
+                "timezone",
+                e_null_coalesce(e_index(e_var("data"), e_str("timezone_name")), e_null()),
+            ),
+            s_assign(
+                "microsecond",
+                e_null_coalesce(e_index(e_var("data"), e_str("microsecond")), e_null()),
+            ),
+            s_assign(
+                "wire_timestamp",
+                e_null_coalesce(e_index(e_var("data"), e_str(&mangled("timestamp"))), e_null()),
+            ),
+            s_assign(
+                "wire_timezone",
+                e_null_coalesce(
+                    e_index(e_var("data"), e_str(&mangled("timezone_name"))),
+                    e_null(),
+                ),
+            ),
+            s_assign(
+                "wire_microsecond",
+                e_null_coalesce(e_index(e_var("data"), e_str(&mangled("microsecond"))), e_null()),
+            ),
+            s_if(
+                e_binop(e_not(e_var("php_shape")), BinOp::And, mangled_shape),
+                {
+                    let mut body = vec![
+                        assign_this_property("timestamp", e_var("wire_timestamp")),
+                        assign_this_property("timezone_name", e_var("wire_timezone")),
+                        assign_this_property("microsecond", e_var("wire_microsecond")),
+                        assign_this_property(
+                            "__elephc_fixed_zone",
+                            e_cast(
+                                CastType::Bool,
+                                e_null_coalesce(
+                                    e_index(
+                                        e_var("data"),
+                                        e_str(&mangled("__elephc_fixed_zone")),
+                                    ),
+                                    // Older elephc wire shapes carried no zone kind and
+                                    // always displayed abbreviation-table hits as fixed.
+                                    super::bodies::zone_is_fixed(e_var("wire_timezone")),
+                                ),
+                            ),
+                        ),
+                    ];
+                    body.extend(restore_leftover_unserialize_properties(&[
+                        &mangled("timestamp"),
+                        &mangled("timezone_name"),
+                        &mangled("microsecond"),
+                        &mangled("__elephc_fixed_zone"),
+                    ]));
+                    body.push(s_return_void());
+                    body
+                },
+                Vec::new(),
+                None,
+            ),
+            s_if(
+                e_binop(e_not(e_var("php_shape")), BinOp::And, plain_shape),
+                {
+                    let mut body = vec![
+                        assign_this_property("timestamp", e_var("timestamp")),
+                        assign_this_property("timezone_name", e_var("timezone")),
+                        assign_this_property("microsecond", e_var("microsecond")),
+                        assign_this_property(
+                            "__elephc_fixed_zone",
+                            super::bodies::zone_is_fixed(e_var("timezone")),
+                        ),
+                    ];
+                    body.extend(restore_leftover_unserialize_properties(&[
+                        "timestamp",
+                        "timezone_name",
+                        "microsecond",
+                        "__elephc_fixed_zone",
+                    ]));
+                    body.push(s_return_void());
+                    body
+                },
+                Vec::new(),
+                None,
+            ),
+            s_if(e_not(e_var("php_shape")), vec![invalid()], Vec::new(), None),
+            // php_date_initialize_from_hash accepts only the three timelib zone types.
+            s_if(
+                e_binop(
+                    e_binop(e_var("type"), BinOp::Lt, e_int(1)),
+                    BinOp::Or,
+                    e_binop(e_var("type"), BinOp::Gt, e_int(3)),
+                ),
+                vec![invalid()],
+                Vec::new(),
+                None,
+            ),
+            // Type 3 names a tz database identifier; an unknown one fails initialization.
+            s_if(
+                e_binop(e_var("type"), BinOp::StrictEq, e_int(3)),
+                vec![s_if(
+                    e_binop(
+                        e_self_call("__elephc_tz_identifier", vec![e_var("zone")]),
+                        BinOp::StrictEq,
+                        e_bool(false),
+                    ),
+                    vec![invalid()],
+                    Vec::new(),
+                    None,
+                )],
                 Vec::new(),
                 None,
             ),
@@ -441,10 +541,7 @@ pub(super) fn datetime_unserialize() -> ClassMethod {
                     BinOp::Or,
                     e_binop(e_var("len"), BinOp::StrictEq, e_int(0)),
                 ),
-                vec![s_throw(e_new(
-                    "Error",
-                    vec![e_str("Invalid serialization data for DateTime object")],
-                ))],
+                vec![invalid()],
                 Vec::new(),
                 None,
             ),
@@ -459,46 +556,95 @@ pub(super) fn datetime_unserialize() -> ClassMethod {
             // Numeric offsets and abbreviations must reach strtotime() with their
             // fixed offset: date_default_timezone_set() makes libc read `+02:00`
             // as UTC-2 and does not resolve abbreviations such as CEST at all.
-            s_if(
-                e_binop(e_var("type"), BinOp::StrictEq, e_int(1)),
-                super::bodies::restore_offset("date", "zone"),
-                Vec::new(),
-                Some(vec![s_if(
-                    e_binop(e_var("type"), BinOp::StrictEq, e_int(2)),
-                    super::bodies::restore_abbreviation("date", "zone"),
+            s_try(
+                vec![s_if(
+                    e_binop(e_var("type"), BinOp::StrictEq, e_int(1)),
+                    super::bodies::restore_offset("date", "zone"),
                     Vec::new(),
-                    Some(super::bodies::restore_timezone(
-                        "date",
-                        e_new("DateTimeZone", vec![e_var("zone")]),
-                    )),
-                )]),
+                    Some(vec![s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(2)),
+                        super::bodies::restore_abbreviation("date", "zone"),
+                        Vec::new(),
+                        // A type 3 payload names a tz-database identifier, even when
+                        // the identifier also exists in the abbreviation table.
+                        Some(super::bodies::restore_timezone(
+                            "date",
+                            e_new("DateTimeZone", vec![e_var("zone")]),
+                            false,
+                        )),
+                    )]),
+                )],
+                vec![(
+                    vec!["Throwable"],
+                    Some("__elephc_date_error"),
+                    vec![invalid()],
+                )],
+                None,
             ),
         ]
         .into_iter()
-        .chain(restore_leftover_unserialize_properties())
+        .chain(restore_leftover_unserialize_properties(&[
+            "date",
+            "timezone_type",
+            "timezone",
+            "__elephc_fixed_zone",
+        ]))
         .collect(),
     )
 }
 
-/// Restores every serialized property the DateTime hook does not handle itself.
+/// Builds the shared type-and-value validation for one elephc wire shape.
 ///
-/// `DateTime::__unserialize()` only owns its internal timestamp/timezone fields;
-/// subclass properties still arrive in `$data` and must keep their mangled keys,
-/// visibility and declared-type checks. The runtime helper is the decoder's own
-/// property store, so hydration stays identical to the no-hook path.
-fn restore_leftover_unserialize_properties() -> Vec<Stmt> {
-    let handled = [
-        "timestamp",
-        "timezone_name",
-        "microsecond",
-        "date",
-        "timezone_type",
-        "timezone",
-    ];
-    let mut skip = e_binop(e_var("key"), BinOp::StrictEq, e_str(handled[0]));
-    for name in &handled[1..] {
-        skip = e_binop(
-            skip,
+/// Both shapes reject a non-int timestamp/microsecond, an empty or whitespace-bearing
+/// timezone name (a relative modifier such as `+2 days` must never reach
+/// `date_default_timezone_set()`), and a microsecond outside `0..=999999`.
+fn valid_wire_values(timestamp: &str, timezone: &str, microsecond: &str) -> Expr {
+    let mut valid = e_binop(
+        e_binop(
+            e_call("is_int", vec![e_var(timestamp)]),
+            BinOp::And,
+            e_call("is_string", vec![e_var(timezone)]),
+        ),
+        BinOp::And,
+        e_call("is_int", vec![e_var(microsecond)]),
+    );
+    valid = e_binop(
+        valid,
+        BinOp::And,
+        e_binop(e_call("strlen", vec![e_var(timezone)]), BinOp::Gt, e_int(0)),
+    );
+    for whitespace in [" ", "\t", "\n", "\r"] {
+        valid = e_binop(
+            valid,
+            BinOp::And,
+            e_not(e_call(
+                "str_contains",
+                vec![e_var(timezone), e_str(whitespace)],
+            )),
+        );
+    }
+    e_binop(
+        valid,
+        BinOp::And,
+        e_binop(
+            e_binop(e_var(microsecond), BinOp::GtEq, e_int(0)),
+            BinOp::And,
+            e_binop(e_var(microsecond), BinOp::LtEq, e_int(999_999)),
+        ),
+    )
+}
+
+/// Restores every serialized property the active DateTime wire shape does not own.
+///
+/// PHP's `restore_custom_datetime_properties()` ignores non-string keys and only the
+/// three internal fields. Every other string key reaches the decoder's own property
+/// store, keeping mangled keys, visibility, and declared-type checks identical to the
+/// no-hook path. `skip` names the fields the selected wire shape consumed.
+fn restore_leftover_unserialize_properties(skip: &[&str]) -> Vec<Stmt> {
+    let mut skipped = e_not(e_call("is_string", vec![e_var("key")]));
+    for name in skip {
+        skipped = e_binop(
+            skipped,
             BinOp::Or,
             e_binop(e_var("key"), BinOp::StrictEq, e_str(name)),
         );
@@ -508,7 +654,7 @@ fn restore_leftover_unserialize_properties() -> Vec<Stmt> {
         Some("key"),
         "value",
         vec![
-            s_if(skip, vec![s_continue(1)], Vec::new(), None),
+            s_if(skipped, vec![s_continue(1)], Vec::new(), None),
             s_expr(e_call(
                 "__elephc_unserialize_store_property",
                 vec![

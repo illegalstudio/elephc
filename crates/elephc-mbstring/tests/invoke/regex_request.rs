@@ -193,9 +193,8 @@ fn replay_corpus(fixture: &[u8], expected: usize, skip_security_divergences: boo
         elephc_mbstring_reset_v1();
         call(RuntimeBuiltinId::MbRegexSetOptions, &[MbArgV1::string(b"pr")]);
         let case: Value = serde_json::from_str(&line.unwrap()).unwrap();
-        // PHP 8.5.13 wraps these group numbers through (int)strtoul; elephc keeps the
-        // escape literal (PHP-PrettyHorriblePatches #34). The dedicated regression
-        // covers the fixed output; the fixture keeps the PHP capture.
+        // Only the unterminated `\k` forms stay divergent (#17); the fixture keeps the
+        // PHP capture and the dedicated regressions cover the fixed output.
         if skip_security_divergences && regex_oracle::has_security_divergence(&case) {
             skipped += 1;
             continue;
@@ -207,6 +206,6 @@ fn replay_corpus(fixture: &[u8], expected: usize, skip_security_divergences: boo
     }
     assert_eq!(count + skipped, expected);
     if skip_security_divergences {
-        assert_eq!(skipped, 50);
+        assert_eq!(skipped, 20);
     }
 }

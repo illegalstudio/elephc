@@ -421,10 +421,10 @@ pub(super) fn publish_phar_set_metadata_function_pointer(ctx: &mut FunctionConte
 }
 
 /// Publishes the archive validity probe used by the OOP constructor.
-pub(super) fn publish_phar_archive_valid_function_pointer(ctx: &mut FunctionContext<'_>) {
+pub(super) fn publish_phar_archive_error_function_pointer(ctx: &mut FunctionContext<'_>) {
     const ENTRIES: &[(&str, &str)] = &[(
-        "elephc_phar_archive_valid",
-        "_elephc_phar_archive_valid_fn",
+        "elephc_phar_archive_error",
+        "_elephc_phar_archive_error_fn",
     )];
     publish_phar_bridge_entries(ctx, ENTRIES);
 }

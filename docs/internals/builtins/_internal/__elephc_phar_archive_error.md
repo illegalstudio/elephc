@@ -1,13 +1,13 @@
 ---
-title: "__elephc_phar_archive_valid() - internals"
-description: "Compiler internals for __elephc_phar_archive_valid(): lowering path, type checks, and runtime helpers."
+title: "__elephc_phar_archive_error() - internals"
+description: "Compiler internals for __elephc_phar_archive_error(): lowering path, type checks, and runtime helpers."
 ---
 
-## `__elephc_phar_archive_valid()` - internals
+## `__elephc_phar_archive_error()` - internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/io/__elephc_phar_archive_valid.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_archive_valid.rs)
+- **Signature**: [`src/builtins/io/__elephc_phar_archive_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_archive_error.rs)
 - **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -15,7 +15,7 @@ description: "Compiler internals for __elephc_phar_archive_valid(): lowering pat
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_phar_archive_valid` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_phar_archive_error` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -31,13 +31,13 @@ description: "Compiler internals for __elephc_phar_archive_valid(): lowering pat
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_phar_archive_valid`
+- **Typed EIR target**: `runtime.__elephc_phar_archive_error`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_phar_archive_valid(string $filename, int $is_data): bool
+function __elephc_phar_archive_error(string $filename, int $is_data): string
 ```
 
 ## What the type checker enforces

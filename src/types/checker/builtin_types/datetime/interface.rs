@@ -13,15 +13,24 @@ use crate::synthetic_class::e_self_call;
 /// Builds the `timestamp` (int) and `timezone_name` (str, default "UTC") backing properties.
 pub(super) fn datetime_backing_properties() -> Vec<ClassProperty> {
     vec![
-        property("timestamp", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
-        property(
+        backing_property("timestamp", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        backing_property(
             "timezone_name",
             TypeExpr::Str,
             Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
         ),
         // Sub-second component (0..999999) preserved across operations; surfaced by getMicrosecond()
         // and the `u`/`v` format specifiers. elephc otherwise works at libc second resolution.
-        property("microsecond", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        backing_property("microsecond", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        // Distinguishes a fixed-offset display zone (timelib `timezone_type` 1 or 2, including an
+        // abbreviation that is also a tz identifier such as `CET`) from a tz-database identifier
+        // (type 3). `CET` must stay DST-aware when it comes from `date_default_timezone_set()`,
+        // but is a fixed +01:00 when it comes from `new DateTimeZone('CET')`.
+        backing_property(
+            "__elephc_fixed_zone",
+            TypeExpr::Bool,
+            Expr::new(ExprKind::BoolLiteral(false), dummy()),
+        ),
         // Per-class static (0 = last createFromFormat succeeded, 1 = it failed) backing
         // getLastErrors()/date_get_last_errors(). Its storage now emits correctly for the used
         // synthetic class (see emit_static_property_initializers' emitted-class filter).
@@ -106,7 +115,10 @@ pub(super) fn datetime_get_offset() -> ClassMethod {
                 "date_default_timezone_set",
                 vec![e_self_call(
                     "__elephc_display_timezone",
-                    vec![this_property("timezone_name")],
+                    vec![
+                        this_property("timezone_name"),
+                        this_property("__elephc_fixed_zone"),
+                    ],
                 )],
             )),
             // $__off = intval(date("Z", $this->timestamp));

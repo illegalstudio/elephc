@@ -117,11 +117,13 @@ fn substitute(output: &mut Vec<u8>, subject: &[u8], replacement: &[u8], length: 
     }
 }
 
-/// Applies PHP's leading-zero rejection and rejects group numbers above its signed-int range.
+/// Applies PHP's leading-zero rejection and 32-bit `(int) strtoul(...)` conversion.
 fn numbered_group(bytes: &[u8]) -> Option<usize> {
     if bytes.len() > 1 && bytes[0] == b'0' { return None; }
     let number = bytes.iter().fold(0u64, |value, byte| value.saturating_mul(10).saturating_add(u64::from(byte - b'0')));
-    // PHP's `(int) strtoul(...)` wraps 2^32+1 back to group 1. Keep the escape literal
-    // instead of silently addressing an unrelated group.
-    usize::try_from(number).ok().filter(|value| *value <= i32::MAX as usize)
+    // `mb_regex_substitute()` stores `(int) strtoul(name, NULL, 10)` in a C `int`:
+    // the low 32 bits select the group and a negative result stays literal. On
+    // LP64 this wraps 2^32+1 back to group 1, exactly like PHP 8.5.
+    let wrapped = number as u32 as i32;
+    usize::try_from(wrapped).ok()
 }

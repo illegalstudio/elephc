@@ -196,6 +196,46 @@ mod bodies_oracle {
         );
     }
 
+    /// The canonical lookup is a binary search, so its keys must stay sorted and every
+    /// `ALL_WITH_BC` identifier must have exactly one lower-cased key.
+    #[test]
+    fn canonical_identifier_table_is_sorted_and_complete() {
+        let table = super::timezone_ids::TIMEZONE_CANONICAL_NAMES;
+        let keys: Vec<&str> = table.iter().map(|(key, _)| *key).collect();
+        assert!(
+            keys.windows(2).all(|pair| pair[0] < pair[1]),
+            "canonical identifier keys must be strictly sorted for the binary search"
+        );
+        for identifier in super::timezone_ids::TIMEZONE_IDENTIFIERS_WITH_BC {
+            let key = identifier.to_ascii_lowercase();
+            assert!(
+                keys.binary_search(&key.as_str()).is_ok(),
+                "ALL_WITH_BC identifier {identifier} is missing from the canonical table"
+            );
+        }
+    }
+
+    /// The `ALL_WITH_BC` list must contain the backward-compatible identifiers that the
+    /// default `ALL` list omits, while staying a strict superset of `ALL`.
+    #[test]
+    fn with_bc_identifier_list_adds_backward_compatible_zones() {
+        let all = super::timezone_ids::TIMEZONE_IDENTIFIERS;
+        let with_bc = super::timezone_ids::TIMEZONE_IDENTIFIERS_WITH_BC;
+        assert!(with_bc.len() > all.len());
+        for legacy in ["Europe/Kiev", "US/Eastern", "Asia/Calcutta", "CET", "GMT"] {
+            assert!(
+                with_bc.contains(&legacy),
+                "ALL_WITH_BC must contain the legacy identifier {legacy}"
+            );
+        }
+        for legacy in ["Europe/Kiev", "US/Eastern", "Asia/Calcutta", "CET"] {
+            assert!(
+                !all.contains(&legacy),
+                "the default ALL list must not contain {legacy}"
+            );
+        }
+    }
+
     /// Removes span payloads so a built node and a parsed node compare on structure alone.
     fn strip_spans(rendered: &str) -> String {
         let mut cleaned = String::with_capacity(rendered.len());

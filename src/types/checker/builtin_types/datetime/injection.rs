@@ -133,7 +133,7 @@ pub(crate) fn inject_builtin_datetime(
                 is_readonly_class: false,
                 properties: datetime_backing_properties(),
                 methods: {
-                    let mut m = datetime_shared_methods();
+                    let mut m = datetime_shared_methods("DateTimeImmutable");
                     m.extend(datetime_setter_methods(false));
                     m.push(datetime_create_from_format("DateTimeImmutable"));
                     m.push(datetime_get_last_errors("DateTimeImmutable"));
@@ -152,7 +152,7 @@ pub(crate) fn inject_builtin_datetime(
     }
 
     if !class_map.contains_key("DateTime") {
-        let mut methods = datetime_shared_methods();
+        let mut methods = datetime_shared_methods("DateTime");
         methods.extend(datetime_setter_methods(true));
         methods.push(datetime_create_from_format("DateTime"));
         methods.push(datetime_get_last_errors("DateTime"));

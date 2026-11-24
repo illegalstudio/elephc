@@ -1,5 +1,6 @@
 //! Purpose:
-//! Parsed-PHP sources for free-form `date_parse` and `gettimeofday`.
+//! AST-built bodies for free-form `date_parse` and `gettimeofday`; the `*_SRC` strings are
+//! test-only transcribed oracles.
 //!
 //! Called from:
 //! - DateTime procedural helper method assembly.
@@ -68,7 +69,7 @@ return ["sec" => $sec, "usec" => $usec, "minuteswest" => $mw, "dsttime" => $dst]
 
 /// Builds the internal static `__elephc_gettimeofday($as_float = false)` method on `DateTime` backing
 /// the `gettimeofday()` procedural function (the name resolver desugars the call to it). Returns the
-/// component array, or a float when `$as_float` is true. Self-contained parsed source.
+/// component array, or a float when `$as_float` is true. Self-contained AST-built body.
 pub(super) fn datetime_gettimeofday() -> ClassMethod {
     let body = super::bodies::gettimeofday();
     ClassMethod {

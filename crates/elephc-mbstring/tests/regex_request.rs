@@ -193,12 +193,11 @@ fn regex_replace_matches_php() {
     let mut skipped_steps = 0;
     for line in BufReader::new(reader).lines() {
         let case: Value = serde_json::from_str(&line.unwrap()).unwrap();
-        // PHP 8.5.13 wraps these group numbers through (int)strtoul; elephc keeps the
-        // escape literal (PHP-PrettyHorriblePatches #34). The dedicated regression
-        // covers the fixed output; the fixture keeps the PHP capture. Divergent steps
-        // are skipped individually so the rest of the case is still compared. Both
-        // counts are pinned to this fixture, so regenerate them when the capture
-        // changes.
+        // Only the unterminated `\k` forms stay divergent (#17). Numeric group numbers
+        // now follow PHP's `(int) strtoul` wrap, so those steps are compared again.
+        // Divergent steps are skipped individually so the rest of the case is still
+        // compared. Both counts are pinned to this fixture, so regenerate them when the
+        // capture changes.
         if regex_oracle::has_security_divergence(&case) {
             skipped_cases += 1;
         }
@@ -214,8 +213,8 @@ fn regex_replace_matches_php() {
         count += 1;
     }
     assert_eq!(count, 1431);
-    assert_eq!(skipped_cases, 50);
-    assert_eq!(skipped_steps, 50);
+    assert_eq!(skipped_cases, 20);
+    assert_eq!(skipped_steps, 20);
 }
 
 /// Checks output initialization and exact capture values before references are materialized by backend adapters.

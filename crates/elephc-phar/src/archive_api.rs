@@ -44,6 +44,54 @@ pub fn archive_is_valid(archive_path: &[u8], is_data: bool) -> bool {
     crate::compression::archive_signature_is_valid(path, is_data)
 }
 
+/// Returns the php-src rejection message for an archive the OOP constructor must refuse.
+///
+/// The boolean validity probe only tells the constructor that opening failed; this
+/// diagnostic pass names the same cause php-src reports (missing signature, or a
+/// keyless signature downgraded under a trusted `<archive>.pubkey`). Returns `None`
+/// when the path is missing or the archive passes the active policy. A non-UTF-8
+/// path is rejected, matching `archive_is_valid()`.
+pub fn archive_validation_error(archive_path: &[u8], is_data: bool) -> Option<String> {
+    // A path that is not valid UTF-8 cannot be opened by PHP's filesystem layer
+    // either. `archive_is_valid()` already rejects it, so report a rejection here
+    // instead of returning `None` (which the constructor reads as "valid").
+    let path_text = match std::str::from_utf8(archive_path) {
+        Ok(text) => text.to_string(),
+        Err(_) => {
+            return Some(format!(
+                "phar \"{}\" is not a valid phar archive",
+                String::from_utf8_lossy(archive_path)
+            ));
+        }
+    };
+    let path = std::path::Path::new(&path_text);
+    if !path.exists() {
+        return None;
+    }
+    if crate::compression::archive_signature_is_valid(path, is_data) {
+        return None;
+    }
+    // Reaching this point means the archive was rejected. A read or decompression
+    // failure is a rejection cause too, not "no error": otherwise a truncated gzip
+    // PHAR would be accepted as an empty object.
+    let generic = || format!("phar \"{path_text}\" is not a valid phar archive");
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(_) => return Some(generic()),
+    };
+    let data = match uncompressed_archive_bytes(&raw) {
+        Some(data) => data,
+        None => return Some(generic()),
+    };
+    let openssl_expected = archive_public_key_path(path).exists();
+    Some(crate::signature::signature_rejection_message(
+        &path_text,
+        &data,
+        openssl_expected,
+        is_data,
+    ))
+}
+
 /// Extracts `entry` from already-loaded archive bytes.
 ///
 /// Container-family dispatch follows ZIP/TAR magic before falling back to native

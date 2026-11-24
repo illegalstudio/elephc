@@ -32,7 +32,8 @@ use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_c
     e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
     function, interface, internal_declarations, method, s_array_assign, s_assign, s_continue,
     s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return, s_return_void,
-    s_static_prop_assign, s_throw, t_array, t_class, t_mixed, t_nullable, t_ptr, t_union
+    s_static_prop_array_assign, s_static_prop_assign, s_throw, t_array, t_class, t_mixed,
+    t_nullable, t_ptr, t_union
 };
 use crate::web_prelude::PhpVersion;
 
@@ -1662,6 +1663,11 @@ fn decl_class_elephcsessionstate() -> Stmt {
         .static_prop("snapshot", TypeExpr::Str, Some(e_str("")))
         .static_prop("snapshotValid", TypeExpr::Bool, Some(e_bool(false)))
         .static_prop("sendCookie", TypeExpr::Bool, Some(e_bool(false)))
+        // Session ini entries changed (or targeted by a failed runtime change) in this
+        // request. php-src's `zend_restore_ini_entry_cb()` calls a modify handler only
+        // when the entry is marked modified, so `ini_restore('session.name')` is a
+        // no-op until something tried to change that entry.
+        .static_prop("modifiedIni", t_array(), Some(e_array(vec![])))
         .build()
 }
 
@@ -3134,6 +3140,45 @@ fn decl_fn_session_id() -> Stmt {
         .build()
 }
 
+/// Builds the PHP 8.5.13 upload-progress rejection for a session setter.
+///
+/// Marks one session ini entry as modified in this request.
+fn session_ini_mark_modified(option: Expr) -> Stmt {
+    s_static_prop_array_assign(
+        "__ElephcSessionState",
+        "modifiedIni",
+        option,
+        e_bool(true),
+    )
+}
+
+/// Emits the upload-progress `Error` guard for a session setting change.
+///
+/// php-src runs `SESSION_CHECK_UPLOAD_PROGRESS_STATE` inside every session INI
+/// modify handler: after the caller's own active-session/header checks and before
+/// the value is applied. `changed` is true when this call supplies a new value.
+fn session_upload_progress_guard(changed: Expr) -> Stmt {
+    s_if(
+        e_binop(
+            changed,
+            BinOp::And,
+            e_binop(
+                e_call("elephc_web_session_get_upload_progress_enabled", vec![]),
+                BinOp::StrictEq,
+                e_int(1),
+            ),
+        ),
+        vec![s_throw(e_new(
+            "Error",
+            vec![e_str(
+                "Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On",
+            )],
+        ))],
+        vec![],
+        None,
+    )
+}
+
 /// `session_name` — transcribed from the PHP form.
 fn decl_fn_session_name() -> Stmt {
     function("session_name")
@@ -3149,6 +3194,13 @@ fn decl_fn_session_name() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_var("name"), BinOp::StrictNotEq, e_null()),
+                vec![session_ini_mark_modified(e_str("session.name"))],
+                vec![],
+                None,
+            ),
+            session_upload_progress_guard(e_binop(e_var("name"), BinOp::StrictNotEq, e_null())),
             s_assign("old", e_call("elephc_web_session_get_name", vec![])),
             s_if(
                 e_binop(e_var("name"), BinOp::StrictNotEq, e_null()),
@@ -3254,6 +3306,13 @@ fn decl_fn_session_save_path() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_var("path"), BinOp::StrictNotEq, e_null()),
+                vec![session_ini_mark_modified(e_str("session.save_path"))],
+                vec![],
+                None,
+            ),
+            session_upload_progress_guard(e_binop(e_var("path"), BinOp::StrictNotEq, e_null())),
             s_assign("old", e_call("elephc_web_session_get_save_path", vec![])),
             s_if(
                 e_binop(e_var("path"), BinOp::StrictNotEq, e_null()),
@@ -3621,6 +3680,13 @@ fn decl_fn_session_cache_limiter() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_var("value"), BinOp::StrictNotEq, e_null()),
+                vec![session_ini_mark_modified(e_str("session.cache_limiter"))],
+                vec![],
+                None,
+            ),
+            session_upload_progress_guard(e_binop(e_var("value"), BinOp::StrictNotEq, e_null())),
             s_assign("old", e_call("elephc_web_session_get_cache_limiter", vec![])),
             s_if(
                 e_binop(e_var("value"), BinOp::StrictNotEq, e_null()),
@@ -3649,6 +3715,13 @@ fn decl_fn_session_cache_expire() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_var("value"), BinOp::StrictNotEq, e_null()),
+                vec![session_ini_mark_modified(e_str("session.cache_expire"))],
+                vec![],
+                None,
+            ),
+            session_upload_progress_guard(e_binop(e_var("value"), BinOp::StrictNotEq, e_null())),
             s_assign("old", e_call("elephc_web_session_get_cache_expire", vec![])),
             s_if(
                 e_binop(e_var("value"), BinOp::StrictNotEq, e_null()),
@@ -3836,6 +3909,14 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
                 vec![],
                 None,
             ),
+            session_ini_mark_modified(e_str("session.cookie_lifetime")),
+            session_ini_mark_modified(e_str("session.cookie_path")),
+            session_ini_mark_modified(e_str("session.cookie_domain")),
+            session_ini_mark_modified(e_str("session.cookie_secure")),
+            session_ini_mark_modified(e_str("session.cookie_partitioned")),
+            session_ini_mark_modified(e_str("session.cookie_httponly")),
+            session_ini_mark_modified(e_str("session.cookie_samesite")),
+            session_upload_progress_guard(e_bool(true)),
             s_expr(e_call("elephc_web_session_set_cookie_params", vec![e_var("__elephc_scp_cl"), e_var("__elephc_scp_cp"), e_var("__elephc_scp_cd"), e_var("__elephc_scp_cs"), e_var("__elephc_scp_cpart"), e_var("__elephc_scp_ch"), e_var("__elephc_scp_css")])),
             s_return(e_bool(true)),
         ])
@@ -3893,6 +3974,8 @@ fn decl_fn_session_module_name() -> Stmt {
                 vec![],
                 None,
             ),
+            session_ini_mark_modified(e_str("session.save_handler")),
+            session_upload_progress_guard(e_bool(true)),
             s_static_prop_assign("__ElephcSessionState", "handler", e_null()),
             s_return(e_var("__elephc_old_module")),
         ])
@@ -3917,6 +4000,21 @@ fn decl_fn_session_set_save_handler() -> Stmt {
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
                     s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            // php-src calls set_user_save_handler_ini() (and therefore the guarded
+            // modify handler) only when the current module is not already "user".
+            s_if(
+                e_binop(
+                    e_static_prop("__ElephcSessionState", "handler"),
+                    BinOp::StrictEq,
+                    e_null(),
+                ),
+                vec![
+                    session_ini_mark_modified(e_str("session.save_handler")),
+                    session_upload_progress_guard(e_bool(true)),
                 ],
                 vec![],
                 None,
@@ -4211,6 +4309,59 @@ fn decl_fn_elephc_ini_session_keys() -> Stmt {
                 None,
             ),
             s_return(e_array(vec![e_str("session.name"), e_str("session.save_path"), e_str("session.save_handler"), e_str("session.cache_limiter"), e_str("session.cache_expire"), e_str("session.cookie_lifetime"), e_str("session.cookie_path"), e_str("session.cookie_domain"), e_str("session.cookie_secure"), e_str("session.cookie_partitioned"), e_str("session.cookie_httponly"), e_str("session.cookie_samesite"), e_str("session.use_cookies"), e_str("session.use_strict_mode"), e_str("session.use_only_cookies"), e_str("session.lazy_write"), e_str("session.use_trans_sid"), e_str("session.referer_check"), e_str("session.trans_sid_tags"), e_str("session.trans_sid_hosts"), e_str("session.serialize_handler"), e_str("session.gc_probability"), e_str("session.gc_divisor"), e_str("session.gc_maxlifetime"), e_str("session.sid_length"), e_str("session.sid_bits_per_character"), e_str("session.auto_start"), e_str("session.upload_progress.enabled"), e_str("session.upload_progress.cleanup"), e_str("session.upload_progress.prefix"), e_str("session.upload_progress.name"), e_str("session.upload_progress.freq"), e_str("session.upload_progress.min_freq")])),
+        ])
+        .build()
+}
+
+/// `ini_restore` — web declaration that enforces the 8.5.13 session guard.
+///
+/// The version prelude injects the same function for CLI builds; in a web build this
+/// declaration runs first and wins the redeclaration guard, so `ini_restore('session.*')`
+/// reaches the upload-progress rule before the no-op session restore. The rule only fires
+/// for an entry already marked modified, matching `zend_restore_ini_entry_cb()`. The shared
+/// Core and mbstring restores stay identical to the CLI declaration.
+fn decl_fn_ini_restore() -> Stmt {
+    function("ini_restore")
+        .param("option", TypeExpr::Str)
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_binop(
+                        e_binop(
+                            e_call("__elephc_is_session_ini", vec![e_var("option")]),
+                            BinOp::And,
+                            not_url_scanner_trans_sid_option("option", "session."),
+                        ),
+                        BinOp::And,
+                        e_binop(
+                            e_call("elephc_web_session_get_upload_progress_enabled", vec![]),
+                            BinOp::StrictEq,
+                            e_int(1),
+                        ),
+                    ),
+                    BinOp::And,
+                    e_call(
+                        "isset",
+                        vec![e_index(
+                            e_static_prop("__ElephcSessionState", "modifiedIni"),
+                            e_var("option"),
+                        )],
+                    ),
+                ),
+                vec![s_throw(e_new(
+                    "Error",
+                    vec![e_str(
+                        "Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On",
+                    )],
+                ))],
+                vec![],
+                None,
+            ),
+            crate::shared_ini_prelude::memory_limit_restore(),
+            crate::shared_ini_prelude::directive(
+                elephc_builtin_contract::mbstring_abi::ini::INI_RESTORE,
+            ),
         ])
         .build()
 }
@@ -4650,16 +4801,9 @@ fn decl_fn_ini_set() -> Stmt {
                 vec![],
                 None,
             ),
-            // An active session rejects every runtime session ini change before the
-            // 8.5.13 upload-progress rule is consulted, so this returns false.
-            s_if(
-                e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
-                vec![
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
+            // php-src marks the ini entry modified before its modify handler runs, so
+            // even a rejected change makes a later ini_restore() call the handler.
+            session_ini_mark_modified(e_var("option")),
             // PHP 8.5.13 (CVE-2026-115560): while upload progress is enabled, a
             // runtime session setting change could make the progress record be
             // read back with a different serializer. Reject every such change.
@@ -4671,6 +4815,16 @@ fn decl_fn_ini_set() -> Stmt {
                 ),
                 vec![
                     s_throw(e_new("Error", vec![e_str("Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On")])),
+                ],
+                vec![],
+                None,
+            ),
+            // php-src runs the upload-progress rule first; an active session only
+            // reaches its own failure once that rule has not thrown.
+            s_if(
+                e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
+                vec![
+                    s_return(e_bool(false)),
                 ],
                 vec![],
                 None,
@@ -5488,6 +5642,7 @@ pub(crate) fn web_declarations_with_environment(
             decl_fn_elephc_session_send_cache_headers(),
             decl_fn_elephc_ini_session_keys(),
             decl_fn_elephc_is_session_ini(),
+            decl_fn_ini_restore(),
             decl_fn_elephc_ini_get_raw(),
         ]);
 

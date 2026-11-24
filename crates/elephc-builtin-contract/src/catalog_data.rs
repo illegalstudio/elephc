@@ -3455,8 +3455,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
-        id: BuiltinId::from_canonical_name("__elephc_phar_archive_valid"),
-        name: "__elephc_phar_archive_valid",
+        id: BuiltinId::from_canonical_name("__elephc_phar_archive_error"),
+        name: "__elephc_phar_archive_error",
         area: Area::Io,
         module: PhpModule::Elephc,
         since: None,
@@ -3480,9 +3480,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Bool,
+        returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "Internal: reports whether an existing PHAR passes the require-hash policy.",
+        summary: "Internal: returns php-src's rejection message for an unreadable PHAR, or an empty string.",
         examples: &[
         ],
         php_manual: None,

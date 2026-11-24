@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parsed-PHP `strftime` translation and microsecond extraction/stripping helpers.
+//! AST-built `strftime` translation and microsecond extraction/stripping helpers.
 //!
 //! Called from:
 //! - DateTime procedural helper method assembly and constructor/modifier paths.
@@ -332,8 +332,8 @@ pub(super) fn datetime_strip_micros() -> ClassMethod {
 
 /// Builds the internal static `DateTime::__elephc_strftime($format, $timestamp, $utc)` method
 /// backing the `strftime()`/`gmstrftime()` procedural functions (the name resolver desugars the
-/// calls to it, injecting `time()` for the default timestamp and the local/UTC flag). Self-contained
-/// parsed source.
+/// calls to it, injecting `time()` for the default timestamp and the local/UTC flag).
+/// Self-contained AST-built body.
 pub(super) fn datetime_strftime() -> ClassMethod {
     let body = super::bodies::strftime();
     ClassMethod {

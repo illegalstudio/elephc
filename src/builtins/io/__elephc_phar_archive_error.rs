@@ -1,5 +1,5 @@
 //! Purpose:
-//! Home of the internal `__elephc_phar_archive_valid` PHAR intrinsic: its declaration,
+//! Home of the internal `__elephc_phar_archive_error` PHAR intrinsic: its declaration,
 //! checker contract, and semantic target. Compiler-synthesized; not PHP-visible.
 //!
 //! Called from:
@@ -7,12 +7,13 @@
 //!   that the current `phar.require_hash` policy cannot authenticate.
 //!
 //! Key details:
-//! - A missing path reports true so the constructor can still create a new archive.
+//! - A missing or valid path reports an empty string so the constructor can still create
+//!   a new archive; a rejection returns php-src's cause-specific message.
 //! - The bridge links `elephc_phar` because the validity probe lives in that crate.
 
 builtin! {
-    contract: "__elephc_phar_archive_valid",
+    contract: "__elephc_phar_archive_error",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ElephcPharArchiveValid,
+        crate::ir::RuntimeFnId::ElephcPharArchiveError,
     ),
 }

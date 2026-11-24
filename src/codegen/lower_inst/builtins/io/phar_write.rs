@@ -451,3 +451,71 @@ pub(super) fn emit_phar_get_string_bridge(
     store_if_result(ctx, inst)
 }
 
+
+/// Emits a `(path: string, value: int) -> string` PHAR bridge call.
+///
+/// Used by the archive-validity diagnostic: the bridge returns php-src's rejection
+/// message, or an empty string when the archive is acceptable. The integer is stashed
+/// while the path is loaded, then passed as the third argument and the out-length
+/// slot as the fourth.
+pub(super) fn emit_phar_path_int_to_string_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    slot: &str,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    let empty = ctx.next_label("phar_path_int_string_empty");
+    let persist = ctx.next_label("phar_path_int_string_persist");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, path, "phar path-int-string path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "x2");                               // bridge arg 2 = caller flag
+            abi::emit_symbol_address(ctx.emitter, "x3", "_phar_list_len");      // bridge arg 3 = out-length slot
+            abi::emit_symbol_address(ctx.emitter, "x9", slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR diagnostic bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", empty));             // missing bridge yields an empty message
+            ctx.emitter.instruction("blr x9");                                  // produce the rejection message
+            ctx.emitter.instruction(&format!("cbz x0, {}", empty));             // a null result means the archive is valid
+            ctx.emitter.instruction("mov x1, x0");                              // str_persist source pointer = bridge buffer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_phar_list_len");
+            ctx.emitter.instruction("ldr x2, [x9]");                            // str_persist length = bridge out-length
+            ctx.emitter.instruction(&format!("b {}", persist));                 // persist the returned bytes
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("mov x1, #0");                              // empty source pointer (length 0 is not dereferenced)
+            ctx.emitter.instruction("mov x2, #0");                              // empty string length
+            ctx.emitter.label(&persist);
+            ctx.emitter.instruction("bl __rt_str_persist");                     // copy into an owned heap string -> x1=ptr, x2=len
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, path, "phar path-int-string path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "rdx");                              // bridge arg 2 = caller flag
+            abi::emit_symbol_address(ctx.emitter, "rcx", "_phar_list_len");     // bridge arg 3 = out-length slot
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR diagnostic bridge was published
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty message
+            ctx.emitter.instruction("call r10");                                // produce the rejection message
+            ctx.emitter.instruction("test rax, rax");                           // a null result means the archive is valid
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // fall back to an empty string
+            ctx.emitter.instruction("mov rdi, rax");                            // str_persist source pointer = bridge buffer
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rdx", "_phar_list_len", 0); // str_persist length = bridge out-length
+            ctx.emitter.instruction(&format!("jmp {}", persist));               // persist the returned bytes
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("mov rdi, 0");                              // empty source pointer (length 0 is not dereferenced)
+            ctx.emitter.instruction("mov rdx, 0");                              // empty string length
+            ctx.emitter.label(&persist);
+            ctx.emitter.instruction("call __rt_str_persist");                   // copy into an owned heap string -> rax=ptr, rdx=len
+        }
+    }
+    store_if_result(ctx, inst)
+}

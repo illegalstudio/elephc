@@ -386,21 +386,25 @@ fn phar_construct_body(is_data: bool) -> Vec<crate::parser::ast::Stmt> {
         // An existing archive that the current `phar.require_hash` policy cannot
         // authenticate must fail the constructor like php-src, not present an empty
         // object through the read helpers' fallback values.
-        if_stmt(
-            not_expr(function_call(
-                "__elephc_phar_archive_valid",
+        assign_stmt(
+            "__elephc_phar_error",
+            function_call(
+                "__elephc_phar_archive_error",
                 vec![
                     var_expr("filename"),
                     int_expr(if is_data { 1 } else { 0 }),
                 ],
-            )),
+            ),
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("__elephc_phar_error"),
+                BinOp::StrictNotEq,
+                string_expr(""),
+            ),
             vec![throw_stmt(new_object_expr(
                 "UnexpectedValueException",
-                vec![binary_expr(
-                    binary_expr(string_expr("phar \""), BinOp::Concat, var_expr("filename")),
-                    BinOp::Concat,
-                    string_expr("\" is not a valid phar archive"),
-                )],
+                vec![var_expr("__elephc_phar_error")],
             ))],
             None,
         ),
