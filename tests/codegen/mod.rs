@@ -196,6 +196,7 @@ mod dead_strip;
 mod locals_retype;
 mod local_definedness;
 mod diverging_operands;
+mod array_merge_single_operand;
 mod stack_guard;
 mod zval;
 

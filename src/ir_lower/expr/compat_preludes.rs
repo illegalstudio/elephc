@@ -1256,6 +1256,19 @@ pub(super) fn lower_gradual_array_merge(
         ));
     }
     let helper = match args.len() {
+        // `array_merge($x)` renumbers the integer keys of one operand, exactly as merging it into
+        // an empty array does. The native helper only takes a packed operand: a boxed `array`
+        // (a method or property result) or a hash reached the runtime call as a mixed cell, and
+        // the result read back as a string.
+        1 => {
+            let empty = Expr::new(ExprKind::ArrayLiteral(Vec::new()), expr.span);
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_NAME),
+                &[args[0].clone(), empty],
+                expr,
+            ));
+        }
         2 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_NAME,
         3 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_THREE_NAME,
         5 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_FIVE_NAME,
