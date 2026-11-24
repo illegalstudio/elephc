@@ -55,7 +55,7 @@ use crate::types::{ClassInfo, PhpType, TypeEnv};
 use super::Checker;
 
 /// The clone-with destination classes one program can reach.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CloneOverrideDestinations {
     /// A site passes an object whose class the checker could not name.
     pub any_class: bool,
@@ -229,7 +229,15 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
     // name that misses every declared slot still takes the ordinary dynamic-property path
     // (deprecation, or `Cannot create dynamic property` on a readonly class).
     let dynamic_writes = std::mem::take(&mut checker.dynamic_property_write_destinations);
+    // One widening per distinct (destination, stored type): a framework has hundreds of identical
+    // dynamic-name write sites and each walked the whole class table.
+    let mut done: Vec<(&CloneOverrideDestinations, PhpType)> = Vec::new();
     for (destination, value_ty) in &dynamic_writes.sites {
+        let key = (destination, value_ty.codegen_repr());
+        if done.iter().any(|seen| seen.0 == key.0 && seen.1 == key.1) {
+            continue;
+        }
+        done.push(key);
         widen_untyped_destination_slots_for(checker, destination, false, Some(value_ty));
     }
 }
@@ -269,6 +277,7 @@ fn widen_untyped_destination_slots_for(
     // `Mixed` on the child and stayed `Int` on the parent, so the parent's own accessor read the
     // child's boxed value back as a raw pointer and a closure-valued slot crashed the process.
     let views = layout_views(checker);
+    let children = class_children(&views);
     for (owner, slot) in widened_slots(&views, &sel) {
         if let Some(stored) = stored {
             let current = checker
@@ -281,7 +290,7 @@ fn widen_untyped_destination_slots_for(
                 continue;
             }
         }
-        for target in slot_inheritors(&views, &owner, slot) {
+        for target in slot_inheritors(&views, &children, &owner, slot) {
             if let Some(info) = checker.classes.get_mut(&target) {
                 info.properties[slot].1 = PhpType::Mixed;
             }
@@ -300,6 +309,7 @@ pub(super) fn widen_property_unset_storage(checker: &mut Checker) {
         return;
     }
     let views = layout_views(checker);
+    let children = class_children(&views);
     let mut selected_slots = BTreeSet::new();
     for (class, property) in destinations.sites {
         let classes = match class {
@@ -352,7 +362,7 @@ pub(super) fn widen_property_unset_storage(checker: &mut Checker) {
         }
     }
     for (owner, slot) in selected_slots {
-        for target in slot_inheritors(&views, &owner, slot) {
+        for target in slot_inheritors(&views, &children, &owner, slot) {
             let may_mark_removed = checker.classes.get(&target).is_some_and(|info| {
                 info.properties.get(slot).is_some_and(|(name, _)| {
                     !info.property_slot_is_reference(slot, name)
@@ -461,39 +471,60 @@ fn slot_declaring_class(
     owner
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Classes `slot_inheritors` visited, for the complexity test.
+    static INHERITOR_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Maps every class to the classes that declare it as their parent.
+///
+/// Built once per widening: asking each (owner, slot) pair of the closed world to scan every class
+/// and walk its parent chain was quadratic in the class count, a third of the check of a
+/// framework build.
+fn class_children(views: &BTreeMap<String, LayoutView>) -> BTreeMap<String, Vec<String>> {
+    let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (class_name, view) in views {
+        if let Some(parent) = &view.parent {
+            children.entry(parent.clone()).or_default().push(class_name.clone());
+        }
+    }
+    children
+}
+
 /// Returns the declaring class plus every class that INHERITS that one physical slot.
 ///
 /// A class that redeclares the slot with a declared type is skipped rather than restamped, which
-/// is the same rule `slot_is_widenable` applies to the destination itself.
+/// is the same rule `slot_is_widenable` applies to the destination itself. Walks only the owner's
+/// subtree through `children` (see [`class_children`]).
 fn slot_inheritors(
     views: &BTreeMap<String, LayoutView>,
+    children: &BTreeMap<String, Vec<String>>,
     owner: &str,
     slot: usize,
 ) -> BTreeSet<String> {
-    views
-        .iter()
-        .filter(|(class_name, view)| {
-            !view.owns_layout
-                && view.widenable.get(slot).copied().unwrap_or(false)
-                && (class_name.as_str() == owner || inherits_from(views, class_name, owner))
+    let qualifies = |class_name: &str| {
+        views.get(class_name).is_some_and(|view| {
+            !view.owns_layout && view.widenable.get(slot).copied().unwrap_or(false)
         })
-        .map(|(class_name, _)| class_name.clone())
-        .collect()
-}
-
-/// Returns whether `child` reaches `ancestor` through the declared parent chain.
-fn inherits_from(views: &BTreeMap<String, LayoutView>, child: &str, ancestor: &str) -> bool {
-    let mut current = views.get(child).and_then(|view| view.parent.clone());
-    for _ in 0..=views.len() {
-        let Some(name) = current else {
-            return false;
-        };
-        if name == ancestor {
-            return true;
+    };
+    let mut found = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![owner.to_string()];
+    while let Some(class_name) = pending.pop() {
+        if !seen.insert(class_name.clone()) {
+            continue;
         }
-        current = views.get(&name).and_then(|view| view.parent.clone());
+        #[cfg(test)]
+        INHERITOR_VISITS.with(|visits| visits.set(visits.get() + 1));
+        if qualifies(&class_name) {
+            found.insert(class_name.clone());
+        }
+        if let Some(below) = children.get(&class_name) {
+            pending.extend(below.iter().cloned());
+        }
     }
-    false
+    found
 }
 
 /// Reserves the per-instance property hash one class needs for an UNKNOWN override key.
@@ -692,7 +723,7 @@ mod tests {
     fn widening_propagates_a_shared_slot_but_not_a_branch_local_one() {
         let views = sibling_views();
         assert_eq!(
-            slot_inheritors(&views, "Root", 0),
+            slot_inheritors(&views, &class_children(&views), "Root", 0),
             BTreeSet::from([
                 "ChildA".to_string(),
                 "ChildB".to_string(),
@@ -701,9 +732,24 @@ mod tests {
             ])
         );
         assert_eq!(
-            slot_inheritors(&views, "ChildA", 1),
+            slot_inheritors(&views, &class_children(&views), "ChildA", 1),
             BTreeSet::from(["ChildA".to_string(), "GrandA".to_string()])
         );
+    }
+
+    /// Verifies a slot's inheritors cost the size of its own subtree, not of the class table: a
+    /// thousand unrelated classes beside a small family add no visit.
+    #[test]
+    fn slot_inheritors_visit_only_the_owners_subtree() {
+        let mut views = sibling_views();
+        for index in 0..1000 {
+            views.insert(format!("Other{index}"), view(None, 1));
+        }
+        let children = class_children(&views);
+        INHERITOR_VISITS.with(|visits| visits.set(0));
+        let found = slot_inheritors(&views, &children, "ChildA", 1);
+        assert_eq!(found.len(), 2);
+        assert_eq!(INHERITOR_VISITS.with(std::cell::Cell::get), 2);
     }
 
     /// Verifies a slot inherited from a class that owns its layout is never selected, so a user
