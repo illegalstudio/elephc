@@ -444,6 +444,32 @@ echo f(null);  // TypeError: t(): Argument #1 ($s) must be of type string, null 
 
 The same check runs when a `mixed` or merged-union value is returned from a function, method or closure declared `: string`, `: float` or `: bool`: `null`, arrays, resources and objects throw `f(): Return value must be of type T, U returned` (a `Stringable` object still converts to `string`), a numeric string converts to `float`, and a value returned as `bool` converts by truthiness. Under `strict_types=1` (of the file that declares the function) only the exact scalar passes, plus an `int` for `float`. A declared `int` return keeps its existing check, and `?T`, unions, `mixed`, `void`, `never`, class and generator return types are unchanged.
 
+### Class-typed boundaries
+
+A `mixed` value, or an `object|null` value, can reach a return, parameter or typed property declared as a class, an interface, `object`, or a nullable or union of those (`?Timer`, `A|B|null`). Array element reads, `WeakMap` lookups and other untyped containers produce such values. PHP checks the value's class at run time, and elephc emits the same check:
+
+```php
+final class TimerQueue {
+    /** @var array<int, Timer> */
+    private array $timers = [];
+    public function extract(): ?Timer {
+        return $this->timers[0] ?? null;   // mixed, checked against ?Timer
+    }
+}
+```
+
+A value of the wrong class or type throws `TypeError` with PHP's message for that boundary:
+
+- return: `TimerQueue::extract(): Return value must be of type ?Timer, string returned`
+- parameter: `take(): Argument #1 ($t) must be of type Timer, int given, called in … on line N`
+- property: `Cannot assign int to property Holder::$timer of type Timer`
+
+A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. As in PHP, the parameter checks of a call run in declaration order after every argument was evaluated, by-reference parameters included, so the first invalid parameter is the one reported. After the boundary, the value has the declared type.
+
+**Differences from PHP.** A `Closure` is rejected at a bare `object` return or parameter, and at an `object` or `?object` property, because elephc stores closures apart from class instances. A `?object` return or parameter keeps it.
+
+**Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A call through a dynamic method name (`$obj->$name($m)`) does not check its arguments. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
+
 ### Strict types
 
 A file whose leading `declare` sequence enables `strict_types=1` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.

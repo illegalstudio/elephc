@@ -27,6 +27,7 @@ pub(super) fn coerce_to_return_type(
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     guard_declared_callable_return_value(ctx, value, span.unwrap_or_else(Span::dummy));
+    let value = crate::ir_lower::object_boundaries::guard_runtime_object_return(ctx, value, span);
     let value = match guard_declared_scalar_return(ctx, value, span, source) {
         ScalarReturnGuard::Converted(converted) => return converted,
         ScalarReturnGuard::Checked(value) => value,
