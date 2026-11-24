@@ -669,6 +669,19 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
         .extern_symbol("__elephc_eval_object_is_a");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    // The bridge answers 0 (no), 1 (yes) or, for a bridge-owned object probed without a context,
+    // 2 (definitely not): only 1 is a true relation, so `is_a($evalObject, 'stdClass')` stays false.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // only a plain yes satisfies the relation
+            ctx.emitter.instruction("cset x0, eq");                             // fold the bridge's definite-no answer into false
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // only a plain yes satisfies the relation
+            ctx.emitter.instruction("sete al");                                 // fold the bridge's definite-no answer into false
+            ctx.emitter.instruction("movzx eax, al");                           // widen the boolean into the result register
+        }
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&false_label);
