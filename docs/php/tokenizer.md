@@ -76,7 +76,10 @@ elephc's own grammar are normalized in the text parser view fallback first, so
 names, DNF types, abstract property hooks, first-class callables, pipes and
 destructuring in expression position remain accepted. Set
 `ELEPHC_TOKEN_VIEW=text`, `off`, or `0` to force that legacy fallback while
-comparing both paths. Syntax errors throw a catchable `ParseError` with PHP's parser-facing
+comparing both paths. Because `elephc-tokenizer` and Magician embed the shared
+chopper, this variable is also read at runtime by compiled programs that call
+`token_get_all(..., TOKEN_PARSE)`; it is not limited to the compiler process.
+Syntax errors throw a catchable `ParseError` with PHP's parser-facing
 wording, including heredoc indentation, invalid escapes, unclosed delimiters,
 numeric-literal boundaries and interpolation offsets. `__halt_compiler()` outside
 the outermost scope throws `CompileError` with PHP's outermost-scope message, and a

@@ -1967,6 +1967,13 @@ jobs:
         shell: elephc-ci-shell {0}
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
 
+      - name: Check the forced text view against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+          ELEPHC_TOKEN_VIEW: text
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
+
       - name: Audit consumer compilation
         if: always()
         uses: ./.github/actions/assert-consumer-builds
