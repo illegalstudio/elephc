@@ -202,6 +202,47 @@ pub(crate) fn clone_bytes<T: Clone>(value: &T) -> Option<u64> {
     }
 }
 
+/// Footprint and live heap at the start of one lowered body.
+pub(crate) struct BodyMark {
+    name: String,
+    footprint: u64,
+    live: usize,
+}
+
+/// Live heap bytes (counting allocator) or 0.
+fn live_bytes() -> usize {
+    #[cfg(feature = "mem-stats")]
+    {
+        counting::live()
+    }
+    #[cfg(not(feature = "mem-stats"))]
+    {
+        0
+    }
+}
+
+/// Starts the per-body memory delta for `name` when the diagnostic is on.
+pub(crate) fn body_start(name: &str) -> Option<BodyMark> {
+    if !enabled() {
+        return None;
+    }
+    Some(BodyMark { name: name.to_string(), footprint: footprint().map_or(0, |f| f.0), live: live_bytes() })
+}
+
+/// Prints one `[mem-body]` line for a body whose footprint or live heap grew by at least
+/// `ELEPHC_MEM_STATS_BODY_KIB` (default 4096) KiB. A closure counts in its enclosing body.
+pub(crate) fn body_end(mark: BodyMark) {
+    static LIMIT: OnceLock<u64> = OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| {
+        std::env::var("ELEPHC_MEM_STATS_BODY_KIB").ok().and_then(|v| v.parse().ok()).unwrap_or(4096)
+    }) * 1024;
+    let footprint = footprint().map_or(0, |f| f.0).saturating_sub(mark.footprint);
+    let live = live_bytes().saturating_sub(mark.live) as u64;
+    if footprint >= limit || live >= limit {
+        eprintln!("[mem-body] footprint +{:>9} live +{:>9} {}", mib(footprint), mib(live), mark.name);
+    }
+}
+
 /// Formats an optional byte count for a report row.
 fn fmt_opt(bytes: Option<u64>) -> String {
     bytes.map(mib).unwrap_or_else(|| "n/a".to_string())
@@ -264,6 +305,11 @@ struct EirTally {
     spare_instruction_capacity: usize,
     spare_value_capacity: usize,
     max_function_bytes: (usize, String),
+    dense_dominator_bytes: u128,
+    max_blocks: (usize, String),
+    signature_clone: u64,
+    signature_count: usize,
+    other_decl_clone: u64,
 }
 
 impl EirTally {
@@ -317,6 +363,10 @@ impl EirTally {
             .map(|l| l.name.as_ref().map_or(0, String::capacity) + php_type_heap(&l.php_type))
             .sum::<usize>();
         self.blocks += function.blocks.len();
+        self.dense_dominator_bytes += (function.blocks.len() as u128).pow(2) / 8;
+        if function.blocks.len() > self.max_blocks.0 {
+            self.max_blocks = (function.blocks.len(), function.name.clone());
+        }
         self.block_inline += function.blocks.capacity() * std::mem::size_of::<crate::ir::BasicBlock>();
         self.block_heap += function
             .blocks
@@ -328,6 +378,13 @@ impl EirTally {
                     + b.terminator.as_ref().map_or(0, |t| t.used_values().len() * 4 + 16)
             })
             .sum::<usize>();
+        if let Some(bytes) = clone_bytes(&function.signature) {
+            self.signature_clone += bytes;
+            self.signature_count += usize::from(function.signature.is_some());
+        }
+        if let Some(bytes) = clone_bytes(&(&function.source_defaults, &function.attribute_names, &function.attribute_args, &function.callable_default, &function.generator_source)) {
+            self.other_decl_clone += bytes;
+        }
         let function_bytes = self.total() - before;
         if function_bytes > self.max_function_bytes.0 {
             self.max_function_bytes = (function_bytes, function.name.clone());
@@ -391,6 +448,19 @@ impl EirTally {
         line("block names, ids, terminators (heap)", self.block_heap, String::new());
         line("function headers (inline)", self.function_inline, String::new());
         line("function names, params, scopes (heap)", self.function_heap, String::new());
+        line(
+            "function signatures (clone-measured)",
+            self.signature_clone as usize,
+            format!("{} signatures", self.signature_count),
+        );
+        line("defaults/attributes/generator (clone)", self.other_decl_clone as usize, String::new());
+        eprintln!(
+            "[mem]   most blocks: {} in {}; per-block dominator bitsets would need {} for the whole module, {} for that body alone",
+            self.max_blocks.1,
+            self.max_blocks.0,
+            mib((self.dense_dominator_bytes.min(u64::MAX as u128)) as u64),
+            mib(((self.max_blocks.0 as u128).pow(2) / 8) as u64),
+        );
         eprintln!(
             "[mem]   largest function {} ({})",
             self.max_function_bytes.1,

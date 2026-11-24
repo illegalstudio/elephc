@@ -243,6 +243,7 @@ fn lower_on_compiler_stack(
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
+    crate::mem_stats::mark("lower: populate_metadata");
     lower_function_declarations(
         program,
         &mut module,
@@ -250,6 +251,7 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    crate::mem_stats::mark("lower: function declarations");
     // A completed source function's refusal is definitive. Avoid lowering the prelude's
     // class catalog when an unsupported native reference already rejects the program.
     if let Some(error) = super::diagnostics::take_first() {
@@ -262,7 +264,9 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    crate::mem_stats::mark("lower: class methods");
     lower_property_init_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
+    crate::mem_stats::mark("lower: property init thunks");
     function::lower_main(
         program,
         &mut module,
@@ -270,6 +274,7 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    crate::mem_stats::mark("lower: main");
     // Source bodies have finished their speculative lowering and rollback. A definitive
     // refusal cannot be repaired by the synthetic eval/reflection helpers below, so report
     // it before materializing the opaque-eval builtin catalog for a rejected program.
@@ -316,16 +321,19 @@ fn lower_on_compiler_stack(
     super::boxed_array_appends::normalize_module(&mut module);
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
+    crate::mem_stats::mark("lower: post passes (effect refinement)");
     reserve_eval_subclass_property_storage(&mut module);
     // A refused shape is reported before validation: the placeholder EIR those sites emit
     // keeps the module well formed, but the program must not reach codegen regardless.
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
-    validate_finished_module(
+    let validated = validate_finished_module(
         module,
         COLLECT_INVALID_BODIES.load(std::sync::atomic::Ordering::Relaxed),
-    )
+    );
+    crate::mem_stats::mark("lower: validated");
+    validated
 }
 
 /// Validates the finished module: every failing body when `collect` (a build that can hand

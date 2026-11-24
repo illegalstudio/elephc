@@ -2067,6 +2067,8 @@ fn lower_closure_function_with_signature(
 /// PHP function that triggers it. Costs one environment lookup per body otherwise.
 struct LoweringTiming {
     running: Option<(String, u128, std::time::Instant)>,
+    /// Footprint and live heap at the start of the body, when `ELEPHC_MEM_STATS` is on.
+    memory: Option<crate::mem_stats::BodyMark>,
 }
 
 impl LoweringTiming {
@@ -2075,12 +2077,15 @@ impl LoweringTiming {
         let running = std::env::var("ELEPHC_LOWER_TIMES").ok().map(|limit| {
             (name.to_string(), limit.parse().unwrap_or(1000), std::time::Instant::now())
         });
-        Self { running }
+        Self { running, memory: crate::mem_stats::body_start(name) }
     }
 }
 
 impl Drop for LoweringTiming {
     fn drop(&mut self) {
+        if let Some(mark) = self.memory.take() {
+            crate::mem_stats::body_end(mark);
+        }
         if let Some((name, limit, started)) = self.running.take() {
             let elapsed = started.elapsed().as_millis();
             if elapsed >= limit {
