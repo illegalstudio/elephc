@@ -124,6 +124,21 @@ pub struct ClosureOrigin {
     pub span: crate::span::Span,
 }
 
+/// Rebuilds `vec` with exact capacity when it carries noticeable spare room.
+///
+/// `Vec::shrink_to_fit` is not enough under mimalloc: its `realloc` keeps the block whenever the
+/// new size is at least half the old one, which is the usual case after doubling growth, so the
+/// spare capacity stays resident. Copying into an exact allocation hands the old block back.
+fn tighten<T>(vec: &mut Vec<T>) {
+    let spare = vec.capacity() - vec.len();
+    if spare == 0 || spare <= vec.len() / 8 {
+        return;
+    }
+    let mut exact = Vec::with_capacity(vec.len());
+    exact.append(vec);
+    *vec = exact;
+}
+
 impl Function {
     /// Returns the PHP source identity while keeping the physical entry symbol private.
     pub(crate) fn display_name(&self) -> &str {
@@ -165,13 +180,13 @@ impl Function {
     /// per instruction (1.2 GB) and a third of the value table (0.3 GB); content and ids are
     /// untouched, so the output is byte-identical.
     pub(crate) fn shrink_to_fit(&mut self) {
-        self.instructions.shrink_to_fit();
-        self.values.shrink_to_fit();
-        self.locals.shrink_to_fit();
-        self.blocks.shrink_to_fit();
+        tighten(&mut self.instructions);
+        tighten(&mut self.values);
+        tighten(&mut self.locals);
+        tighten(&mut self.blocks);
         for block in &mut self.blocks {
-            block.params.shrink_to_fit();
-            block.instructions.shrink_to_fit();
+            tighten(&mut block.params);
+            tighten(&mut block.instructions);
         }
     }
 
@@ -389,4 +404,36 @@ pub(crate) type ValueUseCounts = crate::fast_hash::FastMap<ValueId, usize>;
 std::thread_local! {
     /// Whole-body use countings (`Function::value_use_counts`) on this test thread.
     pub(crate) static VALUE_USE_COUNTINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod tighten_tests {
+    use super::*;
+
+    /// A vector with noticeable spare room is rebuilt exactly; one that is nearly full is left alone.
+    #[test]
+    fn tighten_releases_spare_capacity_only_when_it_is_noticeable() {
+        let mut roomy: Vec<u32> = Vec::with_capacity(1000);
+        roomy.extend(0..600);
+        tighten(&mut roomy);
+        assert_eq!(roomy.capacity(), roomy.len());
+        assert_eq!(roomy[599], 599);
+
+        let mut snug: Vec<u32> = Vec::with_capacity(104);
+        snug.extend(0..100);
+        let before = snug.as_ptr();
+        tighten(&mut snug);
+        assert_eq!(snug.as_ptr(), before, "a few spare slots are not worth a copy");
+    }
+
+    /// A finished function reports no spare capacity in its big tables after `shrink_to_fit`.
+    #[test]
+    fn shrink_to_fit_leaves_no_spare_capacity_in_the_function_tables() {
+        let mut function = Function::new("f".to_string(), IrType::Void, PhpType::Void);
+        function.instructions.reserve(4096);
+        function.values.reserve(4096);
+        function.shrink_to_fit();
+        assert_eq!(function.instructions.capacity(), 0);
+        assert_eq!(function.values.capacity(), 0);
+    }
 }
