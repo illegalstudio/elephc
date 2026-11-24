@@ -1541,25 +1541,24 @@ fn emit_runtime_magic_set_call(
     Ok(())
 }
 
-/// The classes of a write helper that resolve to one `__set` implementation, with the labels the
-/// class-id ladder jumps to.
+/// Classes with `__set` up to which the group dispatch compares class ids directly.
+const MAGIC_SET_DIRECT_COMPARE_MAX: usize = 4;
+
+/// The classes of a write helper that resolve to one `__set` implementation.
 struct MagicSetGroup {
     /// Entry of the shared guarded call.
     entry: String,
     /// Indexes into the arm list, in class-id order.
     members: Vec<usize>,
-    /// The label each member's ladder entry jumps to: the member's own existing-entry probe when
-    /// its class keeps a dynamic hash, the shared entry otherwise.
-    stubs: Vec<String>,
 }
 
 /// Groups the `__set` classes by the implementation they call.
 ///
 /// A class calls the `__set` its `method_impl_classes` names, whatever its own name, so two
-/// classes resolving to the same implementation need one guarded call between them. What stays
-/// per class is only what reads the class itself: the probe of its dynamic hash and the text of
-/// its creation notice or refusal. Without the grouping a program with hundreds of subclasses of
-/// one magic base emitted a whole guarded call sequence for each of them.
+/// classes resolving to the same implementation need one guarded call between them. Nothing is
+/// emitted per class: the class-id -> group table selects the group, and the class-specific parts
+/// (dynamic-hash offset, creation notice, refusal text) are read from the receiver's own
+/// `_class_dyn_hash_rows` row and class name at run time.
 fn plan_magic_set_groups(ctx: &mut FunctionContext<'_>, arms: &[RuntimeMagicSetArm]) -> Vec<MagicSetGroup> {
     let mut by_target: crate::fast_hash::FastMap<(String, String, Option<usize>, bool), usize> =
         crate::fast_hash::FastMap::default();
@@ -1575,26 +1574,324 @@ fn plan_magic_set_groups(ctx: &mut FunctionContext<'_>, arms: &[RuntimeMagicSetA
             groups.push(MagicSetGroup {
                 entry: ctx.next_label("mixed_dyn_prop_set_magic"),
                 members: Vec::new(),
-                stubs: Vec::new(),
             });
             groups.len() - 1
         });
-        let stub = if arm.hash_offset.is_some() {
-            ctx.next_label("mixed_dyn_prop_set_magic_probe")
-        } else {
-            groups[position].entry.clone()
-        };
         groups[position].members.push(index);
-        groups[position].stubs.push(stub);
     }
     groups
 }
 
-/// Emits the guarded `__set` call of one group once, with the class-specific tails around it.
+/// Emits the class-id -> group dispatch of the `__set` classes and falls to `none_label` for any
+/// other receiver class.
 ///
-/// Receiver at stack offset 16, runtime name at 0, a 32-byte staged frame, as in the inline arm
-/// this replaces: an existing dynamic entry is written before magic runs, an active receiver/name
-/// pair falls back to the dynamic hash (deprecation, then store) or the readonly refusal, and an
+/// The table is dense over class ids (`group index + 1`, 0 for a class without `__set`), lives in
+/// read-only data, and is bounds-checked, so a class id the module does not know (an eval or
+/// runtime class) takes `none_label` like any class without `__set`. The cost of a write no longer
+/// grows with the number of classes: one load, then one compare per distinct implementation.
+fn emit_magic_set_group_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    arms: &[RuntimeMagicSetArm],
+    groups: &[MagicSetGroup],
+    none_label: &str,
+) {
+    if arms.is_empty() {
+        abi::emit_jump(ctx.emitter, none_label);
+        return;
+    }
+    // A handful of classes is cheaper as direct compares than as a table walk.
+    if arms.len() <= MAGIC_SET_DIRECT_COMPARE_MAX {
+        for group in groups {
+            for member in &group.members {
+                emit_branch_if_stacked_object_class_matches(ctx, arms[*member].class_id, 16, &group.entry);
+            }
+        }
+        abi::emit_jump(ctx.emitter, none_label);
+        return;
+    }
+    let table_len = arms.iter().map(|arm| arm.class_id).max().map_or(0, |max| max as usize + 1);
+    let mut words = vec![0u64; table_len];
+    for (position, group) in groups.iter().enumerate() {
+        for member in &group.members {
+            words[arms[*member].class_id as usize] = position as u64 + 1;
+        }
+    }
+    let table = ctx.data.add_words(
+        words.into_iter().map(crate::codegen_support::data_section::DataWord::U64).collect(),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the receiver's runtime class id
+            abi::emit_load_int_immediate(ctx.emitter, "x11", table_len as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // ids beyond the table have no __set
+            ctx.emitter.instruction(&format!("b.hs {}", none_label));           // leave them to the dynamic-hash path
+            abi::emit_symbol_address(ctx.emitter, "x11", &table);
+            ctx.emitter.instruction("ldr x10, [x11, x10, lsl #3]");             // read the class's group number
+            ctx.emitter.instruction(&format!("cbz x10, {}", none_label));       // no __set: the dynamic-hash path answers
+            for (position, group) in groups.iter().enumerate() {
+                abi::emit_load_int_immediate(ctx.emitter, "x11", position as i64 + 1);
+                ctx.emitter.instruction("cmp x10, x11");                        // is this the group's implementation?
+                ctx.emitter.instruction(&format!("b.eq {}", group.entry));      // run its guarded call
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the receiver's runtime class id
+            abi::emit_load_int_immediate(ctx.emitter, "r9", table_len as i64);
+            ctx.emitter.instruction("cmp r10, r9");                             // ids beyond the table have no __set
+            ctx.emitter.instruction(&format!("jae {}", none_label));            // leave them to the dynamic-hash path
+            abi::emit_symbol_address(ctx.emitter, "r9", &table);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r10 * 8]");       // read the class's group number
+            ctx.emitter.instruction("test r10, r10");                           // does the class have __set?
+            ctx.emitter.instruction(&format!("jz {}", none_label));             // no: the dynamic-hash path answers
+            for (position, group) in groups.iter().enumerate() {
+                ctx.emitter.instruction(&format!("cmp r10, {}", position + 1)); // is this the group's implementation?
+                ctx.emitter.instruction(&format!("je {}", group.entry));        // run its guarded call
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, none_label);
+}
+
+/// Branches to `found_label` when the receiver's own dynamic hash already holds the stacked name.
+///
+/// Receiver at stack offset 16 and name at 0. A class without an addressable hash, or an id
+/// outside `_class_dyn_hash_rows`, falls through.
+fn emit_table_row_hash_probe(ctx: &mut FunctionContext<'_>, found_label: &str) {
+    let skip = ctx.next_label("magic_set_row_probe_skip");
+    let target = ctx.emitter.target;
+    match target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the receiver's runtime class id
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_count");
+            ctx.emitter.instruction("ldr x11, [x11]");                          // load the dense class table bound
+            ctx.emitter.instruction("cmp x10, x11");                            // ids outside the table have no row
+            ctx.emitter.instruction(&format!("b.hs {}", skip));                 // no row: nothing to probe
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_dyn_hash_rows");
+            ctx.emitter.instruction("add x11, x11, x10, lsl #4");               // address the class's 16-byte row
+            ctx.emitter.instruction("ldr x12, [x11]");                          // load the hash offset
+            ctx.emitter.instruction(&format!("cbz x12, {}", skip));             // no addressable hash: nothing to probe
+            ctx.emitter.instruction("ldr x0, [x9, x12]");                       // load the receiver's dynamic hash
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the receiver's runtime class id
+            ctx.emitter.instruction("cmp r10, QWORD PTR [rip + _class_name_count]"); // ids outside the table have no row
+            ctx.emitter.instruction(&format!("jae {}", skip));                  // no row: nothing to probe
+            ctx.emitter.instruction("lea r9, [rip + _class_dyn_hash_rows]");    // materialize the row table base
+            ctx.emitter.instruction("shl r10, 4");                              // scale the class id to its 16-byte row
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r10]");           // load the hash offset
+            ctx.emitter.instruction("test r10, r10");                           // does the class have an addressable hash?
+            ctx.emitter.instruction(&format!("jz {}", skip));                   // no: nothing to probe
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10]");          // load the receiver's dynamic hash
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 8);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    emit_branch_if_hash_entry_found(ctx, found_label);
+    ctx.emitter.label(&skip);
+}
+
+/// Loads the stacked runtime name into the diagnostic argument registers, cut at its first NUL.
+///
+/// php prints a name as a C string, so a creation notice stops at the first NUL byte.
+fn emit_nul_trimmed_name_args(ctx: &mut FunctionContext<'_>, name_offset: usize) {
+    let target = ctx.emitter.target;
+    let (name_ptr_reg, name_len_reg) = match target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_reg, name_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_reg, name_offset + 8);
+    let scan = ctx.next_label("dyn_prop_name_nul_scan");
+    let scanned = ctx.next_label("dyn_prop_name_nul_done");
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, #0");                              // count the name bytes before the first NUL
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp x9, x2");                              // reached the end of the name?
+            ctx.emitter.instruction(&format!("b.hs {scanned}"));                // the whole name is printable
+            ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load the next name byte
+            ctx.emitter.instruction(&format!("cbz w10, {scanned}"));            // a NUL ends the printed name
+            ctx.emitter.instruction("add x9, x9, #1");                          // keep the byte
+            ctx.emitter.instruction(&format!("b {scan}"));                      // scan the next byte
+            ctx.emitter.label(&scanned);
+            ctx.emitter.instruction("mov x2, x9");                              // the printed name length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor r10d, r10d");                          // count the name bytes before the first NUL
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp r10, rsi");                            // reached the end of the name?
+            ctx.emitter.instruction(&format!("jae {scanned}"));                 // the whole name is printable
+            ctx.emitter.instruction("cmp BYTE PTR [rdi + r10], 0");             // a NUL ends the printed name
+            ctx.emitter.instruction(&format!("je {scanned}"));                  // stop at the NUL
+            ctx.emitter.instruction("inc r10");                                 // keep the byte
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // scan the next byte
+            ctx.emitter.label(&scanned);
+            ctx.emitter.instruction("mov rsi, r10");                            // the printed name length
+        }
+    }
+}
+
+/// Writes the stacked runtime name into the receiver's own dynamic hash through its
+/// `_class_dyn_hash_rows` row: php's creation deprecation when the row flags the class and the name
+/// is new, then the store.
+///
+/// Receiver at stack offset 16, name at 0, one 32-byte frame (released here). A class without an
+/// addressable hash, or an id outside the table, jumps to `miss_label` with the frame still
+/// stacked.
+fn emit_table_runtime_dynamic_hash_write(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    miss_label: &str,
+    line: u32,
+) -> Result<()> {
+    let have_row = ctx.next_label("table_dyn_prop_row");
+    let skip_deprecation = ctx.next_label("table_dyn_prop_no_deprecation");
+    let target = ctx.emitter.target;
+    match target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the receiver's runtime class id
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_count");
+            ctx.emitter.instruction("ldr x11, [x11]");                          // load the dense class table bound
+            ctx.emitter.instruction("cmp x10, x11");                            // ids outside the table have no row
+            ctx.emitter.instruction(&format!("b.hs {}", miss_label));           // leave them to the miss path
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_dyn_hash_rows");
+            ctx.emitter.instruction("add x11, x11, x10, lsl #4");               // address the class's 16-byte row
+            ctx.emitter.instruction("ldp x12, x13, [x11]");                     // load the hash offset and the deprecation flag
+            ctx.emitter.instruction(&format!("cbnz x12, {}", have_row));        // a class with an addressable hash takes the write
+            ctx.emitter.instruction(&format!("b {}", miss_label));              // no hash: the miss path answers
+            ctx.emitter.label(&have_row);
+            ctx.emitter.instruction("stp x12, x13, [sp, #-16]!");               // keep the row across the helper calls
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the receiver's runtime class id
+            ctx.emitter.instruction("cmp r10, QWORD PTR [rip + _class_name_count]"); // ids outside the table have no row
+            ctx.emitter.instruction(&format!("jae {}", miss_label));            // leave them to the miss path
+            ctx.emitter.instruction("lea r11, [rip + _class_dyn_hash_rows]");   // materialize the row table base
+            ctx.emitter.instruction("shl r10, 4");                              // scale the class id to its 16-byte row
+            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + r10]");           // load the hash offset
+            ctx.emitter.instruction("test r9, r9");                             // does this class have an addressable hash?
+            ctx.emitter.instruction(&format!("jnz {}", have_row));              // a class with one takes the write
+            ctx.emitter.instruction(&format!("jmp {}", miss_label));            // no hash: the miss path answers
+            ctx.emitter.label(&have_row);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11 + r10 + 8]");      // load the deprecation flag
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the row across the helper calls
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r9");                 // row word 0: the hash offset
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");            // row word 1: the deprecation flag
+        }
+    }
+    // Stack: [sp] = hash offset, [sp + 8] = deprecation flag, [sp + 16] = name, [sp + 32] = receiver.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &skip_deprecation);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #32]");                       // reload the receiver
+            ctx.emitter.instruction("ldr x10, [sp]");                           // reload the hash offset
+            ctx.emitter.instruction("ldr x0, [x9, x10]");                       // load the receiver's dynamic hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 32]");           // reload the receiver
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the hash offset
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10]");          // load the receiver's dynamic hash
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 24);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    emit_branch_if_hash_entry_found(ctx, &skip_deprecation);
+    super::emit_property_warning_fragment(ctx, b"Deprecated: Creation of dynamic property ", false);
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 32);
+    super::super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, &result_reg, "object");
+    if target.arch == Arch::X86_64 {
+        let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+        ctx.emitter.instruction(&format!("mov rdi, {}", name_ptr));             // pass the class name to the diagnostic fragment
+        ctx.emitter.instruction(&format!("mov rsi, {}", name_len));             // pass its length
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    super::emit_property_warning_fragment(ctx, b"::$", false);
+    emit_nul_trimmed_name_args(ctx, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    super::emit_property_warning_fragment(ctx, b" is deprecated", false);
+    super::emit_property_warning_location(ctx, line);
+    super::emit_property_warning_fragment(ctx, b"\n", true);
+    ctx.emitter.label(&skip_deprecation);
+
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    super::named_property_writes::materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    // Stack: [sp] = boxed value, [sp + 16] = hash offset, [sp + 32] = name, [sp + 48] = receiver.
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #48]");                       // reload the receiver
+            ctx.emitter.instruction("ldr x10, [sp, #16]");                      // reload the hash offset
+            ctx.emitter.instruction("ldr x0, [x9, x10]");                       // load the receiver's dynamic hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 48]");           // reload the receiver
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the hash offset
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10]");          // load the receiver's dynamic hash
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 32);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 40);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 5),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    // The helper can reallocate, so the fresh table is stored back through the row's offset.
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #48]");                       // reload the receiver
+            ctx.emitter.instruction("ldr x10, [sp, #16]");                      // reload the hash offset
+            ctx.emitter.instruction("str x0, [x9, x10]");                       // publish the possibly-moved hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 48]");           // reload the receiver
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the hash offset
+            ctx.emitter.instruction("mov QWORD PTR [r11 + r10], rax");          // publish the possibly-moved hash
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16 + 16 + 32);
+    Ok(())
+}
+
+/// Refuses a dynamic property on a class without a hash to hold it: php's `Cannot create dynamic
+/// property Class::$name`, the class and the name read at run time (receiver at stack offset 16,
+/// name at 0, one 32-byte frame released here).
+fn emit_dynamic_creation_refusal(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    super::super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result_reg, "object");
+    super::super::runtime_class_messages::emit_concat_static_prefix(ctx, "Cannot create dynamic property ");
+    super::super::runtime_class_messages::emit_concat_static_suffix(ctx, "::$");
+    let (right_ptr, right_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, right_ptr, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, right_len, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    super::super::exceptions::emit_error_from_string_result(ctx);
+}
+
+/// Emits the guarded `__set` call of one group once.
+///
+/// Receiver at stack offset 16, runtime name at 0, a 32-byte staged frame. An entry the receiver's
+/// dynamic hash already holds is written before magic is considered (`write_label`); an active
+/// receiver/name pair falls back to the same write, which refuses when the class has no hash; an
 /// escaping Throwable unlinks the guard node before it resumes.
 fn emit_runtime_magic_set_group(
     ctx: &mut FunctionContext<'_>,
@@ -1604,27 +1901,11 @@ fn emit_runtime_magic_set_group(
     arms: &[RuntimeMagicSetArm],
     group: &MagicSetGroup,
     done_label: &str,
-    line: u32,
+    write_label: &str,
 ) -> Result<()> {
-    let recursive_label = ctx.next_label("runtime_magic_set_recursive");
     let caught_label = ctx.next_label("runtime_magic_set_caught");
-    let existing_labels = group
-        .members
-        .iter()
-        .map(|member| {
-            arms[*member].hash_offset.map(|_| ctx.next_label("runtime_magic_set_existing"))
-        })
-        .collect::<Vec<_>>();
-    // Per-class entry: write an entry the dynamic hash already holds before magic is considered.
-    for ((member, stub), existing) in group.members.iter().zip(&group.stubs).zip(&existing_labels) {
-        let (Some(hash_offset), Some(existing)) = (arms[*member].hash_offset, existing) else {
-            continue;
-        };
-        ctx.emitter.label(stub);
-        emit_branch_if_stacked_runtime_hash_contains(ctx, hash_offset, 16, 0, existing);
-        abi::emit_jump(ctx.emitter, &group.entry);
-    }
     ctx.emitter.label(&group.entry);
+    emit_table_row_hash_probe(ctx, write_label);
     let target = &arms[group.members[0]].target;
     abi::emit_reserve_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
     let guarded_receiver_offset = 16 + MAGIC_SET_GUARD_FRAME_BYTES;
@@ -1634,6 +1915,7 @@ fn emit_runtime_magic_set_group(
         MAGIC_SET_GUARD_FRAME_BYTES,
         MAGIC_SET_GUARD_NODE_OFFSET,
     );
+    let recursive_label = ctx.next_label("runtime_magic_set_recursive");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &recursive_label);
     emit_magic_set_exception_handler(ctx, &caught_label);
     emit_runtime_magic_set_method_call(
@@ -1656,40 +1938,9 @@ fn emit_runtime_magic_set_group(
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES + 32);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
-    // The pair is already inside `__set`: the name goes to the dynamic hash of the receiver's own
-    // class, which only the receiver's class id tells apart.
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
-    let tails = group
-        .members
-        .iter()
-        .map(|_| ctx.next_label("runtime_magic_set_class_tail"))
-        .collect::<Vec<_>>();
-    let last = group.members.len() - 1;
-    for (position, member) in group.members.iter().enumerate() {
-        if position != last {
-            emit_branch_if_stacked_object_class_matches(ctx, arms[*member].class_id, 16, &tails[position]);
-        }
-    }
-    for (position, member) in group.members.iter().enumerate() {
-        let arm = &arms[*member];
-        ctx.emitter.label(&tails[position]);
-        if let Some(hash_offset) = arm.hash_offset {
-            emit_dynamic_property_creation_deprecation(ctx, &arm.class_name, hash_offset, 16, 0, line)?;
-            lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
-            abi::emit_jump(ctx.emitter, done_label);
-        } else {
-            emit_readonly_runtime_dynamic_property_error(ctx, &arm.class_name, 0, 32);
-        }
-    }
-    for (member, existing) in group.members.iter().zip(&existing_labels) {
-        let (Some(hash_offset), Some(existing)) = (arms[*member].hash_offset, existing) else {
-            continue;
-        };
-        ctx.emitter.label(existing);
-        lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
-        abi::emit_jump(ctx.emitter, done_label);
-    }
+    abi::emit_jump(ctx.emitter, write_label);
     Ok(())
 }
 
@@ -1932,17 +2183,13 @@ pub(super) fn lower_runtime_mixed_prop_set(
     // A runtime name a class does not DECLARE still belongs in that class's own per-instance
     // hash. The declared (class, name) probes above run first, so a name the class declares keeps
     // its declared answer, and only the rest reach this per-CLASS arm.
-    let hash_arms = if delegate.is_some() || use_tail_call { Vec::new() } else { mixed_class_hash_arms(ctx, "", &[])? };
-    let hash_labels = hash_arms
-        .iter()
-        .map(|arm| {
-            ctx.next_label(&format!(
-                "mixed_dyn_prop_set_hash_{}",
-                label_fragment(&arm.class_name)
-            ))
-        })
-        .collect::<Vec<_>>();
-    let magic_arms = if delegate.is_some() || use_tail_call { Vec::new() } else { runtime_magic_set_arms(ctx)? };
+    // The classes holding the name in a per-instance hash and the classes with a `__set` method
+    // are answered from class-id tables, so nothing here is emitted per class.
+    let table_mode = delegate.is_none() && !use_tail_call;
+    let hash_block_label = ctx.next_label("mixed_dyn_prop_set_hash_table");
+    let magic_write_label = ctx.next_label("mixed_dyn_prop_set_magic_write");
+    let magic_refuse_label = ctx.next_label("mixed_dyn_prop_set_magic_refuse");
+    let magic_arms = if table_mode { runtime_magic_set_arms(ctx)? } else { Vec::new() };
     let magic_groups = plan_magic_set_groups(ctx, &magic_arms);
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
@@ -2003,18 +2250,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
         emit_branch_if_mixed_dynamic_property_group_matches(ctx, group, target);
     }
     ctx.emitter.label(&no_match_label);
-    for group in &magic_groups {
-        for (member, label) in group.members.iter().zip(&group.stubs) {
-            emit_branch_if_stacked_object_class_matches(ctx, magic_arms[*member].class_id, 16, label);
-        }
-    }
-    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
-        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
-    }
     if delegate.is_none() && !in_tail {
         emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    if table_mode {
+        emit_magic_set_group_dispatch(ctx, &magic_arms, &magic_groups, &hash_block_label);
+    } else {
+        abi::emit_jump(ctx.emitter, &miss_label);
+    }
 
     for group in &magic_groups {
         emit_runtime_magic_set_group(
@@ -2025,24 +2268,20 @@ pub(super) fn lower_runtime_mixed_prop_set(
             &magic_arms,
             group,
             &done_label,
-            inst.span.map_or(0, |span| span.line),
+            &magic_write_label,
         )?;
     }
-
-    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
-        ctx.emitter.label(label);
-        // The arm matched this runtime class, so the offset and the class php names in its
-        // creation notice are both its own. The store helper takes the runtime key from the
-        // stacked block and releases that block itself.
-        emit_dynamic_property_creation_deprecation(
-            ctx,
-            &arm.class_name,
-            arm.hash_offset,
-            16,
-            0,
-            inst.span.map_or(0, |span| span.line),
-        )?;
-        lower_runtime_allow_dynamic_prop_set(ctx, value, arm.hash_offset, 16, 0, 32)?;
+    if table_mode {
+        let line = inst.span.map_or(0, |span| span.line);
+        if !magic_groups.is_empty() {
+            ctx.emitter.label(&magic_write_label);
+            emit_table_runtime_dynamic_hash_write(ctx, value, &magic_refuse_label, line)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&magic_refuse_label);
+            emit_dynamic_creation_refusal(ctx);
+        }
+        ctx.emitter.label(&hash_block_label);
+        emit_table_runtime_dynamic_hash_write(ctx, value, &miss_label, line)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

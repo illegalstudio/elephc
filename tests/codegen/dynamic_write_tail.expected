@@ -1,0 +1,226 @@
+Mg "declared" 5: [] 2
+Mg "declared" "str": [] 2
+Mg "declared" [1]: [] 2
+Mg "declared" null: [] 2
+Mg "a" 5: ["set:a"] 2
+Mg "a" "str": ["set:a"] 2
+Mg "a" [1]: ["set:a"] 2
+Mg "a" null: ["set:a"] 2
+Mg "chain" 5: ["set:chain","set:other"] 2
+Mg "chain" "str": ["set:chain","set:other"] 2
+Mg "chain" [1]: ["set:chain","set:other"] 2
+Mg "chain" null: ["set:chain","set:other"] 2
+Mg "same" 5: ERR[8192] "Creation of dynamic property Mg::$same is deprecated" @2
+["set:same"] 3
+Mg "same" "str": ERR[8192] "Creation of dynamic property Mg::$same is deprecated" @2
+["set:same"] 3
+Mg "same" [1]: ERR[8192] "Creation of dynamic property Mg::$same is deprecated" @2
+["set:same"] 3
+Mg "same" null: ERR[8192] "Creation of dynamic property Mg::$same is deprecated" @2
+["set:same"] 3
+Mg "new" 5: ["set:new"] 2
+Mg "new" "str": ["set:new"] 2
+Mg "new" [1]: ["set:new"] 2
+Mg "new" null: ["set:new"] 2
+Mg "0" 5: ["set:0"] 2
+Mg "0" "str": ["set:0"] 2
+Mg "0" [1]: ["set:0"] 2
+Mg "0" null: ["set:0"] 2
+Mg "typed" 5: ["set:typed"] 2
+Mg "typed" "str": ["set:typed"] 2
+Mg "typed" [1]: ["set:typed"] 2
+Mg "typed" null: ["set:typed"] 2
+Mg "prot" 5: ["set:prot"] 2
+Mg "prot" "str": ["set:prot"] 2
+Mg "prot" [1]: ["set:prot"] 2
+Mg "prot" null: ["set:prot"] 2
+Mg "boom" 5: RuntimeException: boom @2
+["set:boom"] 2
+Mg "boom" "str": RuntimeException: boom @2
+["set:boom"] 2
+Mg "boom" [1]: RuntimeException: boom @2
+["set:boom"] 2
+Mg "boom" null: RuntimeException: boom @2
+["set:boom"] 2
+Mg "x\u0000y" 5: ["set:x\u0000y"] 2
+Mg "x\u0000y" "str": ["set:x\u0000y"] 2
+Mg "x\u0000y" [1]: ["set:x\u0000y"] 2
+Mg "x\u0000y" null: ["set:x\u0000y"] 2
+Mg 2 ["set:fresh","set:chain","set:other"]
+MgChild "declared" 5: [] 2
+MgChild "declared" "str": [] 2
+MgChild "declared" [1]: [] 2
+MgChild "declared" null: [] 2
+MgChild "a" 5: ["set:a"] 2
+MgChild "a" "str": ["set:a"] 2
+MgChild "a" [1]: ["set:a"] 2
+MgChild "a" null: ["set:a"] 2
+MgChild "chain" 5: ["set:chain","set:other"] 2
+MgChild "chain" "str": ["set:chain","set:other"] 2
+MgChild "chain" [1]: ["set:chain","set:other"] 2
+MgChild "chain" null: ["set:chain","set:other"] 2
+MgChild "same" 5: ERR[8192] "Creation of dynamic property MgChild::$same is deprecated" @2
+["set:same"] 3
+MgChild "same" "str": ERR[8192] "Creation of dynamic property MgChild::$same is deprecated" @2
+["set:same"] 3
+MgChild "same" [1]: ERR[8192] "Creation of dynamic property MgChild::$same is deprecated" @2
+["set:same"] 3
+MgChild "same" null: ERR[8192] "Creation of dynamic property MgChild::$same is deprecated" @2
+["set:same"] 3
+MgChild "new" 5: ["set:new"] 2
+MgChild "new" "str": ["set:new"] 2
+MgChild "new" [1]: ["set:new"] 2
+MgChild "new" null: ["set:new"] 2
+MgChild "0" 5: ["set:0"] 2
+MgChild "0" "str": ["set:0"] 2
+MgChild "0" [1]: ["set:0"] 2
+MgChild "0" null: ["set:0"] 2
+MgChild "typed" 5: ["set:typed"] 2
+MgChild "typed" "str": ["set:typed"] 2
+MgChild "typed" [1]: ["set:typed"] 2
+MgChild "typed" null: ["set:typed"] 2
+MgChild "prot" 5: ["set:prot"] 2
+MgChild "prot" "str": ["set:prot"] 2
+MgChild "prot" [1]: ["set:prot"] 2
+MgChild "prot" null: ["set:prot"] 2
+MgChild "boom" 5: RuntimeException: boom @2
+["set:boom"] 2
+MgChild "boom" "str": RuntimeException: boom @2
+["set:boom"] 2
+MgChild "boom" [1]: RuntimeException: boom @2
+["set:boom"] 2
+MgChild "boom" null: RuntimeException: boom @2
+["set:boom"] 2
+MgChild "x\u0000y" 5: ["set:x\u0000y"] 2
+MgChild "x\u0000y" "str": ["set:x\u0000y"] 2
+MgChild "x\u0000y" [1]: ["set:x\u0000y"] 2
+MgChild "x\u0000y" null: ["set:x\u0000y"] 2
+MgChild 2 ["set:fresh","set:chain","set:other"]
+Pl "declared" 5:  4
+Pl "declared" "str":  4
+Pl "declared" [1]:  4
+Pl "declared" null:  4
+Pl "a" 5:  3
+Pl "a" "str":  3
+Pl "a" [1]:  3
+Pl "a" null:  3
+Pl "chain" 5:  4
+Pl "chain" "str":  4
+Pl "chain" [1]:  4
+Pl "chain" null:  4
+Pl "same" 5:  4
+Pl "same" "str":  4
+Pl "same" [1]:  4
+Pl "same" null:  4
+Pl "new" 5:  4
+Pl "new" "str":  4
+Pl "new" [1]:  4
+Pl "new" null:  4
+Pl "0" 5:  4
+Pl "0" "str":  4
+Pl "0" [1]:  4
+Pl "0" null:  4
+Pl "typed" 5:  3
+Pl "typed" "str": TypeError: Cannot assign string to property Pl::$typed of type int @7
+ 3
+Pl "typed" [1]: TypeError: Cannot assign array to property Pl::$typed of type int @7
+ 3
+Pl "typed" null: TypeError: Cannot assign null to property Pl::$typed of type int @7
+ 3
+Pl "prot" 5: Error: Cannot access protected property Pl::$prot @7
+ 3
+Pl "prot" "str": Error: Cannot access protected property Pl::$prot @7
+ 3
+Pl "prot" [1]: Error: Cannot access protected property Pl::$prot @7
+ 3
+Pl "prot" null: Error: Cannot access protected property Pl::$prot @7
+ 3
+Pl "boom" 5:  4
+Pl "boom" "str":  4
+Pl "boom" [1]:  4
+Pl "boom" null:  4
+Pl "x\u0000y" 5:  4
+Pl "x\u0000y" "str":  4
+Pl "x\u0000y" [1]:  4
+Pl "x\u0000y" null:  4
+Pl 5
+Strict "declared" 5: ERR[8192] "Creation of dynamic property Strict::$declared is deprecated" @7
+ 2
+Strict "declared" "str": ERR[8192] "Creation of dynamic property Strict::$declared is deprecated" @7
+ 2
+Strict "declared" [1]: ERR[8192] "Creation of dynamic property Strict::$declared is deprecated" @7
+ 2
+Strict "declared" null: ERR[8192] "Creation of dynamic property Strict::$declared is deprecated" @7
+ 2
+Strict "a" 5:  1
+Strict "a" "str":  1
+Strict "a" [1]:  1
+Strict "a" null:  1
+Strict "chain" 5: ERR[8192] "Creation of dynamic property Strict::$chain is deprecated" @7
+ 2
+Strict "chain" "str": ERR[8192] "Creation of dynamic property Strict::$chain is deprecated" @7
+ 2
+Strict "chain" [1]: ERR[8192] "Creation of dynamic property Strict::$chain is deprecated" @7
+ 2
+Strict "chain" null: ERR[8192] "Creation of dynamic property Strict::$chain is deprecated" @7
+ 2
+Strict "same" 5: ERR[8192] "Creation of dynamic property Strict::$same is deprecated" @7
+ 2
+Strict "same" "str": ERR[8192] "Creation of dynamic property Strict::$same is deprecated" @7
+ 2
+Strict "same" [1]: ERR[8192] "Creation of dynamic property Strict::$same is deprecated" @7
+ 2
+Strict "same" null: ERR[8192] "Creation of dynamic property Strict::$same is deprecated" @7
+ 2
+Strict "new" 5: ERR[8192] "Creation of dynamic property Strict::$new is deprecated" @7
+ 2
+Strict "new" "str": ERR[8192] "Creation of dynamic property Strict::$new is deprecated" @7
+ 2
+Strict "new" [1]: ERR[8192] "Creation of dynamic property Strict::$new is deprecated" @7
+ 2
+Strict "new" null: ERR[8192] "Creation of dynamic property Strict::$new is deprecated" @7
+ 2
+Strict "0" 5: ERR[8192] "Creation of dynamic property Strict::$0 is deprecated" @7
+ 2
+Strict "0" "str": ERR[8192] "Creation of dynamic property Strict::$0 is deprecated" @7
+ 2
+Strict "0" [1]: ERR[8192] "Creation of dynamic property Strict::$0 is deprecated" @7
+ 2
+Strict "0" null: ERR[8192] "Creation of dynamic property Strict::$0 is deprecated" @7
+ 2
+Strict "typed" 5: ERR[8192] "Creation of dynamic property Strict::$typed is deprecated" @7
+ 2
+Strict "typed" "str": ERR[8192] "Creation of dynamic property Strict::$typed is deprecated" @7
+ 2
+Strict "typed" [1]: ERR[8192] "Creation of dynamic property Strict::$typed is deprecated" @7
+ 2
+Strict "typed" null: ERR[8192] "Creation of dynamic property Strict::$typed is deprecated" @7
+ 2
+Strict "prot" 5: ERR[8192] "Creation of dynamic property Strict::$prot is deprecated" @7
+ 2
+Strict "prot" "str": ERR[8192] "Creation of dynamic property Strict::$prot is deprecated" @7
+ 2
+Strict "prot" [1]: ERR[8192] "Creation of dynamic property Strict::$prot is deprecated" @7
+ 2
+Strict "prot" null: ERR[8192] "Creation of dynamic property Strict::$prot is deprecated" @7
+ 2
+Strict "boom" 5: ERR[8192] "Creation of dynamic property Strict::$boom is deprecated" @7
+ 2
+Strict "boom" "str": ERR[8192] "Creation of dynamic property Strict::$boom is deprecated" @7
+ 2
+Strict "boom" [1]: ERR[8192] "Creation of dynamic property Strict::$boom is deprecated" @7
+ 2
+Strict "boom" null: ERR[8192] "Creation of dynamic property Strict::$boom is deprecated" @7
+ 2
+Strict "x\u0000y" 5: ERR[8192] "Creation of dynamic property Strict::$x is deprecated" @7
+ 2
+Strict "x\u0000y" "str": ERR[8192] "Creation of dynamic property Strict::$x is deprecated" @7
+ 2
+Strict "x\u0000y" [1]: ERR[8192] "Creation of dynamic property Strict::$x is deprecated" @7
+ 2
+Strict "x\u0000y" null: ERR[8192] "Creation of dynamic property Strict::$x is deprecated" @7
+ 2
+ERR[8192] "Creation of dynamic property Strict::$fresh is deprecated" @8
+ERR[8192] "Creation of dynamic property Strict::$chain is deprecated" @8
+Strict 3
+done

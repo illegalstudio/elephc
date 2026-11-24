@@ -156,6 +156,7 @@ mod outlined_dynamic_properties;
 mod object_property_review;
 mod outlined_method_calls;
 mod deepclone_shapes;
+mod dynamic_write_tail;
 mod destructors;
 mod destructor_unwind_calls;
 mod review_classes_closures;

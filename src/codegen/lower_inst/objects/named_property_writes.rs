@@ -1008,6 +1008,35 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
     };
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_reg, name_offset);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_reg, name_offset + 8);
+    // php prints the name as a C string: the notice stops at the first NUL of a runtime name.
+    let scan = ctx.next_label("dyn_prop_name_nul_scan");
+    let scanned = ctx.next_label("dyn_prop_name_nul_done");
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, #0");                              // count the name bytes before the first NUL
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp x9, x2");                              // reached the end of the name?
+            ctx.emitter.instruction(&format!("b.hs {scanned}"));                // the whole name is printable
+            ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load the next name byte
+            ctx.emitter.instruction(&format!("cbz w10, {scanned}"));            // a NUL ends the printed name
+            ctx.emitter.instruction("add x9, x9, #1");                          // keep the byte
+            ctx.emitter.instruction(&format!("b {scan}"));                      // scan the next byte
+            ctx.emitter.label(&scanned);
+            ctx.emitter.instruction("mov x2, x9");                              // the printed name length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor r10d, r10d");                          // count the name bytes before the first NUL
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp r10, rsi");                            // reached the end of the name?
+            ctx.emitter.instruction(&format!("jae {scanned}"));                 // the whole name is printable
+            ctx.emitter.instruction("cmp BYTE PTR [rdi + r10], 0");             // a NUL ends the printed name
+            ctx.emitter.instruction(&format!("je {scanned}"));                  // stop at the NUL
+            ctx.emitter.instruction("inc r10");                                 // keep the byte
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // scan the next byte
+            ctx.emitter.label(&scanned);
+            ctx.emitter.instruction("mov rsi, r10");                            // the printed name length
+        }
+    }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
     emit_property_warning_fragment(ctx, b" is deprecated", false);
     emit_property_warning_location(ctx, line);
