@@ -69,10 +69,13 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x11, x9, lsl #3]");                           // load the scalar or pointer payload for this numeric key
     emitter.instruction("str x3, [sp, #48]");                                   // save the copied low payload word across optional retain calls
     emitter.instruction("str x12, [sp, #64]");                                  // save the runtime value tag for hash insertion
+    emitter.instruction("cmp x12, #10");                                        // callable descriptors own heap storage outside the 4..7 tag range
+    emitter.instruction("b.eq __rt_array_hash_union_left_retain");              // retain the descriptor for the result hash owner
     emitter.instruction("cmp x12, #4");                                         // is the left payload in the refcounted range?
     emitter.instruction("b.lo __rt_array_hash_union_left_scalar");              // scalar payloads can be copied directly
     emitter.instruction("cmp x12, #7");                                         // is the left payload still a supported refcounted value?
     emitter.instruction("b.hi __rt_array_hash_union_left_scalar");              // unknown high tags fall back to scalar copying
+    emitter.label("__rt_array_hash_union_left_retain");
     emitter.instruction("mov x0, x3");                                          // move the borrowed left heap payload into the retain helper
     emitter.instruction("bl __rt_incref");                                      // retain the left heap payload for the result hash owner
     emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained payload low word
@@ -131,10 +134,13 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #104]");                                  // reload the right value runtime tag
     emitter.instruction("cmp x5, #1");                                          // is the right value a string payload?
     emitter.instruction("b.eq __rt_array_hash_union_right_string");             // strings must be persisted for the result hash owner
+    emitter.instruction("cmp x5, #10");                                         // callable descriptors own heap storage outside the 4..7 tag range
+    emitter.instruction("b.eq __rt_array_hash_union_right_retain");             // retain the descriptor for the result hash owner
     emitter.instruction("cmp x5, #4");                                          // is the right value in the refcounted payload range?
     emitter.instruction("b.lo __rt_array_hash_union_right_scalar");             // scalar payloads can be copied directly
     emitter.instruction("cmp x5, #7");                                          // is the right value still a supported refcounted value?
     emitter.instruction("b.hi __rt_array_hash_union_right_scalar");             // unknown high tags fall back to scalar copying
+    emitter.label("__rt_array_hash_union_right_retain");
     emitter.instruction("ldr x0, [sp, #88]");                                   // load the borrowed right heap payload
     emitter.instruction("bl __rt_incref");                                      // retain the right heap payload for the result hash owner
     emitter.instruction("ldr x3, [sp, #88]");                                   // reload the retained right value low word
@@ -213,10 +219,13 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax + 24 + r10 * 8]");             // load the scalar or pointer payload for this numeric key
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the copied low payload word across optional retain calls
+    emitter.instruction("cmp r11, 10");                                         // callable descriptors own heap storage outside the 4..7 tag range
+    emitter.instruction("je __rt_array_hash_union_x86_left_retain");            // retain the descriptor for the result hash owner
     emitter.instruction("cmp r11, 4");                                          // is the left payload in the refcounted range?
     emitter.instruction("jb __rt_array_hash_union_x86_left_scalar");            // scalar payloads can be copied directly
     emitter.instruction("cmp r11, 7");                                          // is the left payload still a supported refcounted value?
     emitter.instruction("ja __rt_array_hash_union_x86_left_scalar");            // unknown high tags fall back to scalar copying
+    emitter.label("__rt_array_hash_union_x86_left_retain");
     emitter.instruction("mov rax, rcx");                                        // move the borrowed left heap payload into the retain helper
     emitter.instruction("call __rt_incref");                                    // retain the left heap payload for the result hash owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained payload low word
@@ -275,10 +284,13 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 104]");                      // reload the right value runtime tag
     emitter.instruction("cmp r10, 1");                                          // is the right value a string payload?
     emitter.instruction("je __rt_array_hash_union_x86_right_string");           // strings must be persisted for the result hash owner
+    emitter.instruction("cmp r10, 10");                                         // callable descriptors own heap storage outside the 4..7 tag range
+    emitter.instruction("je __rt_array_hash_union_x86_right_retain");           // retain the descriptor for the result hash owner
     emitter.instruction("cmp r10, 4");                                          // is the right value in the refcounted payload range?
     emitter.instruction("jb __rt_array_hash_union_x86_right_scalar");           // scalar payloads can be copied directly
     emitter.instruction("cmp r10, 7");                                          // is the right value still a supported refcounted value?
     emitter.instruction("ja __rt_array_hash_union_x86_right_scalar");           // unknown high tags fall back to scalar copying
+    emitter.label("__rt_array_hash_union_x86_right_retain");
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // load the borrowed right heap payload
     emitter.instruction("call __rt_incref");                                    // retain the right heap payload for the result hash owner
     emitter.instruction("mov rcx, QWORD PTR [rbp - 88]");                       // reload the retained right value low word
