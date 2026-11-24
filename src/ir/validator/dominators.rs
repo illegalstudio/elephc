@@ -5,49 +5,109 @@
 //! - The validator's existing fixed-point dominator computation and use checks.
 //!
 //! Key details:
-//! - Dense block IDs index the original bitsets without expanding them into hash tables.
+//! - Dominance is an ancestor query on the dominator tree (Euler-tour numbers), so memory is linear
+//!   in the block count instead of quadratic.
 //! - Singleton queries preserve the validator's unreachable-block convention.
 
 use crate::ir::BlockId;
 
-/// Computed dominators with constant-time membership and singleton-self queries.
+/// Marks a block outside the dominator tree (unreachable from the entry).
+const UNREACHED: u32 = u32::MAX;
+
+/// Computed dominators answered from the dominator tree in constant time.
+///
+/// The tree is stored as Euler-tour entry/exit numbers (one `u32` pair per block), so memory is
+/// linear in the block count. The former per-block bitsets were `blocks * blocks / 8` bytes: a
+/// body of 200k blocks needed 5 GB for its dominator rows alone.
 pub(super) struct DominatorSets {
-    bits: Vec<Vec<u64>>,
-    singleton_self: Vec<bool>,
+    enter: Vec<u32>,
+    exit: Vec<u32>,
+    entry: usize,
     /// Fixed-point sweeps, retained only for deterministic scheduling regressions.
     #[cfg(test)]
     pub(super) sweeps: usize,
 }
 
 impl DominatorSets {
-    /// Keeps the computed bits and caches whether each row contains exactly its own block.
-    pub(super) fn new(bits: Vec<Vec<u64>>) -> Self {
-        let singleton_self = bits.iter().enumerate().map(|(block, words)| {
-            words.iter().enumerate().all(|(index, &word)| {
-                let expected = if index == block / 64 { 1_u64 << (block % 64) } else { 0 };
-                word == expected
-            }) && words.get(block / 64).is_some()
-        }).collect();
+    /// Builds the queries from immediate dominators: `idom[b]` is the parent of reachable block
+    /// `b` in the dominator tree (`idom[entry] == entry`), and `u32::MAX` for an unreachable one.
+    pub(super) fn from_idoms(idom: &[u32], entry: usize) -> Self {
+        let count = idom.len();
+        // Children in compressed-row form, so no per-block `Vec` is allocated.
+        let mut first_child = vec![0u32; count + 1];
+        for (block, &parent) in idom.iter().enumerate() {
+            if parent != UNREACHED && block != entry {
+                first_child[parent as usize + 1] += 1;
+            }
+        }
+        for index in 0..count {
+            first_child[index + 1] += first_child[index];
+        }
+        let mut fill = first_child.clone();
+        let mut children = vec![0u32; first_child[count] as usize];
+        for (block, &parent) in idom.iter().enumerate() {
+            if parent != UNREACHED && block != entry {
+                children[fill[parent as usize] as usize] = block as u32;
+                fill[parent as usize] += 1;
+            }
+        }
+        let mut enter = vec![UNREACHED; count];
+        let mut exit = vec![UNREACHED; count];
+        let mut clock = 0u32;
+        if entry < count && idom[entry] != UNREACHED {
+            let mut stack = vec![(entry as u32, first_child[entry])];
+            enter[entry] = clock;
+            clock += 1;
+            while let Some((block, next)) = stack.last_mut() {
+                let block = *block as usize;
+                if *next < first_child[block + 1] {
+                    let child = children[*next as usize];
+                    *next += 1;
+                    enter[child as usize] = clock;
+                    clock += 1;
+                    stack.push((child, first_child[child as usize]));
+                } else {
+                    exit[block] = clock;
+                    clock += 1;
+                    stack.pop();
+                }
+            }
+        }
         Self {
-            bits,
-            singleton_self,
+            enter,
+            exit,
+            entry,
             #[cfg(test)]
             sweeps: 0,
         }
     }
 
-    /// Answers false for either unknown block, matching the previous block-map lookup.
+    /// Answers false for either unknown block; an unreachable block is dominated only by itself.
     pub(super) fn dominates(&self, definition: BlockId, used_in: BlockId) -> bool {
         let definition = definition.as_raw() as usize;
-        if definition >= self.bits.len() { return false; }
-        self.bits.get(used_in.as_raw() as usize)
-            .and_then(|words| words.get(definition / 64))
-            .is_some_and(|word| word & (1_u64 << (definition % 64)) != 0)
+        let used_in = used_in.as_raw() as usize;
+        if definition >= self.enter.len() || used_in >= self.enter.len() {
+            return false;
+        }
+        if self.enter[used_in] == UNREACHED {
+            return definition == used_in;
+        }
+        if self.enter[definition] == UNREACHED {
+            return false;
+        }
+        self.enter[definition] <= self.enter[used_in] && self.exit[used_in] <= self.exit[definition]
     }
 
-    /// Preserves the exact singleton-self rule, including the separately handled entry block.
+    /// Whether the block's dominator set is exactly itself: the entry and every unreachable block.
     pub(super) fn is_singleton(&self, block: BlockId) -> bool {
-        self.singleton_self.get(block.as_raw() as usize).copied().unwrap_or(false)
+        let block = block.as_raw() as usize;
+        block < self.enter.len() && (block == self.entry || self.enter[block] == UNREACHED)
+    }
+
+    /// Number of blocks the tree covers (for the linear-size regression).
+    #[cfg(test)]
+    pub(super) fn tree_words(&self) -> usize {
+        self.enter.len() + self.exit.len()
     }
 
     /// Records how many fixed-point sweeps computed these sets.

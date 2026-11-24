@@ -2203,6 +2203,7 @@ fn definition_dominates_use(
 /// to `{self}`. Validation skips cross-block dominance for their uses while
 /// still rejecting same-block use-before-definition.
 fn compute_dominators(function: &Function) -> DominatorSets {
+    const NONE: u32 = u32::MAX;
     let predecessors = compute_predecessors(function);
     let reverse_postorder = reachable_reverse_postorder(function, &predecessors);
     let reachable: HashSet<BlockId> = reverse_postorder
@@ -2210,52 +2211,50 @@ fn compute_dominators(function: &Function) -> DominatorSets {
         .map(|index| BlockId::from_raw(*index as u32))
         .collect();
     let block_count = function.blocks.len();
-    let all_blocks = full_block_bitset(block_count);
     let entry_index = function.entry.as_raw() as usize;
-    let mut dominators: Vec<Vec<u64>> = function
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| {
-            if index == entry_index || !reachable.contains(&block.id) {
-                let mut singleton = empty_block_bitset(block_count);
-                set_block_bit(&mut singleton, index);
-                singleton
-            } else {
-                all_blocks.clone()
-            }
-        })
-        .collect();
     let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
-
-    #[cfg(test)]
-    let mut sweeps = 0;
+    let mut rpo_number = vec![NONE; block_count];
+    for (number, &block) in reverse_postorder.iter().enumerate() {
+        rpo_number[block] = number as u32;
+    }
+    // Cooper-Harvey-Kennedy: immediate dominators by intersecting the processed predecessors'
+    // dominator chains, in reverse postorder so a reducible graph settles in one sweep.
+    let mut idom = vec![NONE; block_count];
+    idom[entry_index] = entry_index as u32;
+    let mut sweeps = 0usize;
     let mut changed = true;
     while changed {
-        #[cfg(test)]
-        {
-            sweeps += 1;
-        }
+        sweeps += 1;
         changed = false;
-        // Block ids need not follow control flow. Visiting them numerically required one full
-        // sweep per backward-numbered edge on a linear CFG; RPO propagates that chain at once.
-        for &block_index in reverse_postorder.iter().skip(1) {
-            let predecessors = &predecessor_indices[block_index];
-            let mut next = predecessors
-                .first()
-                .map(|index| dominators[*index].clone())
-                .unwrap_or_else(|| empty_block_bitset(block_count));
-            for pred_index in predecessors.iter().skip(1) {
-                bitset_and_assign(&mut next, &dominators[*pred_index]);
+        for &block in reverse_postorder.iter().skip(1) {
+            let mut candidate = NONE;
+            for &pred in &predecessor_indices[block] {
+                if idom[pred] == NONE {
+                    continue;
+                }
+                candidate = if candidate == NONE {
+                    pred as u32
+                } else {
+                    let (mut left, mut right) = (pred as u32, candidate);
+                    while left != right {
+                        while rpo_number[left as usize] > rpo_number[right as usize] {
+                            left = idom[left as usize];
+                        }
+                        while rpo_number[right as usize] > rpo_number[left as usize] {
+                            right = idom[right as usize];
+                        }
+                    }
+                    left
+                };
             }
-            set_block_bit(&mut next, block_index);
-            if dominators[block_index] != next {
-                dominators[block_index] = next;
+            if candidate != NONE && idom[block] != candidate {
+                idom[block] = candidate;
                 changed = true;
             }
         }
     }
-    let sets = DominatorSets::new(dominators);
+    let _ = sweeps;
+    let sets = DominatorSets::from_idoms(&idom, entry_index);
     #[cfg(test)]
     let sets = sets.with_sweeps(sweeps);
     sets
@@ -2283,42 +2282,6 @@ fn reachable_predecessor_indices(
                 .unwrap_or_default()
         })
         .collect()
-}
-
-/// Builds a bitset with every block bit set, masking unused bits in the last word.
-fn full_block_bitset(block_count: usize) -> Vec<u64> {
-    let mut bits = vec![u64::MAX; block_bitset_word_count(block_count)];
-    let trailing_bits = block_count % u64::BITS as usize;
-    if trailing_bits != 0 {
-        if let Some(last) = bits.last_mut() {
-            *last = (1_u64 << trailing_bits) - 1;
-        }
-    }
-    bits
-}
-
-/// Builds an empty block bitset with enough words for the function block count.
-fn empty_block_bitset(block_count: usize) -> Vec<u64> {
-    vec![0; block_bitset_word_count(block_count)]
-}
-
-/// Returns the number of machine words needed to represent one block bitset.
-fn block_bitset_word_count(block_count: usize) -> usize {
-    block_count.div_ceil(u64::BITS as usize)
-}
-
-/// Marks one block index as present in a dominator bitset.
-fn set_block_bit(bits: &mut [u64], block_index: usize) {
-    let word = block_index / u64::BITS as usize;
-    let bit = block_index % u64::BITS as usize;
-    bits[word] |= 1_u64 << bit;
-}
-
-/// Intersects a dominator bitset in place with another predecessor bitset.
-fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
-    for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
-        *left_word &= *right_word;
-    }
 }
 
 /// Traverses the validator's graph, including its implicit exception-handler edges.
@@ -2661,6 +2624,17 @@ mod dominator_bitset_tests {
             dominators.sweeps
         );
         validate_function(&function).unwrap();
+    }
+
+    /// Dominator storage is linear in the block count: two `u32` per block, where per-block
+    /// bitsets held `blocks * blocks` bits (5 GB for a 200k-block body).
+    #[test]
+    fn dominator_storage_is_linear_in_block_count() {
+        for count in [256usize, 4096] {
+            let function = reverse_linear(count);
+            let dominators = compute_dominators(&function);
+            assert_eq!(dominators.tree_words(), 2 * function.blocks.len());
+        }
     }
 
     /// Runs one bounded profiler workload; no wall-clock assertion depends on machine load.
