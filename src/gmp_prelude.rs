@@ -23,9 +23,9 @@ mod validators;
 
 pub(crate) use detect::program_uses_gmp;
 
-use crate::parser::ast::{CType, Program, Stmt};
+use crate::parser::ast::{CType, Program, Stmt, StmtKind};
 #[cfg(test)]
-use crate::parser::ast::{StmtKind, TypeExpr};
+use crate::parser::ast::TypeExpr;
 use crate::synthetic_class::{e_int, e_str, extern_fn, s_const};
 
 /// Injects the GMP surface when the program references it or `force` is set.
@@ -52,7 +52,21 @@ fn declarations() -> Vec<Stmt> {
     program.extend(constant_declarations());
     program.push(class::gmp_class());
     program.extend(validators::declarations());
-    program.extend(functions::declarations());
+    let php86 = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
+    program.extend(functions::declarations().into_iter().filter(|stmt| {
+        php86
+            || !matches!(
+                &stmt.kind,
+                StmtKind::FunctionDecl { name, .. }
+                    if matches!(
+                        name.as_str(),
+                        "gmp_powm_sec"
+                            | "gmp_prevprime"
+                            | "__elephc_gmp_prevprime_no_flag"
+                    )
+            )
+    }));
     program
 }
 

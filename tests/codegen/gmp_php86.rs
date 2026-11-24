@@ -11,13 +11,13 @@
 //! - Expected strings are php-src 8.6's; `ULONG_MAX` is 18446744073709551615 on every
 //!   supported 64-bit target.
 
+use elephc::php_version::PhpVersion;
+
 use crate::support::*;
 
-/// Runs one fixture with the forced GMP prelude.
+/// Runs one fixture under the PHP 8.6 profile, where these functions and diagnostics exist.
 fn run(source: &str) -> String {
-    let out = compile_and_run_capture_merged_with_gmp(source);
-    assert!(out.success, "stderr: {}", out.stderr);
-    out.stdout
+    compile_and_run_with_php_version(source, PhpVersion::Php86)
 }
 
 /// `gmp_powm_sec()` computes the same residue as `gmp_powm()` and validates its operands.

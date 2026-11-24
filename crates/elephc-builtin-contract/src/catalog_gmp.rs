@@ -15,7 +15,8 @@
 //! - Entries stay in canonical lowercase name order, as the registry requires.
 
 use crate::{
-    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, PhpVersion,
+    TypeSpec,
 };
 
 /// The libgmp version pinned by the managed native package and reported by `GMP_VERSION`.
@@ -112,12 +113,18 @@ const DEFAULT_FLAGS: DefaultSpec = DefaultSpec::Int(17);
 /// One procedural GMP contract.
 macro_rules! gmp_contract {
     ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal) => {
+        gmp_contract!(@build $name, [$($param),*], $returns, $summary, None)
+    };
+    ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal, since: $since:ident) => {
+        gmp_contract!(@build $name, [$($param),*], $returns, $summary, Some(PhpVersion::$since))
+    };
+    (@build $name:literal, [$($param:expr),*], $returns:expr, $summary:literal, $since:expr) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::Math,
             module: PhpModule::Gmp,
-            since: None,
+            since: $since,
             kind: BuiltinKind::Function,
             params: &[$($param),*],
             variadic: None,
@@ -174,8 +181,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     gmp_contract!("gmp_popcount", [param!("num", OPERAND)], TypeSpec::Int, "Population count of a GMP number."),
     gmp_contract!("gmp_pow", [param!("num", OPERAND), param!("exponent", TypeSpec::Int)], GMP_RESULT, "Raises a GMP number to an integer power."),
     gmp_contract!("gmp_powm", [param!("num", OPERAND), param!("exponent", OPERAND), param!("modulus", OPERAND)], GMP_RESULT, "Modular exponentiation."),
-    gmp_contract!("gmp_powm_sec", [param!("num", OPERAND), param!("exponent", OPERAND), param!("modulus", OPERAND)], GMP_RESULT, "Side-channel quiet modular exponentiation."),
-    gmp_contract!("gmp_prevprime", [param!("num", OPERAND), ref_param!("definitely_prime", TypeSpec::Bool, DefaultSpec::Null)], GMP_RESULT, "Returns the largest prime smaller than a GMP number."),
+    gmp_contract!("gmp_powm_sec", [param!("num", OPERAND), param!("exponent", OPERAND), param!("modulus", OPERAND)], GMP_RESULT, "Side-channel quiet modular exponentiation.", since: Php86),
+    gmp_contract!("gmp_prevprime", [param!("num", OPERAND), ref_param!("definitely_prime", TypeSpec::Bool, DefaultSpec::Null)], GMP_RESULT, "Returns the largest prime smaller than a GMP number.", since: Php86),
     gmp_contract!("gmp_prob_prime", [param!("num", OPERAND), param!("repetitions", TypeSpec::Int, DefaultSpec::Int(10))], TypeSpec::Int, "Probable-prime test."),
     gmp_contract!("gmp_random_bits", [param!("bits", TypeSpec::Int)], GMP_RESULT, "Generates a random GMP number with the given bit count."),
     gmp_contract!("gmp_random_range", [param!("min", OPERAND), param!("max", OPERAND)], GMP_RESULT, "Generates a random GMP number in a range."),
