@@ -2450,6 +2450,12 @@ fn lower_body_into_function(
     ctx.finalize_value_ownership_metadata();
     let mut closures = ctx.into_closures();
     closures.extend(eager_validators);
+    // The body is finished: give back the doubling growth now, not at validation, or every body
+    // lowered so far carries it through the rest of lowering (1.2 GB of the Symfony Demo's peak).
+    function.shrink_to_fit();
+    for closure in &mut closures {
+        closure.shrink_to_fit();
+    }
     closures
 }
 
