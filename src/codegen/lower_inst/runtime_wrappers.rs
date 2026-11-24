@@ -443,8 +443,17 @@ fn emit_runtime_call_wrapper_body(
                 sig,
                 kind,
             );
+            // A failed build hands the copy back too: a copy that stays held would queue every
+            // later wrapper behind a holder that never returns.
+            let wrapper = match wrapper {
+                Ok(wrapper) => wrapper,
+                Err(error) => {
+                    ctx.shared.return_wrapper_module(owned);
+                    return Err(error);
+                }
+            };
             copied_module = Some(owned);
-            wrapper?
+            wrapper
         }
     };
     let wrapper_module: &crate::ir::Module = copied_module.as_deref().unwrap_or(module);
@@ -467,10 +476,11 @@ fn emit_runtime_call_wrapper_body(
     // Closed on the error path too: the scope holds the caller's text, and returning early with
     // it would drop everything the caller had emitted so far.
     ctx.emitter.end_out_of_line(scope);
-    emitted?;
+    // The copy goes back before an emission error propagates, for the same reason.
     if let Some(copy) = copied_module {
         ctx.shared.return_wrapper_module(copy);
     }
+    emitted?;
     Ok(())
 }
 
