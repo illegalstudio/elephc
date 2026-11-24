@@ -69,10 +69,7 @@ struct ExpandedTrait {
 /// `origin` names the declaring trait after generic instantiation (`Holder<int>` and
 /// `Holder<string>` are two traits), so two copies of one method reached along two `use`
 /// paths share it, while two instantiations of one generic method, which share a span, do not.
-/// `source_trait` names the trait in the `use` that brought the method in (the class-like itself
-/// for its own methods), the name PHP prints when a body overrides an abstract `as final` import.
 struct TraitMethod {
-    source_trait: String,
     origin: String,
     decl: ClassMethod,
 }
@@ -80,10 +77,15 @@ struct TraitMethod {
 #[derive(Clone)]
 /// A trait method imported during trait composition, with its source trait
 /// tracked for insteadof conflict resolution and visibility override resolution.
+///
+/// `binding` orders the methods as PHP binds them (`zend_do_traits_method_binding`): by used
+/// trait, then by method within it, an alias (numbered in declaration order) just before the
+/// method it copies (`usize::MAX`).
 struct ImportedMethod {
     source_trait: String,
     origin: String,
     decl: ClassMethod,
+    binding: (usize, usize, usize),
 }
 
 /// Scans `program` for all traits, classes, and enums, validates direct member uniqueness,
@@ -183,7 +185,7 @@ pub fn flatten_classes(
                     errors.extend(error.flatten());
                     continue;
                 }
-                let (imported_props, imported_methods, imported_constants) =
+                let (imported_props, imported_methods, imported_constants, bound_methods) =
                     match expand::resolve_trait_uses(
                         trait_uses,
                         &trait_map,
@@ -211,39 +213,24 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
-                let mut local_final_overrides = Vec::new();
+                // Ancestors, builtin ones included, are only known to the checker driver, so a
+                // class's abstract `as final` imports are checked there.
+                final_abstract_imports.extend(final_import_groups(bound_methods).into_iter().map(
+                    |imports| FinalAbstractImport {
+                        class: name.clone(),
+                        own: own_method_span(methods, &imports[0].decl.name),
+                        span: stmt.span,
+                        imports,
+                    },
+                ));
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
                     name,
                     stmt.span,
                     &format!("class {}", name),
-                    Some(&mut local_final_overrides),
                 ) {
-                    Ok(methods) => {
-                        final_abstract_imports.extend(local_final_overrides.drain(..).map(
-                            |(method, source_trait, local)| FinalAbstractImport {
-                                class: name.clone(),
-                                method,
-                                source_trait,
-                                span: local,
-                                local: true,
-                            },
-                        ));
-                        final_abstract_imports.extend(
-                            methods
-                                .iter()
-                                .filter(|method| method.decl.is_abstract && method.decl.is_final)
-                                .map(|method| FinalAbstractImport {
-                                    class: name.clone(),
-                                    method: method.decl.name.clone(),
-                                    source_trait: method.source_trait.clone(),
-                                    span: stmt.span,
-                                    local: false,
-                                }),
-                        );
-                        methods.into_iter().map(|method| method.decl).collect()
-                    }
+                    Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
                     Err(error) => {
                         errors.extend(error.flatten());
                         continue;
@@ -300,7 +287,7 @@ pub fn flatten_classes(
                     errors.extend(error.flatten());
                     continue;
                 }
-                let (imported_props, imported_methods, imported_constants) =
+                let (imported_props, imported_methods, imported_constants, bound_methods) =
                     match expand::resolve_trait_uses(
                         trait_uses,
                         &trait_map,
@@ -322,13 +309,20 @@ pub fn flatten_classes(
                     ));
                     continue;
                 }
+                if let Err(error) = reject_overridden_final_imports(
+                    &final_import_groups(bound_methods),
+                    methods,
+                    stmt.span,
+                ) {
+                    errors.extend(error.flatten());
+                    continue;
+                }
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
                     name,
                     stmt.span,
                     &format!("enum {}", name),
-                    None,
                 ) {
                     Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
                     Err(error) => {
@@ -386,35 +380,139 @@ pub fn flatten_classes(
     (flattened, flattened_enums, errors, final_abstract_imports)
 }
 
-/// An abstract trait method made `as final` on a class, recorded while flattening the class and
-/// checked against the class's ancestors by `final_abstract_import_overrides`. `local` marks one
-/// the class body replaces, with `span` at that method; otherwise it is kept on the class and
-/// `span` is the class declaration.
+/// The methods a class's trait uses bind under one name that an abstract `as final` import
+/// takes part in, in binding order, recorded while flattening the class and checked by
+/// `final_abstract_import_overrides` once the class's ancestors are known. `own` is the span and
+/// kind (static or not) of the class's own method of that name, and `span` the class
+/// declaration.
 pub struct FinalAbstractImport {
     class: String,
-    method: String,
-    source_trait: String,
+    own: Option<(Span, bool)>,
     span: Span,
-    local: bool,
+    imports: Vec<ImportedMethod>,
 }
 
-/// The class-body methods that replace an abstract `as final` import while overriding a non
-/// private ancestor method, by lowercase class and method name, with the importing trait and
-/// the import's method name. The class schema reports `Cannot override final method T::foo()`
-/// for one only after its ordinary override checks pass, as PHP checks the parent first.
+/// The class-body or concrete imported methods that are checked as overrides of a visible
+/// ancestor method before an abstract `as final` import they replace is reported, by lowercase
+/// class and method name, with the importing trait and the import's method name. The class
+/// schema reports `Cannot override final method T::foo()` for one only after its ordinary
+/// override checks pass, as PHP inherits the parent before it binds abstract trait methods.
 pub(crate) type FinalAbstractBodyOverrides = HashMap<(String, String), (String, String)>;
 
-/// Reports the abstract `as final` imports that another method overrides, once every class,
-/// builtin ones included, is in `classes`. Zend binds a class's traits after its parent's
-/// methods, so an import the class keeps is overridden by any ancestor method of that name,
-/// private or static included: `Cannot override final method A::foo()`, after which every method
-/// of the name is dropped so the schema reports nothing more about it. A class-body method that
-/// replaces the import is reported the same way when no ancestor, or only a private one,
-/// declares the name. Over a non-private ancestor method it is checked as an override of that
-/// method first, so it is returned in the body-override map for the class schema, and the other
-/// methods of the name are dropped.
+/// Groups `bound` (in binding order) by method name, keeping the groups an abstract `as final`
+/// import takes part in.
+fn final_import_groups(bound: Vec<ImportedMethod>) -> Vec<Vec<ImportedMethod>> {
+    let mut groups: Vec<(String, Vec<ImportedMethod>)> = Vec::new();
+    for method in bound {
+        let key = php_symbol_key(&method.decl.name);
+        match groups.iter_mut().find(|(name, _)| *name == key) {
+            Some((_, group)) => group.push(method),
+            None => groups.push((key, vec![method])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(_, group)| group)
+        .filter(|group| group.iter().any(|method| method.decl.is_abstract && method.decl.is_final))
+        .collect()
+}
+
+/// Returns the span and kind (static or not) of the method named `name` among `methods`.
+fn own_method_span(methods: &[ClassMethod], name: &str) -> Option<(Span, bool)> {
+    methods
+        .iter()
+        .find(|method| method.name.eq_ignore_ascii_case(name))
+        .map(|method| (method.span, method.is_static))
+}
+
+/// Returns the first concrete method among `imports`, the one PHP binds before the abstract
+/// ones (two concrete imports are a collision reported while selecting methods).
+fn concrete_import(imports: &[ImportedMethod]) -> Option<&ImportedMethod> {
+    imports.iter().find(|method| !method.decl.is_abstract)
+}
+
+/// Replays how Zend binds one method name (`zend_do_link_class`, `zend_add_trait_method`) and
+/// returns the index in `imports` of the first abstract `as final` import that another method
+/// overrides. Concrete trait methods bind first, where the class-like's own method wins, then
+/// the parent's methods are inherited, then the abstract trait methods bind in order, each
+/// checked as the parent of whatever already holds the name: a final one fails first, and a
+/// plain one of the other kind (static or instance) fails the kind check, which the class schema
+/// reports, so no final import is reported after it. A later copy of the abstract trait method
+/// already bound is skipped. `held` is whether the holder before the abstract ones bind (an own
+/// method, a concrete import or an ancestor method) is static, or `None` without one.
+fn first_overridden_final_import(held: Option<bool>, imports: &[ImportedMethod]) -> Option<usize> {
+    let mut holder_is_static = held;
+    let mut bound: Option<&ImportedMethod> = None;
+    for (index, method) in imports.iter().enumerate() {
+        if !method.decl.is_abstract {
+            continue;
+        }
+        let Some(is_static) = holder_is_static else {
+            holder_is_static = Some(method.decl.is_static);
+            bound = Some(method);
+            continue;
+        };
+        if bound.is_some_and(|existing| {
+            merge::is_same_trait_method(
+                (&existing.origin, &existing.decl),
+                (&method.origin, &method.decl),
+            )
+        }) {
+            continue;
+        }
+        if method.decl.is_final {
+            return Some(index);
+        }
+        if method.decl.is_static != is_static {
+            return None;
+        }
+    }
+    None
+}
+
+/// The error for `import`, an abstract `as final` trait method that another method overrides.
+fn final_import_override(span: Span, import: &ImportedMethod) -> CompileError {
+    CompileError::new(
+        span,
+        &format!(
+            "Cannot override final method {}::{}",
+            import.source_trait, import.decl.name
+        ),
+    )
+}
+
+/// Reports the first abstract `as final` import of a trait or enum that its own method, a
+/// concrete import or an earlier abstract import overrides (`first_overridden_final_import`).
+/// Traits and enums have no parent, so nothing is inherited before the abstract methods bind.
+fn reject_overridden_final_imports(
+    groups: &[Vec<ImportedMethod>],
+    own_methods: &[ClassMethod],
+    span: Span,
+) -> Result<(), CompileError> {
+    for imports in groups {
+        let own = own_methods
+            .iter()
+            .find(|method| method.name.eq_ignore_ascii_case(&imports[0].decl.name));
+        let held = own
+            .map(|method| method.is_static)
+            .or_else(|| concrete_import(imports).map(|method| method.decl.is_static));
+        if let Some(index) = first_overridden_final_import(held, imports) {
+            let at = own.map_or(span, |method| method.span);
+            return Err(final_import_override(at, &imports[index]));
+        }
+    }
+    Ok(())
+}
+
+/// Checks each class's abstract `as final` imports once every class, builtin ones included, is
+/// in `classes` (`first_overridden_final_import`, with the nearest ancestor method of the name,
+/// private or static included, holding the name too). An overridden import is reported, and
+/// every method of the name is dropped so the schema reports nothing more about it, except when
+/// the method holding the name is the class's own or a concrete import and a visible ancestor
+/// method declares it too: PHP checks that override first, so the method stays, the others of
+/// the name are dropped, and it is returned in the body-override map for the class schema.
 pub(crate) fn final_abstract_import_overrides(
-    imports: &[FinalAbstractImport],
+    groups: &[FinalAbstractImport],
     classes: &mut HashMap<String, FlattenedClass>,
 ) -> (Vec<CompileError>, FinalAbstractBodyOverrides) {
     let by_key: HashMap<String, &FlattenedClass> = classes
@@ -423,36 +521,46 @@ pub(crate) fn final_abstract_import_overrides(
         .collect();
     let mut errors = Vec::new();
     let mut body_overrides = FinalAbstractBodyOverrides::new();
-    // Class name, method name, and the span of a class-body method that stays.
-    let mut dropped: Vec<(&FinalAbstractImport, Option<Span>)> = Vec::new();
-    for import in imports {
-        let ancestor = nearest_ancestor_method(&by_key, &import.class, &import.method);
-        let visible_ancestor =
+    // Class, method name, and the span of the method that stays, if any.
+    let mut dropped: Vec<(&str, &str, Option<Span>)> = Vec::new();
+    for group in groups {
+        let name = &group.imports[0].decl.name;
+        let ancestor = nearest_ancestor_method(&by_key, &group.class, name);
+        let concrete = concrete_import(&group.imports);
+        let own = group.own.map(|(span, _)| span);
+        let held = group
+            .own
+            .map(|(_, is_static)| is_static)
+            .or_else(|| concrete.map(|method| method.decl.is_static))
+            .or_else(|| ancestor.map(|method| method.is_static));
+        let Some(index) = first_overridden_final_import(held, &group.imports) else {
+            continue;
+        };
+        let import = &group.imports[index];
+        let holder = own.or(concrete.map(|method| method.decl.span));
+        let checked_first =
             ancestor.is_some_and(|method| method.visibility != Visibility::Private);
-        if import.local && visible_ancestor {
-            body_overrides.insert(
-                (php_symbol_key(&import.class), php_symbol_key(&import.method)),
-                (import.source_trait.clone(), import.method.clone()),
-            );
-            dropped.push((import, Some(import.span)));
-        } else if import.local || ancestor.is_some() {
-            errors.push(CompileError::new(
-                import.span,
-                &format!(
-                    "Cannot override final method {}::{}",
-                    import.source_trait, import.method
-                ),
-            ));
-            dropped.push((import, None));
+        match holder {
+            Some(holder) if checked_first => {
+                body_overrides.insert(
+                    (php_symbol_key(&group.class), php_symbol_key(name)),
+                    (import.source_trait.clone(), import.decl.name.clone()),
+                );
+                dropped.push((&group.class, name, Some(holder)));
+            }
+            _ => {
+                errors.push(final_import_override(own.unwrap_or(group.span), import));
+                dropped.push((&group.class, name, None));
+            }
         }
     }
-    for (import, kept) in dropped {
+    for (class_name, name, kept) in dropped {
         if let Some(class) = classes
             .values_mut()
-            .find(|class| class.name.eq_ignore_ascii_case(&import.class))
+            .find(|class| class.name.eq_ignore_ascii_case(class_name))
         {
             class.methods.retain(|method| {
-                !method.name.eq_ignore_ascii_case(&import.method) || Some(method.span) == kept
+                !method.name.eq_ignore_ascii_case(name) || Some(method.span) == kept
             });
         }
     }

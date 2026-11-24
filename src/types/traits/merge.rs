@@ -89,59 +89,31 @@ pub(super) fn merge_property_into(
 
 /// Merges `imported` trait methods with `local` class/trait methods.
 /// Validates that `local` has no duplicate method keys (name + is_static).
-/// Imported methods with the same key as local are skipped (local wins), except an abstract
-/// import made final with `as final`, which the local method cannot override.
+/// Imported methods with the same key as local are skipped (local wins); an abstract import
+/// made `as final` that a local method overrides is reported by `reject_overridden_final_imports`.
 /// Duplicate imported methods (same key from multiple traits) are resolved by
 /// `resolve_duplicate_imported_method`; `resolve_trait_uses` has already merged them, so a
 /// collision here is reported without trait names.
 /// Returns the merged list: imported-first, then local, each local method with `local_origin`
 /// (the declaring trait, or the class) as its origin.
-///
-/// A local method replacing an abstract `as final` import is an error here, unless
-/// `deferred_final_overrides` is given: a class records the override there instead (method name,
-/// importing trait, local span), because a final ancestor method takes precedence and ancestors
-/// are only known once every class is flattened.
 pub(super) fn merge_methods(
     imported: Vec<TraitMethod>,
     local: &[ClassMethod],
     local_origin: &str,
     span: Span,
     owner_label: &str,
-    mut deferred_final_overrides: Option<&mut Vec<(String, String, Span)>>,
 ) -> Result<Vec<TraitMethod>, CompileError> {
     validate_direct_method_duplicates(local, span, owner_label)?;
 
     let mut local_keys = HashSet::new();
-    let mut local_names = HashMap::new();
     for method in local {
         local_keys.insert((php_symbol_key(&method.name), method.is_static));
-        local_names.entry(php_symbol_key(&method.name)).or_insert(method.span);
     }
 
     let mut merged: Vec<TraitMethod> = Vec::new();
     let mut seen_imported: HashMap<(String, bool), usize> = HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.decl.name), imported_method.decl.is_static);
-        // Zend checks a local method against an abstract trait method as an override, so an
-        // abstract method made `as final` cannot be implemented here, static or not. A concrete
-        // trait method stays replaceable, final or not.
-        if imported_method.decl.is_abstract && imported_method.decl.is_final {
-            if let Some(local_span) = local_names.get(&key.0) {
-                let Some(deferred) = deferred_final_overrides.as_deref_mut() else {
-                    return Err(final_abstract_import_override(
-                        *local_span,
-                        &imported_method.source_trait,
-                        &imported_method.decl.name,
-                    ));
-                };
-                deferred.push((
-                    imported_method.decl.name.clone(),
-                    imported_method.source_trait.clone(),
-                    *local_span,
-                ));
-                continue;
-            }
-        }
         if local_keys.contains(&key) {
             continue;
         }
@@ -171,56 +143,16 @@ pub(super) fn merge_methods(
     }
 
     merged.extend(local.iter().map(|method| TraitMethod {
-        source_trait: local_origin.to_string(),
         origin: local_origin.to_string(),
         decl: method.clone(),
     }));
     Ok(merged)
 }
 
-/// Reports a method that overrides `name`, an abstract trait method made `as final`, with the
-/// trait in the `use` that imported it, as PHP prints it (`Cannot override final method T::foo()`).
-pub(super) fn final_abstract_import_override(span: Span, source_trait: &str, name: &str) -> CompileError {
-    CompileError::new(
-        span,
-        &format!("Cannot override final method {}::{}", source_trait, name),
-    )
-}
-
-/// Applies Zend's rule for an abstract trait method made `as final` to two trait imports of
-/// one name, static or not, `earlier` bound before `later`: a later abstract final import
-/// overrides whatever came first, and a later concrete method overrides an earlier abstract
-/// final one. A later plain abstract method is a compatible redeclaration, and the same trait
-/// method reached along two `use` paths is one method.
-pub(super) fn check_final_abstract_imports(
-    earlier: &ImportedMethod,
-    later: &ImportedMethod,
-    span: Span,
-) -> Result<(), CompileError> {
-    if !earlier.decl.name.eq_ignore_ascii_case(&later.decl.name)
-        || is_same_trait_method((&earlier.origin, &earlier.decl), (&later.origin, &later.decl))
-    {
-        return Ok(());
-    }
-    if later.decl.is_abstract && later.decl.is_final {
-        return Err(final_abstract_import_override(span, &later.source_trait, &later.decl.name));
-    }
-    if earlier.decl.is_abstract && earlier.decl.is_final && !later.decl.is_abstract {
-        return Err(final_abstract_import_override(
-            span,
-            &earlier.source_trait,
-            &earlier.decl.name,
-        ));
-    }
-    Ok(())
-}
-
 /// Appends each method in `incoming` to `existing`, tracking seen (name, is_static)
 /// keys to prevent duplicate imports across different trait sources.
 /// A second method with a key already in `existing` is resolved by
 /// `resolve_duplicate_imported_method`; a collision reports both source traits as PHP does.
-/// An abstract `as final` import is checked against every earlier import of its name first
-/// (`check_final_abstract_imports`).
 /// Used when accumulating methods from multiple traits within one class.
 pub(super) fn merge_imported_method_set(
     existing: &mut Vec<ImportedMethod>,
@@ -234,9 +166,6 @@ pub(super) fn merge_imported_method_set(
         .map(|(index, method)| ((php_symbol_key(&method.decl.name), method.decl.is_static), index))
         .collect();
     for method in incoming {
-        for earlier in existing.iter() {
-            check_final_abstract_imports(earlier, &method, span)?;
-        }
         let key = (php_symbol_key(&method.decl.name), method.decl.is_static);
         if let Some(&index) = seen.get(&key) {
             match resolve_duplicate_imported_method(

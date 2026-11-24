@@ -1771,6 +1771,53 @@ fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
     }
 }
 
+/// Abstract `as final` imports bind after the class's own and concrete imported methods and after
+/// the parent is inherited, as in php-src's `zend_do_link_class`: with any other method of the
+/// name the earliest final import in `use` order is reported, with only the imports the first
+/// one that a later final import overrides; a concrete import is checked as an override of a
+/// visible ancestor first (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_binding_model() {
+    let ab = "trait A { abstract public function foo(); }\ntrait B { abstract public function foo(); }\n";
+    let a = "trait A { abstract public function foo(); }\n";
+    let both = "A::foo as final; B::foo as final;";
+    let single_error = |source: &str| -> String {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        messages.into_iter().next().unwrap()
+    };
+    for (source, message) in [
+        (format!("{ab}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ {both} }} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}abstract class C {{ use A, B {{ {both} }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use B, A {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}abstract class C {{ use A, B {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}enum E {{ use A, B {{ {both} }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}enum E {{ use A, B {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}trait O {{ use A, B {{ {both} }} public function foo() {{}} }}\nclass Z {{ use O; }}"), "Cannot override final method A::foo"),
+        (format!("{ab}trait O {{ use A, B {{ {both} }} }}\nabstract class Z {{ use O; }}"), "Cannot override final method B::foo"),
+        ("trait A { abstract public function getMessage(); }\ntrait B { abstract public function getMessage(); }\nclass C extends Exception { use A, B { A::getMessage as final; B::getMessage as final; } }".to_string(), "Cannot override final method A::getMessage"),
+        (format!("class P {{ final public function foo() {{}} }}\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method P::foo"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ public static function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot change method kind"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ protected function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot reduce visibility"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method A::foo"),
+        (format!("class P {{ private function foo() {{}} }}\n{a}trait B {{ public static function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method A::foo"),
+        (format!("class P {{ public function bar() {{}} }}\n{a}trait B {{ public static function bar() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final bar; }} }}"), "Cannot change method kind"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    for source in [
+        format!("{ab}class P {{ public function foo(): int {{ return 1; }} }}\nabstract class C extends P {{ use A, B {{ {both} }} public function foo(): string {{ return 'x'; }} }}"),
+        format!("class P {{ public function foo(): int {{ return 1; }} }}\n{a}trait B {{ public function foo(): string {{ return 'x'; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"),
+    ] {
+        let reported = single_error(&source);
+        assert!(!reported.contains("Cannot override final method"), "{source}: {reported}");
+    }
+}
+
 /// Builtin ancestors count like user ones for an abstract `as final` import: a kept import is
 /// overridden by `Exception::getMessage`, and a class body replacing it meets the final builtin
 /// method first. A class body that overrides a visible, non-final ancestor illegally reports
