@@ -178,6 +178,8 @@ echo count($holder->map), count($holder->list);
 }
 
 /// The same order holds for containers reached through `global`, including boxed elements.
+/// During shutdown the remaining destructors bind those names again, including names whose
+/// values were already detached. The heap must also be clean after those activations retire.
 #[test]
 fn test_element_overwrite_publishes_before_the_destructor_for_global_containers() {
     let source = r#"<?php

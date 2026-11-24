@@ -1024,28 +1024,39 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             globals.push(name.to_string());
         }
     }
-    for name in globals {
-        if ctx.module.extern_globals.contains_key(&name) {
-            continue;
-        }
+    let globals: Vec<_> = globals.into_iter().filter_map(|name| {
+        if ctx.module.extern_globals.contains_key(&name) { return None; }
         let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
         };
-        if !cleanup_tracked_codegen_type(&ty) {
-            continue;
-        }
         let symbol = ir_global_symbol(&name);
-        if !ctx.data.has_comm(&symbol) {
-            continue;
-        }
+        (cleanup_tracked_codegen_type(&ty) && ctx.data.has_comm(&symbol))
+            .then_some((name, symbol, ty))
+    }).collect();
+    if globals.is_empty() { return; }
+
+    let result = abi::int_result_reg(ctx.emitter);
+    let again = ctx.next_label("global_cleanup_again");
+    ctx.emitter.label(&again);
+    for (name, symbol, ty) in &globals {
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        if ty == PhpType::Str {
-            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+        // A destructor may bind this name while the previous reference wrapper is retiring.
+        // Detach first so the new activation cannot acquire that zero-count wrapper.
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 0);
+        if *ty == PhpType::Str {
+            abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 8);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(ctx.emitter, ty);
         }
+    }
+    // Destructor activations can recreate a previously visited global, even with a null value.
+    for (_, symbol, _) in &globals {
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &again);
     }
 }
 
