@@ -414,8 +414,9 @@ mod tests {
         // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
         // two line-aware diagnostic helpers, the internal memory limit setter, the
         // three compiled-pattern helpers the `preg_grep()` prelude calls, and the
-        // internal unserialize property store and PHAR validity probe.
-        assert_eq!(eval_internal, 150);
+        // internal unserialize property store and PHAR validity probe. The proc prelude's
+        // five resource helpers too.
+        assert_eq!(eval_internal, 155);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         // 34 registry builtins awaiting eval homes (the five `proc_*` functions among them),
@@ -438,8 +439,9 @@ mod tests {
         // `__elephc_set_memory_limit`, the `preg_grep()` prelude's three internal
         // compiled-pattern helpers, and the internal unserialize property store and
         // PHAR validity probe.
-        // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
-        assert_eq!(aot_registry, 856);
+        // The seven ext/posix bridge builtins are ordinary PCNTL registry operations. The
+        // `proc_*` family and its five internal resource helpers add ten more.
+        assert_eq!(aot_registry, 866);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -505,8 +507,9 @@ mod tests {
         // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
         // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
         // three internal compiled-pattern helpers, and the internal unserialize
-        // property store and PHAR validity probe.
-        assert_eq!(unsupported, 531);
+        // property store and PHAR validity probe, and the five `proc_*` functions with their
+        // five internal resource helpers.
+        assert_eq!(unsupported, 541);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
