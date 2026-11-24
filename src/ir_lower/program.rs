@@ -356,6 +356,7 @@ pub(super) fn validate_finished_module(mut module: Module, collect: bool) -> Res
         .chain(module.runtime_callable_invokers.iter_mut())
     {
         crate::ir::prune_dead_blocks(function);
+        function.shrink_to_fit();
     }
     if collect {
         let failures = invalid_bodies(&module);
