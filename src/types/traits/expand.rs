@@ -18,8 +18,7 @@ use crate::parser::ast::{
 use crate::span::Span;
 
 use super::{
-    final_import_groups, reject_overridden_final_imports, ExpandedTrait, ImportedMethod,
-    TraitDeclInfo, TraitMethod,
+    reject_overridden_final_imports, ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod,
 };
 use super::merge::{
     check_abstract_redeclaration, is_same_trait_method, merge_constants,
@@ -82,8 +81,9 @@ fn expand_trait(
         true,
     )?;
     reject_overridden_final_imports(
-        &final_import_groups(bound_methods),
+        &bound_methods,
         &trait_info.methods,
+        trait_name,
         trait_info.span,
     )?;
     let mut methods = merge_methods(

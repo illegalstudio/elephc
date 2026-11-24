@@ -1829,11 +1829,18 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         (format!("{kinds}class P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function bar() {{}} }}"), "Cannot reduce visibility when overriding method: C::bar"),
         (format!("{a}trait B {{ abstract public function bar(); }}\nclass P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ A::foo as final; B::bar as final; }} public function bar() {{}} public function foo() {{}} }}"), "Cannot override final method A::foo"),
         (format!("{kinds}class P {{ public function foo() {{}} final public const X = 1; }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} public const X = 2; }}"), "final constant"),
+        // Interface final constants are checked after the abstract trait binding.
+        (format!("interface I {{ final public const X = 1; }}\n{a}class C implements I {{ use A {{ foo as final; }} public function foo() {{}} public const X = 2; }}"), "Cannot override final method A::foo"),
+        // PHP stops binding at the failure, so a requirement bound later is never checked.
+        (format!("class P {{ public function foo() {{}} public static function bar() {{}} }}\n{a}trait T {{ abstract public function bar(); }}\nclass C extends P {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{kinds}enum E {{ use A, B {{ B::foo as final; }} public function foo() {{}} case X; }}"), "Cannot change method kind when overriding E::foo"),
     ] {
         let reported = single_error(&source);
         assert!(reported.contains(message), "{source}: {reported}");
     }
     for source in [
+        // A requirement bound before the failure is checked first.
+        format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} }}"),
         format!("{kinds}class P {{ public function foo(): int {{ return 1; }} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): string {{ return 'x'; }} }}"),
         format!("{ab}class P {{ public function foo(): int {{ return 1; }} }}\nabstract class C extends P {{ use A, B {{ {both} }} public function foo(): string {{ return 'x'; }} }}"),
         format!("class P {{ public function foo(): int {{ return 1; }} }}\n{a}trait B {{ public function foo(): string {{ return 'x'; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"),

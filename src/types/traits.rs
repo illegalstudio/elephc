@@ -214,14 +214,17 @@ pub fn flatten_classes(
                 };
                 // Ancestors, builtin ones included, are only known to the checker driver, so a
                 // class's abstract `as final` imports are checked there.
-                final_abstract_imports.extend(final_import_groups(bound_methods).into_iter().map(
-                    |imports| FinalAbstractImport {
+                if !final_import_groups(bound_methods.clone()).is_empty() {
+                    final_abstract_imports.push(FinalAbstractImport {
                         class: name.clone(),
-                        own: own_method_span(methods, &imports[0].decl.name),
+                        own: methods
+                            .iter()
+                            .map(|method| (method.name.clone(), method.span, method.is_static))
+                            .collect(),
                         span: stmt.span,
-                        imports,
-                    },
-                ));
+                        bound: bound_methods,
+                    });
+                }
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
@@ -308,11 +311,9 @@ pub fn flatten_classes(
                     ));
                     continue;
                 }
-                if let Err(error) = reject_overridden_final_imports(
-                    &final_import_groups(bound_methods),
-                    methods,
-                    stmt.span,
-                ) {
+                if let Err(error) =
+                    reject_overridden_final_imports(&bound_methods, methods, name, stmt.span)
+                {
                     errors.extend(error.flatten());
                     continue;
                 }
@@ -379,16 +380,15 @@ pub fn flatten_classes(
     (flattened, flattened_enums, errors, final_abstract_imports)
 }
 
-/// The methods a class's trait uses bind under one name that an abstract `as final` import
-/// takes part in, in binding order, recorded while flattening the class and checked by
-/// `final_abstract_import_overrides` once the class's ancestors are known. `own` is the span and
-/// kind (static or not) of the class's own method of that name, and `span` the class
-/// declaration.
+/// A class whose trait uses bind an abstract `as final` import, recorded while flattening it and
+/// checked by `final_abstract_import_overrides` once its ancestors are known: the name, span and
+/// kind (static or not) of each of its own methods, its declaration span, and every method its
+/// trait uses bind, in binding order.
 pub struct FinalAbstractImport {
     class: String,
-    own: Option<(Span, bool)>,
+    own: Vec<(String, Span, bool)>,
     span: Span,
-    imports: Vec<ImportedMethod>,
+    bound: Vec<ImportedMethod>,
 }
 
 /// The first abstract trait binding failure of each class beside an abstract `as final` import
@@ -399,12 +399,12 @@ pub struct FinalAbstractImport {
 pub(crate) type FinalAbstractBindingFailures = HashMap<String, (Span, String)>;
 
 /// The first failure of the abstract trait methods bound under one name
-/// (`first_overridden_final_import`).
+/// (`first_overridden_final_import`), by index into the bound imports.
 enum AbstractBindingFailure {
     /// An abstract `as final` import that the method holding the name overrides.
     Final(usize),
     /// A plain abstract import of the other kind (static or instance) than that method.
-    Kind,
+    Kind(usize),
 }
 
 /// Groups `bound` (in binding order) by method name, keeping the groups an abstract `as final`
@@ -425,12 +425,72 @@ fn final_import_groups(bound: Vec<ImportedMethod>) -> Vec<Vec<ImportedMethod>> {
         .collect()
 }
 
-/// Returns the span and kind (static or not) of the method named `name` among `methods`.
-fn own_method_span(methods: &[ClassMethod], name: &str) -> Option<(Span, bool)> {
-    methods
-        .iter()
-        .find(|method| method.name.eq_ignore_ascii_case(name))
-        .map(|method| (method.span, method.is_static))
+/// The earliest abstract binding failure of a class-like, in binding order
+/// (`first_overridden_final_import` per name): the bound position of the failing import, the
+/// method holding its name (the class-like's own method or a concrete import), and the message.
+struct FirstBindingFailure {
+    binding: (usize, usize, usize),
+    name: String,
+    holder: Option<Span>,
+    message: String,
+}
+
+impl AbstractBindingFailure {
+    /// The index of the failing import.
+    fn index(&self) -> usize {
+        match self {
+            AbstractBindingFailure::Final(index) | AbstractBindingFailure::Kind(index) => *index,
+        }
+    }
+}
+
+/// Replays the abstract binding of every name of `bound` that an abstract `as final` import takes
+/// part in and returns the failure PHP reports first, the earliest in binding order. `own` lists
+/// the class-like's own methods (name, span, static), `ancestor` returns the nearest ancestor
+/// method of a name (a class's, `None` for traits and enums), and `owner` names the class-like
+/// in the kind message.
+fn first_binding_failure<'a>(
+    bound: &[ImportedMethod],
+    own: &[(String, Span, bool)],
+    ancestor: impl Fn(&str) -> Option<&'a ClassMethod>,
+    owner: &str,
+) -> Option<FirstBindingFailure> {
+    let mut first: Option<FirstBindingFailure> = None;
+    for imports in final_import_groups(bound.to_vec()) {
+        let name = &imports[0].decl.name;
+        let own_method = own.iter().find(|(own_name, _, _)| own_name.eq_ignore_ascii_case(name));
+        let concrete = concrete_import(&imports);
+        let held = own_method
+            .map(|(_, _, is_static)| *is_static)
+            .or_else(|| concrete.map(|method| method.decl.is_static))
+            .or_else(|| ancestor(name).map(|method| method.is_static));
+        let Some(failure) = first_overridden_final_import(held, &imports) else {
+            continue;
+        };
+        let failing = &imports[failure.index()];
+        if first.as_ref().is_some_and(|first| first.binding <= failing.binding) {
+            continue;
+        }
+        let holder = own_method
+            .map(|(_, span, _)| *span)
+            .or(concrete.map(|method| method.decl.span));
+        let message = match failure {
+            AbstractBindingFailure::Final(_) => format!(
+                "Cannot override final method {}::{}",
+                failing.source_trait, failing.decl.name
+            ),
+            AbstractBindingFailure::Kind(_) => {
+                format!("Cannot change method kind when overriding {}::{}", owner, name)
+            }
+        };
+        first = Some(FirstBindingFailure {
+            binding: failing.binding,
+            name: name.clone(),
+            holder,
+            message,
+        });
+    }
+    first
 }
 
 /// Returns the first concrete method among `imports`, the one PHP binds before the abstract
@@ -475,57 +535,41 @@ fn first_overridden_final_import(
             return Some(AbstractBindingFailure::Final(index));
         }
         if method.decl.is_static != is_static {
-            return Some(AbstractBindingFailure::Kind);
+            return Some(AbstractBindingFailure::Kind(index));
         }
     }
     None
 }
 
-/// The error for `import`, an abstract `as final` trait method that another method overrides.
-fn final_import_override(span: Span, import: &ImportedMethod) -> CompileError {
-    CompileError::new(
-        span,
-        &format!(
-            "Cannot override final method {}::{}",
-            import.source_trait, import.decl.name
-        ),
-    )
-}
-
-/// Reports the first abstract `as final` import of a trait or enum that its own method, a
-/// concrete import or an earlier abstract import overrides (`first_overridden_final_import`).
-/// Traits and enums have no parent, so nothing is inherited before the abstract methods bind.
+/// Reports the first abstract binding failure of a trait or enum beside an abstract `as final`
+/// import (`first_binding_failure`): an import its own method, a concrete import or an earlier
+/// abstract import overrides, or a plain abstract import of the other kind. Traits and enums have
+/// no parent, so nothing is inherited before the abstract methods bind.
 fn reject_overridden_final_imports(
-    groups: &[Vec<ImportedMethod>],
+    bound: &[ImportedMethod],
     own_methods: &[ClassMethod],
+    owner: &str,
     span: Span,
 ) -> Result<(), CompileError> {
-    for imports in groups {
-        let own = own_methods
-            .iter()
-            .find(|method| method.name.eq_ignore_ascii_case(&imports[0].decl.name));
-        let held = own
-            .map(|method| method.is_static)
-            .or_else(|| concrete_import(imports).map(|method| method.decl.is_static));
-        if let Some(AbstractBindingFailure::Final(index)) =
-            first_overridden_final_import(held, imports)
-        {
-            let at = own.map_or(span, |method| method.span);
-            return Err(final_import_override(at, &imports[index]));
-        }
+    let own: Vec<(String, Span, bool)> = own_methods
+        .iter()
+        .map(|method| (method.name.clone(), method.span, method.is_static))
+        .collect();
+    match first_binding_failure(bound, &own, |_| None, owner) {
+        Some(failure) => Err(CompileError::new(failure.holder.unwrap_or(span), &failure.message)),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Checks each class's abstract `as final` imports once every class, builtin ones included, is
-/// in `classes` (`first_overridden_final_import`, with the nearest ancestor method of the name,
-/// private or static included, holding the name too). For a binding failure (an overridden
-/// final import, or a plain abstract import of the other kind) the method holding the name, the
-/// class's own or a concrete import, stays for the schema's ordinary override checks, the other
-/// methods of the name are dropped, and the class's first failure in binding order is returned
-/// for the schema to report once its inheritance checks pass.
+/// in `classes` (`first_binding_failure`, with the nearest ancestor method of a name, private or
+/// static included, holding the name too). For the class's first failure the method holding the
+/// name (its own or a concrete import) stays for the schema's ordinary override checks, the
+/// other methods of the name are dropped, and so is every abstract import bound after the
+/// failing one, which PHP never binds. The failure is returned for the schema to report once the
+/// class's inheritance checks pass.
 pub(crate) fn final_abstract_import_overrides(
-    groups: &[FinalAbstractImport],
+    records: &[FinalAbstractImport],
     classes: &mut HashMap<String, FlattenedClass>,
 ) -> FinalAbstractBindingFailures {
     let by_key: HashMap<String, &FlattenedClass> = classes
@@ -533,44 +577,38 @@ pub(crate) fn final_abstract_import_overrides(
         .map(|class| (php_symbol_key(&class.name), class))
         .collect();
     let mut failures = FinalAbstractBindingFailures::new();
-    // Class, method name, and the span of the method that stays, if any.
-    let mut dropped: Vec<(&str, &str, Option<Span>)> = Vec::new();
-    for group in groups {
-        let name = &group.imports[0].decl.name;
-        let ancestor = nearest_ancestor_method(&by_key, &group.class, name);
-        let concrete = concrete_import(&group.imports);
-        let own = group.own.map(|(span, _)| span);
-        let held = group
-            .own
-            .map(|(_, is_static)| is_static)
-            .or_else(|| concrete.map(|method| method.decl.is_static))
-            .or_else(|| ancestor.map(|method| method.is_static));
-        let Some(failure) = first_overridden_final_import(held, &group.imports) else {
+    // The class, its first failure, and the abstract imports bound after that failure.
+    let mut dropped: Vec<(&FinalAbstractImport, FirstBindingFailure, Vec<&ImportedMethod>)> =
+        Vec::new();
+    for record in records {
+        let ancestor = |name: &str| nearest_ancestor_method(&by_key, &record.class, name);
+        let Some(failure) = first_binding_failure(&record.bound, &record.own, ancestor, &record.class)
+        else {
             continue;
         };
-        let holder = own.or(concrete.map(|method| method.decl.span));
-        let span = holder.unwrap_or(group.span);
-        let message = match failure {
-            AbstractBindingFailure::Final(index) => {
-                final_import_override(span, &group.imports[index]).message
-            }
-            AbstractBindingFailure::Kind => format!(
-                "Cannot change method kind when overriding {}::{}",
-                group.class, name
-            ),
-        };
-        failures
-            .entry(php_symbol_key(&group.class))
-            .or_insert((span, message));
-        dropped.push((&group.class, name, holder));
+        failures.insert(
+            php_symbol_key(&record.class),
+            (failure.holder.unwrap_or(record.span), failure.message.clone()),
+        );
+        let unbound = record
+            .bound
+            .iter()
+            .filter(|method| method.decl.is_abstract && method.binding > failure.binding)
+            .collect();
+        dropped.push((record, failure, unbound));
     }
-    for (class_name, name, kept) in dropped {
+    for (record, failure, unbound) in dropped {
         if let Some(class) = classes
             .values_mut()
-            .find(|class| class.name.eq_ignore_ascii_case(class_name))
+            .find(|class| class.name.eq_ignore_ascii_case(&record.class))
         {
             class.methods.retain(|method| {
-                !method.name.eq_ignore_ascii_case(name) || Some(method.span) == kept
+                let failing_name = method.name.eq_ignore_ascii_case(&failure.name);
+                let never_bound = unbound.iter().any(|import| {
+                    import.decl.name.eq_ignore_ascii_case(&method.name)
+                        && import.decl.span == method.span
+                });
+                !(failing_name && Some(method.span) != failure.holder) && !never_bound
             });
         }
     }

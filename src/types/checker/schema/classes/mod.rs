@@ -141,7 +141,7 @@ fn build_loaded_class_info(
     properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
-    validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
+    validate_final_constant_constraints(&class, parent_info.as_ref())?;
     // PHP binds abstract trait methods after the parent inheritance checked above, and before
     // interfaces (`final_abstract_import_overrides`).
     if let Some((span, message)) =
@@ -149,6 +149,7 @@ fn build_loaded_class_info(
     {
         return Err(CompileError::new(*span, message));
     }
+    validate_interface_final_constants(&class, &state, checker)?;
     interfaces::validate_interface_contracts(
         &mut state,
         &class,
@@ -310,12 +311,12 @@ fn validate_parent_constraints(
     Ok(())
 }
 
-/// Validates PHP final class-constant inheritance constraints for one class.
+/// Validates PHP final class-constant inheritance constraints for one class against its own
+/// declarations and its parent; interface final constants are checked later
+/// (`validate_interface_final_constants`).
 fn validate_final_constant_constraints(
     class: &FlattenedClass,
     parent_info: Option<&ClassInfo>,
-    state: &ClassBuildState,
-    checker: &Checker,
 ) -> Result<(), CompileError> {
     for constant in &class.constants {
         if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
@@ -336,6 +337,19 @@ fn validate_final_constant_constraints(
                 ),
             ));
         }
+    }
+    Ok(())
+}
+
+/// Rejects a class constant that redeclares a final constant of an implemented interface. PHP
+/// checks interfaces after the parent inheritance and the abstract trait binding, so this runs
+/// after `validate_final_constant_constraints` and the recorded binding failure.
+fn validate_interface_final_constants(
+    class: &FlattenedClass,
+    state: &ClassBuildState,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for constant in &class.constants {
         for interface_name in &state.interfaces {
             let Some(interface_info) = checker.interfaces.get(interface_name) else {
                 continue;
