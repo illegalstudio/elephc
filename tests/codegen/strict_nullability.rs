@@ -55,6 +55,7 @@ fn test_strict_nullability_public_opaque_eval_contracts_bundle() {
 #[test]
 fn test_strict_nullability_public_source_probes_and_profile_identity() {
     for source in ["<?php function f(int $value=null){}", "<?php if(false){echo null[0];}",
+        "<?php eval('function f(int $value=null){}');",
         "<?php function f(string $value){} f(value:null);", "<?php if(false){strlen(null);}"] {
         StrictFixture::new(source).assert_error(&["--strict-nullability"], "strict-nullability");
     }

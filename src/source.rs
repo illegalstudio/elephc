@@ -44,10 +44,10 @@ pub use elephc_chopper::syntax::source::{
 
 /// Applies path-dependent post-parse processing shared by every physical source loader.
 ///
-/// Magic constants retain the real path, strict PHP audits the unfiltered physical
-/// program, and conditional compilation runs after it so inactive extension syntax in a
-/// PHP file cannot evade the audit. `goto` lowering closes the sequence, so no later pass
-/// ever sees a jump.
+/// Written declarations are audited before PHP normalization can widen them. Magic constants
+/// retain the real path, strict PHP audits the unfiltered physical program, and conditional
+/// compilation runs after it so inactive extension syntax in a PHP file cannot evade the audit.
+/// `goto` lowering closes the sequence, so no later pass ever sees a jump.
 #[allow(dead_code)] // Default-profile compatibility entry point for library callers and tests.
 pub fn finalize_physical_program(
     program: Program,
@@ -69,6 +69,8 @@ pub fn finalize_physical_program_with_semantics(
     defines: &HashSet<String>,
     semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<Program, CompileError> {
+    crate::semantics::nullability::validate_original_declarations(&program, semantic_profile)
+        .map_err(|error| error.with_file(path.display().to_string()))?;
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
     crate::php_only::check_file_with_mode(&program, &path.display().to_string(), mode)?;
     crate::semantics::validate_source(&program, semantic_profile)

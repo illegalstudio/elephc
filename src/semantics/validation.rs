@@ -245,18 +245,27 @@ impl AstVisitor for SourceValidator {
             .and_then(|tokens| crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php));
         match parsed {
             Ok(program) => {
+                let original_declarations =
+                    super::nullability::validate_original_declarations(&program, self.profile);
                 let program = crate::magic_constants::substitute_eval_constants(
                     program,
                     source_path.as_deref().map(std::path::Path::new),
                 );
                 self.depth += 1;
-                match super::numeric_constants::validate(&program, self.profile).and_then(|()| {
-                    if self.profile.contains(StrictFeature::ArrayKeys) {
-                        validate_source_writes(&program, self.profile, SourceWriteScope::LiteralEval)
-                    } else {
-                        Ok(())
-                    }
-                }) {
+                match original_declarations
+                    .and_then(|()| super::numeric_constants::validate(&program, self.profile))
+                    .and_then(|()| {
+                        if self.profile.contains(StrictFeature::ArrayKeys) {
+                            validate_source_writes(
+                                &program,
+                                self.profile,
+                                SourceWriteScope::LiteralEval,
+                            )
+                        } else {
+                            Ok(())
+                        }
+                    })
+                {
                     Ok(()) => {
                         self.eval_source_paths.push(source_path);
                         walk_program(&program, self);
