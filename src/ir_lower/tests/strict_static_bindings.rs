@@ -27,6 +27,9 @@ fn lower_statics(target: Target, strict: bool) -> Module {
         function static_parameter_choice(string &$value, bool $bind): void {
             if($bind){static $value=1;}echo $value;
         }
+        function static_array_owner(): void {
+            $seed=[1];static $value=$seed;unset($seed);
+        }
         $parameter="local";static_parameter_choice($parameter,false);
         late_static();late_static();
         echo conditional_static(false),":",conditional_static(true),"|";late_throw();
@@ -61,6 +64,21 @@ fn strict_native_static_bindings_keep_storage_separate_on_every_target() {
             let crate::ir::ValueDef::Instruction { inst, .. } = source.def else { panic!("reference place"); };
             assert!(matches!(main.instruction(inst).unwrap().op, Op::LoadLocal | Op::LoadRefCell),
                 "{name}: string reference arguments preserve their place through canonical promotion");
+            let array_owner = module.functions.iter()
+                .find(|function| function.name == "static_array_owner")
+                .expect("array static owner fixture");
+            let initializer = array_owner.instructions.iter()
+                .find(|instruction| instruction.op == Op::InitStaticLocal)
+                .expect("array static initializer");
+            let source = array_owner.value(initializer.operands[0]).expect("initializer source");
+            let crate::ir::ValueDef::Instruction { inst, .. } = source.def else {
+                panic!("{name}: array initializer owner must be an instruction result");
+            };
+            assert_eq!(
+                array_owner.instruction(inst).expect("initializer owner instruction").op,
+                Op::Acquire,
+                "{name}: publishing a local array as static storage needs an independent owner",
+            );
             crate::ir::validate_module(&module).unwrap();
             let mut invalid = module.clone();
             let function = invalid.functions.iter_mut().find(|function| function.name == "late_static").unwrap();

@@ -18,7 +18,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, 
     ctx.builder.position_at_end(init_block);
     let value = lower_expr(ctx, init);
     let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(span));
-    let value = if ctx.builder.value_ownership(value.value) == Ownership::Borrowed {
+    let value = if ctx.builder.value_ownership(value.value) != Ownership::Owned {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
     } else { value };
     let existing = ctx.builder.function().locals.iter().find(|local|
