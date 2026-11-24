@@ -2762,6 +2762,9 @@ fn runtime_builtin_needs_unlinked_bridge(ctx: &FunctionContext<'_>, name: &str) 
                 && !linked.iter().any(|linked| {
                     matches!(linked, crate::codegen::LinkRequirement::Bridge(name) if name == library)
                 })
+                // A prelude that declares the bridge's externs (the random surface's
+                // `elephc_random_*`) links it as well, so its builtins keep their wrapper.
+                && !ctx.module.extern_decls.iter().any(|decl| decl.link_libs.iter().any(|lib| lib == *library))
         }
         _ => false,
     })
