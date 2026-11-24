@@ -98,6 +98,26 @@ echo $cells[0], ':', $result, ':', $values[1];
     );
 }
 
+/// Computed assignment indices keep their pre-RHS value, unlike plain local indices.
+#[test]
+fn test_strict_array_keys_preserves_assignment_index_capture_order() {
+    let source = r#"<?php
+$keys = [0];
+$computed = [[], []];
+$computed[$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd';
+$computed[0][false] = 'x';
+$key = 0;
+$plain = [[], []];
+$plain[$key] = ($key = 1) ? 'ab' : 'cd';
+$plain[1][false] = 'y';
+echo $computed[0], ':', $plain[1];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "xb:yb"
+    );
+}
+
 /// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
 #[test]
 fn test_strict_array_keys_interpolation_uses_integer_offsets() {

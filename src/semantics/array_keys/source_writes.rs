@@ -18,6 +18,7 @@ use crate::parser::ast::{
     ArrayEntry, CastType, CatchClause, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt,
     StmtKind, TypeExpr,
 };
+use crate::span::Span;
 use crate::types::PhpType;
 use elephc_semantics::{array_keys::StringKey, SemanticProfile};
 
@@ -1883,19 +1884,20 @@ fn validate_stmt(
             index,
             value,
         } => {
-            apply_expression_facts(index, locals, properties, profile, current_class);
+            let index_span = index.span;
+            let evaluated_index =
+                apply_expression_facts(index, locals, properties, profile, current_class);
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
-            validate_index(
-                profile,
-                &receiver,
-                index,
-                locals,
-                properties,
-                current_class,
-            )?;
-            let index = infer_expr(index, locals, properties, profile, current_class);
+            // PHP re-reads a plain local index after the RHS, while every computed index is
+            // stabilized when its own evaluation finishes.
+            let index = if matches!(&index.kind, ExprKind::Variable(_)) {
+                infer_expr(index, locals, properties, profile, current_class)
+            } else {
+                evaluated_index
+            };
+            validate_index_fact(profile, &receiver, &index, index_span)?;
             locals.assign(array, array_write_fact(receiver, index, value));
         }
         StmtKind::ArrayPush { array, value } => {
@@ -4176,13 +4178,22 @@ fn validate_index(
     properties: &PropertyFacts,
     current_class: Option<&str>,
 ) -> Result<(), CompileError> {
-    let Some(receiver) = receiver.value_type() else {
+    let index_span = index.span;
+    let index = infer_expr(index, locals, properties, profile, current_class);
+    validate_index_fact(profile, receiver, &index, index_span)
+}
+
+/// Validates one index fact captured at its PHP-observable evaluation point.
+fn validate_index_fact(
+    profile: SemanticProfile,
+    receiver: &ValueFact,
+    index: &ValueFact,
+    span: Span,
+) -> Result<(), CompileError> {
+    let (Some(receiver), Some(key)) = (receiver.value_type(), index.value_type()) else {
         return Ok(());
     };
-    let Some(key) = infer_expr(index, locals, properties, profile, current_class).value_type() else {
-        return Ok(());
-    };
-    super::validate_write_receiver(profile, &receiver, &key, index.span)
+    super::validate_write_receiver(profile, &receiver, &key, span)
 }
 
 /// Validates every key whose immediate receiver can be proven while walking to the root.

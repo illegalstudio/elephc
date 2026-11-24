@@ -205,6 +205,29 @@ fn strict_array_key_source_validation_keeps_inc_dec_capture_order() {
     }
 }
 
+/// Computed assignment indices stay captured before the RHS, while plain locals are re-read.
+#[test]
+fn strict_array_key_source_validation_keeps_assignment_index_capture_order() {
+    let accepted = [
+        "<?php $keys = [0]; $values = [[], []]; $values[$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[0][false] = 'x';",
+        "<?php $key = 0; $values = [[], []]; $values[$key] = ($key = 1) ? 'ab' : 'cd'; $values[1][false] = 'x';",
+    ];
+    for source in accepted {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    let rejected = [
+        "<?php $keys = [0]; $values = [[], []]; $values[$keys[0]] = ($keys[0] = 1) ? 'ab' : 'cd'; $values[1][false] = 'x';",
+        "<?php $key = 0; $values = [[], []]; $values[$key] = ($key = 1) ? 'ab' : 'cd'; $values[0][false] = 'x';",
+    ];
+    for source in rejected {
+        let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .expect_err("the final write selects the array slot rather than the assigned string");
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
 /// Negative maximum keys advance implicit appends by one instead of resetting to zero.
 #[test]
 fn strict_array_key_source_validation_tracks_negative_append_keys() {
