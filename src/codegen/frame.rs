@@ -1037,6 +1037,18 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     }).collect();
     if globals.is_empty() { return; }
 
+    // PHP first removes direct object globals with a single owner. Remaining objects run
+    // their callbacks while other global names and container aliases are still published.
+    if ctx.module.required_runtime_features.eval_bridge
+        || ctx.module.class_infos.values().any(|class| class.methods.contains_key("__destruct"))
+    {
+        for (_, symbol, ty) in globals.iter().rev() {
+            if *ty == PhpType::Mixed {
+                emit_main_single_owner_global_cleanup(ctx, symbol);
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_gc_finalize_before_global_cleanup");
+    }
     let result = abi::int_result_reg(ctx.emitter);
     let again = ctx.next_label("global_cleanup_again");
     ctx.emitter.label(&again);
@@ -1058,6 +1070,48 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
         abi::emit_branch_if_int_result_nonzero(ctx.emitter, &again);
     }
+}
+
+/// Retires an ordinary global object box when its last PHP owner is this binding.
+fn emit_main_single_owner_global_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str) {
+    let done = ctx.next_label("global_cleanup_shared");
+    let emitter = &mut *ctx.emitter;
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+    abi::emit_branch_if_int_result_zero(emitter, &done);
+    let (payload, scratch) = match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // inspect the direct value without following PHP references
+            emitter.instruction("cmp x9, #6");                                  // only direct object slots participate in the first shutdown pass
+            emitter.instruction(&format!("b.ne {done}"));                       // preserve arrays and PHP reference bindings
+            emitter.instruction("ldr w9, [x0, #-12]");                          // verify that this slot owns its box exclusively
+            emitter.instruction("cmp w9, #1");                                  // another box owner would keep the underlying object alive
+            emitter.instruction(&format!("b.ne {done}"));                       // leave a shared box published
+            ("x9", "x10")
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [rax], 6");                      // select direct objects without following PHP references
+            emitter.instruction(&format!("jne {done}"));                        // preserve arrays and PHP reference bindings
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // verify that this slot owns its box exclusively
+            emitter.instruction(&format!("jne {done}"));                        // leave a shared box published
+            ("r10", "r11")
+        }
+    };
+    abi::emit_load_from_address(emitter, payload, result, 8);
+    crate::codegen_support::sentinels::emit_branch_if_null_container(emitter, payload, scratch, &done);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr w10, [x9, #-12]");                         // read the live managed object's reference count
+            emitter.instruction("cmp w10, #1");                                 // verify that no other PHP object owner exists
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                 // verify that no other PHP object owner exists
+        }
+    }
+    abi::emit_branch_if_not_equal_wide(emitter, &done);
+    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+    emitter.label(&done);
 }
 
 /// Releases the refcounted value stored in a static-local symbol.

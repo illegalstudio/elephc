@@ -8,7 +8,7 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
-use crate::codegen_support::runtime::arrays::hash_layout;
+use crate::codegen_support::{abi, runtime::arrays::hash_layout};
 use crate::codegen_support::emit::Emitter;
 use super::gc_candidates::scans;
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
@@ -18,6 +18,20 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND};
 
 use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
+
+/// Shares ordinary cycle collection and executable shutdown's live-object destructor pass.
+pub(super) fn emit_collector_entries(emitter: &mut Emitter) {
+    let mode = abi::int_arg_reg_name(emitter.target, 1);
+    let body = "__rt_gc_collect_cycles_enter";
+    emitter.label_global("__rt_gc_finalize_before_global_cleanup");
+    abi::emit_load_int_immediate(emitter, mode, 1);
+    abi::emit_jump(emitter, body);
+    super::gc_host_roots::entry(emitter);
+    emitter.label_global("__rt_gc_collect_cycles_explicit");
+    super::gc_host_roots::begin(emitter);
+    abi::emit_load_int_immediate(emitter, mode, 0);
+    emitter.label_shared(body);
+}
 
 /// Emits `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers.
 ///
@@ -40,9 +54,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
-    super::gc_host_roots::entry(emitter);
-    emitter.label_global("__rt_gc_collect_cycles_explicit");
-    super::gc_host_roots::begin(emitter);
+    emit_collector_entries(emitter);
 
     // -- avoid recursive re-entry while the collector is already running --
     emitter.instruction("mov x0, #0");                                          // a nested collection reports zero collected nodes
@@ -70,12 +82,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     //   [sp, #96] = destructor rescan state
     //   [sp, #104] = pending cleanup exception
     //   [sp, #112] = enclosing GC suppression
+    //   [sp, #120] = run destructors on reachable objects before global cleanup
     emitter.instruction("sub sp, sp, #128");                                    // allocate collector stack frame
     emitter.instruction("str x19, [sp, #48]");                                  // preserve the callee-saved scratch register used during child scans
     emitter.instruction("str x20, [sp, #56]");                                  // preserve the callee-saved payload-size register used during heap scans
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
     emitter.instruction("str xzr, [sp, #96]");                                  // start with no destructor-driven rescan
+    emitter.instruction("str x1, [sp, #120]");                                  // preserve the shutdown mode across all recounts
     CLEANUP.begin(emitter);
     emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
 
@@ -400,6 +414,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
     super::gc_host_roots::publish(emitter);
+    emitter.instruction("ldr x0, [sp, #120]");                                  // include live objects only at executable shutdown
     emitter.instruction("bl __rt_gc_destructors");                              // protect candidate data and run destructors before reclamation
     emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // observe mutations and resurrection before choosing doomed nodes
     emitter.instruction("bl __rt_gc_weak_observers");                           // retire weak keys while candidate snapshots still protect callbacks
