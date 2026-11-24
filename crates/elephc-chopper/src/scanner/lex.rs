@@ -1478,24 +1478,24 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
     } else if token.id == tok::T_EXIT {
         // Zend names T_EXIT `exit` even when the source spells it `die`.
         format!("syntax error, unexpected token \"exit\", expecting {expected}")
-    } else if token.id == id("T_LNUMBER") {
+    } else if token.id == tok::T_LNUMBER {
         format!("syntax error, unexpected integer \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_DNUMBER") {
+    } else if token.id == tok::T_DNUMBER {
         format!("syntax error, unexpected floating-point number \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_VARIABLE") {
+    } else if token.id == tok::T_VARIABLE {
         format!("syntax error, unexpected variable \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_CONSTANT_ENCAPSED_STRING") {
+    } else if token.id == tok::T_CONSTANT_ENCAPSED_STRING {
         let (noun, body) = quoted_string_noun(text);
         format!("syntax error, unexpected {noun} \"{}\", expecting {expected}", String::from_utf8_lossy(body))
-    } else if token.id == id("T_NAME_QUALIFIED") {
+    } else if token.id == tok::T_NAME_QUALIFIED {
         format!("syntax error, unexpected namespaced name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_NAME_FULLY_QUALIFIED") {
+    } else if token.id == tok::T_NAME_FULLY_QUALIFIED {
         format!("syntax error, unexpected fully qualified name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
-    } else if token.id == id("T_NAME_RELATIVE") {
+    } else if token.id == tok::T_NAME_RELATIVE {
         format!("syntax error, unexpected namespace-relative name \"{}\", expecting {expected}", String::from_utf8_lossy(text))
     } else if text == b"\"" {
         format!("syntax error, unexpected double-quote mark, expecting {expected}")
-    } else if token.id == id("T_START_HEREDOC") {
+    } else if token.id == tok::T_START_HEREDOC {
         let header = super::heredoc_start_header(text);
         format!(
             "syntax error, unexpected heredoc start \"{}\", expecting {expected}",
@@ -1503,7 +1503,7 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
         )
     } else if let Some(cast) = super::cast_diagnostic_text(token.id) {
         format!("syntax error, unexpected token \"{cast}\", expecting {expected}")
-    } else if token.id == id("T_CLOSE_TAG") {
+    } else if token.id == tok::T_CLOSE_TAG {
         format!("syntax error, unexpected token \";\", expecting {expected}")
     } else if let Some(keyword) = super::keyword_diagnostic_spelling(token.id, text) {
         format!("syntax error, unexpected token \"{keyword}\", expecting {expected}")
@@ -1522,7 +1522,7 @@ fn unexpected_expecting(source: &[u8], token: &Token, expected: &str) -> String 
 /// A heredoc start is reported on the first body line, after the header newline. Every other
 /// token keeps its own start.
 fn diagnostic_pos(source: &[u8], token: &Token) -> usize {
-    if token.id != id("T_START_HEREDOC") {
+    if token.id != tok::T_START_HEREDOC {
         return token.pos;
     }
     let text = &source[token.pos..token.pos + token.len];
