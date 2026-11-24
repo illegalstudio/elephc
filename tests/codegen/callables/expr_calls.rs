@@ -2516,3 +2516,31 @@ echo "\n";
     );
     assert_eq!(out, "x/2/3|41|x/s/z|\n");
 }
+
+/// Runs the unresolvable-callback fixture, with its trailing line replaced by `fragment`.
+fn run_invalid_callbacks(fragment: &str) -> String {
+    let source = include_str!("invalid_callbacks.php").replace("EVAL_LINE", fragment);
+    compile_and_run(&source)
+}
+
+/// Every boxed callable that names no invokable target raises php's catchable error, never a
+/// fatal exit, through `call_user_func`, `call_user_func_array`, `array_map` and a direct `$f()`:
+/// a short, long, nested or non-string-method array, an unknown class or method, an abstract
+/// method, a non-object first element, a class-string naming an instance method, an unknown
+/// function name and a non-callable scalar.
+///
+/// Oracle: `php -n` printed `invalid_callbacks.expected.txt` for the same program. A callback a
+/// builtin validates is a `TypeError` worded `<builtin>(): Argument #N ($callback) must be a
+/// valid callback, <reason>`; a direct call is an `Error` with the capitalised reason.
+#[test]
+fn test_unresolvable_boxed_callables_raise_php_catchable_errors() {
+    assert_eq!(run_invalid_callbacks(""), include_str!("invalid_callbacks.expected.txt"));
+}
+
+/// The same matrix in a program that links the eval bridge, where the module-wide callback
+/// normalizer (not the scope-aware dispatcher) serves the unrestricted sites.
+#[test]
+fn test_unresolvable_boxed_callables_raise_php_catchable_errors_with_eval_linked() {
+    let out = run_invalid_callbacks("$code = $argc > 9 ? 'return 1;' : ''; eval($code);");
+    assert_eq!(out, include_str!("invalid_callbacks.expected.txt"));
+}

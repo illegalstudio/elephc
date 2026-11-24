@@ -1,0 +1,52 @@
+viaCuf 0: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCuf 1: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCuf 2: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCuf 3: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, second array member is not a valid method
+viaCuf 4: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class "NoSuchClass" not found
+viaCuf 5: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nosuch"
+viaCuf 6: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot call abstract method Abs::am()
+viaCuf 7: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCuf 8: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCuf 9: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCuf 10: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method H::greet() cannot be called statically
+viaCuf 11: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, function "nosuchfn" not found or invalid function name
+viaCuf 12: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given
+viaCufa 0: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCufa 1: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCufa 2: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCufa 3: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, second array member is not a valid method
+viaCufa 4: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, class "NoSuchClass" not found
+viaCufa 5: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nosuch"
+viaCufa 6: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, cannot call abstract method Abs::am()
+viaCufa 7: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCufa 8: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+viaCufa 9: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+viaCufa 10: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, non-static method H::greet() cannot be called statically
+viaCufa 11: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nosuchfn" not found or invalid function name
+viaCufa 12: TypeError: call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given
+viaMap 0: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, array callback must have exactly two members
+viaMap 1: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, array callback must have exactly two members
+viaMap 2: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object
+viaMap 3: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, second array member is not a valid method
+viaMap 4: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, class "NoSuchClass" not found
+viaMap 5: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, class H does not have a method "nosuch"
+viaMap 6: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot call abstract method Abs::am()
+viaMap 7: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object
+viaMap 8: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object
+viaMap 9: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, array callback must have exactly two members
+viaMap 10: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, non-static method H::greet() cannot be called statically
+viaMap 11: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, function "nosuchfn" not found or invalid function name
+viaMap 12: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, no array or string given
+viaDirect 0: Error: Array callback must have exactly two elements
+viaDirect 1: Error: Array callback must have exactly two elements
+viaDirect 2: Error: First array member is not a valid class name or object
+viaDirect 3: Error: Second array member is not a valid method
+viaDirect 4: Error: Class "NoSuchClass" not found
+viaDirect 5: Error: Call to undefined method H::nosuch()
+viaDirect 6: Error: Cannot call abstract method Abs::am()
+viaDirect 7: Error: First array member is not a valid class name or object
+viaDirect 8: Error: First array member is not a valid class name or object
+viaDirect 9: Error: Array callback must have exactly two elements
+viaDirect 10: Error: Non-static method H::greet() cannot be called statically
+viaDirect 11: Error: Call to undefined function nosuchfn()
+viaDirect 12: Error: Value of type int is not callable

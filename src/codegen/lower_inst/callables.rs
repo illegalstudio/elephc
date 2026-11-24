@@ -214,6 +214,7 @@ pub(super) fn lower_closure_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
 /// Lowers expression-call forms like `($expr)(...)` when the callee is a runtime string.
 pub(super) fn lower_expr_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let callable = expect_operand(inst, 0)?;
+    set_invalid_callback_site(ctx, inst, callable);
     match ctx.value_php_type(callable)?.codegen_repr() {
         PhpType::Str => lower_runtime_string_call(ctx, inst, callable, "expr_call"),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
@@ -236,6 +237,7 @@ pub(super) fn lower_callable_descriptor_invoke(
     let callable = expect_operand(inst, 0)?;
     let arg_mixed = expect_operand(inst, 1)?;
     require_descriptor_arg_container(ctx, arg_mixed, "callable_descriptor_invoke")?;
+    set_invalid_callback_site(ctx, inst, callable);
     match ctx.value_php_type(callable)?.codegen_repr() {
         PhpType::Str => lower_runtime_string_descriptor_invoke(
             ctx,
@@ -319,8 +321,29 @@ fn lower_shared_mixed_descriptor_invoke(
     // is merged, so a flag raised directly never reached the emission decision and the program
     // called an undefined `_eir_callable_argument_normalizer`.
     ctx.shared.require_callable_argument_normalizer();
+    // The normalizer has no call site of its own: the wording of its failure comes from here.
+    let prefix = match callback_kind_of(ctx, inst) {
+        CALLBACK_KIND_CALL_USER_FUNC => CALL_USER_FUNC_CALLBACK_PREFIX,
+        CALLBACK_KIND_CALL_USER_FUNC_ARRAY => CALL_USER_FUNC_ARRAY_CALLBACK_PREFIX,
+        _ => "",
+    };
     ctx.load_value_to_result(callable)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    let address = abi::symbol_scratch_reg(ctx.emitter);
+    let value = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, address, "_callable_failure_prefix");
+    abi::emit_symbol_address(ctx.emitter, value, &prefix_label);
+    abi::emit_store_to_address(ctx.emitter, value, address, 0);
+    abi::emit_load_int_immediate(ctx.emitter, value, prefix_len as i64);
+    abi::emit_store_to_address(ctx.emitter, value, address, 8);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
+    // Only this call's failure may use the prefix: later normalizer callers word their own.
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_symbol_address(ctx.emitter, address, "_callable_failure_prefix");
+    abi::emit_store_zero_to_address(ctx.emitter, address, 0);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let descriptor = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, descriptor, abi::int_result_reg(ctx.emitter));
     emit_descriptor_reg_invoker_call_with_mixed_arg(
@@ -394,6 +417,7 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    set_invalid_callback_site(ctx, inst, callable);
     let has_eval_context = super::builtins::has_eval_context(ctx);
     if ctx.runtime_callable_candidates(callable).is_none()
         && !has_eval_context
@@ -861,6 +885,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     arity: Option<usize>,
     inaccessible_override: Option<InaccessibleMethodError>,
 ) -> Result<()> {
+    set_callback_validation_site(ctx, callable, string_type_error.or(invalid_type_error));
     let miss = match &inaccessible_override {
         None => Some(None),
         Some(InaccessibleMethodError::Ignore) => Some(Some(CallableResolverMiss::Ignore)),
@@ -1111,7 +1136,7 @@ fn emit_inline_mixed_callable_descriptor_value(
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&undefined_label);
         match string_type_error {
-            Some(message) => super::exceptions::emit_type_error(ctx, message),
+            Some(message) => emit_callback_type_error(ctx, message),
             None => emit_undefined_runtime_string_call_fatal(ctx),
         }
     }
@@ -1142,7 +1167,7 @@ fn emit_inline_mixed_callable_descriptor_value(
             emit_runtime_descriptor_owned_flag(ctx, true);
             abi::emit_jump(ctx.emitter, &done_label);
         } else if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callback_type_error(ctx, message);
         } else {
             emit_runtime_callable_array_no_match_abort(ctx);
         }
@@ -1178,7 +1203,7 @@ fn emit_inline_mixed_callable_descriptor_value(
             } else if eval_fallback_slot.is_some() {
                 abi::emit_jump(ctx.emitter, &fatal_label);
             } else if let Some(message) = invalid_type_error {
-                super::exceptions::emit_type_error(ctx, message);
+                emit_callback_type_error(ctx, message);
             } else {
                 emit_mixed_callable_not_callable_fatal(ctx, op_name);
             }
@@ -1193,7 +1218,7 @@ fn emit_inline_mixed_callable_descriptor_value(
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
     }
     if let Some(message) = invalid_type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callback_type_error(ctx, message);
     } else {
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
     }
@@ -1419,6 +1444,7 @@ fn emit_eval_closure_descriptor_or_branch(
 /// report from a large application says only that SOME call site refused SOME value, and finding
 /// which one means disassembling the binary.
 fn emit_mixed_callable_not_callable_fatal(ctx: &mut FunctionContext<'_>, op_name: &str) {
+    emit_invalid_callback_throw(ctx);
     let message = format!(
         "Fatal error: Unsupported EIR {} mixed value is not callable in {}\n",
         op_name, ctx.function.name,
@@ -2963,6 +2989,7 @@ fn emit_runtime_string_descriptor_value_impl(
     strict_php: bool,
     type_error: Option<&'static str>,
 ) -> Result<()> {
+    set_callback_validation_site(ctx, callable, type_error);
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases =
         runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
@@ -2970,7 +2997,7 @@ fn emit_runtime_string_descriptor_value_impl(
         // No compiled function answers any name the candidate set allows: every run takes the
         // miss path, which is the run-time error php raises (nothing is pushed yet).
         match type_error {
-            Some(message) => super::exceptions::emit_type_error(ctx, message),
+            Some(message) => emit_callback_type_error(ctx, message),
             None => emit_undefined_runtime_string_call_fatal(ctx),
         }
         return Ok(());
@@ -2994,7 +3021,7 @@ fn emit_runtime_string_descriptor_value_impl(
         ctx.emitter.label(&miss_label);
         if let Some(message) = type_error {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callback_type_error(ctx, message);
         } else {
             emit_undefined_runtime_string_call_fatal(ctx);
         }
@@ -3026,7 +3053,7 @@ fn emit_runtime_string_descriptor_value_impl(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callback_type_error(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -3052,6 +3079,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     arity: Option<usize>,
     eval_fallback: Option<&str>,
 ) -> Result<()> {
+    set_callback_validation_site(ctx, callable, type_error);
     let known_candidates;
     let candidate_names = match candidate_names {
         Some(names) => Some(names),
@@ -3074,7 +3102,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
             return Ok(());
         }
         match type_error {
-            Some(message) => super::exceptions::emit_type_error(ctx, message),
+            Some(message) => emit_callback_type_error(ctx, message),
             None => emit_undefined_runtime_string_call_fatal(ctx),
         }
         return Ok(());
@@ -3098,7 +3126,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
             abi::emit_jump(ctx.emitter, label);
         } else if let Some(message) = type_error {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callback_type_error(ctx, message);
         } else {
             emit_undefined_runtime_string_call_fatal(ctx);
         }
@@ -3133,7 +3161,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         abi::emit_jump(ctx.emitter, label);
     } else if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callback_type_error(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -4969,7 +4997,7 @@ fn emit_require_callable_array_pair_in_reg(
 /// Uses a catchable builtin diagnostic for malformed pairs without changing legacy call behavior.
 fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<&'static str>) {
     if let Some(message) = type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callback_type_error(ctx, message);
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }
@@ -5778,8 +5806,205 @@ fn emit_selected_template_with_saved_receiver_capture(
     }
 }
 
+/// How the failing callback's validation message is prefixed.
+#[derive(Clone)]
+enum InvalidCallbackPrefix {
+    /// A callback validated by a builtin: its fixed `<name>(): Argument ... valid callback` text.
+    /// The empty string selects the direct-call `Error`.
+    Static(String),
+    /// Chosen at run time by the callback kind a shared dispatcher receives.
+    Dynamic(ValueId),
+}
+
+thread_local! {
+    /// The callable and prefix of the descriptor invocation being lowered, with its function.
+    static INVALID_CALLBACK_SITE: std::cell::RefCell<Option<(String, ValueId, InvalidCallbackPrefix)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Records which callable, and which builtin's wording, an unresolvable target raises for.
+///
+/// The miss paths are many and deep; none of them knows the instruction that started the
+/// dispatch, so the entry points record it here and the paths read it back when they give up.
+fn set_invalid_callback_site(ctx: &FunctionContext<'_>, inst: &Instruction, callable: ValueId) {
+    let prefix = if crate::codegen::shared_mixed_callable::is_shared_helper_name(&ctx.function.name) {
+        InvalidCallbackPrefix::Dynamic(crate::codegen::shared_mixed_callable::kind_value())
+    } else {
+        InvalidCallbackPrefix::Static(match callback_kind_of(ctx, inst) {
+            CALLBACK_KIND_CALL_USER_FUNC => CALL_USER_FUNC_CALLBACK_PREFIX.to_string(),
+            CALLBACK_KIND_CALL_USER_FUNC_ARRAY => CALL_USER_FUNC_ARRAY_CALLBACK_PREFIX.to_string(),
+            _ => String::new(),
+        })
+    };
+    INVALID_CALLBACK_SITE.with(|site| {
+        *site.borrow_mut() = Some((ctx.function.name.clone(), callable, prefix));
+    });
+}
+
+/// Records the callable a builtin validates and the fixed text its `TypeError` starts with.
+fn set_callback_validation_site(ctx: &FunctionContext<'_>, callable: ValueId, message: Option<&'static str>) {
+    let Some(message) = message else { return };
+    INVALID_CALLBACK_SITE.with(|site| {
+        *site.borrow_mut() = Some((
+            ctx.function.name.clone(),
+            callable,
+            InvalidCallbackPrefix::Static(message.to_string()),
+        ));
+    });
+}
+
+/// Raises a builtin's callback `TypeError`, with php's reason when the helper is available.
+///
+/// `message` is the builtin's fixed text (`array_map(): Argument #1 ($callback) must be a valid
+/// callback or null`); the helper appends `, <reason>` the way php does. Without the helper, or
+/// for a site whose callable was not recorded, the bare message is thrown.
+fn emit_callback_type_error(ctx: &mut FunctionContext<'_>, message: &'static str) {
+    let recorded = INVALID_CALLBACK_SITE.with(|site| {
+        let mut site = site.borrow_mut();
+        match site.as_mut() {
+            Some((function, _, prefix)) if *function == ctx.function.name => {
+                *prefix = InvalidCallbackPrefix::Static(message.to_string());
+                true
+            }
+            _ => false,
+        }
+    });
+    if recorded {
+        emit_invalid_callback_throw(ctx);
+    }
+    super::exceptions::emit_type_error(ctx, message);
+}
+
+/// Pushes an empty argument collector when the helper carries the hidden surplus-argument tail.
+///
+/// A program that may capture backtraces gives every function a trailing variadic collector, and a
+/// call written in assembly has to supply it like any caller: an empty `array<mixed>`, popped into
+/// the fourth argument register once the other arguments are in place. Returns whether it pushed.
+fn invalid_callback_pushes_collector(ctx: &mut FunctionContext<'_>, helper: &str) -> bool {
+    let hidden = ctx.callable_function_by_name(helper).is_some_and(|callee| {
+        callee.params.last().is_some_and(|param| param.name == crate::func_args::HIDDEN_ARGS_PARAM)
+    });
+    if !hidden {
+        return false;
+    }
+    let (capacity, size) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_load_int_immediate(ctx.emitter, capacity, 1);
+    abi::emit_load_int_immediate(ctx.emitter, size, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    let result = abi::int_result_reg(ctx.emitter).to_string();
+    crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result, &PhpType::Mixed);
+    abi::emit_push_reg(ctx.emitter, &result);
+    true
+}
+
+/// Calls the invalid-callback helper for the recorded site; the helper always throws.
+///
+/// Emits nothing when the program carries no helper or no site was recorded for this function, so
+/// the caller's older fatal path stays the fallback.
+fn emit_invalid_callback_throw(ctx: &mut FunctionContext<'_>) {
+    let helper = crate::invalid_callback_prelude::INVALID_CALLBACK_HELPER_NAME;
+    if !ctx.module.has_function_named(helper) {
+        return;
+    }
+    let Some((function, callable, prefix)) = INVALID_CALLBACK_SITE.with(|site| site.borrow().clone())
+    else {
+        return;
+    };
+    if function != ctx.function.name {
+        return;
+    }
+    let call_with = |ctx: &mut FunctionContext<'_>, text: &str| -> Result<()> {
+        let collector = invalid_callback_pushes_collector(ctx, helper);
+        let ty = ctx.load_value_to_result(callable)?;
+        emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::int_result_reg(ctx.emitter),
+        );
+        let (label, len) = ctx.data.add_string(text.as_bytes());
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &label);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), len as i64);
+        if collector {
+            abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3));
+        }
+        abi::emit_call_label(ctx.emitter, &function_symbol(helper));
+        Ok(())
+    };
+    match prefix {
+        InvalidCallbackPrefix::Static(text)
+            if ctx.function.name == super::callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER =>
+        {
+            // The module-wide normalizer serves every call site: the site that is calling it
+            // left its wording in `_callable_failure_prefix` (null pointer: none was left).
+            let generic = ctx.next_label("invalid_callback_generic");
+            let collector = invalid_callback_pushes_collector(ctx, helper);
+            let Ok(ty) = ctx.load_value_to_result(callable) else { return };
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+            abi::emit_reg_move(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 0),
+                abi::int_result_reg(ctx.emitter),
+            );
+            let address = abi::symbol_scratch_reg(ctx.emitter);
+            let text_ptr = abi::int_arg_reg_name(ctx.emitter.target, 1);
+            let text_len = abi::int_arg_reg_name(ctx.emitter.target, 2);
+            abi::emit_symbol_address(ctx.emitter, address, "_callable_failure_prefix");
+            abi::emit_load_from_address(ctx.emitter, text_ptr, address, 0);
+            abi::emit_load_from_address(ctx.emitter, text_len, address, 8);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {text_ptr}, {generic}")), // no site left a wording: use the builtin's own
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {text_ptr}, {text_ptr}")); // no site left a wording: use the builtin's own
+                    ctx.emitter.instruction(&format!("jz {generic}"));          // branch to the generic wording
+                }
+            }
+            if collector {
+                abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3));
+            }
+            abi::emit_call_label(ctx.emitter, &function_symbol(helper));
+            ctx.emitter.label(&generic);
+            let _ = call_with(ctx, &text);
+        }
+        InvalidCallbackPrefix::Static(text) => {
+            let _ = call_with(ctx, &text);
+        }
+        InvalidCallbackPrefix::Dynamic(kind) => {
+            let user_func = ctx.next_label("invalid_callback_user_func");
+            let user_func_array = ctx.next_label("invalid_callback_user_func_array");
+            let kind_reg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+            if ctx.load_value_to_reg(kind, kind_reg).is_err() {
+                return;
+            }
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cmp {kind_reg}, #{CALLBACK_KIND_CALL_USER_FUNC}")); // is the callback a call_user_func() argument?
+                    ctx.emitter.instruction(&format!("b.eq {user_func}"));      // word the call_user_func() validation error
+                    ctx.emitter.instruction(&format!("cmp {kind_reg}, #{CALLBACK_KIND_CALL_USER_FUNC_ARRAY}")); // is the callback a call_user_func_array() argument?
+                    ctx.emitter.instruction(&format!("b.eq {user_func_array}")); // word the call_user_func_array() validation error
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("cmp {kind_reg}, {CALLBACK_KIND_CALL_USER_FUNC}")); // is the callback a call_user_func() argument?
+                    ctx.emitter.instruction(&format!("je {user_func}"));        // word the call_user_func() validation error
+                    ctx.emitter.instruction(&format!("cmp {kind_reg}, {CALLBACK_KIND_CALL_USER_FUNC_ARRAY}")); // is the callback a call_user_func_array() argument?
+                    ctx.emitter.instruction(&format!("je {user_func_array}"));  // word the call_user_func_array() validation error
+                }
+            }
+            let _ = call_with(ctx, "");
+            ctx.emitter.label(&user_func);
+            let _ = call_with(ctx, CALL_USER_FUNC_CALLBACK_PREFIX);
+            ctx.emitter.label(&user_func_array);
+            let _ = call_with(ctx, CALL_USER_FUNC_ARRAY_CALLBACK_PREFIX);
+        }
+    }
+}
+
 /// Emits the fatal path for runtime callable arrays without a matching method.
 fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
+    emit_invalid_callback_throw(ctx);
     let message = if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
         format!(
             "Fatal error: callable array did not resolve to an invokable target in {}\n",
@@ -6875,6 +7100,7 @@ fn store_runtime_string_call_result(
 
 /// Emits the fatal path for an unmatched runtime string callable name.
 fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
+    emit_invalid_callback_throw(ctx);
     // `ELEPHC_EVAL_TRACE` names the compiled function the call is in, as the callable-array
     // fatal does, so a build can say which site needs a candidate the closed world lacks.
     let message = if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {

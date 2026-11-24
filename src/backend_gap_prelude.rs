@@ -1068,6 +1068,12 @@ pub fn inject_if_used(
     // And so is a method call on an unknown receiver whose class declares `__call()` but not the
     // method: the dispatch ladder lists only the classes that declare it.
     let needs_magic_call = crate::magic_call_prelude::program_declares_magic_call(&program);
+    // Every boxed callable that resolves to nothing raises php's catchable error through one helper.
+    let needs_invalid_callback = usage.dynamic_function_call
+        || ["call_user_func", "call_user_func_array", "array_map", "array_filter", "array_reduce",
+            "array_walk", "array_walk_recursive", "usort", "uasort", "uksort", "iterator_apply"]
+            .iter()
+            .any(|name| usage.references(name));
     if sources.is_empty()
         && !needs_csv_long_forms
         && !needs_array_find
@@ -1091,6 +1097,7 @@ pub fn inject_if_used(
         && !needs_version_compare
         && !needs_hash_pbkdf2
         && !needs_magic_call
+        && !needs_invalid_callback
         && !inject_randomizer
         && !needs_natural_order
         && !needs_parse_str
@@ -1242,6 +1249,11 @@ pub fn inject_if_used(
     }
     if needs_magic_call {
         let declarations = crate::magic_call_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_invalid_callback {
+        let declarations = crate::invalid_callback_prelude::declarations(&program);
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

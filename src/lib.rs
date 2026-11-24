@@ -108,6 +108,7 @@ mod strnatcmp_prelude;
 mod strtok_prelude;
 mod randomizer_prelude;
 pub mod builtin_callable_prelude;
+mod invalid_callback_prelude;
 mod magic_call_prelude;
 pub mod static_ref_capture;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
