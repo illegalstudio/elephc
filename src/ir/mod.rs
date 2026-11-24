@@ -10,6 +10,7 @@
 //!   are immutable metadata assigned when instructions are built.
 
 mod block;
+pub(crate) mod control_flow;
 mod runtime_fn;
 mod builder;
 mod effects;

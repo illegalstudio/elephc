@@ -14,9 +14,9 @@ mod reference_results;
 mod eval_scope_owners;
 mod dominators;
 
-use dominators::DominatorSets;
+use dominators::DominatorTree;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
 use crate::ir::effects::Effects;
@@ -195,7 +195,7 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     }
     validate_value_table(function)?;
     validate_instruction_placement(function)?;
-    let dominators = compute_dominators(function);
+    let dominators = DominatorTree::new(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
     string_append::validate_transfers(function)?;
@@ -372,7 +372,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -1015,7 +1015,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -2061,7 +2061,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -2132,7 +2132,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -2149,7 +2149,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -2198,7 +2198,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -2275,7 +2275,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -2287,8 +2287,7 @@ fn validate_use(
     // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
     // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
     // and same-block ordering so malformed instructions still fail validation.
-    let use_is_unreachable = use_block != function.entry
-        && dominators.is_singleton(use_block);
+    let use_is_unreachable = !dominators.is_reachable(use_block);
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
@@ -2310,7 +2309,7 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &DominatorSets,
+    dominators: &DominatorTree,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
@@ -2321,196 +2320,6 @@ fn definition_dominates_use(
             .map(|use_index| index < use_index)
             .unwrap_or(true),
         ValueDef::Instruction { block, .. } => dominators.dominates(block, use_block),
-    }
-}
-
-/// Computes simple iterative dominator sets for the function CFG.
-///
-/// Only predecessors reachable from the entry are intersected. An unreachable
-/// block carries no real control flow from the entry, so including it as a
-/// predecessor would wrongly shrink a reachable block's dominator set. For example, a
-/// loop whose `for.update` is skipped by an unconditional `break` leaves that
-/// update block unreachable yet still branching back to the loop header, which
-/// would otherwise strip the entry block out of the header's dominators and
-/// produce spurious `UseNotDominated` errors for any value the entry defines and
-/// a later pass forwards into the loop. Unreachable blocks themselves resolve
-/// to `{self}`. Validation skips cross-block dominance for their uses while
-/// still rejecting same-block use-before-definition.
-fn compute_dominators(function: &Function) -> DominatorSets {
-    let predecessors = compute_predecessors(function);
-    let reachable = reachable_from_entry(function, &predecessors);
-    let block_count = function.blocks.len();
-    let all_blocks = full_block_bitset(block_count);
-    let mut dominators = vec![all_blocks.clone(); block_count];
-    let entry_index = function.entry.as_raw() as usize;
-    dominators[entry_index] = empty_block_bitset(block_count);
-    set_block_bit(&mut dominators[entry_index], entry_index);
-    let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (block_index, block) in function.blocks.iter().enumerate() {
-            if block.id == function.entry {
-                continue;
-            }
-            let mut next = if predecessor_indices[block_index].is_empty() {
-                empty_block_bitset(block_count)
-            } else {
-                all_blocks.clone()
-            };
-            for pred_index in &predecessor_indices[block_index] {
-                bitset_and_assign(&mut next, &dominators[*pred_index]);
-            }
-            set_block_bit(&mut next, block_index);
-            if dominators[block_index] != next {
-                dominators[block_index] = next;
-                changed = true;
-            }
-        }
-    }
-    DominatorSets::new(dominators)
-}
-
-/// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
-fn reachable_predecessor_indices(
-    function: &Function,
-    predecessors: &HashMap<BlockId, Vec<BlockId>>,
-    reachable: &HashSet<BlockId>,
-) -> Vec<Vec<usize>> {
-    function
-        .blocks
-        .iter()
-        .map(|block| {
-            predecessors
-                .get(&block.id)
-                .map(|preds| {
-                    preds
-                        .iter()
-                        .filter(|pred| reachable.contains(pred))
-                        .map(|pred| pred.as_raw() as usize)
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
-        .collect()
-}
-
-/// Builds a bitset with every block bit set, masking unused bits in the last word.
-fn full_block_bitset(block_count: usize) -> Vec<u64> {
-    let mut bits = vec![u64::MAX; block_bitset_word_count(block_count)];
-    let trailing_bits = block_count % u64::BITS as usize;
-    if trailing_bits != 0 {
-        if let Some(last) = bits.last_mut() {
-            *last = (1_u64 << trailing_bits) - 1;
-        }
-    }
-    bits
-}
-
-/// Builds an empty block bitset with enough words for the function block count.
-fn empty_block_bitset(block_count: usize) -> Vec<u64> {
-    vec![0; block_bitset_word_count(block_count)]
-}
-
-/// Returns the number of machine words needed to represent one block bitset.
-fn block_bitset_word_count(block_count: usize) -> usize {
-    block_count.div_ceil(u64::BITS as usize)
-}
-
-/// Marks one block index as present in a dominator bitset.
-fn set_block_bit(bits: &mut [u64], block_index: usize) {
-    let word = block_index / u64::BITS as usize;
-    let bit = block_index % u64::BITS as usize;
-    bits[word] |= 1_u64 << bit;
-}
-
-/// Intersects a dominator bitset in place with another predecessor bitset.
-fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
-    for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
-        *left_word &= *right_word;
-    }
-}
-
-/// Computes the set of blocks reachable from the entry over the same edge set as
-/// `compute_predecessors` (terminator successors plus implicit exception-handler
-/// edges): a block is reachable when it is the entry or any of its predecessors
-/// is reachable. Iterates to a fixed point.
-fn reachable_from_entry(
-    function: &Function,
-    predecessors: &HashMap<BlockId, Vec<BlockId>>,
-) -> HashSet<BlockId> {
-    let mut reachable: HashSet<BlockId> = HashSet::from([function.entry]);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in &function.blocks {
-            if reachable.contains(&block.id) {
-                continue;
-            }
-            if let Some(preds) = predecessors.get(&block.id) {
-                if preds.iter().any(|pred| reachable.contains(pred)) {
-                    reachable.insert(block.id);
-                    changed = true;
-                }
-            }
-        }
-    }
-    reachable
-}
-
-/// Builds predecessor lists from every terminator edge plus implicit exception edges.
-///
-/// A `try_push_handler <token>` instruction installs an exception handler whose block id equals
-/// `<token>` (the backend recovers it the same way, `BlockId::from_raw(token as u32)`). Control can
-/// reach that handler from anywhere in the protected region, but the push block dominates the whole
-/// region, so the push block is the handler's immediate dominator. The terminator graph alone never
-/// names the handler as a successor, so without this edge the handler looks unreachable: its
-/// dominator set collapses to itself and corrupts every block reached from the catch body — for a
-/// `try`/`catch` inside a loop the back-edge then strips the entry block out of the loop header's
-/// dominators, yielding spurious `UseNotDominated` errors for values defined in the entry block.
-fn compute_predecessors(function: &Function) -> HashMap<BlockId, Vec<BlockId>> {
-    let mut predecessors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
-    for block in &function.blocks {
-        if let Some(term) = &block.terminator {
-            for successor in successors(term) {
-                predecessors.entry(successor).or_default().push(block.id);
-            }
-        }
-        for inst_id in &block.instructions {
-            let Some(inst) = function.instruction(*inst_id) else {
-                continue;
-            };
-            if inst.op == Op::TryPushHandler {
-                if let Some(Immediate::I64(token)) = inst.immediate {
-                    let handler = BlockId::from_raw(token as u32);
-                    predecessors.entry(handler).or_default().push(block.id);
-                }
-            }
-        }
-    }
-    predecessors
-}
-
-/// Returns all direct successor blocks for a terminator.
-fn successors(term: &Terminator) -> Vec<BlockId> {
-    match term {
-        Terminator::Br { target, .. } => vec![*target],
-        Terminator::CondBr {
-            then_target,
-            else_target,
-            ..
-        } => vec![*then_target, *else_target],
-        Terminator::Switch { cases, default, .. } => {
-            let mut out: Vec<BlockId> = cases.iter().map(|case| case.target).collect();
-            out.push(*default);
-            out
-        }
-        Terminator::GeneratorSuspend { resume, .. } => vec![*resume],
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
     }
 }
 

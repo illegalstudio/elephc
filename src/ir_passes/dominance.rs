@@ -10,13 +10,8 @@
 //!   fixed-point driver.
 //!
 //! Key details:
-//! - Uses the Cooper–Harvey–Kennedy iterative algorithm ("A Simple, Fast
-//!   Dominance Algorithm"): walk blocks in reverse postorder, recomputing each
-//!   block's idom as the intersection of its already-processed predecessors'
-//!   idoms until a fixed point. The intersect walks the partial idom tree using
-//!   postorder numbers as "fingers". This converges for arbitrary (including
-//!   irreducible) reducible CFGs and is simple and fast on the small functions
-//!   EIR produces.
+//! - Shares the immediate-dominator computation with the validator, using the
+//!   optimizer's explicit-edge graph.
 //! - Only blocks reachable from the entry participate. Unreachable blocks (which
 //!   `branch_simplify` neutralizes in place but leaves in the table) are excluded
 //!   from the dominator tree, and dominance queries about them return `false`.
@@ -25,6 +20,7 @@
 //!   terminate without special cases; the public `immediate_dominator` maps the
 //!   entry and unreachable blocks back to `None`.
 
+use crate::ir::control_flow::immediate_dominators;
 use crate::ir::{BlockId, Function};
 
 use super::cfg::{predecessors, reverse_postorder};
@@ -136,54 +132,13 @@ pub fn compute_dominance(func: &Function) -> DominanceInfo {
     let block_count = func.blocks.len();
     let entry = func.entry;
 
-    // Reverse postorder of reachable blocks (entry first), with a postorder
-    // number per block where a higher number is closer to the entry — the order
-    // the intersect's finger walk relies on.
     let rpo = reverse_postorder(func);
-    let mut reachable = vec![false; block_count];
-    let mut postorder_number = vec![0u32; block_count];
-    for (rpo_index, &block) in rpo.iter().enumerate() {
-        let raw = block.as_raw() as usize;
-        reachable[raw] = true;
-        postorder_number[raw] = (rpo.len() - 1 - rpo_index) as u32;
-    }
+    let parents = immediate_dominators(entry, &predecessors(func), &rpo);
+    let reachable = parents.iter().map(Option::is_some).collect();
 
-    let preds = predecessors(func);
-
-    // `idom[b]` is `None` until the block has been assigned a dominator. The
-    // entry is its own dominator (the tree root sentinel).
-    let mut idom: Vec<Option<BlockId>> = vec![None; block_count];
-    idom[entry.as_raw() as usize] = Some(entry);
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        // Process every reachable block except the entry, in reverse postorder,
-        // so each block's predecessors are usually already processed.
-        for &block in rpo.iter().skip(1) {
-            let mut new_idom: Option<BlockId> = None;
-            for &pred in &preds[block.as_raw() as usize] {
-                if !reachable[pred.as_raw() as usize] || idom[pred.as_raw() as usize].is_none() {
-                    continue;
-                }
-                new_idom = Some(match new_idom {
-                    None => pred,
-                    Some(current) => intersect(pred, current, &idom, &postorder_number),
-                });
-            }
-            if let Some(new_idom) = new_idom {
-                if idom[block.as_raw() as usize] != Some(new_idom) {
-                    idom[block.as_raw() as usize] = Some(new_idom);
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    // Finalize: self-root the entry and any unreachable block so later walks
-    // terminate, then build the dominator-tree children lists.
-    let idom: Vec<BlockId> = (0..block_count)
-        .map(|raw| idom[raw].unwrap_or_else(|| BlockId::from_raw(raw as u32)))
+    // Self-root the entry and unreachable blocks so later walks terminate.
+    let idom: Vec<_> = parents.into_iter().enumerate()
+        .map(|(raw, parent)| parent.unwrap_or_else(|| BlockId::from_raw(raw as u32)))
         .collect();
     let mut children: Vec<Vec<BlockId>> = vec![Vec::new(); block_count];
     for &block in rpo.iter().skip(1) {
@@ -197,26 +152,4 @@ pub fn compute_dominance(func: &Function) -> DominanceInfo {
         reachable,
         children,
     }
-}
-
-/// Returns the nearest common ancestor of two processed blocks in the partial
-/// dominator tree, walking the two "fingers" up their idom chains until they
-/// meet. Higher postorder numbers are closer to the entry, so the finger with
-/// the smaller number is always the one moved up; the entry has the maximum
-/// number and is never moved, guaranteeing termination.
-fn intersect(
-    mut a: BlockId,
-    mut b: BlockId,
-    idom: &[Option<BlockId>],
-    postorder_number: &[u32],
-) -> BlockId {
-    while a != b {
-        while postorder_number[a.as_raw() as usize] < postorder_number[b.as_raw() as usize] {
-            a = idom[a.as_raw() as usize].expect("intersect operand has an assigned idom");
-        }
-        while postorder_number[b.as_raw() as usize] < postorder_number[a.as_raw() as usize] {
-            b = idom[b.as_raw() as usize].expect("intersect operand has an assigned idom");
-        }
-    }
-    a
 }
