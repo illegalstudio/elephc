@@ -671,7 +671,8 @@ Cannot assign float to property Box::$n of type int\n6"
         "Deprecated: Implicit conversion from float -2.5 to int loses precision in ",
         "Deprecated: Implicit conversion from float-string \"2.5\" to int loses precision in ",
     ];
-    let lines = out.stderr.lines().collect::<Vec<_>>();
+    // `php -n` opens every diagnostic with an empty line ("\nDeprecated: ... on line 17\n").
+    let lines = out.stderr.lines().filter(|line| !line.is_empty()).collect::<Vec<_>>();
     assert_eq!(lines.len(), expected.len(), "{}", out.stderr);
     for (line, prefix) in lines.iter().zip(expected) {
         assert!(

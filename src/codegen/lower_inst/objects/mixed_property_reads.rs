@@ -503,7 +503,9 @@ pub(super) fn lower_declared_mixed_prop_get(
         // (`__get` itself usually stores the answer there: `$this->$name = ...`). The row lookup
         // answers every class of the group from its own hash offset; a class without an
         // addressable hash, or a table without the name, falls through to the accessor.
-        if magic_calls_get(mode) {
+        // `isset()` asks the table first as well: a name the object holds (a stored null or false
+        // included) is a real entry, so `__isset` is only the answer for an absent one.
+        if magic_calls_get(mode) || magic_isset_alone(mode) {
             emit_table_dynamic_hash_read(ctx, property, &[], &done_label);
         }
         emit_mixed_magic_get_arm(ctx, Some(&group.class_name), property, mode, &done_label)?;
@@ -1301,7 +1303,26 @@ pub(super) fn lower_mixed_prop_initialized(
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
         let base_reg = abi::int_result_reg(ctx.emitter);
-        if candidate.slot.is_declared {
+        // A slot this scope cannot reach is not this probe's to judge: php treats the name as
+        // undeclared there and asks `__isset` (or answers false without it) whether or not the
+        // typed slot was ever initialized, and the read that follows a true answer does exactly
+        // that, so the probe lets it through.
+        let unreachable = ctx.module.class_infos.get(&candidate.slot.class_name).is_some_and(|info| {
+            let visibility = info
+                .property_visibilities
+                .get(property)
+                .cloned()
+                .unwrap_or(crate::parser::ast::Visibility::Public);
+            let declaring = info
+                .property_declaring_classes
+                .get(property)
+                .map(String::as_str)
+                .unwrap_or(candidate.slot.class_name.as_str());
+            !super::super::callable_descriptors::codegen_can_access_member(ctx, declaring, &visibility)
+        });
+        if unreachable {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        } else if candidate.slot.is_declared {
             emit_typed_property_initialized_bool(ctx, &candidate.slot, base_reg);
         } else {
             // An untyped slot is plain null from construction, so it is always initialized.

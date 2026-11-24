@@ -849,6 +849,23 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    // A raw scalar or array receiver (`int $value` read as `$value->x ?? 'd'`) holds no object
+    // slot at all: php answers the quiet probe as "not initialized" without touching the value,
+    // and unboxing a raw payload as a Mixed cell would fault.
+    if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Str
+            | PhpType::Void
+            | PhpType::TaggedScalar
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+    ) {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_if_result(ctx, inst);
+    }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
     }

@@ -430,8 +430,19 @@ echo $root?->branch->label(noisy()) ?? "fallback";
 "#,
     );
     assert!(!out.success, "program unexpectedly succeeded");
-    assert_eq!(out.stdout,
-        "\nFatal error: Uncaught Error: Call to a member function label() on null\nStack trace:\n#0 {main}\n");
+    // `php -n` prints the uncaught error with its location, and noisy() is never evaluated:
+    //   Fatal error: Uncaught Error: Call to a member function label() on null in <file>:15
+    //   Stack trace:
+    //   #0 {main}
+    //     thrown in <file> on line 15
+    // The test file lives in a temporary directory, so only the path is left unpinned.
+    assert!(
+        out.stdout.starts_with("\nFatal error: Uncaught Error: Call to a member function label() on null in "),
+        "{}", out.stdout
+    );
+    assert!(out.stdout.contains(".php:15\nStack trace:\n#0 {main}\n  thrown in "), "{}", out.stdout);
+    assert!(out.stdout.ends_with(".php on line 15\n"), "{}", out.stdout);
+    assert!(!out.stdout.contains("noisy|"), "{}", out.stdout);
     assert_eq!(out.stderr, "");
 }
 

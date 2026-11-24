@@ -437,8 +437,12 @@ pub(super) fn lower_lazy_empty_without_native(
         // never-created name answers `true` instead of raising. Unlike `isset()` it needs the
         // VALUE: php asks `__isset` and then `__get`, which is the `??` fetch (`Coalesce`).
         if property_probe_needs_runtime_name_form(ctx, object) {
-            let object = lower_subscript_receiver_silently(ctx, object);
-            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            // The fetch is quiet in php, so an eval-owned receiver's uninitialized typed property
+            // must read as empty here too: the bridge raises for it unless the mode is on.
+            let probed = lower_operand_in_quiet_property_fetch(ctx, &args[0], |ctx| {
+                let object = lower_subscript_receiver_silently(ctx, object);
+                lower_property_empty_probe_from_value(ctx, object, property, &args[0])
+            });
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
         // A class answering undeclared names from its dynamic hash (stdClass, a class allowing
@@ -447,8 +451,12 @@ pub(super) fn lower_lazy_empty_without_native(
             property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Fallback)
         ) {
-            let object = lower_subscript_receiver_silently(ctx, object);
-            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            // The fetch is quiet in php, so an eval-owned receiver's uninitialized typed property
+            // must read as empty here too: the bridge raises for it unless the mode is on.
+            let probed = lower_operand_in_quiet_property_fetch(ctx, &args[0], |ctx| {
+                let object = lower_subscript_receiver_silently(ctx, object);
+                lower_property_empty_probe_from_value(ctx, object, property, &args[0])
+            });
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
         // A class with `__get` but no `__isset`: php finds no property and never calls
