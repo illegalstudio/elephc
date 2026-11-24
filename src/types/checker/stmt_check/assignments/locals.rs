@@ -328,6 +328,11 @@ fn check_assign_value_type(
         poison_unbound_local(env, name);
         return Err(error);
     }
+    if null_coalesce_default.is_none() {
+        checker.restore_widened_binding_view(name, env);
+    } else {
+        checker.binding_widened_views.remove(name);
+    }
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.

@@ -229,6 +229,7 @@ impl Checker {
             local_conditional_depth: 0,
             local_binding_depth: HashMap::default(),
             narrowed_local_origins: HashMap::default(),
+            binding_widened_views: HashMap::default(),
             ref_aliased_locals: HashSet::default(),
             non_builtin_ref_aliased_locals: HashSet::default(),
             ref_assign_aliased_locals: HashSet::default(),

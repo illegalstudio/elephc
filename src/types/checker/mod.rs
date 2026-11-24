@@ -914,6 +914,11 @@ pub(crate) struct Checker {
     /// Empty outside a guarded region, and reset per body — a name narrowed in the caller says
     /// nothing about a same-named local in a closure checked inside the branch.
     pub narrowed_local_origins: HashMap<String, NarrowedLocalOrigin>,
+    /// For each local whose environment view got a `null` ONLY because it may be unbound (see
+    /// [`Checker::publish_binding_read_views`]): the type the binding held before and the widened
+    /// view. A later plain store replaces the value, so it is merged against the binding, not
+    /// against the read view. Frame-scoped.
+    pub binding_widened_views: HashMap<String, (PhpType, PhpType)>,
     /// Monotonic binding revisions distinguish a fresh guard from an intervening store.
     pub next_guard_binding_revision: u64,
     /// Locals of the current body that a reference can reach: `=&` target or source,
@@ -1196,6 +1201,7 @@ pub(crate) struct SavedLocalBindingScope {
     binding_depth: HashMap<String, u32>,
     definitely_bound: HashSet<String>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
+    binding_widened_views: HashMap<String, (PhpType, PhpType)>,
     loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
     finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
     ref_aliased: HashSet<String>,
@@ -1542,6 +1548,7 @@ impl Checker {
             // checked inside that branch binds its own name in its own frame, so inheriting the
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
+            binding_widened_views: std::mem::take(&mut self.binding_widened_views),
             loop_flow_frames: std::mem::take(&mut self.loop_flow_frames),
             finally_flow_frames: std::mem::take(&mut self.finally_flow_frames),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
@@ -1596,6 +1603,7 @@ impl Checker {
         self.local_binding_depth = saved.binding_depth;
         self.definitely_bound_locals = saved.definitely_bound;
         self.narrowed_local_origins = saved.narrowed_origins;
+        self.binding_widened_views = saved.binding_widened_views;
         self.loop_flow_frames = saved.loop_flow_frames;
         self.finally_flow_frames = saved.finally_flow_frames;
         self.ref_aliased_locals = saved.ref_aliased;

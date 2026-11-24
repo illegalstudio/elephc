@@ -197,6 +197,7 @@ mod locals_retype;
 mod local_definedness;
 mod diverging_operands;
 mod array_merge_single_operand;
+mod binding_rebind;
 mod stack_guard;
 mod zval;
 

@@ -113,6 +113,30 @@ impl Checker {
                 let joined = self.binding_read_type(name, read, env);
                 (joined != *read).then(|| (name.clone(), joined))
             }).collect();
-        for (name, read) in changed { env.insert(name, read); }
+        for (name, read) in changed {
+            // Remember what the binding held: the null of the view only says it may be unbound.
+            if let Some(binding) = env.get(&name).cloned() {
+                self.binding_widened_views.insert(name.clone(), (binding, read.clone()));
+            }
+            env.insert(name, read);
+        }
+    }
+
+    /// Hands a plain store the binding a missing-binding view widened: the store replaces the
+    /// value, so it is merged against the type the binding held, not against the read view's
+    /// extra `null` (which made `$p = $a->cp(); return ...;` beside a later `$p = $a->ep();` keep
+    /// the first class). Returns whether the view was restored.
+    pub(super) fn restore_widened_binding_view(&mut self, name: &str, env: &mut TypeEnv) -> bool {
+        let Some((binding, view)) = self.binding_widened_views.remove(name) else { return false; };
+        if self.definitely_bound_locals.contains(name) || env.get(name) != Some(&view) {
+            return false;
+        }
+        // A conditional join taken since may have recorded the widened view as the physical
+        // storage; it is the same extra `null`, not a nullable declaration.
+        if self.guarded_union_types.get(name).is_some_and(|storage| storage.ty == view) {
+            self.guarded_union_types.remove(name);
+        }
+        env.insert(name.to_string(), binding);
+        true
     }
 }

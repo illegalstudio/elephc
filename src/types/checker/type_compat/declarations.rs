@@ -960,6 +960,7 @@ impl Checker {
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
+        let saved_loop_stmt_depth = self.loop_stmt_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
@@ -980,6 +981,9 @@ impl Checker {
         self.foreach_key_locals.clear();
         self.eval_barrier_active = false;
         self.break_continue_depth = 0;
+        // The loop nesting that keeps a read's type belongs to ONE body: a method inferred on
+        // demand from inside a caller's loop starts outside any loop of its own.
+        self.loop_stmt_depth = 0;
         self.finally_break_continue_bases.clear();
         // A function/method/closure body is not the scope whose environment becomes
         // `global_env`, so null-probe roots found here must not be deferred against it.
@@ -1018,6 +1022,7 @@ impl Checker {
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
+        self.loop_stmt_depth = saved_loop_stmt_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
         self.exit_local_binding_scope(saved_local_binding_scope);
