@@ -892,7 +892,7 @@ fn validate_opcode_rules(
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
-        | CallableArrayNew | GeneratorNew | InvokerRefArg
+        | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | IncludeOnceTest | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
@@ -937,7 +937,7 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        FirstClassCallableNew | CallableValueNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
+        FirstClassCallableNew | CallableValueNew | CallableArrayNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
