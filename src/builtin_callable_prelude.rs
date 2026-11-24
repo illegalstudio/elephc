@@ -50,9 +50,11 @@ pub fn builtin_name_of_wrapper(function: &str) -> Option<&str> {
     function.strip_prefix(WRAPPER_PREFIX)
 }
 
-/// Declares the wrappers of the builtins this program's string literals name.
+/// Declares the wrappers of the builtins this program's string literals name, for the builtins the
+/// compile `target` provides.
 pub fn inject_if_used(
     program: Program,
+    target: crate::codegen_support::platform::Target,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
     if !crate::closed_world::is_enabled() {
@@ -101,14 +103,15 @@ pub fn inject_if_used(
         }
     });
     names.retain(|name| inert.get(name) != occurrences.get(name));
-    // Only a builtin the profile shows: `--strict-php` hides the extension builtins, and a function
-    // the program declares under one of their names (php refuses to redeclare a visible one) answers
-    // that name itself.
+    // Only a builtin the profile shows on this target: `--strict-php` hides the extension builtins, a
+    // builtin the target does not provide (`pcntl_getcpu()` on macOS) has no body a wrapper could
+    // call, and a function the program declares under one of their names (php refuses to redeclare a
+    // visible one) answers that name itself.
     let strict = crate::strict_php::is_enabled();
     let wrappers: Vec<Stmt> = names
         .iter()
         .filter(|name| {
-            crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(name, strict)
+            crate::types::checker::builtins::is_php_visible_builtin_function_for_target(name, strict, target)
         })
         .filter_map(|name| wrapper_of(name))
         .collect();

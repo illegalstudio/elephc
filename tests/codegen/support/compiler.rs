@@ -582,7 +582,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::throwable_string_prelude::inject(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: callable wrappers for the builtins a string literal names
     // (closed world only), forced as a group because lowering reaches them through a string.
-    let resolved = elephc::builtin_callable_prelude::inject_if_used(resolved, &mut prelude_inventory)
+    let resolved = elephc::builtin_callable_prelude::inject_if_used(resolved, target(), &mut prelude_inventory)
         .expect("builtin callable prelude injection failed");
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);

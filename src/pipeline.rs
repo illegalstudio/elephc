@@ -1166,7 +1166,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // `ErrorHandler` does it for every warning it is configured to throw on, from a class the
     // autoload pass splices in, so the gate has to read the complete program like the rest here.
     // Before the preludes that follow: the wrappers call builtins that need their helpers.
-    let ast = match crate::builtin_callable_prelude::inject_if_used(ast, &mut prelude_inventory) {
+    let ast = match crate::builtin_callable_prelude::inject_if_used(ast, target, &mut prelude_inventory) {
         Ok(injected) => injected,
         Err(e) => {
             crate::progress::clear();
