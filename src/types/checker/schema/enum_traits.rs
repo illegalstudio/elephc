@@ -171,12 +171,14 @@ pub(crate) fn validate_class_trait_requirements(
 /// Applies the class error edits of `validate_class_trait_requirements` to `reported`: each
 /// replacement puts a used trait's own requirement incompatibility in place of a class's error
 /// (PHP compiles that trait before it binds the class), and each removal drops a class's error
-/// whose trait incompatibility an earlier class already reported.
+/// whose trait incompatibility an earlier class already reported. Two classes can share one
+/// error (their common parent's), so a slot that holds a replacement is never removed.
 fn apply_class_error_edits(
     reported: &mut Vec<CompileError>,
     replacements: Vec<(usize, CompileError)>,
     mut removals: Vec<usize>,
 ) {
+    removals.retain(|index| !replacements.iter().any(|(replaced, _)| replaced == index));
     for (index, error) in replacements {
         if let Some(slot) = reported.get_mut(index) {
             *slot = error;

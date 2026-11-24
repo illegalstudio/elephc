@@ -1920,6 +1920,21 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         // An unknown grandparent stays unknown when a second class reaches it.
         assert!(messages.iter().all(|message| !message.contains("involving class Unknown")), "{parent}: {messages:?}");
     }
+    // Two children sharing that parent's error keep the trait incompatibility the first one
+    // put in its place.
+    for parent in [
+        "interface I { public function foo(); }\nclass Base implements I {}\n",
+        "class Base extends Unknown {}\n",
+        "class Ba extends Bb {}\nclass Bb extends Ba {}\nclass Base extends Ba {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\nclass E extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+    }
     // PHP compiles a class body before it early-binds the parent, binds only a parent declared
     // earlier, and rejects an earlier trait or an internal final class as a parent while
     // compiling.
