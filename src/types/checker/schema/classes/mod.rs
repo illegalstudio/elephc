@@ -141,13 +141,24 @@ fn build_loaded_class_info(
     properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
-    validate_final_constant_constraints(&class, parent_info.as_ref())?;
+    validate_final_constant_constraints(&class, parent_info.as_ref(), checker)?;
     // PHP binds abstract trait methods after the parent inheritance checked above, and before
     // interfaces (`final_abstract_import_overrides`).
-    if let Some((span, message)) =
+    if let Some(failure) =
         checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name))
     {
-        return Err(CompileError::new(*span, message));
+        // The abstract trait methods bound before the failure are checked first, against the
+        // class's own or concrete imported method that satisfies them.
+        for required in &failure.earlier_requirements {
+            if let Some(actual) = class.methods.iter().find(|method| {
+                !method.is_abstract
+                    && method.is_static == required.is_static
+                    && method.name.eq_ignore_ascii_case(&required.name)
+            }) {
+                super::enum_traits::validate_class_requirement(checker, &class, required, actual)?;
+            }
+        }
+        return Err(CompileError::new(failure.span, &failure.message));
     }
     validate_interface_final_constants(&class, &state, checker)?;
     interfaces::validate_interface_contracts(
@@ -312,11 +323,13 @@ fn validate_parent_constraints(
 }
 
 /// Validates PHP final class-constant inheritance constraints for one class against its own
-/// declarations and its parent; interface final constants are checked later
+/// declarations and its parent, including the final constants of the interfaces the parent
+/// already implements (inherited with it). Interfaces this class adds are checked later
 /// (`validate_interface_final_constants`).
 fn validate_final_constant_constraints(
     class: &FlattenedClass,
     parent_info: Option<&ClassInfo>,
+    checker: &Checker,
 ) -> Result<(), CompileError> {
     for constant in &class.constants {
         if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
@@ -337,8 +350,35 @@ fn validate_final_constant_constraints(
                 ),
             ));
         }
+        let parent_interfaces = parent_info.map_or(&[][..], |parent| &parent.interfaces[..]);
+        if let Some(error) = interface_final_constant_error(class, constant, parent_interfaces, checker)
+        {
+            return Err(error);
+        }
     }
     Ok(())
+}
+
+/// Returns the error for `constant` redeclaring a final constant of one of `interfaces`.
+fn interface_final_constant_error(
+    class: &FlattenedClass,
+    constant: &crate::parser::ast::ClassConst,
+    interfaces: &[String],
+    checker: &Checker,
+) -> Option<CompileError> {
+    interfaces
+        .iter()
+        .filter_map(|interface_name| checker.interfaces.get(interface_name))
+        .any(|interface_info| interface_info.final_constants.contains(&constant.name))
+        .then(|| {
+            CompileError::new(
+                constant.span,
+                &format!(
+                    "{}::{} cannot override final interface constant",
+                    class.name, constant.name
+                ),
+            )
+        })
 }
 
 /// Rejects a class constant that redeclares a final constant of an implemented interface. PHP
@@ -350,19 +390,9 @@ fn validate_interface_final_constants(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for constant in &class.constants {
-        for interface_name in &state.interfaces {
-            let Some(interface_info) = checker.interfaces.get(interface_name) else {
-                continue;
-            };
-            if interface_info.final_constants.contains(&constant.name) {
-                return Err(CompileError::new(
-                    constant.span,
-                    &format!(
-                        "{}::{} cannot override final interface constant",
-                        class.name, constant.name
-                    ),
-                ));
-            }
+        if let Some(error) = interface_final_constant_error(class, constant, &state.interfaces, checker)
+        {
+            return Err(error);
         }
     }
     Ok(())

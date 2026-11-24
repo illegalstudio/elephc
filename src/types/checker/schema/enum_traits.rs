@@ -90,7 +90,14 @@ pub(crate) fn validate_class_trait_requirements(
     // it names `self`, `parent` or `static`: those resolve against each consuming class, so the
     // pair is checked for every user and the outcome does not depend on declaration order.
     let mut checked_pairs = HashSet::new();
-    for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
+    // A class with an abstract trait binding failure checked the requirements bound before it
+    // while it was built, and PHP never binds the ones after it.
+    for class in classes.iter().filter(|class| {
+        !class.used_traits.is_empty()
+            && !checker
+                .final_abstract_binding_failures
+                .contains_key(&php_symbol_key(&class.name))
+    }) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
         let satisfied = contract.satisfied.iter().filter(|(required, actual)| {
@@ -175,7 +182,7 @@ fn collect_class_trait_uses<'a>(program: &'a [crate::parser::ast::Stmt], uses: &
 /// Applies PHP's prototype check to the method that satisfies one abstract trait method: the
 /// parameters may only widen, a by-reference return stays by reference, and a declared return
 /// type must be honoured. Visibility is not compared (see the module notes).
-fn validate_class_requirement(
+pub(in crate::types::checker::schema) fn validate_class_requirement(
     checker: &Checker,
     class: &FlattenedClass,
     required: &ClassMethod,

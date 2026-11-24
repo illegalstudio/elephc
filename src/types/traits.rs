@@ -304,17 +304,18 @@ pub fn flatten_classes(
                             continue;
                         }
                     };
+                // PHP binds the trait methods before it rejects an enum's trait properties.
+                if let Err(error) =
+                    reject_overridden_final_imports(&bound_methods, methods, name, stmt.span)
+                {
+                    errors.extend(error.flatten());
+                    continue;
+                }
                 if let Some(property) = imported_props.first() {
                     errors.push(CompileError::new(
                         property.span,
                         "Enums cannot use traits with properties",
                     ));
-                    continue;
-                }
-                if let Err(error) =
-                    reject_overridden_final_imports(&bound_methods, methods, name, stmt.span)
-                {
-                    errors.extend(error.flatten());
                     continue;
                 }
                 let merged_methods = match merge::merge_methods(
@@ -391,12 +392,19 @@ pub struct FinalAbstractImport {
     bound: Vec<ImportedMethod>,
 }
 
-/// The first abstract trait binding failure of each class beside an abstract `as final` import
-/// (an overridden final import, or a plain abstract import of the other kind), by lowercase class
-/// name, with its span and message. PHP binds abstract trait methods after the whole parent
-/// inheritance of the class, so the class schema reports it after its method and final constant
-/// checks and before its interface checks.
-pub(crate) type FinalAbstractBindingFailures = HashMap<String, (Span, String)>;
+/// The first abstract trait binding failure of a class beside an abstract `as final` import (an
+/// overridden final import, or a plain abstract import of the other kind). PHP binds abstract
+/// trait methods after the whole parent inheritance of the class, so the class schema reports it
+/// after its method and final constant checks and before its interface checks, once the abstract
+/// imports bound before it (`earlier_requirements`) pass against the methods satisfying them.
+pub(crate) struct FinalAbstractBindingFailure {
+    pub(crate) span: Span,
+    pub(crate) message: String,
+    pub(crate) earlier_requirements: Vec<ClassMethod>,
+}
+
+/// The first abstract trait binding failure of each class, by lowercase class name.
+pub(crate) type FinalAbstractBindingFailures = HashMap<String, FinalAbstractBindingFailure>;
 
 /// The first failure of the abstract trait methods bound under one name
 /// (`first_overridden_final_import`), by index into the bound imports.
@@ -566,8 +574,9 @@ fn reject_overridden_final_imports(
 /// static included, holding the name too). For the class's first failure the method holding the
 /// name (its own or a concrete import) stays for the schema's ordinary override checks, the
 /// other methods of the name are dropped, and so is every abstract import bound after the
-/// failing one, which PHP never binds. The failure is returned for the schema to report once the
-/// class's inheritance checks pass.
+/// failing one, which PHP never binds; abstract imports bound before it stay. The failure is
+/// returned, with those earlier imports, for the schema to report once the class's inheritance
+/// checks pass.
 pub(crate) fn final_abstract_import_overrides(
     records: &[FinalAbstractImport],
     classes: &mut HashMap<String, FlattenedClass>,
@@ -577,38 +586,58 @@ pub(crate) fn final_abstract_import_overrides(
         .map(|class| (php_symbol_key(&class.name), class))
         .collect();
     let mut failures = FinalAbstractBindingFailures::new();
-    // The class, its first failure, and the abstract imports bound after that failure.
-    let mut dropped: Vec<(&FinalAbstractImport, FirstBindingFailure, Vec<&ImportedMethod>)> =
-        Vec::new();
+    // The class, its first failure, and the abstract imports bound before and after it.
+    #[allow(clippy::type_complexity)]
+    let mut dropped: Vec<(
+        &FinalAbstractImport,
+        FirstBindingFailure,
+        Vec<&ImportedMethod>,
+        Vec<&ImportedMethod>,
+    )> = Vec::new();
     for record in records {
         let ancestor = |name: &str| nearest_ancestor_method(&by_key, &record.class, name);
         let Some(failure) = first_binding_failure(&record.bound, &record.own, ancestor, &record.class)
         else {
             continue;
         };
+        let earlier: Vec<&ImportedMethod> = record
+            .bound
+            .iter()
+            .filter(|method| method.decl.is_abstract && method.binding < failure.binding)
+            .collect();
         failures.insert(
             php_symbol_key(&record.class),
-            (failure.holder.unwrap_or(record.span), failure.message.clone()),
+            FinalAbstractBindingFailure {
+                span: failure.holder.unwrap_or(record.span),
+                message: failure.message.clone(),
+                earlier_requirements: earlier.iter().map(|method| method.decl.clone()).collect(),
+            },
         );
         let unbound = record
             .bound
             .iter()
             .filter(|method| method.decl.is_abstract && method.binding > failure.binding)
             .collect();
-        dropped.push((record, failure, unbound));
+        dropped.push((record, failure, earlier, unbound));
     }
-    for (record, failure, unbound) in dropped {
+    for (record, failure, earlier, unbound) in dropped {
         if let Some(class) = classes
             .values_mut()
             .find(|class| class.name.eq_ignore_ascii_case(&record.class))
         {
-            class.methods.retain(|method| {
-                let failing_name = method.name.eq_ignore_ascii_case(&failure.name);
-                let never_bound = unbound.iter().any(|import| {
+            let is_import = |imports: &[&ImportedMethod], method: &ClassMethod| {
+                imports.iter().any(|import| {
                     import.decl.name.eq_ignore_ascii_case(&method.name)
                         && import.decl.span == method.span
-                });
-                !(failing_name && Some(method.span) != failure.holder) && !never_bound
+                })
+            };
+            // Of the failing name, the holder and the abstract imports bound before the failure
+            // stay, so the schema checks them against the ancestor first.
+            class.methods.retain(|method| {
+                let failing_name = method.name.eq_ignore_ascii_case(&failure.name);
+                let kept_of_name =
+                    Some(method.span) == failure.holder || is_import(&earlier, method);
+                !(failing_name && !kept_of_name) && !is_import(&unbound, method)
             });
         }
     }
