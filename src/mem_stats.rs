@@ -489,6 +489,26 @@ fn report_biggest_body(module: &Module) {
         .chain(&module.class_methods)
         .chain(&module.closures)
         .max_by_key(|function| function.instructions.len());
+    // Module-wide: which lowering shapes own the blocks (and the instructions in them).
+    let mut shape: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for function in module.functions.iter().chain(&module.class_methods).chain(&module.closures) {
+        for block in &function.blocks {
+            let prefix = block.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+            let entry = shape.entry(prefix.to_string()).or_default();
+            entry.0 += 1;
+            entry.1 += block.instructions.len();
+        }
+    }
+    let mut rows: Vec<(String, (usize, usize))> = shape.into_iter().collect();
+    rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    eprintln!(
+        "[mem]   module block shapes (blocks/instructions): {}",
+        rows.iter()
+            .take(16)
+            .map(|(name, (blocks, instructions))| format!("{name}={blocks}/{instructions}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let Some(function) = biggest else { return };
     let mut blocks: std::collections::BTreeMap<String, usize> = Default::default();
     for block in &function.blocks {
@@ -512,6 +532,19 @@ fn report_biggest_body(module: &Module) {
         function.values.len()
     );
     eprintln!("[mem]   block prefixes: {}", top(blocks));
+    // Source lines that own the most blocks: how many times each line was lowered into this body.
+    let mut lines: std::collections::BTreeMap<String, usize> = Default::default();
+    for block in &function.blocks {
+        let line = block
+            .instructions
+            .iter()
+            .filter_map(|id| function.instructions.get(id.as_raw() as usize))
+            .find_map(|inst| inst.span.map(|span| span.line));
+        if let Some(line) = line {
+            *lines.entry(format!("L{line}")).or_default() += 1;
+        }
+    }
+    eprintln!("[mem]   blocks per source line: {}", top(lines));
     eprintln!("[mem]   ops: {}", top(ops));
 }
 
