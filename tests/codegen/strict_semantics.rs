@@ -407,6 +407,24 @@ fn test_strict_dynamic_code_override_keeps_independent_locals_eval_context() {
         .run(&["--strict-locals", "--no-strict-dynamic-code"]), "17");
 }
 
+/// Tokenizer failures retain distinct concrete exception classes under strict local typing.
+#[test]
+fn test_strict_locals_accepts_tokenizer_error_subclasses() {
+    let source = r#"<?php
+$parse = function (string $code): void {
+    try { token_get_all($code, TOKEN_PARSE); echo 'wrong'; }
+    catch (ParseError $error) { echo get_class($error), ':', $error->getLine(); }
+};
+$parse("<?php\n\nfunction broken(");
+try { token_get_all('<?php function f() { __halt_compiler(); }', TOKEN_PARSE); echo 'wrong'; }
+catch (CompileError $error) { echo ':', get_class($error); }
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-locals"]),
+        "ParseError:3:CompileError"
+    );
+}
+
 /// Included physical source is checked before frontend simplification can discard its branch.
 #[test]
 fn test_strict_dynamic_code_validates_included_physical_source() {

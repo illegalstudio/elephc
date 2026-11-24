@@ -89,12 +89,16 @@ function token_get_all(string $code, int $flags = 0): array {
             // A nested __halt_compiler() is a CompileError. ParseError extends that class, so
             // catch (ParseError) must not observe it. The message is the only class selector.
             if ($message === '__HALT_COMPILER() can only be used from the outermost scope') {
-                $error = new \CompileError($message);
-            } else {
-                $error = new \ParseError($message);
+                $compileError = new \CompileError($message);
+                __elephc_tokenizer_error_location(
+                    $compileError,
+                    elephc_tokenizer_error_line($scan)
+                );
+                throw $compileError;
             }
-            __elephc_tokenizer_error_location($error, elephc_tokenizer_error_line($scan));
-            throw $error;
+            $parseError = new \ParseError($message);
+            __elephc_tokenizer_error_location($parseError, elephc_tokenizer_error_line($scan));
+            throw $parseError;
         }
         $limit = __elephc_tokenizer_memory_limit();
         // Approximation of PHP's token-array footprint: a flat per-token cost that covers the
