@@ -1849,6 +1849,15 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         let reported = single_error(&source);
         assert!(reported.contains(message), "{source}: {reported}");
     }
+    // A parent that failed to build keeps its own error: the child's used traits do not replace it.
+    let parent_failed = check_source_full(
+        "<?php\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nfinal class GP {}\nclass P extends GP {}\nclass C extends P { use A, T { A::foo as final; } public function foo() {} }\n",
+    )
+    .err()
+    .expect("program should fail");
+    let messages: Vec<String> = parent_failed.flatten().into_iter().map(|error| error.message).collect();
+    assert!(messages[0].contains("cannot extend final class"), "{messages:?}");
+    assert!(messages.iter().all(|message| !message.contains("bar")), "{messages:?}");
     for source in [
         // Abstract imports bound before the failure are checked first, against the parent or
         // the method that satisfies them.

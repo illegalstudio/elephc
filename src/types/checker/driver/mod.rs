@@ -381,7 +381,16 @@ pub(super) fn check_types_impl(
             &mut next_class_id,
             &mut building,
         ) {
-            class_build_errors.insert(php_symbol_key(&class_name), errors.len());
+            // A class whose parent failed returns the parent's error, which stays the parent's.
+            let parent_built = class_map
+                .get(&class_name)
+                .and_then(|class| class.extends.as_deref())
+                .is_none_or(|parent| {
+                    checker.classes.keys().any(|built| built.eq_ignore_ascii_case(parent))
+                });
+            if parent_built {
+                class_build_errors.insert(php_symbol_key(&class_name), errors.len());
+            }
             errors.extend(error.flatten());
         }
     }
