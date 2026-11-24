@@ -60,7 +60,7 @@ enum BuiltInRecipe {
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
-        ("pcre2", 8) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 9) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("openssl-crypto", 1) => Some(BuiltInRecipe::OpensslCrypto),
@@ -131,7 +131,8 @@ mod tests {
         assert!(built_in_recipe("pcre2", 5).is_none());
         assert!(built_in_recipe("pcre2", 6).is_none());
         assert!(built_in_recipe("pcre2", 7).is_none());
-        assert!(matches!(built_in_recipe("pcre2", 8), Some(BuiltInRecipe::Pcre2)));
+        assert!(built_in_recipe("pcre2", 8).is_none());
+        assert!(matches!(built_in_recipe("pcre2", 9), Some(BuiltInRecipe::Pcre2)));
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog
