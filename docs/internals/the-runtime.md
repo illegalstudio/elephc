@@ -1523,8 +1523,12 @@ layout crosses the boundary. `compile` returns an opaque handle and slot count;
 `exec` writes fixed 16-byte `[start, end]` signed-64-bit pairs, initializing
 unmatched and surplus slots to `[-1, -1]`.
 
-`__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`,
-`m`, `s`, `u`, `U`) to shim compile flags. `__rt_pcre_to_posix` keeps its
+`__rt_preg_strip` parses PHP delimiters the way php-src does (leading whitespace,
+bracket pairs with nesting, the first unescaped closer) and maps the modifiers
+`i`, `m`, `s`, `u`, `U` to pcre2posix `REG_*` bits and `x`, `A`, `D`, `n`, `J`,
+`r` to the shim's private compile bits; `S`, `X`, space, LF and CR are ignored.
+Any pattern PHP rejects before compiling sets bit 30, which every helper tests
+right after the strip to return its failure value. `__rt_pcre_to_posix` keeps its
 historic symbol name for compatibility but only materializes a null-terminated
 pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
 whole regex family is emitted only when the program's `RuntimeFeatures` request
@@ -1549,9 +1553,9 @@ maps the stored `_preg_last_error` code to PHP's message table.
 | `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings. `/e` is rejected before compilation. The -1 path still returns a fresh empty array so the caller can release it without storing it | pattern + subject strings | `x0`/`rax` = 1, 0, or -1; `x1`/`rdx` = matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
-| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
-| `__rt_preg_replace_callback` | Replace all regex matches in a dedicated output buffer, building an indexed `$matches` string array and appending the callback result. A successful replacement is a Mixed string and the output buffer is released after that cell copies it. An invalid pattern boxes PHP null: unknown modifiers, a missing ending delimiter, a compile failure, and the removed `/e` modifier (bit 30 from `__rt_preg_strip`). Space, LF, and CR in the modifier suffix are ignored. `/x` sets bit 13 and the PCRE2 shim compiles with `PCRE2_EXTENDED`, so leading `(*UTF)` and `(*ANYCRLF)` verbs stay at the start of the pattern. Other valid modifiers the runtime does not map are not null | pattern + callback + subject | `x0`/`rax` = Mixed cell (string, or null) |
-| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
+| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector. Every exec searches the whole subject with `REG_STARTEND`, and later ones use the shim's global continuation, so empty matches and the subject end behave like php-src | pattern + replacement + subject | `x1`/`x2` = result string |
+| `__rt_preg_replace_callback` | Replace all regex matches in a dedicated output buffer, building an indexed `$matches` string array and appending the callback result. A successful replacement is a Mixed string and the output buffer is released after that cell copies it. An invalid pattern boxes PHP null: every pattern `__rt_preg_strip` rejects (bit 30) and a compile failure. `/x` sets bit 13 and the PCRE2 shim compiles with `PCRE2_EXTENDED`, so leading `(*UTF)` and `(*ANYCRLF)` verbs stay at the start of the pattern. The match loop is the same global iteration as `__rt_preg_replace` | pattern + callback + subject | `x0`/`rax` = Mixed cell (string, or null) |
+| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout. Iterates like `__rt_preg_replace`, and only returned pieces count toward the limit | pattern + subject strings, limit, flags | `x0` = array pointer |
 
 ## I/O routines
 

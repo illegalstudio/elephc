@@ -294,6 +294,37 @@ static int check_match_error_statuses(void) {
     return 0;
 }
 
+/* PHP's /A, /D, /n and /J reach PCRE2 as compile options through private flag bits,
+ * which never leak into the POSIX record. */
+static int check_php_modifier_flags(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "a", 0x4000, &slots) == 0, "/A fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "ba", 0, NULL, 0) == 17, "/A anchors the match at the start");
+    CHECK(elephc_pcre2_v1_exec(handle, "ab", 0, NULL, 0) == 0, "/A still matches at the start");
+    elephc_pcre2_v1_free(handle);
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "a$", 0x8000, &slots) == 0, "/D fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "a\n", 0, NULL, 0) == 17, "/D keeps $ off a final newline");
+    elephc_pcre2_v1_free(handle);
+    CHECK(elephc_pcre2_v1_compile(&handle, "a$", 0, &slots) == 0, "plain $ fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "a\n", 0, NULL, 0) == 0, "plain $ matches before a final newline");
+    elephc_pcre2_v1_free(handle);
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "(a)(b)", 0x20000, &slots) == 0, "/n fixture must compile");
+    CHECK(slots == 1, "/n leaves only the full-match slot");
+    elephc_pcre2_v1_free(handle);
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "(?<n>a)|(?<n>b)", 0, &slots) != 0,
+        "duplicate names need /J");
+    CHECK(elephc_pcre2_v1_compile(&handle, "(?<n>a)|(?<n>b)", 0x40000, &slots) == 0,
+        "/J allows duplicate names");
+    CHECK(elephc_pcre2_v1_exec(handle, "b", 0, NULL, 0) == 0, "/J pattern matches");
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 int main(void) {
     int result;
 
@@ -322,6 +353,10 @@ int main(void) {
         return result;
     }
     result = check_match_error_statuses();
+    if (result != 0) {
+        return result;
+    }
+    result = check_php_modifier_flags();
     if (result != 0) {
         return result;
     }

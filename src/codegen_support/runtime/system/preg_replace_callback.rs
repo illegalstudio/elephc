@@ -11,52 +11,24 @@
 //!   cannot clobber it. The epilogue copies that buffer into a Mixed string and
 //!   then releases it.
 //! - The helper returns one Mixed cell. A replacement string is tag 1. An invalid
-//!   pattern is tag 8 null: unknown modifiers, a missing ending delimiter, a
-//!   compile failure, and the removed `/e` modifier. `/e` is bit 30 from
-//!   `__rt_preg_strip`. Space, LF, and CR in the modifier suffix are ignored.
-//!   `/x` sets bit 13 (`0x2000`); the PCRE2 shim compiles that pattern in
-//!   extended mode. Other valid modifiers this runtime does not map are not null.
-//!   That null path runs before the output buffer is allocated.
+//!   pattern is tag 8 null: every pattern `__rt_preg_strip` rejects (bit 30: a
+//!   bad or missing delimiter, an unknown modifier, the removed `/e`) and a
+//!   compile failure. That null path runs before the output buffer is allocated.
 //! - A setjmp boundary covers the replacement loop. On a callback throw the helper
 //!   decrefs the matches array, frees the subject, the current output block, a
 //!   pending callback result, the PCRE2 handle, and the offset-pair vector, then
 //!   rethrows the original exception. A retained matches array keeps its extra ref.
-//! - A match that ends at the subject terminator leaves the loop without another exec,
-//!   so that exit clears `_preg_exec_error`: an error a nested `preg_*` call recorded in
-//!   the last callback must not fail this call (it stays in `_preg_last_error`).
+//! - Every exec searches the whole private subject copy with `REG_STARTEND`, and each one
+//!   after the first asks the shim for PCRE2's global continuation, like php-src's replace
+//!   loop: an empty match retries at the same offset, the subject end is probed too, and
+//!   no subject byte is skipped. The cursor slot holds the previous match end.
+//! - The loop always ends with this helper's own exec, after the last callback, so an
+//!   error a nested `preg_*` call recorded in a callback does not fail this call (it
+//!   stays in `_preg_last_error`).
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-
-/// Branches to `next_label` when `reg` is a modifier the pre-scan must not reject.
-///
-/// Implemented modifiers and valid PHP modifiers this runtime leaves unmapped
-/// continue the scan. Space, LF, and CR continue too: PHP ignores those bytes
-/// in the modifier suffix. The removed `e` also continues: `__rt_preg_strip`
-/// sets bit 30, and the caller tests that bit immediately after the strip. Any
-/// other byte falls through so the caller can return null.
-fn emit_branch_if_callback_modifier_continues(
-    emitter: &mut Emitter,
-    reg: &str,
-    next_label: &str,
-) {
-    // space, LF, CR, then i m s u U x A D S X J n, plus e (bit 30 after the strip).
-    for byte in [
-        32, 10, 13, 105, 109, 115, 117, 85, 120, 65, 68, 83, 88, 74, 110, 101,
-    ] {
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {reg}, #{byte}"));            // compare a modifier the pre-scan must not reject
-                emitter.instruction(&format!("b.eq {next_label}"));             // keep scanning a recognized modifier or /e
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {reg}, {byte}"));             // compare a modifier the pre-scan must not reject
-                emitter.instruction(&format!("je {next_label}"));               // keep scanning a recognized modifier or /e
-            }
-        }
-    }
-}
 
 /// Emits the target's in-band null string pair into the given pointer/length registers.
 fn emit_preg_replace_callback_null(emitter: &mut Emitter, ptr_reg: &str, len_reg: &str) {
@@ -105,7 +77,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     let callback_result_ptr_off = output_backup_len_off + 8;
     let callback_result_len_off = callback_result_ptr_off + 8;
     let output_cap_off = callback_result_len_off + 8;
-    let saved_x19_off = output_cap_off + 8;
+    let subject_end_off = output_cap_off + 8;
+    let match_count_off = subject_end_off + 8;
+    let saved_x19_off = match_count_off + 8;
     let saved_x20_off = saved_x19_off + 8;
     let saved_x21_off = saved_x20_off + 8;
     // The handler record is the standard 224-byte try/catch slot. It starts
@@ -139,34 +113,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x5, [sp, #{}]", subject_ptr_off));        // save subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("str x6, [sp, #{}]", subject_len_off));        // save subject length for fallback and C-string conversion
 
-    // -- reject patterns PHP rejects before compilation --
-    emitter.instruction("cbz x2, __rt_preg_replace_callback_pattern_ok");       // an empty pattern is decided by compilation
-    emitter.instruction("ldrb w9, [x1]");                                       // inspect the opening byte
-    emitter.instruction("cmp w9, #47");                                         // only slash-delimited patterns carry a modifier suffix
-    emitter.instruction("b.ne __rt_preg_replace_callback_pattern_ok");          // other delimiters stay on the compile path
-    emitter.instruction("cmp x2, #2");                                          // a closing delimiter needs a second byte
-    emitter.instruction("b.lt __rt_preg_replace_callback_fail");                // "/" has no ending delimiter
-    emitter.instruction("sub x10, x2, #1");                                     // start at the final pattern byte
-    emitter.label("__rt_preg_replace_callback_pattern_scan");
-    emitter.instruction("cmp x10, #1");                                         // stop before the opening delimiter
-    emitter.instruction("b.lt __rt_preg_replace_callback_fail");                // no closing delimiter, so PHP returns null
-    emitter.instruction("ldrb w9, [x1, x10]");                                  // load the current trailing byte
-    emitter.instruction("cmp w9, #47");                                         // a closing slash ends the modifier suffix
-    emitter.instruction("b.eq __rt_preg_replace_callback_pattern_ok");          // every trailing byte was a modifier the scan accepts
-    emit_branch_if_callback_modifier_continues(
-        emitter,
-        "w9",
-        "__rt_preg_replace_callback_pattern_next",
-    );
-    emitter.instruction("b __rt_preg_replace_callback_fail");                   // PHP returns null for an unknown modifier
-    emitter.label("__rt_preg_replace_callback_pattern_next");
-    emitter.instruction("sub x10, x10, #1");                                    // continue toward the closing delimiter
-    emitter.instruction("b __rt_preg_replace_callback_pattern_scan");           // keep scanning the modifier suffix
-    emitter.label("__rt_preg_replace_callback_pattern_ok");
-
     // -- strip delimiters and compile PCRE regex --
-    emitter.instruction("bl __rt_preg_strip");                                  // strip slash delimiters and expose supported regex flags
-    emitter.instruction("tbnz x3, #30, __rt_preg_replace_callback_fail");       // the removed /e modifier is invalid in PHP 8
+    emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose supported regex flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_replace_callback_fail");       // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save regex flags from the stripped pattern
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
@@ -212,6 +161,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_replace_callback_subject_copy");           // continue copying subject bytes
     emitter.label("__rt_preg_replace_callback_subject_copy_done");
     emitter.instruction("strb wzr, [x9, x11]");                                 // terminate the private subject copy
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", subject_cstr_off));       // pass the private subject copy to strlen
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
+    emitter.instruction(&format!("str x0, [sp, #{}]", subject_end_off));        // save the subject end offset for every exec range
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov x19, #4096");                                      // initial output capacity
@@ -226,7 +178,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x20, [sp, #{}]", output_write_off));      // initialize final output write pointer
     emitter.instruction(&format!("str x21, [sp, #{}]", output_cap_off));        // initialize output capacity
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_cstr_off));       // load subject C-string start
-    emitter.instruction(&format!("str x9, [sp, #{}]", current_pos_off));        // initialize current regex search cursor
+    emitter.instruction(&format!("str x9, [sp, #{}]", current_pos_off));        // the previous match end starts at the subject start
+    emitter.instruction(&format!("str xzr, [sp, #{}]", match_count_off));       // no exec has matched yet
     emitter.instruction(&format!("str xzr, [sp, #{}]", callback_result_ptr_off)); // no callback result is owned yet
     emitter.instruction(&format!("str xzr, [sp, #{}]", matches_array_off));     // no matches array is owned yet
     emit_preg_replace_callback_install_boundary(
@@ -237,19 +190,29 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // load current subject cursor
-    emitter.instruction("ldrb w9, [x1]");                                       // read the current subject byte
-    emitter.instruction("cbz w9, __rt_preg_replace_callback_empty_subject");    // finish when the cursor reaches the null terminator
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass the whole subject so offsets stay absolute
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", current_pos_off));        // load the previous match end
+    emitter.instruction("sub x9, x9, x1");                                      // turn it into the search start offset
+    emitter.instruction("str x9, [x3]");                                        // publish the input range start
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_end_off));        // load the subject end offset
+    emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
+    super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_tail");            // copy the remaining subject when there are no more matches
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", match_count_off));        // load the match count
+    emitter.instruction("add x9, x9, #1");                                      // later execs continue after this match
+    emitter.instruction(&format!("str x9, [sp, #{}]", match_count_off));        // save the match count
 
     // -- remember unmatched prefix length before this match --
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
     emitter.instruction("ldr x9, [x14]");                                       // load full-match signed-64-bit start
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_cstr_off));      // load the subject start
+    emitter.instruction("add x9, x9, x10");                                     // address of the match start
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", current_pos_off));       // load the previous match end
+    emitter.instruction("sub x9, x9, x10");                                     // prefix length = match start - previous match end
     emitter.instruction(&format!("str x9, [sp, #{}]", prefix_len_off));         // save prefix byte count until callback scratch work is done
 
     // -- find highest populated capture so trailing unmatched captures are omitted --
@@ -289,8 +252,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #0");                                         // check whether this capture was populated
     emitter.instruction("b.lt __rt_preg_replace_callback_empty_capture");       // emit an empty string for interior unmatched captures
     emitter.instruction("sub x2, x16, x15");                                    // compute capture byte length
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // reload current subject cursor
-    emitter.instruction("add x1, x1, x15");                                     // compute capture byte pointer
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // reload the subject start
+    emitter.instruction("add x1, x1, x15");                                     // capture byte pointer = subject + absolute capture start
     emitter.instruction("b __rt_preg_replace_callback_push_capture");           // append matched capture text
     emitter.label("__rt_preg_replace_callback_empty_capture");
     emitter.instruction("mov x1, #0");                                          // empty unmatched capture has a null pointer
@@ -370,14 +333,10 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload the output write pointer after the frees
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair before advancing cursor
     emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
-    emitter.instruction("cmp x9, #0");                                          // detect zero-length regex matches
-    emitter.instruction("b.gt __rt_preg_replace_callback_advance_ok");          // use native rm_eo when the match consumed bytes
-    emitter.instruction("mov x9, #1");                                          // force progress for zero-length matches
-    emitter.label("__rt_preg_replace_callback_advance_ok");
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", current_pos_off));       // reload current subject cursor
-    emitter.instruction("add x10, x10, x9");                                    // move cursor past the current match
-    emitter.instruction(&format!("str x10, [sp, #{}]", current_pos_off));       // save next regex search cursor
-    emitter.instruction("b __rt_preg_replace_callback_loop");                   // continue replacing further matches
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_cstr_off));      // load the subject start
+    emitter.instruction("add x10, x10, x9");                                    // address of the match end
+    emitter.instruction(&format!("str x10, [sp, #{}]", current_pos_off));       // unreplaced text resumes at the match end
+    emitter.instruction("b __rt_preg_replace_callback_loop");                   // PCRE2 picks the next offset, retrying after an empty match
 
     // -- copy trailing subject after the last match --
     emitter.label("__rt_preg_replace_callback_tail");
@@ -409,9 +368,6 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_replace_callback_tail_loop");              // continue copying tail bytes
 
     // -- free regex and return final output slice --
-    emitter.label("__rt_preg_replace_callback_empty_subject");
-    emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // load the initialized empty-subject output cursor
-    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
@@ -509,7 +465,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let callback_result_ptr_off = output_backup_len_off + 8;
     let callback_result_len_off = callback_result_ptr_off + 8;
     let output_cap_off = callback_result_len_off + 8;
-    let saved_r12_off = output_cap_off + 8;
+    let subject_end_off = output_cap_off + 8;
+    let match_count_off = subject_end_off + 8;
+    let saved_r12_off = match_count_off + 8;
     let saved_r13_off = saved_r12_off + 8;
     let saved_r14_off = saved_r13_off + 8;
     // Same 224-byte handler record as the AArch64 path. `push rbp` already
@@ -540,39 +498,12 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve subject length for fallback and C-string conversion
 
-    // -- reject patterns PHP rejects before compilation --
-    emitter.instruction("test rsi, rsi");                                       // skip the byte load when the pattern is empty
-    emitter.instruction("jz __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // an empty pattern is decided by compilation
-    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // inspect the opening byte
-    emitter.instruction("cmp r8d, 47");                                         // only slash-delimited patterns carry a modifier suffix
-    emitter.instruction("jne __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // other delimiters stay on the compile path
-    emitter.instruction("cmp rsi, 2");                                          // a closing delimiter needs a second byte
-    emitter.instruction("jl __rt_preg_replace_callback_fail_linux_x86_64");     // "/" has no ending delimiter
-    emitter.instruction("mov r9, rsi");                                         // copy the pattern length for the reverse scan
-    emitter.instruction("sub r9, 1");                                           // start at the final pattern byte
-    emitter.label("__rt_preg_replace_callback_pattern_scan_linux_x86_64");
-    emitter.instruction("cmp r9, 1");                                           // stop before the opening delimiter
-    emitter.instruction("jl __rt_preg_replace_callback_fail_linux_x86_64");     // no closing delimiter, so PHP returns null
-    emitter.instruction("movzx r8d, BYTE PTR [rdi + r9]");                      // load the current trailing byte
-    emitter.instruction("cmp r8d, 47");                                         // a closing slash ends the modifier suffix
-    emitter.instruction("je __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // every trailing byte was a modifier the scan accepts
-    emit_branch_if_callback_modifier_continues(
-        emitter,
-        "r8d",
-        "__rt_preg_replace_callback_pattern_next_linux_x86_64",
-    );
-    emitter.instruction("jmp __rt_preg_replace_callback_fail_linux_x86_64");    // PHP returns null for an unknown modifier
-    emitter.label("__rt_preg_replace_callback_pattern_next_linux_x86_64");
-    emitter.instruction("sub r9, 1");                                           // continue toward the closing delimiter
-    emitter.instruction("jmp __rt_preg_replace_callback_pattern_scan_linux_x86_64"); // keep scanning the modifier suffix
-    emitter.label("__rt_preg_replace_callback_pattern_ok_linux_x86_64");
-
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into the delimiter-strip helper input register
-    emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags
-    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
-    emitter.instruction("jc __rt_preg_replace_callback_fail_linux_x86_64");     // PHP 8 rejects /e as an unknown modifier
+    emitter.instruction("call __rt_preg_strip");                                // strip delimiters and gather supported regex flags
+    emitter.instruction("bt rcx, 30");                                          // did delimiter parsing reject the pattern?
+    emitter.instruction("jc __rt_preg_replace_callback_fail_linux_x86_64");     // PHP rejects this pattern before compiling it
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve delimiter-strip flags for regcomp
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern across compilation
@@ -621,6 +552,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_callback_subject_copy_linux_x86_64"); // continue copying subject bytes
     emitter.label("__rt_preg_replace_callback_subject_copy_done_linux_x86_64");
     emitter.instruction("mov BYTE PTR [rdi + rdx], 0");                         // terminate the private subject copy
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the private subject copy to strlen
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_end_off)); // save the subject end offset for every exec range
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov rax, 4096");                                       // initial output capacity
@@ -634,7 +568,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", output_write_off)); // initialize final output write pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r14", output_cap_off)); // initialize output capacity
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); // load subject C-string start
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize current regex search cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // the previous match end starts at the subject start
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_count_off)); // no exec has matched yet
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", callback_result_ptr_off)); // no callback result is owned yet
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", matches_array_off)); // no matches array is owned yet
     emit_preg_replace_callback_install_boundary(
@@ -645,21 +580,26 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop_linux_x86_64");
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for regexec
-    emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // read the current subject byte
-    emitter.instruction("test r9d, r9d");                                       // check whether the cursor reached the null terminator
-    emitter.instruction("jz __rt_preg_replace_callback_empty_subject_linux_x86_64"); // finish when the full subject has been consumed
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the whole subject so offsets stay absolute
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", current_pos_off)); // load the previous match end
+    emitter.instruction("sub r9, rsi");                                         // turn it into the search start offset
+    emitter.instruction("mov QWORD PTR [rcx], r9");                             // publish the input range start
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_end_off)); // load the subject end offset
+    emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
+    super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
-    emitter.instruction("test eax, eax");                                       // did regexec find another match?
+    emitter.instruction("test eax, eax");                                       // did the exec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
+    emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", match_count_off)); // later execs continue after this match
 
     // -- remember unmatched prefix length before this match --
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
     emitter.instruction("mov r9, QWORD PTR [r10]");                             // load full-match signed-64-bit start
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_cstr_off)); // address of the match start
+    emitter.instruction(&format!("sub r9, QWORD PTR [rsp + {}]", current_pos_off)); // prefix length = match start - previous match end
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", prefix_len_off)); // save prefix byte count until callback scratch work is done
 
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload dynamic regmatch count
@@ -698,8 +638,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 0");                                          // check whether this capture was populated
     emitter.instruction("jl __rt_preg_replace_callback_empty_capture_linux_x86_64"); // emit an empty string for interior unmatched captures
     emitter.instruction("sub rcx, r11");                                        // compute capture byte length
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
-    emitter.instruction("add rsi, r11");                                        // compute capture byte pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload the subject start
+    emitter.instruction("add rsi, r11");                                        // capture byte pointer = subject + absolute capture start
     emitter.instruction("jmp __rt_preg_replace_callback_push_capture_linux_x86_64"); // append matched capture text
     emitter.label("__rt_preg_replace_callback_empty_capture_linux_x86_64");
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
@@ -781,14 +721,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // reload the output write pointer after the frees
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair before advancing cursor
     emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load full-match signed-64-bit end
-    emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches
-    emitter.instruction("jg __rt_preg_replace_callback_advance_ok_linux_x86_64"); // use native rm_eo when the match consumed bytes
-    emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
-    emitter.label("__rt_preg_replace_callback_advance_ok_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
-    emitter.instruction("add r10, r9");                                         // move cursor past the current match
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_pos_off)); // save next regex search cursor
-    emitter.instruction("jmp __rt_preg_replace_callback_loop_linux_x86_64");    // continue replacing further matches
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_cstr_off)); // address of the match end
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", current_pos_off)); // unreplaced text resumes at the match end
+    emitter.instruction("jmp __rt_preg_replace_callback_loop_linux_x86_64");    // PCRE2 picks the next offset, retrying after an empty match
 
     // -- copy trailing subject after the last match --
     emitter.label("__rt_preg_replace_callback_tail_linux_x86_64");
@@ -820,9 +755,6 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_callback_tail_loop_linux_x86_64"); // continue copying tail bytes
 
     // -- free regex and return final output slice --
-    emitter.label("__rt_preg_replace_callback_empty_subject_linux_x86_64");
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // load the initialized empty-subject output cursor
-    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);

@@ -9,8 +9,18 @@
 
 /* Private continuation flag; PCRE2 10.47 handles UTF-8, CRLF and empty retries. */
 #define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
-/* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
+/* Private compile flags for PHP modifiers pcre2posix has no bit for (REG_EXTENDED is 0).
+ * They sit above every REG_* compile flag and are cleared before the POSIX record keeps
+ * the remaining flags. */
 #define ELEPHC_PCRE2_EXTENDED 0x2000
+#define ELEPHC_PCRE2_ANCHORED 0x4000
+#define ELEPHC_PCRE2_DOLLAR_ENDONLY 0x8000
+#define ELEPHC_PCRE2_NO_AUTO_CAPTURE 0x20000
+#define ELEPHC_PCRE2_DUPNAMES 0x40000
+#define ELEPHC_PCRE2_CASELESS_RESTRICT 0x80000
+#define ELEPHC_PCRE2_PRIVATE_COMPILE_FLAGS (ELEPHC_PCRE2_EXTENDED | ELEPHC_PCRE2_ANCHORED \
+    | ELEPHC_PCRE2_DOLLAR_ENDONLY | ELEPHC_PCRE2_NO_AUTO_CAPTURE | ELEPHC_PCRE2_DUPNAMES \
+    | ELEPHC_PCRE2_CASELESS_RESTRICT)
 /* Private exec statuses for PCRE2 match errors POSIX has no code for. They sit above
  * every REG_* value so PHP's PREG_RECURSION_LIMIT_ERROR and PREG_BAD_UTF8_OFFSET_ERROR
  * survive the opaque ABI. */
@@ -40,6 +50,7 @@ static pcre2_code *elephc_pcre2_compile_locale(
     const uint8_t *pattern,
     PCRE2_SIZE length,
     uint32_t options,
+    uint32_t extra_options,
     int *errorcode,
     PCRE2_SIZE *erroffset)
 {
@@ -49,6 +60,17 @@ static pcre2_code *elephc_pcre2_compile_locale(
 
     if (context != NULL && tables != NULL) {
         pcre2_set_character_tables(context, tables);
+    }
+    if (extra_options != 0) {
+        if (context == NULL) {
+            *errorcode = PCRE2_ERROR_NOMEMORY;
+            *erroffset = 0;
+            if (tables != NULL) {
+                pcre2_maketables_free(NULL, tables);
+            }
+            return NULL;
+        }
+        pcre2_set_compile_extra_options(context, extra_options);
     }
     code = pcre2_compile((PCRE2_SPTR)pattern, length, options,
         errorcode, erroffset, context);
@@ -72,14 +94,16 @@ static pcre2_code *elephc_pcre2_compile_locale(
     return code;
 }
 
-/* Compiles with PCRE2_EXTENDED while filling the same POSIX regex_t pcre2_regcomp uses.
+/* Compiles a PHP pattern while filling the same POSIX regex_t pcre2_regcomp uses.
+ * The private flags carry PHP modifiers as compile options, like php-src:
+ * /x PCRE2_EXTENDED, /A PCRE2_ANCHORED, /D PCRE2_DOLLAR_ENDONLY,
+ * /n PCRE2_NO_AUTO_CAPTURE, /J PCRE2_DUPNAMES and /r PCRE2_EXTRA_CASELESS_RESTRICT.
  * An option group inserted before the pattern would hide (*UTF), (*ANYCRLF), (*CRLF),
- * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. PHP passes /x
- * as a compile option. */
-static int elephc_pcre2_compile_with_options(
-    regex_t *preg, const char *pattern, int cflags, uint32_t extra_options)
+ * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. */
+static int elephc_pcre2_compile_php(regex_t *preg, const char *pattern, int cflags)
 {
-    uint32_t options = extra_options;
+    uint32_t options = 0;
+    uint32_t extra_options = 0;
     uint32_t capture_count = 0;
     int errorcode = 0;
     PCRE2_SIZE erroffset = 0;
@@ -92,12 +116,23 @@ static int elephc_pcre2_compile_with_options(
     if ((cflags & REG_UTF) != 0) options |= PCRE2_UTF;
     if ((cflags & REG_UCP) != 0) options |= PCRE2_UCP;
     if ((cflags & REG_UNGREEDY) != 0) options |= PCRE2_UNGREEDY;
+    if ((cflags & ELEPHC_PCRE2_EXTENDED) != 0) options |= PCRE2_EXTENDED;
+    if ((cflags & ELEPHC_PCRE2_ANCHORED) != 0) options |= PCRE2_ANCHORED;
+    if ((cflags & ELEPHC_PCRE2_DOLLAR_ENDONLY) != 0) options |= PCRE2_DOLLAR_ENDONLY;
+    if ((cflags & ELEPHC_PCRE2_NO_AUTO_CAPTURE) != 0) options |= PCRE2_NO_AUTO_CAPTURE;
+    if ((cflags & ELEPHC_PCRE2_DUPNAMES) != 0) options |= PCRE2_DUPNAMES;
+#ifdef PCRE2_EXTRA_CASELESS_RESTRICT
+    /* php-src maps /r only when PCRE2 has the option (10.43+); the pinned 10.47 does. */
+    if ((cflags & ELEPHC_PCRE2_CASELESS_RESTRICT) != 0) {
+        extra_options |= PCRE2_EXTRA_CASELESS_RESTRICT;
+    }
+#endif
 
-    preg->re_cflags = cflags;
+    preg->re_cflags = cflags & ~ELEPHC_PCRE2_PRIVATE_COMPILE_FLAGS;
     preg->re_pcre2_code = NULL;
     preg->re_match_data = NULL;
     code = elephc_pcre2_compile_locale((const uint8_t *)pattern,
-        PCRE2_ZERO_TERMINATED, options, &errorcode, &erroffset);
+        PCRE2_ZERO_TERMINATED, options, extra_options, &errorcode, &erroffset);
     preg->re_erroffset = erroffset;
     if (code == NULL) {
         (void)errorcode;
@@ -118,16 +153,6 @@ static int elephc_pcre2_compile_with_options(
     }
     preg->re_erroffset = (size_t)(-1);
     return 0;
-}
-
-static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int cflags)
-{
-    return elephc_pcre2_compile_with_options(preg, pattern, cflags, PCRE2_EXTENDED);
-}
-
-static int elephc_pcre2_compile_posix(regex_t *preg, const char *pattern, int cflags)
-{
-    return elephc_pcre2_compile_with_options(preg, pattern, cflags, 0);
 }
 
 typedef struct elephc_pcre2_v1_handle {
@@ -158,12 +183,7 @@ int32_t elephc_pcre2_v1_compile(
     if (handle == NULL) {
         return (int32_t)REG_ESPACE;
     }
-    if ((cflags & ELEPHC_PCRE2_EXTENDED) != 0) {
-        cflags &= ~(uint32_t)ELEPHC_PCRE2_EXTENDED;
-        result = elephc_pcre2_compile_extended(&handle->regex, pattern_z, (int)cflags);
-    } else {
-        result = elephc_pcre2_compile_posix(&handle->regex, pattern_z, (int)cflags);
-    }
+    result = elephc_pcre2_compile_php(&handle->regex, pattern_z, (int)cflags);
     if (result != 0) {
         free(handle);
         return (int32_t)result;
@@ -313,7 +333,7 @@ int32_t elephc_pcre2_v1_mime_compile(
     }
     code = elephc_pcre2_compile_locale(
         pattern == NULL ? (const uint8_t *)"" : pattern,
-        (PCRE2_SIZE)length, PCRE2_CASELESS, &error, &offset);
+        (PCRE2_SIZE)length, PCRE2_CASELESS, 0, &error, &offset);
     if (code == NULL) {
         *error_offset_out = (uint64_t)offset;
         return (int32_t)error;
