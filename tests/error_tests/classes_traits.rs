@@ -1981,9 +1981,21 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         // An enum whose backed case values fail is still declared.
         ("enum E: int { case A = \"x\"; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
         ("enum E: int { case A = 1; case C = 1; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
-        // An enum never binds while PHP compiles: a later trait without `use` takes its name,
-        // and a later interface with parents loses to it.
-        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait E {}".to_string(), "Duplicate trait declaration: E"),
+        // A redeclared name belongs to the first declaration PHP binds while compiling (a trait
+        // without `use`, an interface without parents, a class without traits or interfaces whose
+        // parent is bound), else to the first one; every other declaration is the redeclaration,
+        // at its own statement. An enum never binds while compiling.
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait E {}".to_string(), "Duplicate class or enum declaration: E"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nenum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass E implements I {}".to_string(), "bar"),
+        ("interface I { public function foo(); }\nenum E { case A; }\nclass E implements I {}".to_string(), "Duplicate class declaration: E"),
+        ("enum E { case A; }\nclass E extends Missing {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nclass E implements I {}\nenum E { case A; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I { private final const Y = 1; }".to_string(), "Private constant E::Y cannot be final"),
+        ("interface E {}\nclass E {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nclass E implements I {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface E {}".to_string(), "Duplicate class declaration: E"),
+        ("interface J {}\ninterface E extends J {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I {}\nclass E implements I {}".to_string(), "bar"),
+        ("interface J {}\ninterface E extends J {}\nclass E {}".to_string(), "Duplicate interface declaration: E"),
         ("enum E { case A; }\ntrait Q {}\ntrait E { use Q; }".to_string(), "Duplicate trait declaration: E"),
         ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface J {}\ninterface E extends J {}".to_string(), "bar"),
         ("enum E { case A; }\ninterface E extends Missing {}".to_string(), "Duplicate interface declaration: E"),

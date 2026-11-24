@@ -57,6 +57,7 @@ mod declaration_metadata;
 mod externs;
 mod functions;
 mod init;
+mod redeclarations;
 mod top_level;
 
 use declaration_metadata::{
@@ -113,26 +114,19 @@ pub(super) fn check_types_impl(
     constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
-    let (
-        mut flattened_classes,
-        mut flattened_enums,
-        flatten_errors,
-        redeclarations,
-        final_abstract_imports,
-    ) = flatten_classes(program);
-    errors.extend(flatten_errors);
     // The errors PHP raises while it compiles (an early-bound class, a parentless interface) or
     // declares (every other class, interface, trait and enum) a declaration, each with when PHP
-    // reports it, sorted once every declaration is linked so the first is PHP's.
-    let order = declaration_order(program);
-    let positions = declaration_positions(program);
+    // reports it, sorted once every declaration is linked so the first is PHP's. It starts with
+    // the declarations that reuse a name PHP binds to another one, which every pass below skips.
+    let redeclarations::Redeclarations { rejected, errors: redeclaration_errors } =
+        redeclarations::redeclarations(program);
+    let order = declaration_order(program, &rejected);
+    let positions = declaration_positions(program, &rejected);
     let statement_positions = declaration_statement_positions(program);
-    let mut linked: Vec<(LinkOrder, CompileError)> = Vec::new();
-    // A trait or class-like declaration reusing a trait's name fails when PHP declares it.
-    for error in redeclarations {
-        let position = statement_positions.get(&error.span).copied().unwrap_or(usize::MAX);
-        linked.push(((true, position), error));
-    }
+    let mut linked: Vec<(LinkOrder, CompileError)> = redeclaration_errors;
+    let (mut flattened_classes, mut flattened_enums, flatten_errors, final_abstract_imports) =
+        flatten_classes(program, &rejected);
+    errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
     checker.trait_method_requirements =
@@ -157,36 +151,13 @@ pub(super) fn check_types_impl(
     let declared_traits = collect_declared_trait_names(program);
     let declared_trait_methods = collect_declared_trait_methods(program);
     let declared_trait_constants = collect_declared_trait_constants(program);
-    let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
-    for class in &flattened_classes {
-        let key = php_symbol_key(&class.name);
-        if !seen_classes.insert(key) {
-            // PHP raises it when it declares the second class.
-            linked.push((
-                (true, statement_positions.get(&class.span).copied().unwrap_or(usize::MAX)),
-                CompileError::new(
-                    class.span,
-                    &format!("Duplicate class declaration: {}", class.name),
-                ),
-            ));
-            continue;
-        }
+    for class in flattened_classes.iter().filter(|class| !rejected.contains(&class.span)) {
         class_map.insert(class.name.clone(), class.clone());
     }
     let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::new();
     checker.declared_classes = class_map.keys().cloned().collect();
-    // The first enum statement of each name: PHP declares an enum and an interface with parents
-    // in source order, so the later of the two is the redeclaration.
-    let mut enum_statements: HashMap<String, crate::span::Span> = HashMap::new();
-    for stmt in program {
-        if let StmtKind::EnumDecl { name, .. } = &stmt.kind {
-            enum_statements.entry(php_symbol_key(name)).or_insert(stmt.span);
-        }
-    }
-    let statement_position =
-        |span: &crate::span::Span| statement_positions.get(span).copied().unwrap_or(usize::MAX);
-    for stmt in program {
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::InterfaceDecl {
             generics: _,
             name,
@@ -196,21 +167,18 @@ pub(super) fn check_types_impl(
             constants,
         } = &stmt.kind
         {
+            // A clash among the program's own declarations is already decided; this catches a
+            // class the program declares elsewhere (not at the top level).
             let interface_key = php_symbol_key(name);
-            let after_enum = !extends.is_empty()
-                && enum_statements.get(&interface_key).is_some_and(|enum_span| {
-                    statement_position(enum_span) < statement_position(&stmt.span)
-                });
-            if after_enum
-                || interface_map
-                    .keys()
-                    .any(|existing| php_symbol_key(existing) == interface_key)
+            if interface_map
+                .keys()
+                .any(|existing| php_symbol_key(existing) == interface_key)
                 || class_map
                     .keys()
                     .any(|existing| php_symbol_key(existing) == interface_key)
             {
                 linked.push((
-                    (true, statement_position(&stmt.span)),
+                    (true, statement_positions.get(&stmt.span).copied().unwrap_or(usize::MAX)),
                     CompileError::new(
                         stmt.span,
                         &format!("Duplicate interface declaration: {}", name),
@@ -420,7 +388,7 @@ pub(super) fn check_types_impl(
     // mismatch) and its private final constants. Those errors precede every diagnostic raised
     // when PHP declares a class, and the class builds below do not report them again.
     linked.extend(class_compile_errors(
-        program,
+        &order,
         &flattened_classes,
         &class_map,
         &checker,
@@ -464,11 +432,9 @@ pub(super) fn check_types_impl(
     let mut global_constants = HashMap::new();
     collect_global_constants(program, &mut global_constants);
     // Backed case value errors, which PHP raises when an enum's cases are first used, after
-    // every declaration it links. Such an enum is still declared, so a later enum of its name is
-    // a redeclaration.
+    // every declaration it links.
     let mut case_value_errors = Vec::new();
-    let mut case_value_enums = HashSet::new();
-    for stmt in program {
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::EnumDecl {
             name,
             backing_type,
@@ -487,13 +453,6 @@ pub(super) fn check_types_impl(
                     .copied()
                     .unwrap_or_else(|| position_of(&positions, name)),
             );
-            if case_value_enums.contains(&php_symbol_key(name)) {
-                linked.push((
-                    link_order,
-                    CompileError::new(stmt.span, &format!("Duplicate class or enum declaration: {}", name)),
-                ));
-                continue;
-            }
             let enum_methods = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
@@ -532,10 +491,7 @@ pub(super) fn check_types_impl(
                 Err(EnumBuildError::Declaration(error)) => {
                     linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
                 }
-                Err(EnumBuildError::CaseValue(error)) => {
-                    case_value_enums.insert(php_symbol_key(name));
-                    case_value_errors.extend(error.flatten());
-                }
+                Err(EnumBuildError::CaseValue(error)) => case_value_errors.extend(error.flatten()),
             }
         }
     }
@@ -565,6 +521,7 @@ pub(super) fn check_types_impl(
     validate_trait_requirements(
         &checker,
         program,
+        &rejected,
         &flattened_classes,
         &expanded,
         &mut linked,
@@ -894,14 +851,13 @@ var_dump((new Mw())->check(new Req()));
 /// span. A class that uses traits or implements interfaces, or whose parent is declared later,
 /// is linked later, so its parent errors stay with the class schema build.
 fn class_compile_errors(
-    program: &Program,
+    order: &HashMap<String, usize>,
     classes: &[FlattenedClass],
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     positions: &HashMap<String, usize>,
     statement_positions: &HashMap<crate::span::Span, usize>,
 ) -> Vec<(LinkOrder, CompileError)> {
-    let order = declaration_order(program);
     let mut errors = Vec::new();
     for class in classes {
         // At this declaration's own statement, which a redeclared class does not share.
@@ -918,7 +874,9 @@ fn class_compile_errors(
                 )));
             }
         }
-        if !is_early_bound(class, &order, class_map, checker) {
+        // A redeclaration is never early-bound: the name is taken (`redeclarations`).
+        let kept = class_map.get(&class.name).is_some_and(|kept| kept.span == class.span);
+        if !kept || !is_early_bound(class, order, class_map, checker) {
             continue;
         }
         let Some(parent_name) = class.extends.as_deref() else {
@@ -1001,8 +959,9 @@ fn is_early_bound(
 }
 
 /// The source position of each top-level class, interface, trait and enum declaration of
-/// `program`, keyed by `php_symbol_key`.
-fn declaration_order(program: &Program) -> HashMap<String, usize> {
+/// `program`, keyed by `php_symbol_key`: for a redeclared name, the declaration PHP keeps (the
+/// first one not in `rejected`).
+fn declaration_order(program: &Program, rejected: &HashSet<crate::span::Span>) -> HashMap<String, usize> {
     let mut order = HashMap::new();
     for (position, stmt) in program.iter().enumerate() {
         if let StmtKind::ClassDecl { name, .. }
@@ -1010,7 +969,9 @@ fn declaration_order(program: &Program) -> HashMap<String, usize> {
         | StmtKind::TraitDecl { name, .. }
         | StmtKind::EnumDecl { name, .. } = &stmt.kind
         {
-            order.entry(php_symbol_key(name)).or_insert(position);
+            if !rejected.contains(&stmt.span) {
+                order.entry(php_symbol_key(name)).or_insert(position);
+            }
         }
     }
     order

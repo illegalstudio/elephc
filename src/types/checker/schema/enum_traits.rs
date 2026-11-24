@@ -65,19 +65,20 @@ pub(crate) type LinkOrder = (bool, usize);
 pub(crate) fn validate_trait_requirements(
     checker: &Checker,
     program: &Program,
+    rejected: &HashSet<Span>,
     classes: &[FlattenedClass],
     enums: &[&FlattenedClass],
     linked: &mut Vec<(LinkOrder, CompileError)>,
     class_build_errors: &HashMap<String, usize>,
 ) {
     let mut traits = HashMap::new();
-    collect_trait_members(program, &mut traits);
+    collect_trait_members(program, rejected, &mut traits);
     if traits.is_empty() {
         return;
     }
-    let positions = declaration_positions(program);
+    let positions = declaration_positions(program, rejected);
     let mut class_uses = HashMap::new();
-    collect_class_trait_uses(program, &mut class_uses);
+    collect_class_trait_uses(program, rejected, &mut class_uses);
     let mut walk = RequirementWalk::new(&traits);
     // Each class to walk with its contract, whether it has a binding failure, and its error slot.
     let mut walked = Vec::new();
@@ -117,7 +118,7 @@ pub(crate) fn validate_trait_requirements(
     }
     let mut errors: Vec<(LinkOrder, CompileError)> = Vec::new();
     let failed_traits =
-        trait_requirement_errors(checker, program, &traits, &mut walk, &positions, &mut errors, |pair| {
+        trait_requirement_errors(checker, program, rejected, &traits, &mut walk, &positions, &mut errors, |pair| {
             let key = pair.key();
             reached.contains(&key) || !suppressed.contains(&key)
         });
@@ -184,9 +185,11 @@ pub(crate) fn validate_trait_requirements(
 /// for each trait in declaration order, the first incompatible pair `included` accepts that
 /// does not name `self`, `parent` or `static`, named after the trait, added to `errors` at the
 /// trait's position. Returns the keys of the traits that failed.
+#[allow(clippy::too_many_arguments)]
 fn trait_requirement_errors(
     checker: &Checker,
     program: &Program,
+    rejected: &HashSet<Span>,
     traits: &HashMap<String, TraitMembers<'_>>,
     walk: &mut RequirementWalk<'_, '_>,
     positions: &HashMap<String, usize>,
@@ -194,7 +197,7 @@ fn trait_requirement_errors(
     included: impl Fn(&SatisfiedPair) -> bool,
 ) -> HashSet<String> {
     let mut declared: Vec<(usize, String)> = Vec::new();
-    collect_trait_names(program, &mut declared, positions);
+    collect_trait_names(program, rejected, &mut declared, positions);
     declared.sort_by_key(|(position, _)| *position);
     let mut seen = HashSet::new();
     let mut failed = HashSet::new();
@@ -299,16 +302,20 @@ fn collect_enum_trait_uses<'a>(program: &'a [crate::parser::ast::Stmt], uses: &m
     }
 }
 
-/// Collects each trait declaration's name with its source position, through namespace blocks.
+/// Collects each trait declaration's name with its source position, through namespace blocks,
+/// leaving out the `rejected` redeclarations.
 fn collect_trait_names(
     program: &[crate::parser::ast::Stmt],
+    rejected: &HashSet<Span>,
     names: &mut Vec<(usize, String)>,
     positions: &HashMap<String, usize>,
 ) {
     for stmt in program {
         match &stmt.kind {
-            StmtKind::TraitDecl { name, .. } => names.push((position_of(positions, name), name.clone())),
-            StmtKind::NamespaceBlock { body, .. } => collect_trait_names(body, names, positions),
+            StmtKind::TraitDecl { name, .. } if !rejected.contains(&stmt.span) => {
+                names.push((position_of(positions, name), name.clone()))
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_trait_names(body, rejected, names, positions),
             _ => {}
         }
     }
@@ -333,13 +340,15 @@ fn for_each_declaration<'a>(
 }
 
 /// The source position of each class, interface, trait and enum declaration, keyed by
-/// `php_symbol_key` (the first one of a redeclared name), counted through namespace blocks: the
-/// position half of a `LinkOrder`.
-pub(crate) fn declaration_positions(program: &Program) -> HashMap<String, usize> {
+/// `php_symbol_key`, counted through namespace blocks: the position half of a `LinkOrder`. A
+/// redeclared name maps to the declaration PHP keeps, the first one not in `rejected`.
+pub(crate) fn declaration_positions(program: &Program, rejected: &HashSet<Span>) -> HashMap<String, usize> {
     let mut positions = HashMap::new();
     let mut next = 0;
-    for_each_declaration(program, &mut |_, name| {
-        positions.entry(php_symbol_key(name)).or_insert(next);
+    for_each_declaration(program, &mut |stmt, name| {
+        if !rejected.contains(&stmt.span) {
+            positions.entry(php_symbol_key(name)).or_insert(next);
+        }
         next += 1;
     });
     positions
@@ -447,14 +456,21 @@ fn type_mentions_relative_class(hint: &TypeExpr) -> bool {
     }
 }
 
-/// Indexes each class declaration's trait uses by class name, through namespace blocks.
-fn collect_class_trait_uses<'a>(program: &'a [crate::parser::ast::Stmt], uses: &mut HashMap<&'a str, &'a [TraitUse]>) {
+/// Indexes each class declaration's trait uses by class name, through namespace blocks, leaving
+/// out the `rejected` redeclarations.
+fn collect_class_trait_uses<'a>(
+    program: &'a [crate::parser::ast::Stmt],
+    rejected: &HashSet<Span>,
+    uses: &mut HashMap<&'a str, &'a [TraitUse]>,
+) {
     for stmt in program {
         match &stmt.kind {
-            StmtKind::ClassDecl { name, trait_uses, .. } if !trait_uses.is_empty() => {
+            StmtKind::ClassDecl { name, trait_uses, .. }
+                if !trait_uses.is_empty() && !rejected.contains(&stmt.span) =>
+            {
                 uses.insert(name.as_str(), trait_uses.as_slice());
             }
-            StmtKind::NamespaceBlock { body, .. } => collect_class_trait_uses(body, uses),
+            StmtKind::NamespaceBlock { body, .. } => collect_class_trait_uses(body, rejected, uses),
             _ => {}
         }
     }
@@ -775,14 +791,19 @@ impl<'t, 'a> RequirementWalk<'t, 'a> {
     }
 }
 
-/// Collects raw trait declarations, including namespace blocks used by checker-only fixtures.
-fn collect_trait_members<'a>(program: &'a Program, traits: &mut HashMap<String, TraitMembers<'a>>) {
+/// Collects raw trait declarations, including namespace blocks used by checker-only fixtures,
+/// leaving out the `rejected` redeclarations.
+fn collect_trait_members<'a>(
+    program: &'a Program,
+    rejected: &HashSet<Span>,
+    traits: &mut HashMap<String, TraitMembers<'a>>,
+) {
     for stmt in program {
         match &stmt.kind {
-            StmtKind::TraitDecl { name, trait_uses, methods, .. } => {
+            StmtKind::TraitDecl { name, trait_uses, methods, .. } if !rejected.contains(&stmt.span) => {
                 traits.insert(php_symbol_key(name), (name.as_str(), trait_uses, methods));
             }
-            StmtKind::NamespaceBlock { body, .. } => collect_trait_members(body, traits),
+            StmtKind::NamespaceBlock { body, .. } => collect_trait_members(body, rejected, traits),
             _ => {}
         }
     }

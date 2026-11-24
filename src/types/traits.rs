@@ -97,29 +97,22 @@ struct ImportedMethod {
 /// Trait declarations are stored in `trait_map` for later expansion.
 /// Class-like declarations with traits are processed in program order; each declaration's trait
 /// uses are resolved recursively, then merged with the declaration's own members.
-/// Circular trait composition and duplicate declarations are reported as errors.
-/// Returns `(flattened_classes, flattened_enums, errors, redeclarations,
-/// final_abstract_imports)`: `redeclarations` are the errors for a trait whose name an earlier
-/// trait or any class-like declaration has, and for a class-like declaration named like a trait,
-/// each at its declaration statement, which PHP raises when it declares it, not while compiling;
-/// the imports are checked by `final_abstract_import_overrides` once builtin classes are
-/// registered too.
+/// Circular trait composition is reported as an error. A trait statement in `rejected` reuses a
+/// name PHP binds to another declaration (`driver::redeclarations`, which reports it) and is
+/// left out of the trait table.
+/// Returns `(flattened_classes, flattened_enums, errors, final_abstract_imports)`; the last are
+/// checked by `final_abstract_import_overrides` once builtin classes are registered too.
 pub fn flatten_classes(
     program: &Program,
+    rejected: &HashSet<Span>,
 ) -> (
     Vec<FlattenedClass>,
     HashMap<String, FlattenedClass>,
     Vec<CompileError>,
-    Vec<CompileError>,
     Vec<FinalAbstractImport>,
 ) {
     let mut trait_map = HashMap::new();
-    let mut trait_keys = HashSet::new();
-    // Each class-like name with the span of an enum that declared it: PHP never early-binds an
-    // enum, so a later trait without `use`, which it binds while compiling, takes the name.
-    let mut class_like_keys: HashMap<String, Option<Span>> = HashMap::new();
     let mut errors = Vec::new();
-    let mut redeclarations = Vec::new();
     let mut final_abstract_imports = Vec::new();
 
     for stmt in program {
@@ -133,24 +126,7 @@ pub fn flatten_classes(
                 properties,
                 methods,
                 constants,
-            } => {
-                let trait_key = php_symbol_key(name);
-                let earlier_enum = class_like_keys.get(&trait_key).copied().flatten();
-                if let Some(enum_span) = earlier_enum.filter(|_| trait_uses.is_empty()) {
-                    // The enum is the redeclaration, when PHP declares it.
-                    redeclarations.push(CompileError::new(
-                        enum_span,
-                        &format!("Duplicate trait declaration: {}", name),
-                    ));
-                    class_like_keys.remove(&trait_key);
-                } else if class_like_keys.contains_key(&trait_key) || trait_keys.contains(&trait_key) {
-                    redeclarations.push(CompileError::new(
-                        stmt.span,
-                        &format!("Duplicate trait declaration: {}", name),
-                    ));
-                    continue;
-                }
-                trait_keys.insert(trait_key);
+            } if !rejected.contains(&stmt.span) => {
                 trait_map.insert(
                     name.clone(),
                     TraitDeclInfo {
@@ -161,20 +137,6 @@ pub fn flatten_classes(
                         span: stmt.span,
                     },
                 );
-            }
-            StmtKind::ClassDecl { name, .. }
-            | StmtKind::EnumDecl { name, .. }
-            | StmtKind::InterfaceDecl { name, .. } => {
-                let class_like_key = php_symbol_key(name);
-                if trait_keys.contains(&class_like_key) {
-                    redeclarations.push(CompileError::new(
-                        stmt.span,
-                        &format!("Duplicate class or interface declaration: {}", name),
-                    ));
-                    continue;
-                }
-                let enum_span = matches!(stmt.kind, StmtKind::EnumDecl { .. }).then_some(stmt.span);
-                class_like_keys.entry(class_like_key).or_insert(enum_span);
             }
             _ => {}
         }
@@ -400,7 +362,7 @@ pub fn flatten_classes(
         }
     }
 
-    (flattened, flattened_enums, errors, redeclarations, final_abstract_imports)
+    (flattened, flattened_enums, errors, final_abstract_imports)
 }
 
 /// A class whose trait uses bind an abstract `as final` import, recorded while flattening it and
