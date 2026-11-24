@@ -3395,20 +3395,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
     }
 
-    /// Releases the boxed local owner before a consuming mutation executes.
+    /// Retains a borrowed native view, then releases the boxed local owner before mutation.
     ///
-    /// The source load already owns an unboxed concrete reference. Widening the
-    /// destination storage before emitting this cleanup makes the final Mixed frame
-    /// representation visible, then dropping the old box transfers its payload owner
-    /// to the source SSA value so COW sees only real aliases during the mutation.
+    /// Widening the destination storage before emitting this cleanup makes the final Mixed
+    /// frame representation visible. A conditional reference path can expose a borrowed native
+    /// view of that box, so it first takes the independent owner consumed by the mutation. An
+    /// ordinary provisional local load already lowers as an owned unbox from final Mixed storage.
     pub(crate) fn prepare_mutated_local_owner(
         &mut self,
         name: &str,
         source: LoweredValue,
         replacement_type: PhpType,
         span: Option<Span>,
-    ) {
-        self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, true);
+    ) -> LoweredValue {
+        self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, true)
     }
 
     /// Widens the destination for a consuming mutation whose BACKEND retires the boxed owner.
@@ -3429,7 +3429,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         replacement_type: PhpType,
         span: Option<Span>,
     ) {
-        self.prepare_mutated_local_owner_impl(name, source, replacement_type, span, false);
+        let _ = self.prepare_mutated_local_owner_impl(
+            name,
+            source,
+            replacement_type,
+            span,
+            false,
+        );
     }
 
     /// Shared body of the two consuming-mutation preludes above.
@@ -3447,14 +3453,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         replacement_type: PhpType,
         span: Option<Span>,
         release_box: bool,
-    ) {
+    ) -> LoweredValue {
         let previous_kind = self
             .local_kinds
             .get(name)
             .copied()
             .unwrap_or(LocalKind::PhpLocal);
         if self.uses_global_storage(name, previous_kind) {
-            return;
+            return source;
         }
         let slot = self.declare_local(name, replacement_type.clone());
         let is_ref_bound =
@@ -3463,11 +3469,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder
             .widen_local_storage_type(slot, replacement_type);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
-        if release_box
+        let release_previous_box = release_box
             && !is_ref_bound
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_type, PhpType::Mixed | PhpType::Union(_));
+        let source = if release_previous_box
+            && self.builder.value_ownership(source.value) == Ownership::Borrowed
         {
+            crate::ir_lower::ownership::acquire_if_refcounted(self, source, span)
+        } else {
+            source
+        };
+        if release_previous_box {
             self.emit_void(
                 Op::ReleaseLocalSlot,
                 Vec::new(),
@@ -3476,6 +3489,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             );
         }
+        source
     }
 
     /// Emits a consuming local storeback after a mutation or representation change.

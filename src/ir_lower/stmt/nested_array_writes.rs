@@ -1230,7 +1230,12 @@ fn lower_local_parent_fetch_for_write_inner(
             let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
             // Fetch-for-write normalizes typed entries in place and returns their attached
             // Mixed cells. Declare that result contract before publishing the changed hash.
-            ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
+            let hash_value = ctx.prepare_mutated_local_owner(
+                name,
+                hash_value,
+                assoc_ty.clone(),
+                Some(span),
+            );
             Some(lower_hash_parent_fetch_for_write_with_key(ctx, name, hash_value, assoc_ty, key_value, span, key_already_diagnosed))
         }
         _ => None,
@@ -1249,7 +1254,12 @@ fn lower_indexed_parent_fetch_for_write(
     key_already_diagnosed: bool,
 ) -> LoweredValue {
     let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    ctx.prepare_mutated_local_owner(name, array, ensured_ty.clone(), Some(span));
+    let array = ctx.prepare_mutated_local_owner(
+        name,
+        array,
+        ensured_ty.clone(),
+        Some(span),
+    );
     let key_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], span);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,

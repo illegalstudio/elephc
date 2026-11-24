@@ -112,7 +112,7 @@ function buildHeterogeneousAppend(): void {
 /// Final storage normalization selects boxed or native append coherently on every target.
 #[test]
 fn ref_local_append_uses_final_storage_on_all_targets() {
-    use crate::ir::{Immediate, Op};
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, ValueDef};
     use crate::types::PhpType;
     let source = r#"<?php
 function touchUnknown(&$items): void { $items[0] = 7; }
@@ -222,6 +222,44 @@ touchUnknown($items); echo count($items);
         let module = super::lower_source_at_for_target(
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let nested = module.functions.iter()
+            .find(|function| function.name == "earlyNativeNested")
+            .expect("conditional native nested write fixture");
+        let fetch = nested.instructions.iter()
+            .find(|instruction| matches!(
+                instruction.immediate,
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ArrayFetchForWrite
+                        | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                ))
+            ))
+            .expect("nested write fetch-for-write");
+        let retained = nested.value(fetch.operands[0]).expect("retained mutation owner");
+        let ValueDef::Instruction { inst: retain, block: retain_block, index: retain_index } = retained.def else {
+            panic!("{target}: retained mutation owner must be an instruction result");
+        };
+        let retain = nested.instruction(retain).expect("mutation owner acquire");
+        assert_eq!(retain.op, Op::Acquire, "{target}: retain a borrowed native view before cleanup");
+        let borrowed = nested.value(retain.operands[0]).expect("borrowed native view");
+        assert_eq!(
+            borrowed.ownership,
+            crate::ir::Ownership::Borrowed,
+            "{target}: the conditional reference path must expose the borrowed view",
+        );
+        let ValueDef::Instruction { block: fetch_block, index: fetch_index, .. } =
+            nested.value(fetch.result.expect("fetch result")).expect("fetch result value").def
+        else {
+            panic!("{target}: fetch-for-write result must be an instruction result");
+        };
+        assert_eq!(retain_block, fetch_block, "{target}: retain and consume in one write block");
+        assert!(
+            nested.block(fetch_block).expect("nested write block").instructions
+                [retain_index as usize + 1..fetch_index as usize]
+                .iter()
+                .any(|id| nested.instruction(*id).is_some_and(|instruction|
+                    instruction.op == Op::ReleaseLocalSlot)),
+            "{target}: retire the old Mixed box only after taking the mutation owner",
         );
         let mut boxed = 0;
         let mut native = 0;
