@@ -252,10 +252,11 @@ fn unpin_leading_reference_defaults(
 /// before an omitted trailing default that can throw is evaluated.
 ///
 /// It runs when the call has such a default (`throwing_default`), or when a supplied object
-/// parameter precedes a checked scalar one: the object check of each earlier parameter comes
-/// first (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a`, and a later
-/// `Stringable` is not converted), and `object_guarded` records the parameters checked here so
-/// the final pass does not check them again. An object argument is matched by its value
+/// parameter is checked beside a scalar one: both kinds of check then run here in parameter
+/// order (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a` and does not convert a
+/// later `Stringable`; `g(s: $null, a: $false)` for `g(string $s, C $a)` refuses `$s`), and
+/// `object_guarded` records the parameters checked here so the final pass does not check them
+/// again. An object argument is matched by its value
 /// expression, not the `name: value` wrapper the final pass sees.
 ///
 /// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
@@ -288,15 +289,17 @@ fn check_supplied_scalar_params_before_defaults(
             ctx, sig, param_index, value, &expr,
         ).is_some())
     };
-    let first_scalar = supplied.iter().position(|(param_index, source_index)| {
+    let any_scalar = supplied.iter().any(|(param_index, source_index)| {
         super::scalar_param_guards::guarded_scalar_param(
             ctx, sig, *param_index, source_values[*source_index], GuardSource::Unrecorded,
         ).is_some()
     });
-    let Some(first_scalar) = first_scalar else { return };
-    let object_first = supplied[..first_scalar].iter()
+    if !any_scalar {
+        return;
+    }
+    let object_checks = supplied.iter()
         .any(|(param_index, source_index)| object_checked(ctx, *param_index, *source_index, source_values[*source_index]));
-    if !throwing_default && !object_first {
+    if !throwing_default && !object_checks {
         return;
     }
     // Every owned source is rooted before the first check can throw: the regular parameters'

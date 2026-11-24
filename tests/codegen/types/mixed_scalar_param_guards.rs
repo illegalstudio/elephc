@@ -1267,6 +1267,46 @@ run(42, null, new Name(), new C());
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
 
+/// Object and scalar parameter checks run together in parameter order once every argument was
+/// evaluated, positional and named alike: a scalar parameter before an object one is refused
+/// first (and an accepted `Stringable` is converted before the object is refused), and an
+/// object parameter before a scalar one is refused first, for `?C`, `C|false` and `mixed`
+/// arguments, with and without a throwing trailing default. The values are released.
+#[test]
+fn test_object_and_scalar_parameter_checks_run_in_parameter_order() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {}
+class Name { public function __toString(): string { echo "toString ran\n"; return "n"; } }
+function so(string $s, C $a) { echo "so body ", $s, "\n"; }
+function os(C $a, string $s) { echo "os body ", $s, "\n"; }
+function sod(string $s, C $a, int $d = 1 % 0) { echo "sod body\n"; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function run(mixed $s, ?C $a, C|false $f, mixed $x) {
+    echo "-- positional\n";
+    try { so($s, $a); } catch (Throwable $e) { show($e); }
+    try { so($s, $f); } catch (Throwable $e) { show($e); }
+    try { so($s, $x); } catch (Throwable $e) { show($e); }
+    try { os($a, $s); } catch (Throwable $e) { show($e); }
+    try { os($x, $s); } catch (Throwable $e) { show($e); }
+    try { sod($s, $f); } catch (Throwable $e) { show($e); }
+    echo "-- named\n";
+    try { so(s: $s, a: $a); } catch (Throwable $e) { show($e); }
+    try { so(a: $f, s: $s); } catch (Throwable $e) { show($e); }
+    try { so(s: $s, a: $x); } catch (Throwable $e) { show($e); }
+    try { os(a: $a, s: $s); } catch (Throwable $e) { show($e); }
+    try { os(s: $s, a: $x); } catch (Throwable $e) { show($e); }
+    try { sod(s: $s, a: $f); } catch (Throwable $e) { show($e); }
+}
+run(null, null, false, 42);
+run(new Name(), null, false, 42);
+run(new Name(), new C(), new C(), new C());
+"#,
+    );
+    assert_eq!(output.stdout, "-- positional\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, int given\nTypeError: sod(): Argument #1 ($s) must be of type string, null given\n-- named\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: so(): Argument #1 ($s) must be of type string, null given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, int given\nTypeError: sod(): Argument #1 ($s) must be of type string, null given\n-- positional\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, null given\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, false given\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, int given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, int given\ntoString ran\nTypeError: sod(): Argument #2 ($a) must be of type C, false given\n-- named\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, null given\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, false given\ntoString ran\nTypeError: so(): Argument #2 ($a) must be of type C, int given\nTypeError: os(): Argument #1 ($a) must be of type C, null given\nTypeError: os(): Argument #1 ($a) must be of type C, int given\ntoString ran\nTypeError: sod(): Argument #2 ($a) must be of type C, false given\n-- positional\ntoString ran\nso body n\ntoString ran\nso body n\ntoString ran\nso body n\ntoString ran\nos body n\ntoString ran\nos body n\ntoString ran\nDivisionByZeroError: Modulo by zero\n-- named\ntoString ran\nso body n\ntoString ran\nso body n\ntoString ran\nso body n\ntoString ran\nos body n\ntoString ran\nos body n\ntoString ran\nDivisionByZeroError: Modulo by zero\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// A builtin's callback and a call through a callable value bind each value through the
 /// callable invoker's scalar checks, whose precision deprecation runs the error handler: a
 /// global it writes must not be read back from a value the optimizer saved before the call

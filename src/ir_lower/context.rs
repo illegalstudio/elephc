@@ -427,6 +427,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `(expression depth, unrecorded)` while positional arguments of a guarded call are
     /// lowered: scalar-parameter checks wait for parameter-order normalization.
     pub(crate) scalar_guard_deferral: Option<(usize, bool)>,
+    /// `(expression depth, deferred checks)` while the positional arguments of a call are
+    /// lowered: an object parameter's check waits too, so every check runs in parameter
+    /// order once the arguments were evaluated (`(parameter index, argument)` per check).
+    pub(crate) object_guard_deferral: Option<(usize, Vec<(usize, Expr)>)>,
     /// Set just before the arguments of a call through a statically resolved callable value
     /// (`$f = 'f'; $f($v)`) are lowered: the checker records no argument sites for such a
     /// call, so its scalar-parameter checks decide from the value types. Consumed by the next
@@ -911,6 +915,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflected_invoke_call_span: None,
             call_site_span: None,
             scalar_guard_deferral: None,
+            object_guard_deferral: None,
             scalar_guards_unrecorded: false,
             pipe_guard_arg_span: None,
             source_path,

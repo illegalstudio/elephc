@@ -900,16 +900,16 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    // A `mixed` or `object|null` source is checked from a rooted copy first; the re-reading
-    // guard below keeps the `Class|false` / `Class|null` unions it already covered.
-    let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
-    if !by_reference {
-        if let Some(guarded) = guard_runtime_object_param(ctx, sig, index, value, arg) {
-            return guarded;
+    let depth = ctx.expression_depth;
+    if ctx.object_guard_deferral.as_ref().is_some_and(|(deferral_depth, _)| *deferral_depth == depth)
+        && object_param_guard(ctx, sig, index, value.value, arg).is_some()
+    {
+        // Checked with the scalar parameters, in parameter order, once every argument was
+        // evaluated (`coerce_operands_to_params_guarded`).
+        if let Some((_, deferred)) = ctx.object_guard_deferral.as_mut() {
+            deferred.push((index, arg.clone()));
         }
-        if let Some(deferred) = defer_callable_param_check(ctx, sig, index, value, arg.span) {
-            return deferred;
-        }
+        return value;
     }
     if let Some(guarded) = guard_object_param_argument(ctx, sig, index, value, arg) {
         return guarded;
@@ -1615,9 +1615,23 @@ pub(super) fn coerce_operands_to_params(
 pub(super) fn coerce_operands_to_params_guarded(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
+    operands: Vec<crate::ir::ValueId>,
+    sources: Option<&[super::scalar_param_guards::GuardSource]>,
+    positional: bool,
+) -> Vec<crate::ir::ValueId> {
+    coerce_operands_to_params_guarded_with_objects(ctx, sig, operands, sources, positional, &[])
+}
+
+/// [`coerce_operands_to_params_guarded`] with the object-parameter checks positional lowering
+/// deferred (`(parameter index, argument)`): each runs at its parameter's turn, so the first
+/// refused parameter in declaration order throws, as in PHP.
+fn coerce_operands_to_params_guarded_with_objects(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
     sources: Option<&[super::scalar_param_guards::GuardSource]>,
     positional: bool,
+    object_guards: &[(usize, Expr)],
 ) -> Vec<crate::ir::ValueId> {
     use super::scalar_param_guards::GuardSource;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
@@ -1647,8 +1661,12 @@ pub(super) fn coerce_operands_to_params_guarded(
     // throws with it as its previous exception, and a check that converts its operand (an
     // `int`/`float` binding, a string conversion) reads a borrowed value and never releases a
     // box an owner still points at.
+    let object_guard = |index: usize| {
+        object_guards.iter().find(|(guarded, _)| *guarded == index).map(|(_, arg)| arg)
+    };
     let publish = needs_coercion.iter().any(|needs| *needs)
-        || deferred_positional.iter().any(|deferred| *deferred);
+        || deferred_positional.iter().any(|deferred| *deferred)
+        || !object_guards.is_empty();
     if publish {
         // Source evaluation has completed, but any parameter conversion below can throw.
         // Publish the one last source value that did not need protection during source
@@ -1680,9 +1698,9 @@ pub(super) fn coerce_operands_to_params_guarded(
     }
     // The last operand whose check or conversion can throw. A string converted for it (or after
     // it) has nothing left to survive before the call, which roots it like any owned operand.
-    let last_throwing_operand = (0..limit)
-        .rev()
-        .find(|index| needs_guard[*index].is_some() || needs_coercion[*index]);
+    let last_throwing_operand = (0..limit).rev().find(|index| {
+        needs_guard[*index].is_some() || needs_coercion[*index] || object_guard(*index).is_some()
+    });
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             if let Some((local, span)) = reference_check(index) {
@@ -1693,6 +1711,14 @@ pub(super) fn coerce_operands_to_params_guarded(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
+        if let Some(arg) = object_guard(index) {
+            emit_property_type_guards_before(ctx, index);
+            let lowered = lowered_value_from_id(ctx, operands[index]);
+            if let Some(object) = guard_object_param_argument(ctx, sig, index, lowered, arg) {
+                operands[index] = root_evaluated_call_argument(ctx, object, Span::dummy()).value;
+            }
+            continue;
+        }
         let value = operands[index];
         if let Some(source) = needs_guard[index] {
             emit_property_type_guards_before(ctx, index);
@@ -2272,16 +2298,23 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         .collect::<Vec<_>>();
     // Check scalar parameters after every argument was evaluated, as PHP does at the callee.
     let previous_deferral = ctx.scalar_guard_deferral;
+    let previous_object_deferral = ctx.object_guard_deferral.take();
     if !capture_values {
         ctx.scalar_guard_deferral = Some((ctx.expression_depth, expanded_spread || unrecorded_sources));
+        ctx.object_guard_deferral = Some((ctx.expression_depth, Vec::new()));
     }
     let operands = lower_positional_operands(
         ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         regular_param_count, fixed_arg_count,
     );
     ctx.scalar_guard_deferral = previous_deferral;
+    let object_guards = std::mem::replace(&mut ctx.object_guard_deferral, previous_object_deferral)
+        .map(|(_, guards)| guards)
+        .unwrap_or_default();
     let sources = (!capture_values).then_some(guard_sources.as_slice());
-    let mut operands = coerce_operands_to_params_guarded(ctx, sig, operands, sources, true);
+    let mut operands = coerce_operands_to_params_guarded_with_objects(
+        ctx, sig, operands, sources, true, &object_guards,
+    );
     // PHP binds the supplied parameters before it evaluates an omitted default, so a refused
     // argument throws `TypeError` before a throwing default (`int $n = 1 % 0`) runs.
     if !trim_trailing_defaults && fixed_arg_count < regular_param_count {
