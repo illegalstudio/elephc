@@ -28,8 +28,9 @@ use super::state::ClassBuildState;
 /// Collects all interfaces (including transitive parents) that `class` implements.
 ///
 /// Validates that each interface exists, that `Throwable` is only implementable by
-/// `Error`/`Exception`, and that non-interfaces are not being implemented as interfaces.
-/// Pushes collected interface names onto `state.interfaces` in breadth-first order.
+/// `Error`/`Exception`, that non-interfaces are not being implemented as interfaces, and
+/// that only enums implement `UnitEnum`/`BackedEnum`. Pushes collected interface names
+/// onto `state.interfaces` in breadth-first order.
 pub(super) fn collect_interfaces(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -39,15 +40,6 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
-        if !checker.enums.contains_key(&class.name)
-            && (php_symbol_key(interface_name) == "unitenum"
-                || checker.interface_extends_interface(interface_name, "UnitEnum"))
-        {
-            return Err(CompileError::new(
-                class.span,
-                &format!("Non-enum class {} cannot implement interface UnitEnum", class.name),
-            ));
-        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -76,6 +68,14 @@ pub(super) fn collect_interfaces(
         }
         queue.push(interface_name.clone());
     }
+    if !checker.enums.contains_key(&class.name) {
+        if let Some(interface) = first_rejected_enum_interface(checker, &class.implements) {
+            return Err(CompileError::new(
+                class.span,
+                &format!("Non-enum class {} cannot implement interface {}", class.name, interface),
+            ));
+        }
+    }
     while let Some(interface_name) = queue.pop() {
         if !seen_interfaces.insert(interface_name.clone()) {
             continue;
@@ -92,6 +92,67 @@ pub(super) fn collect_interfaces(
         state.interfaces.push(interface_name);
     }
     Ok(())
+}
+
+/// Returns the enum interface PHP rejects first on a non-enum class, if any.
+///
+/// PHP links a class's `implements` list in source order. Each named interface runs its
+/// handler, then links its inherited table in reverse and runs those handlers, so the
+/// interface a diagnostic names depends on that walk rather than on the first match.
+fn first_rejected_enum_interface(
+    checker: &Checker,
+    implements: &[String],
+) -> Option<&'static str> {
+    let implements_enum_contract = implements.iter().any(|interface_name| {
+        php_symbol_key(interface_name) == "unitenum"
+            || checker.interface_extends_interface(interface_name, "UnitEnum")
+    });
+    if !implements_enum_contract {
+        return None;
+    }
+    let mut linked = implements.to_vec();
+    for interface_name in implements {
+        let inherited_start = linked.len();
+        link_inherited_interfaces(&mut linked, &php_interface_table(checker, interface_name));
+        let rejected = std::iter::once(interface_name)
+            .chain(&linked[inherited_start..])
+            .find_map(|name| enum_interface_name(name));
+        if rejected.is_some() {
+            return rejected;
+        }
+    }
+    None
+}
+
+/// Returns the canonical spelling when `interface_name` is `UnitEnum` or `BackedEnum`.
+fn enum_interface_name(interface_name: &str) -> Option<&'static str> {
+    match php_symbol_key(interface_name).as_str() {
+        "unitenum" => Some("UnitEnum"),
+        "backedenum" => Some("BackedEnum"),
+        _ => None,
+    }
+}
+
+/// Builds PHP's interface table: declared parents, then each parent's table as inherited.
+fn php_interface_table(checker: &Checker, interface_name: &str) -> Vec<String> {
+    let Some(interface_info) = checker.interfaces.get(interface_name) else {
+        return Vec::new();
+    };
+    let mut table = interface_info.parents.clone();
+    for parent_name in &interface_info.parents {
+        link_inherited_interfaces(&mut table, &php_interface_table(checker, parent_name));
+    }
+    table
+}
+
+/// Appends `inherited` in reverse, skipping names linked before this call.
+fn link_inherited_interfaces(linked: &mut Vec<String>, inherited: &[String]) {
+    let linked_before = linked.len();
+    for interface_name in inherited.iter().rev() {
+        if !linked[..linked_before].contains(interface_name) {
+            linked.push(interface_name.clone());
+        }
+    }
 }
 
 /// Returns `true` if `interface_name` is or extends `Throwable` (case-insensitive).
