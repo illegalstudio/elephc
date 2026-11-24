@@ -2595,7 +2595,10 @@ mod tests {
         let changed = parsed
             .with_component(COMPONENT_PATH, Some("/a^b"))
             .expect("path write succeeds");
-        assert_eq!(changed.to_string(false, false), "https://example.com/a%5Eb");
+        assert_eq!(
+            changed.try_to_string(false, false).as_deref(),
+            Some("https://example.com/a%5Eb")
+        );
     }
 
     /// Verifies a relative Windows-drive reference only freezes path writes on a `file:` base.
