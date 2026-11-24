@@ -12,7 +12,11 @@ use super::keywords::{is_label, is_whitespace};
 /// Returns the byte length of the leading identifier characters, including high bytes.
 #[inline]
 pub fn identifier_len(source: &[u8]) -> usize {
-    source.iter().take_while(|&&byte| is_label(byte)).count()
+    let mut len = 0;
+    while len < source.len() && is_label(source[len]) {
+        len += 1;
+    }
+    len
 }
 
 /// Returns the byte length of a run of digits, allowing underscores between digits.

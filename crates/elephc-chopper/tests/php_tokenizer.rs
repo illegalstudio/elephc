@@ -15,6 +15,19 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
+/// Returns the wall-clock budget for the linearity smoke tests.
+///
+/// These tests detect accidental quadratic scans, not micro-regressions. The budget is
+/// deliberately generous and configurable so a loaded CI runner cannot turn them into flakes;
+/// reproducible timings live in `scripts/bench/token_view.py`.
+fn linearity_budget() -> std::time::Duration {
+    let seconds = std::env::var("ELEPHC_LINEARITY_BUDGET_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30);
+    std::time::Duration::from_secs(seconds)
+}
+
 /// Every tokenizer constant exists and the historical alias resolves canonically.
 #[test]
 fn tokenizer_catalog_has_all_154_php85_constants() {
@@ -1742,6 +1755,21 @@ fn tokenizer_php_src_heredoc_parse_errors() {
     assert!(tokenize(b"<?php <<<INNER_END\n\n   INNER_END;", TOKEN_PARSE).is_ok());
 }
 
+/// An unclosed delimiter highlights its opener but parsing stopped at EOF, so warnings
+/// reached before that stop must still be reported.
+#[test]
+fn tokenizer_unclosed_delimiter_keeps_earlier_warnings() {
+    let error = tokenize_with_warnings(b"<?php function f() { (integer)$x;", TOKEN_PARSE)
+        .expect_err("unclosed block");
+    assert_eq!(error.message, "Unclosed '{'");
+    assert_eq!(error.warnings.len(), 1, "{:?}", error.warnings);
+    assert_eq!(
+        error.warnings[0].message,
+        "Non-canonical cast (integer) is deprecated, use the (int) cast instead"
+    );
+    assert_eq!(error.warnings[0].severity, 8_192);
+}
+
 /// php-src tokenizer invalid escapes report PHP's parser-facing messages.
 #[test]
 fn tokenizer_php_src_unicode_escape_errors() {
@@ -2563,7 +2591,7 @@ fn tokenizer_long_interpolation_and_reference_arrays_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid interpolation and references");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "linear scan took {:?}",
         started.elapsed()
     );
@@ -2587,11 +2615,29 @@ fn tokenizer_nested_reference_targets_stay_linear() {
         // The parser rejects this at its nesting cap; the precheck must still finish linearly.
         let _ = tokenize(source.as_bytes(), TOKEN_PARSE);
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
+            started.elapsed() < linearity_budget(),
             "nested {target:?} reference target scan took {:?}",
             started.elapsed()
         );
     }
+}
+
+/// Comments between a control header and its statement must not rescan the comment run for
+/// every trivia token; only a T_STRING candidate can be a label.
+#[test]
+fn tokenizer_comment_after_control_header_stays_linear() {
+    let mut source = String::from("<?php if (1) ");
+    for _ in 0..100_000 {
+        source.push_str("/*x*/");
+    }
+    source.push_str(" echo 1;");
+    let started = std::time::Instant::now();
+    tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid comment run after a control header");
+    assert!(
+        started.elapsed() < linearity_budget(),
+        "comment-after-control-header scan took {:?}",
+        started.elapsed()
+    );
 }
 
 /// Repeated computed variables must not walk the same statement prefix for every `$$`.
@@ -2605,7 +2651,7 @@ fn tokenizer_computed_variable_runs_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid computed-variable expression");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "computed-variable scan took {:?}",
         started.elapsed()
     );
@@ -2622,7 +2668,7 @@ fn tokenizer_comment_runs_stay_linear() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid comment run");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "comment-run scan took {:?}",
         started.elapsed()
     );
@@ -2645,7 +2691,7 @@ fn tokenizer_nested_heredocs_stay_linear() {
     // The parser rejects the nesting after lexing; heredoc validation itself must stay linear.
     let _ = elephc_chopper::scanner::scan(source.as_bytes());
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "nested heredoc validation took {:?}",
         started.elapsed()
     );
@@ -2666,7 +2712,7 @@ fn tokenizer_deep_dollar_brace_nesting_stays_bounded() {
     let started = std::time::Instant::now();
     tokenize(source.as_bytes(), TOKEN_PARSE).expect("valid variable-variable expression");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "nested interpolation took {:?}",
         started.elapsed()
     );
@@ -2699,7 +2745,7 @@ fn tokenizer_deep_computed_members_stay_bounded() {
     let started = std::time::Instant::now();
     let _ = tokenize_with_warnings(source.as_bytes(), TOKEN_PARSE);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(30),
+        started.elapsed() < linearity_budget(),
         "nested computed members took {:?}",
         started.elapsed()
     );
@@ -2718,7 +2764,7 @@ fn tokenizer_many_warnings_before_an_error_stay_linear() {
         .expect_err("echo ; is a syntax error");
     assert_eq!(error.warnings.len(), 5_000);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "warning lines took {:?}",
         started.elapsed()
     );
@@ -2740,7 +2786,7 @@ fn tokenizer_deep_double_quoted_interpolation_is_bounded() {
     let result = tokenize_with_warnings(source.as_bytes(), TOKEN_PARSE);
     assert!(result.is_err(), "deep interpolation must be a catchable syntax error");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
+        started.elapsed() < linearity_budget(),
         "deep interpolation took {:?}",
         started.elapsed()
     );
@@ -2794,4 +2840,119 @@ fn tokenizer_validation_preserves_compiler_declaration_rules() {
         tokenize(source.as_bytes(), TOKEN_PARSE).expect("PHP accepts the parameter grammar");
         assert!(parser::parse_test_source(source).is_err(), "compiler accepted {source}");
     }
+}
+
+/// Padded cast spellings like `( int )` are valid PHP and must use the same parser path.
+#[test]
+fn tokenizer_padded_casts_are_valid() {
+    for source in [
+        b"<?php echo ( int )$x;".as_slice(),
+        b"<?php $a = ( integer )$b;",
+        b"<?php $a = ( string )$b;",
+        b"<?php ( void )$a;",
+        b"<?php $a = ( array )$b;",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+}
+
+/// A delimiter mismatch stops before the later tokens and drops their warnings.
+#[test]
+fn tokenizer_mismatched_delimiter_drops_later_warnings() {
+    let error = tokenize_with_warnings(b"<?php echo \"${a[0}\"; (integer)$x;", TOKEN_PARSE)
+        .expect_err("mismatched delimiter");
+    assert_eq!(error.message, "Unclosed '[' does not match '}'");
+    assert!(
+        error.warnings.iter().all(|warning| !warning.message.contains("Non-canonical cast")),
+        "{:?}",
+        error.warnings
+    );
+}
+
+/// Qualified names are valid reference targets through indexes and members.
+#[test]
+fn tokenizer_namespaced_reference_targets_are_valid() {
+    for source in [
+        b"<?php $a = &\\Foo\\Bar[0];".as_slice(),
+        b"<?php $a = &\\Foo\\Bar->x;",
+        b"<?php $a = &\\Foo\\Bar?->x;",
+        b"<?php $a = &namespace\\Foo\\Bar[0];",
+        b"<?php $a = &\\Foo\\Bar[0]->x;",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+    assert!(tokenize(b"<?php $a = &\\Foo\\Bar{0};", TOKEN_PARSE).is_err());
+}
+
+/// A reference target cannot be followed by an assignment or update operator.
+#[test]
+fn tokenizer_reference_write_continuations_are_errors() {
+    for (source, message) in [
+        (b"<?php $a = &$b = 1;".as_slice(), "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &$b += 1;", "syntax error, unexpected token \"+=\""),
+        (b"<?php $a = &$b++;", "syntax error, unexpected token \"++\""),
+        (b"<?php $a = &$b[0] = 1;", "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &$b->c = 1;", "syntax error, unexpected token \"=\""),
+        (b"<?php $a = &foo() = 1;", "syntax error, unexpected token \"=\""),
+        (
+            b"<?php foreach ($a as &$b = 1) {}",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php foreach ($a as $k => &$v = 1) {}",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $a = [1 => &$v = 1];",
+            "syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $a = [1 => &$v++];",
+            "syntax error, unexpected token \"++\", expecting \"->\" or \"?->\" or \"[\"",
+        ),
+        (
+            b"<?php $f = function () use (&$x = 1) {};",
+            "syntax error, unexpected token \"=\", expecting \")\"",
+        ),
+    ] {
+        let error = tokenize(source, TOKEN_PARSE).expect_err("write continuation must fail");
+        assert_eq!(error.message, message, "{}", String::from_utf8_lossy(source));
+    }
+    for source in [
+        b"<?php foreach ($a as $k => &$v) {}".as_slice(),
+        b"<?php $a = [1 => &$v];",
+        b"<?php $f = function () use (&$x) {};",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+}
+
+/// Static member first-class callables are valid PHP in both validation views.
+#[test]
+fn tokenizer_static_member_first_class_callables_are_valid() {
+    for source in [
+        b"<?php C::class(...);".as_slice(),
+        b"<?php C::$method(...);",
+        b"<?php C::method(...);",
+        b"<?php $c::class(...);",
+    ] {
+        tokenize(source, TOKEN_PARSE)
+            .unwrap_or_else(|error| panic!("{}: {}", String::from_utf8_lossy(source), error.message));
+    }
+}
+
+/// A later reference write error must not hide an earlier `${...}` syntax error.
+#[test]
+fn tokenizer_earlier_dollar_brace_error_wins_over_later_reference() {
+    let error = tokenize(b"<?php ${1+}; $a = &$b++;", TOKEN_PARSE)
+        .expect_err("malformed ${...} must fail");
+    assert_eq!(error.message, "syntax error, unexpected token \"}\"");
+    assert_eq!(error.pos, 10);
+
+    let error = tokenize(b"<?php $a = &$b++; ${1+};", TOKEN_PARSE)
+        .expect_err("reference write continuation must fail");
+    assert_eq!(error.message, "syntax error, unexpected token \"++\"");
 }

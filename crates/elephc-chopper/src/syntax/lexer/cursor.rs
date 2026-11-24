@@ -26,7 +26,7 @@ pub struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     /// Constructs a cursor whose spans identify one included physical source file.
-    pub(super) fn new_in_source(source: &'a str, source_id: u32) -> Self {
+    pub(crate) fn new_in_source(source: &'a str, source_id: u32) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
@@ -123,7 +123,7 @@ impl<'a> Cursor<'a> {
 
     /// Consumes a UTF-8 slice identified by a byte scanner and updates the source span.
     #[inline]
-    pub(super) fn skip_bytes(&mut self, len: usize) {
+    pub(crate) fn skip_bytes(&mut self, len: usize) {
         if len == 0 {
             return;
         }
@@ -132,8 +132,19 @@ impl<'a> Cursor<'a> {
             return;
         }
         let consumed = &self.remaining()[..len];
+        let bytes = consumed.as_bytes();
+        if bytes.is_ascii() {
+            if let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') {
+                self.line += bytes.iter().filter(|byte| **byte == b'\n').count();
+                self.col = len - last_newline;
+            } else {
+                self.col += len;
+            }
+            self.pos += len;
+            return;
+        }
         if let Some(last_newline) = consumed.rfind('\n') {
-            self.line += consumed.as_bytes().iter().filter(|&&byte| byte == b'\n').count();
+            self.line += bytes.iter().filter(|&&byte| byte == b'\n').count();
             self.col = consumed[last_newline + 1..].chars().count() + 1;
         } else {
             self.col += consumed.chars().count();
@@ -142,7 +153,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Returns the consumed source offset so a literal decoder can resume the scanner.
-    pub(super) fn position(&self) -> usize {
+    pub(crate) fn position(&self) -> usize {
         self.pos
     }
 

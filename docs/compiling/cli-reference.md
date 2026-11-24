@@ -1031,6 +1031,7 @@ overrides. Native-package variables select the cache and target C toolchain:
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
 | `ELEPHC_NATIVE_CACHE` | absolute or invocation-relative directory | Native artifact/source cache root |
 | `ELEPHC_RUNTIME_CACHE_DIR` | absolute or invocation-relative directory | Prepared runtime objects only (default `$XDG_CACHE_HOME/elephc`); REPL hosts and `elephc test` outputs stay under the cache root |
+| `ELEPHC_TOKEN_VIEW` | `text`, `off`, `0` | No flag; forces the legacy text parser view for `TOKEN_PARSE` validation. Supported sources otherwise use the source-spanned token view, with automatic fallback for unsupported shapes. The embedded tokenizer also reads it at runtime in compiled programs. |
 | `ELEPHC_NATIVE_CC` | executable | Host or explicit cross C compiler fallback |
 | `ELEPHC_NATIVE_AR` | executable | Host or explicit cross archiver fallback |
 | `ELEPHC_NATIVE_RANLIB` | executable | Host or explicit cross archive indexer fallback |

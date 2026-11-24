@@ -15,10 +15,13 @@ use crate::scanner::HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE;
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
 use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 mod diagnostics;
 mod parser_view;
 mod prechecks;
+mod reference_scan;
+mod token_view;
 
 use diagnostics::*;
 use parser_view::*;
@@ -111,6 +114,11 @@ mod tok {
     pub const T_STATIC: i64 = id("T_STATIC");
     pub const T_NAMESPACE: i64 = id("T_NAMESPACE");
     pub const T_STRING: i64 = id("T_STRING");
+    pub const T_INT_CAST: i64 = id("T_INT_CAST");
+    pub const T_DOUBLE_CAST: i64 = id("T_DOUBLE_CAST");
+    pub const T_BOOL_CAST: i64 = id("T_BOOL_CAST");
+    pub const T_ARRAY_CAST: i64 = id("T_ARRAY_CAST");
+    pub const T_OBJECT_CAST: i64 = id("T_OBJECT_CAST");
     pub const T_STRING_CAST: i64 = id("T_STRING_CAST");
     pub const T_STRING_VARNAME: i64 = id("T_STRING_VARNAME");
     pub const T_TRAIT: i64 = id("T_TRAIT");
@@ -198,6 +206,11 @@ const _: () = {
     assert!(tok::T_START_HEREDOC != -1, "T_START_HEREDOC missing from the tokenizer catalog");
     assert!(tok::T_STATIC != -1, "T_STATIC missing from the tokenizer catalog");
     assert!(tok::T_STRING != -1, "T_STRING missing from the tokenizer catalog");
+    assert!(tok::T_INT_CAST != -1, "T_INT_CAST missing from the tokenizer catalog");
+    assert!(tok::T_DOUBLE_CAST != -1, "T_DOUBLE_CAST missing from the tokenizer catalog");
+    assert!(tok::T_BOOL_CAST != -1, "T_BOOL_CAST missing from the tokenizer catalog");
+    assert!(tok::T_ARRAY_CAST != -1, "T_ARRAY_CAST missing from the tokenizer catalog");
+    assert!(tok::T_OBJECT_CAST != -1, "T_OBJECT_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_CAST != -1, "T_STRING_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_VARNAME != -1, "T_STRING_VARNAME missing from the tokenizer catalog");
     assert!(tok::T_TRAIT != -1, "T_TRAIT missing from the tokenizer catalog");
@@ -219,6 +232,10 @@ pub trait SourceToken {
     fn pos(&self) -> usize;
     /// Returns the byte length in the original source.
     fn len(&self) -> usize;
+    /// Returns the one-based source line when the embedder retains it.
+    fn line(&self) -> usize {
+        0
+    }
 }
 
 /// One tokenizer token reduced to the metadata this validator needs.
@@ -242,7 +259,7 @@ impl SourceToken for SyntaxToken {
 }
 
 /// One TOKEN_PARSE failure with PHP-compatible text and a source byte offset.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationError {
     /// PHP-style parser message without a filename suffix.
     pub message: String,
@@ -261,6 +278,8 @@ pub struct TokenView {
     pub pos: usize,
     /// Byte length in the original source.
     pub len: usize,
+    /// One-based source line.
+    pub line: usize,
 }
 
 impl SourceToken for TokenView {
@@ -270,6 +289,8 @@ impl SourceToken for TokenView {
     fn pos(&self) -> usize { self.pos }
     /// Returns the byte length in the original source.
     fn len(&self) -> usize { self.len }
+    /// Returns the one-based source line.
+    fn line(&self) -> usize { self.line }
 }
 
 /// Validates a token view without monomorphizing the parser in the engine's opt-level crate.
@@ -290,7 +311,7 @@ pub struct ValidationWarning {
 }
 
 /// The result of validating one source for TOKEN_PARSE.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ValidationFeedback {
     /// Byte offsets of keyword tokens Zend must rewrite to T_STRING.
     pub names: Vec<usize>,
@@ -323,30 +344,49 @@ pub fn validate<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedba
 
 /// Runs the prechecks and validates the normalized view under the tokenizer grammar.
 fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedback {
+    validate_in_scope_with(source, tokens, token_view_enabled())
+}
+
+/// Runs validation with an explicit token-view selection for differential tests.
+fn validate_in_scope_with<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    use_token_view: bool,
+) -> ValidationFeedback {
+    let presence = TokenPresence::scan(tokens);
     // `declare(encoding=...)` is emitted while that statement is compiled, so it survives a
     // later parse failure. The caller drops the warnings that follow the failure position.
-    let encoding_warnings = declare_encoding_warnings(source, tokens);
+    let encoding_warnings = if presence.declare {
+        declare_encoding_warnings(source, tokens)
+    } else {
+        Vec::new()
+    };
     // These pre-checks parse regions the parser view blanks, so the identifier feedback they
     // record has to be merged with the main parse's feedback below.
     let mut precheck_names = Vec::new();
     let reference_delimiters = OnceCell::new();
-    let precheck = close_tag_else_error(source, tokens)
-        .or_else(|| halt_compiler_scope_error(source, tokens))
-        .or_else(|| new_dynamic_static_error(source, tokens))
-        .or_else(|| invalid_array_reference_error(source, tokens, &reference_delimiters))
-        .or_else(|| goto_statement_error(source, tokens))
-        .or_else(|| unterminated_backtick_error(source, tokens));
-    let precheck = precheck
-        .or_else(|| void_cast_expression_error(tokens))
-        .or_else(|| switch_case_html_error(source, tokens))
-        .or_else(|| dollar_brace_expression_error(source, tokens, &mut precheck_names));
-    let precheck = precheck
-        .or_else(|| computed_member_expression_error(source, tokens, &mut precheck_names))
-        .or_else(|| declaration_variable_variable_error(source, tokens))
-        .or_else(|| complex_interpolation_error(source, tokens))
-        .or_else(|| simple_interpolation_offset_error(source, tokens));
+    let precheck = run_prechecks(
+        source,
+        tokens,
+        &presence,
+        &reference_delimiters,
+        &mut precheck_names,
+    );
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
+    if use_token_view {
+        if let Some(view) = token_view::build(source, tokens, &reference_delimiters) {
+            return validate_token_view(
+                source,
+                tokens,
+                view,
+                presence.list,
+                precheck,
+                precheck_names,
+                encoding_warnings,
+            );
+        }
+    }
     let (view, map, reference_error) =
         parser_view(source, tokens, source.len(), &reference_delimiters);
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
@@ -382,7 +422,11 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                     warnings: encoding_warnings,
                 };
             }
-            let error = reserved_list_error(source, tokens);
+            let error = if presence.list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
             let mut names = if error.is_some() || names.is_empty() {
                 Vec::new()
             } else {
@@ -417,6 +461,114 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
             }
         },
     }
+}
+
+/// Returns whether the source-spanned token view is enabled.
+///
+/// The token view is the default for supported sources; `ELEPHC_TOKEN_VIEW=text`
+/// keeps the legacy text view as an escape hatch during rollout.
+fn token_view_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !std::env::var_os("ELEPHC_TOKEN_VIEW")
+            .and_then(|value| value.to_str().map(str::to_owned))
+            .is_some_and(|value| matches!(value.as_str(), "0" | "off" | "text"))
+    })
+}
+
+/// Validates one source through the source-spanned token view.
+fn validate_token_view<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    view: token_view::TokenProjection,
+    has_list: bool,
+    precheck: Option<ValidationError>,
+    precheck_names: Vec<usize>,
+    encoding_warnings: Vec<ValidationWarning>,
+) -> ValidationFeedback {
+    let token_view::TokenProjection { tokens: view_tokens } = view;
+    let reference_error: Option<ReferenceError> = None;
+    let (result, names) = crate::syntax::parser::parse_with_tokenizer_feedback(&view_tokens);
+    match result {
+        Ok(_) => {
+            if let Some(precheck) = prefer_reference_error(precheck, reference_error) {
+                return ValidationFeedback {
+                    names: Vec::new(),
+                    error: Some(precheck),
+                    warnings: encoding_warnings,
+                };
+            }
+            let error = if has_list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
+            let mut names = if error.is_some() || names.is_empty() {
+                Vec::new()
+            } else {
+                mapped_names_source(source, names)
+            };
+            if error.is_none() {
+                names.extend(precheck_names);
+                names.sort_unstable();
+                names.dedup();
+            }
+            ValidationFeedback {
+                names,
+                error,
+                warnings: encoding_warnings,
+            }
+        }
+        Err(error) => {
+            let mapped = parser_error_source(source, tokens, &error);
+            let error = unclosed_delimiter_error(source, tokens, mapped.pos, &error.message)
+                .or_else(|| diagnostic_override(source, tokens, &mapped, &error.message))
+                .unwrap_or(mapped);
+            ValidationFeedback {
+                names: Vec::new(),
+                error: Some(earlier_error(source, tokens, precheck, error, reference_error)),
+                warnings: encoding_warnings,
+            }
+        }
+    }
+}
+
+/// Maps parser feedback spans from source coordinates to byte offsets.
+fn mapped_names_source(source: &[u8], names: Vec<(Span, String)>) -> Vec<usize> {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Vec::new();
+    };
+    let lines = line_starts(text);
+    let positions: Vec<(u32, u32)> = names.iter().map(|(span, _)| (span.line, span.col)).collect();
+    let offsets = view_offsets(text, &lines, &positions);
+    let mut result: Vec<usize> = names
+        .into_iter()
+        .zip(offsets)
+        .filter_map(|((_, spelling), source_pos)| {
+            let source_pos = source_pos.min(source.len());
+            let text = source.get(source_pos..)?;
+            text.get(..spelling.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(spelling.as_bytes()))
+                .then_some(source_pos)
+        })
+        .collect();
+    result.sort_unstable();
+    result.dedup();
+    result
+}
+
+/// Maps one parser error span from source coordinates to a source-token diagnostic.
+fn parser_error_source<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    error: &CompileError,
+) -> ValidationError {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return token_error_at(source, tokens, source.len());
+    };
+    let lines = line_starts(text);
+    let source_pos = view_offset(text, &lines, error.span.line, error.span.col);
+    token_error_at(source, tokens, source_pos)
 }
 
 /// Preserves parser errors inside a reference base while refining a rejected `readonly` name.
@@ -866,7 +1018,7 @@ fn view_offsets(view: &str, lines: &[usize], positions: &[(u32, u32)]) -> Vec<us
 }
 
 /// Precomputes the byte offset of every one-based parser-view line.
-fn line_starts(view: &str) -> Vec<usize> {
+pub(super) fn line_starts(view: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(view.bytes().enumerate().filter_map(|(index, byte)| {
         (byte == b'\n').then_some(index + 1)
@@ -878,3 +1030,6 @@ fn line_starts(view: &str) -> Vec<usize> {
 fn is_trivia(id: i64) -> bool {
     id == tok::T_WHITESPACE || id == tok::T_COMMENT || id == tok::T_DOC_COMMENT
 }
+
+#[cfg(test)]
+mod tests;

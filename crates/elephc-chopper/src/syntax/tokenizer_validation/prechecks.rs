@@ -10,8 +10,181 @@
 use crate::scanner::{newline_count, operator, Operator, HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE};
 
 use super::diagnostics::*;
-use super::parser_view::{parser_view, ternary_colon_before_label};
+use super::parser_view::{enclosing_braces, parser_view, ternary_colon_before_label};
+use super::reference_scan::{
+    is_reference_marker, is_write_continuation, reference_chain_end, reference_target_starts_at,
+};
 use super::*;
+
+/// Token categories whose absence lets validation skip a precheck's full token scan.
+///
+/// Every precheck reacts only to a small set of token IDs. Recording those IDs once here
+/// replaces a dozen full passes over a source that contains none of them.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TokenPresence {
+    /// A `declare` keyword is present.
+    pub(super) declare: bool,
+    /// A close tag and an `else`/`elseif` are both present.
+    pub(super) close_tag_else: bool,
+    /// `__halt_compiler` is present.
+    pub(super) halt_compiler: bool,
+    /// `new` is present.
+    pub(super) new: bool,
+    /// A reference-shaped ampersand token is present.
+    pub(super) reference_ampersand: bool,
+    /// `goto` is present.
+    pub(super) goto: bool,
+    /// A backtick delimiter is present.
+    pub(super) backtick: bool,
+    /// A `(void)` cast is present.
+    pub(super) void_cast: bool,
+    /// A `switch` opener, close tag and inline HTML are all present.
+    pub(super) switch_html: bool,
+    /// A bare `$` or a `${` interpolation opener is present.
+    pub(super) dollar_brace: bool,
+    /// A member access operator is present.
+    pub(super) computed_member: bool,
+    /// A bare `$` that may start a declaration is present.
+    pub(super) declaration_variable: bool,
+    /// A `{$...}` interpolation opener is present.
+    pub(super) curly_open: bool,
+    /// A variable inside a string context is present.
+    pub(super) interpolation_offset: bool,
+    /// `list` is present.
+    pub(super) list: bool,
+}
+
+impl TokenPresence {
+    /// Collects the trigger categories for every validation precheck in one forward pass.
+    pub(super) fn scan<T: SourceToken>(tokens: &[T]) -> Self {
+        let mut presence = Self::default();
+        let mut saw_close_tag = false;
+        let mut saw_else = false;
+        let mut saw_switch = false;
+        let mut saw_inline_html = false;
+        let mut saw_dollar_brace = false;
+        let mut saw_variable = false;
+        let mut saw_string_context = false;
+        for token in tokens {
+            match token.id() {
+                tok::T_DECLARE => presence.declare = true,
+                tok::T_CLOSE_TAG => saw_close_tag = true,
+                tok::T_ELSE | tok::T_ELSEIF => saw_else = true,
+                tok::T_HALT_COMPILER => presence.halt_compiler = true,
+                tok::T_NEW => presence.new = true,
+                tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+                | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG => {
+                    presence.reference_ampersand = true;
+                }
+                tok::T_GOTO => presence.goto = true,
+                tok::T_VOID_CAST => presence.void_cast = true,
+                tok::T_SWITCH => saw_switch = true,
+                tok::T_INLINE_HTML => saw_inline_html = true,
+                tok::T_DOLLAR_OPEN_CURLY_BRACES => saw_dollar_brace = true,
+                tok::T_DOUBLE_COLON
+                | tok::T_OBJECT_OPERATOR
+                | tok::T_NULLSAFE_OBJECT_OPERATOR => presence.computed_member = true,
+                tok::T_CURLY_OPEN => presence.curly_open = true,
+                tok::T_LIST => presence.list = true,
+                tok::T_VARIABLE => saw_variable = true,
+                tok::T_ENCAPSED_AND_WHITESPACE | tok::T_START_HEREDOC => {
+                    saw_string_context = true;
+                }
+                id if id == i64::from(b'`') => {
+                    presence.backtick = true;
+                    saw_string_context = true;
+                }
+                id if id == i64::from(b'$') => {
+                    presence.declaration_variable = true;
+                    saw_dollar_brace = true;
+                }
+                id if id == i64::from(b'"') => saw_string_context = true,
+                _ => {}
+            }
+        }
+        presence.close_tag_else = saw_close_tag && saw_else;
+        presence.switch_html = saw_switch && saw_close_tag && saw_inline_html;
+        presence.dollar_brace = saw_dollar_brace;
+        presence.interpolation_offset = saw_variable && saw_string_context;
+        presence
+    }
+}
+
+/// Runs the source-level prechecks and keeps the earliest diagnostic.
+///
+/// Each check is skipped when its trigger category is absent from the source, so the
+/// common valid source pays for one presence pass instead of one full scan per check.
+/// Several checks can match one source, so the smallest source position wins; a tie keeps
+/// the first check's diagnostic.
+pub(super) fn run_prechecks<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    presence: &TokenPresence,
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
+    names: &mut Vec<usize>,
+) -> Option<ValidationError> {
+    let mut earliest: Option<ValidationError> = None;
+    let mut consider = |error: Option<ValidationError>| {
+        let Some(error) = error else {
+            return;
+        };
+        if earliest
+            .as_ref()
+            .is_none_or(|current| error.pos < current.pos)
+        {
+            earliest = Some(error);
+        }
+    };
+    if presence.close_tag_else {
+        consider(close_tag_else_error(source, tokens));
+    }
+    if presence.halt_compiler {
+        consider(halt_compiler_scope_error(source, tokens));
+    }
+    if presence.new {
+        consider(new_dynamic_static_error(source, tokens));
+    }
+    if presence.reference_ampersand {
+        consider(invalid_array_reference_error(
+            source,
+            tokens,
+            reference_delimiters,
+        ));
+        consider(invalid_reference_write_continuation_error(
+            source,
+            tokens,
+            reference_delimiters,
+        ));
+    }
+    if presence.goto {
+        consider(goto_statement_error(source, tokens));
+    }
+    if presence.backtick {
+        consider(unterminated_backtick_error(source, tokens));
+    }
+    if presence.void_cast {
+        consider(void_cast_expression_error(tokens));
+    }
+    if presence.switch_html {
+        consider(switch_case_html_error(source, tokens));
+    }
+    if presence.dollar_brace {
+        consider(dollar_brace_expression_error(source, tokens, names));
+    }
+    if presence.computed_member {
+        consider(computed_member_expression_error(source, tokens, names));
+    }
+    if presence.declaration_variable {
+        consider(declaration_variable_variable_error(source, tokens));
+    }
+    if presence.curly_open {
+        consider(complex_interpolation_error(source, tokens));
+    }
+    if presence.interpolation_offset {
+        consider(simple_interpolation_offset_error(source, tokens));
+    }
+    earliest
+}
 
 /// Rejects an unterminated backtick shell string with Zend's delimiter expectation.
 #[inline(never)]
@@ -130,6 +303,105 @@ pub(super) fn delimiter_pairs<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>
         }
     }
     pairs
+}
+
+/// Rejects a write operator after a reference target where PHP expects a value.
+///
+/// Assignment references and `foreach` value targets can be followed by ordinary operators
+/// (`&$b + 1`, `&$b ? 1 : 2`), but never by an assignment or update (`&$b = 1`, `&$b++`).
+/// The precheck runs on native tokens, so it covers both validation views.
+#[inline(never)]
+pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
+) -> Option<ValidationError> {
+    let close_of = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
+    let enclosing = enclosing_delimiters(tokens);
+    let braces = enclosing_braces(tokens);
+    for index in 0..tokens.len() {
+        if !is_reference_marker(tokens[index].id()) {
+            continue;
+        }
+        let Some(previous) = previous_significant_index(tokens, index) else {
+            continue;
+        };
+        let previous_id = tokens[previous].id();
+        let assignment = previous_id == i64::from(b'=');
+        let foreach_value = previous_id == tok::T_AS;
+        let arrow_entry = previous_id == tok::T_DOUBLE_ARROW
+            && arrow_introduces_reference_entry(tokens, previous, &enclosing, &braces);
+        let use_capture = previous_id == i64::from(b'(')
+            && enclosing[index] != u32::MAX
+            && previous_significant_index(tokens, enclosing[index] as usize)
+                .is_some_and(|before| tokens[before].id() == tok::T_USE);
+        if !assignment && !foreach_value && !arrow_entry && !use_capture {
+            continue;
+        }
+        if assignment
+            && enclosing[index] != u32::MAX
+            && paren_is_declaration_parameters(tokens, enclosing[index] as usize)
+        {
+            // A parameter default is an expression, so the ordinary parser reports the `&`.
+            continue;
+        }
+        let Some(target) = next_significant_index(tokens, index) else {
+            continue;
+        };
+        if !reference_target_starts_at(tokens, target) {
+            continue;
+        }
+        let Some(end) = reference_chain_end(source, tokens, target, close_of) else {
+            continue;
+        };
+        let Some(after) = next_significant_index(tokens, end) else {
+            continue;
+        };
+        if !is_write_continuation(source, &tokens[after]) {
+            continue;
+        }
+        let error = if assignment {
+            token_error_at(source, tokens, tokens[after].pos())
+        } else if foreach_value || arrow_entry {
+            reference_chain_error(source, tokens, after)
+        } else {
+            with_expectation(token_error_at(source, tokens, tokens[after].pos()), "\")\"")
+        };
+        return Some(error);
+    }
+    None
+}
+
+/// Returns whether a `=>` directly introduces an array/list entry or keyed `foreach` value.
+///
+/// Those contexts accept a reference marker on the value, but not a write operator after its
+/// target. Match arms and arrow-function bodies also use `=>` and must keep their marker so the
+/// ordinary parser reports `unexpected token "&"`.
+fn arrow_introduces_reference_entry<T: SourceToken>(
+    tokens: &[T],
+    arrow: usize,
+    enclosing: &[u32],
+    braces: &[u32],
+) -> bool {
+    let delimiter =
+        (enclosing[arrow] != u32::MAX).then_some(enclosing[arrow] as usize);
+    let brace = (braces[arrow] != u32::MAX).then_some(braces[arrow] as usize);
+    if brace.is_some_and(|brace| delimiter.is_none_or(|delimiter| brace > delimiter)) {
+        return false;
+    }
+    let Some(open) = delimiter else {
+        return false;
+    };
+    match tokens[open].id() {
+        id if id == i64::from(b'[') => bracket_opens_array_literal(tokens, open),
+        id if id == i64::from(b'(') => previous_significant_index(tokens, open).is_some_and(|before| {
+            matches!(
+                tokens[before].id(),
+                id if id == tok::T_ARRAY || id == tok::T_LIST || id == tok::T_FOREACH
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// Rejects a malformed `array(&…)`, `list(&…)` or `[&…]` reference entry.
