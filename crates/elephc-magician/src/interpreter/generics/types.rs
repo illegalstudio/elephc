@@ -124,6 +124,11 @@ fn accepts_value(ty: &Type, value: RuntimeCellHandle, candidate: Option<&Referen
         Type::Nullable(inner) => if values.type_tag(value)? == EVAL_TAG_NULL { Ok(true) }
             else { accepts_value(inner, value, candidate, context, values) },
         Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
+        // The native bridge boxes a pointer word as an integer. Its nominal pointee
+        // is not present in the runtime tag, and null is handled by the enclosing type.
+        Type::Atom(name) | Type::Apply(name, _) if name == "ptr" => {
+            Ok(values.type_tag(value)? == EVAL_TAG_INT)
+        }
         Type::Apply(name, args) if name == "array" => accepts_array(args, value, candidate, context, values),
         Type::Apply(_, _) => {
             let actual = runtime_generic_type(value, context, values, 0)?;

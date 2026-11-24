@@ -795,7 +795,8 @@ $args = [[null, null]];
 
 /// Verifies a reference element of a bridged array (`[&$x]` built in eval) converts to the
 /// referenced value: the integer address survives the conversion, a plain element behaves the
-/// same, and the caller's array and variable keep their values.
+/// same, and the caller's array and variable keep their values. A nullable pointer element
+/// also accepts null, but the native boundary rejects a string before converting its layout.
 #[test]
 fn test_pointer_array_parameter_conversion_reads_reference_elements() {
     let out = compile_and_run(
@@ -806,10 +807,11 @@ function take(array<ptr<Vec2>|null> $items): string {
     return ($items[0] === null ? "null" : (string) (int) $items[0]) . "," . json_encode($items)
         . (isset($items[1]) ? "set" : "unset");
 }
-eval('$x = 123; $items = [&$x]; echo take($items), "|", take([123]), "|", $x, json_encode($items), "\n";');
+eval('$x = 123; $items = [&$x]; echo take($items), "|", take([123]), "|", $x, json_encode($items), "\n";
+echo take([null]), "|"; try { take(["123"]); } catch (TypeError $e) { echo "rejected"; }');
 "#,
     );
-    assert_eq!(out, "123,[123,null]unset|123,[123,null]unset|123[123]\n");
+    assert_eq!(out, "123,[123,null]unset|123,[123,null]unset|123[123]\nnull,[null,null]unset|rejected");
 }
 
 /// Verifies arrays of boxed cells written into pointer-array properties from outside AOT code
