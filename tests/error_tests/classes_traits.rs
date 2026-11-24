@@ -1972,12 +1972,31 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait Q {}\ntrait Q {}".to_string(), "bar"),
         ("class C {}\nclass C {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate class declaration: C"),
         ("trait Q {}\ntrait Q {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate trait declaration: Q"),
+        // A redeclaration is ordered at its own statement, and the first declaration is the one
+        // PHP checks.
+        ("class A {}\nclass B { private final const Y = 1; }\nclass A { private final const Z = 1; }".to_string(), "Private constant B::Y cannot be final"),
+        ("namespace N { class A {} class B { private final const Y = 1; } class A { private final const Z = 1; } }".to_string(), "B::Y cannot be final"),
+        ("interface I { public function foo(): int; }\nenum E implements I { public function foo(): string { return \"a\"; } case B; }\nenum E { case A; }".to_string(), "E::foo"),
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I { public function foo(): int; }\nenum E implements I { public function foo(): string { return \"a\"; } case B; }".to_string(), "bar"),
+        // An enum whose backed case values fail is still declared.
+        ("enum E: int { case A = \"x\"; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("enum E: int { case A = 1; case C = 1; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
     ] {
         let error = check_source_full(&format!("<?php\n{source}\n"))
             .err()
             .expect("program should fail");
         let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
         assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+    // A failed interface is not left being built: walking it again reports its unknown parent,
+    // not a cycle.
+    for between in ["", "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\n"] {
+        let error = check_source_full(&format!("<?php\ninterface B extends Missing {{}}\n{between}interface A extends B {{}}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("Missing"), "{between}: {messages:?}");
+        assert!(messages.iter().all(|message| !message.contains("Circular")), "{between}: {messages:?}");
     }
     // A trait's own pair is reported once, named after the trait, not after its users.
     for users in ["class Zebra { use U; }\nclass Apple { use U; }", "enum Zebra { use U; case X; }\nenum Apple { use U; case Y; }"] {

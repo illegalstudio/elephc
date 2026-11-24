@@ -404,7 +404,14 @@ pub(super) fn check_types_impl(
     // compiling one it rejects its early-bound parent (a final class, an interface, a readonly
     // mismatch) and its private final constants. Those errors precede every diagnostic raised
     // when PHP declares a class, and the class builds below do not report them again.
-    linked.extend(class_compile_errors(program, &flattened_classes, &class_map, &checker, &positions));
+    linked.extend(class_compile_errors(
+        program,
+        &flattened_classes,
+        &class_map,
+        &checker,
+        &positions,
+        &statement_positions,
+    ));
     // Where each class's own build error starts in `linked`, so a used trait's own requirement
     // incompatibility can take its place (`validate_trait_requirements`). A class whose build
     // only repeats an error reported before the class builds (its own compile error, or its
@@ -442,8 +449,10 @@ pub(super) fn check_types_impl(
     let mut global_constants = HashMap::new();
     collect_global_constants(program, &mut global_constants);
     // Backed case value errors, which PHP raises when an enum's cases are first used, after
-    // every declaration it links.
+    // every declaration it links. Such an enum is still declared, so a later enum of its name is
+    // a redeclaration.
     let mut case_value_errors = Vec::new();
+    let mut case_value_enums = HashSet::new();
     for stmt in program {
         if let StmtKind::EnumDecl {
             name,
@@ -455,6 +464,21 @@ pub(super) fn check_types_impl(
             ..
         } = &stmt.kind
         {
+            // At this enum's own statement, which a redeclared enum does not share.
+            let link_order = (
+                true,
+                statement_positions
+                    .get(&stmt.span)
+                    .copied()
+                    .unwrap_or_else(|| position_of(&positions, name)),
+            );
+            if case_value_enums.contains(&php_symbol_key(name)) {
+                linked.push((
+                    link_order,
+                    CompileError::new(stmt.span, &format!("Duplicate class or enum declaration: {}", name)),
+                ));
+                continue;
+            }
             let enum_methods = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
@@ -491,12 +515,12 @@ pub(super) fn check_types_impl(
             ) {
                 Ok(()) => {}
                 Err(EnumBuildError::Declaration(error)) => {
-                    // At this enum's own statement, which a redeclared enum does not share.
-                    let position = statement_positions.get(&stmt.span).copied();
-                    let link_order = (true, position.unwrap_or_else(|| position_of(&positions, name)));
                     linked.extend(error.flatten().into_iter().map(|error| (link_order, error)));
                 }
-                Err(EnumBuildError::CaseValue(error)) => case_value_errors.extend(error.flatten()),
+                Err(EnumBuildError::CaseValue(error)) => {
+                    case_value_enums.insert(php_symbol_key(name));
+                    case_value_errors.extend(error.flatten());
+                }
             }
         }
     }
@@ -860,11 +884,14 @@ fn class_compile_errors(
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     positions: &HashMap<String, usize>,
+    statement_positions: &HashMap<crate::span::Span, usize>,
 ) -> Vec<(LinkOrder, CompileError)> {
     let order = declaration_order(program);
     let mut errors = Vec::new();
     for class in classes {
-        let link_order = (false, position_of(positions, &class.name));
+        // At this declaration's own statement, which a redeclared class does not share.
+        let position = statement_positions.get(&class.span).copied();
+        let link_order = (false, position.unwrap_or_else(|| position_of(positions, &class.name)));
         for constant in &class.constants {
             if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
                 errors.push((link_order, CompileError::new(

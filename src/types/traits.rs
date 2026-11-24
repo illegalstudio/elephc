@@ -358,8 +358,9 @@ pub fn flatten_classes(
                         merged_methods,
                         name,
                     );
-                flattened_enums.insert(
-                    name.clone(),
+                // A redeclared enum keeps the first declaration, which the checker registers; the
+                // later one is only reported as a duplicate.
+                flattened_enums.entry(name.clone()).or_insert(
                     FlattenedClass {
                         name: name.clone(),
                         span: stmt.span,
