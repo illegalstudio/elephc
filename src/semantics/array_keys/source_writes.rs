@@ -967,7 +967,7 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         self.error.is_none() && !is_lazy_flow_expression(expr)
     }
 
-    /// Publishes assignment facts for later operands, then restores source policy.
+    /// Publishes local writes for later operands, then restores source policy.
     fn expression_end(&mut self, expr: &Expr) {
         if self.error.is_none() && self.statement_depth == 1 {
             if let ExprKind::Assignment {
@@ -1004,6 +1004,8 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
                     self.profile,
                     self.current_class,
                 );
+            } else {
+                let _ = apply_local_inc_dec(&expr.kind, &mut self.locals);
             }
         }
         self.source.leave_expression();
@@ -1167,7 +1169,7 @@ fn validate_lazy_expression_writes(
     }
 }
 
-/// Applies assignment side effects from one evaluated expression to a scratch flow state.
+/// Applies local writes from one evaluated expression to a scratch flow state.
 fn apply_expression_facts(
     expr: &Expr,
     locals: &mut LocalFacts,
@@ -1189,7 +1191,7 @@ fn apply_expression_facts(
         .unwrap_or(ValueFact::Unknown)
 }
 
-/// Records nested assignment results after their operands have produced their side effects.
+/// Records expression results after their operands have produced their side effects.
 struct ExpressionFactUpdater<'a> {
     locals: &'a mut LocalFacts,
     properties: &'a PropertyFacts,
@@ -1223,9 +1225,14 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
         false
     }
 
-    /// Commits one assignment result after nested RHS assignments have updated the flow state.
+    /// Captures one result after nested operands have updated the flow state.
     fn expression_end(&mut self, expr: &Expr) {
-        if self.expression_values.contains_key(&expression_id(expr)) {
+        let id = expression_id(expr);
+        if self.expression_values.contains_key(&id) {
+            return;
+        }
+        if let Some(result) = apply_local_inc_dec(&expr.kind, self.locals) {
+            self.expression_values.insert(id, result);
             return;
         }
         forget_call_mutated_facts(expr, self.locals);
@@ -1266,8 +1273,29 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
                 self.current_class,
             ),
         };
-        self.expression_values.insert(expression_id(expr), value);
+        self.expression_values.insert(id, value);
     }
+}
+
+/// Records a local increment or decrement and returns its prefix or postfix result.
+/// Only a representable literal integer update can keep an exact key fact here.
+fn apply_local_inc_dec(kind: &ExprKind, locals: &mut LocalFacts) -> Option<ValueFact> {
+    let (name, delta, postfix) = match kind {
+        ExprKind::PreIncrement(name) => (name, 1, false),
+        ExprKind::PostIncrement(name) => (name, 1, true),
+        ExprKind::PreDecrement(name) => (name, -1, false),
+        ExprKind::PostDecrement(name) => (name, -1, true),
+        _ => return None,
+    };
+    let ValueFact::Integer(value) = locals.get(name) else {
+        locals.assign(name, ValueFact::Unknown);
+        return Some(ValueFact::Unknown);
+    };
+    let next = value
+        .checked_add(delta)
+        .map_or(ValueFact::Unknown, ValueFact::Integer);
+    locals.assign(name, next.clone());
+    Some(if postfix { ValueFact::Integer(value) } else { next })
 }
 
 /// Forgets tracked local shapes that one completed call may replace through an argument.

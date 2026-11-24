@@ -160,6 +160,35 @@ fn strict_array_key_source_validation_variadic_bindings() {
     }
 }
 
+/// Source-order local updates select the current array slot in both statement and expression walks.
+#[test]
+fn strict_array_key_source_validation_tracks_local_inc_dec() {
+    for (initial, update) in [(0, "$key++"), (0, "++$key"), (2, "$key--"), (2, "--$key")] {
+        for statement in [
+            format!("{update}; $values[$key][false] = 'x';"),
+            format!("$results = [{update}, $values[$key][false] = 'x'];"),
+        ] {
+            let accepted = format!("<?php $key = {initial}; $values = [[], 'ab', []]; {statement}");
+            crate::semantics::validate_source(&parse(&accepted, SourceMode::Php), profile())
+                .unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+
+            let rejected = format!("<?php $key = {initial}; $values = ['ab', [], 'cd']; {statement}");
+            let error = crate::semantics::validate_source(&parse(&rejected, SourceMode::Php), profile())
+                .expect_err("the updated key selects the array, even though its old slot was a string");
+            assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+        }
+    }
+
+    for (update, values) in [("$key++", "[[], 'ab']"), ("++$key", "['ab', []]")] {
+        let rejected = format!(
+            "<?php $key = 0; $index = {update}; $values = {values}; $values[$index][false] = 'x';"
+        );
+        let error = crate::semantics::validate_source(&parse(&rejected, SourceMode::Php), profile())
+            .expect_err("the expression result selects the array before or after the update");
+        assert!(error.message.contains("strict-array-keys"), "{rejected}: {error:?}");
+    }
+}
+
 /// Negative maximum keys advance implicit appends by one instead of resetting to zero.
 #[test]
 fn strict_array_key_source_validation_tracks_negative_append_keys() {

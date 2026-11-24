@@ -52,6 +52,34 @@ echo rewrite('ab'), ':', VariadicWriter::rewrite('ab'), ':', $rewrite('ab');
     );
 }
 
+/// Local prefix and postfix updates can switch nested writes to a string receiver.
+#[test]
+fn test_strict_array_keys_accepts_updated_local_string_offsets() {
+    let source = r#"<?php
+$values = [[], 'ab', []];
+$key = 0;
+$key++;
+$values[$key][false] = 'p';
+echo $values[1], ':';
+$key = 0;
+++$key;
+$values[$key][false] = 'q';
+echo $values[1], ':';
+$key = 2;
+$old = $key--;
+$values[$key][false] = 'r';
+echo $old, $values[1], ':';
+$key = 2;
+$next = --$key;
+$values[$next][false] = 's';
+echo $next, $values[1];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "pb:qb:2rb:1sb"
+    );
+}
+
 /// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
 #[test]
 fn test_strict_array_keys_interpolation_uses_integer_offsets() {
