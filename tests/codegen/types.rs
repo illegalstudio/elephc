@@ -49,6 +49,7 @@ mod param_coercion;
 mod implicit_nullable_params;
 #[path = "types/mixed_scalar_param_guards.rs"]
 mod mixed_scalar_param_guards;
+mod mixed_object_boundaries;
 #[path = "types/declare_groups.rs"]
 mod declare_groups;
 #[path = "types/strict_types.rs"]

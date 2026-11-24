@@ -174,6 +174,10 @@ pub(crate) struct DeferredObjectParamChecks {
     pub expression_depth: usize,
     /// Regular parameters that need the runtime class check, in recording order.
     pub checks: Vec<DeferredObjectParamCheck>,
+    /// Whether an earlier parameter's scalar check was deferred to the same ordered pass
+    /// (`scalar_param_guards`): a later class check then waits too, so the first invalid
+    /// parameter in declaration order is the one reported.
+    pub scalar_deferred: bool,
 }
 
 /// One class-like parameter check a call runs once all of its arguments were evaluated.
@@ -404,43 +408,6 @@ const EVAL_ARGC_LOCAL_NAME: &str = "argc";
 const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 /// Mutable state for one function body while it is lowered.
-/// The object-parameter checks of the positional call whose arguments are being lowered.
-///
-/// An object argument is checked while it is lowered, as before the scalar checks were
-/// deferred, unless an earlier parameter's check (scalar or object) already waits for the
-/// guarded parameter pass: it then waits too, so the first refused parameter in declaration
-/// order throws. A call whose earlier parameters check nothing keeps the object check next to
-/// its argument.
-#[derive(Clone, Debug)]
-pub(crate) struct ObjectGuardDeferral {
-    /// Expression depth of the call's arguments.
-    pub(crate) depth: usize,
-    /// `(parameter index, argument)` of each deferred object check.
-    pub(crate) guards: Vec<(usize, Expr)>,
-    /// Whether a check of an earlier parameter was deferred.
-    pub(crate) earlier_deferred: bool,
-}
-
-/// Starts deferring a positional call's object checks at `depth`, returning the enclosing
-/// call's state to restore with [`finish_object_guard_deferral`].
-pub(crate) fn begin_object_guard_deferral(
-    ctx: &mut LoweringContext<'_, '_>,
-    depth: usize,
-) -> Option<ObjectGuardDeferral> {
-    ctx.object_guard_deferral.replace(ObjectGuardDeferral { depth, guards: Vec::new(), earlier_deferred: false })
-}
-
-/// Restores the enclosing call's state and returns the object checks deferred since
-/// [`begin_object_guard_deferral`].
-pub(crate) fn finish_object_guard_deferral(
-    ctx: &mut LoweringContext<'_, '_>,
-    previous: Option<ObjectGuardDeferral>,
-) -> Vec<(usize, Expr)> {
-    std::mem::replace(&mut ctx.object_guard_deferral, previous)
-        .map(|deferral| deferral.guards)
-        .unwrap_or_default()
-}
-
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
@@ -464,10 +431,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `(expression depth, unrecorded)` while positional arguments of a guarded call are
     /// lowered: scalar-parameter checks wait for parameter-order normalization.
     pub(crate) scalar_guard_deferral: Option<(usize, bool)>,
-    /// Set while the positional arguments of a call are lowered: an object parameter's
-    /// check waits once an earlier parameter's check was deferred, so every check runs in
-    /// parameter order (see [`ObjectGuardDeferral`]).
-    pub(crate) object_guard_deferral: Option<ObjectGuardDeferral>,
     /// Set just before the arguments of a call through a statically resolved callable value
     /// (`$f = 'f'; $f($v)`) are lowered: the checker records no argument sites for such a
     /// call, so its scalar-parameter checks decide from the value types. Consumed by the next
@@ -952,7 +915,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflected_invoke_call_span: None,
             call_site_span: None,
             scalar_guard_deferral: None,
-            object_guard_deferral: None,
             scalar_guards_unrecorded: false,
             pipe_guard_arg_span: None,
             source_path,

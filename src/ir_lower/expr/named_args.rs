@@ -126,11 +126,20 @@ pub(super) fn lower_named_args_with_signature_options(
             if !super::call_arg_coercion::default_is_inert(default)));
     let mut leading_defaults = vec![None; plan.regular_args.len()];
     let mut object_guarded = vec![false; plan.regular_args.len()];
-    if !capture_values {
+    if throwing_default {
         check_supplied_scalar_params_before_defaults(
             ctx, sig, &plan, &mut source_values, &mut leading_defaults, &mut object_guarded,
-            throwing_default,
         );
+    } else if plan.regular_args.iter().enumerate().any(|(param_index, arg)| matches!(arg,
+        crate::types::call_args::PlannedRegularArg::Source { source_index, .. }
+            if super::scalar_param_guards::guarded_scalar_param(
+                ctx, sig, param_index, source_values[*source_index],
+                super::scalar_param_guards::GuardSource::Unrecorded,
+            ).is_some()))
+    {
+        // The scalar checks run in the call's ordered parameter pass: a `Class|false` /
+        // `Class|null` guard below joins them there instead of running first.
+        super::call_arg_coercion::mark_scalar_param_check_deferred(ctx);
     }
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
     for (param_index, arg) in plan.regular_args.iter().enumerate() {
@@ -251,12 +260,12 @@ fn unpin_leading_reference_defaults(
 /// Runs the runtime scalar-parameter checks of the supplied named arguments in parameter order,
 /// before an omitted trailing default that can throw is evaluated.
 ///
-/// It runs when the call has such a default (`throwing_default`), or when a supplied object
-/// parameter is checked beside a scalar one: both kinds of check then run here in parameter
-/// order (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a` and does not convert a
-/// later `Stringable`; `g(s: $null, a: $false)` for `g(string $s, C $a)` refuses `$s`), and
-/// `object_guarded` records the parameters checked here so the final pass does not check them
-/// again. An object argument is matched by its value
+/// Every check of a supplied parameter runs here in parameter order: the scalar checks, the
+/// class-like checks the sources deferred (`DeferredObjectParamChecks`, taken out of the frame
+/// so the ordered pass does not repeat them) and the `Class|false` / `Class|null` guards
+/// (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a` and does not convert a later
+/// `Stringable`). `object_guarded` records the parameters checked here so the final loop does
+/// not guard them again. An object argument is matched by its value
 /// expression, not the `name: value` wrapper the final pass sees.
 ///
 /// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
@@ -274,7 +283,6 @@ fn check_supplied_scalar_params_before_defaults(
     source_values: &mut [crate::ir::ValueId],
     leading_defaults: &mut [Option<LeadingDefault>],
     object_guarded: &mut [bool],
-    throwing_default: bool,
 ) {
     use super::scalar_param_guards::GuardSource;
     let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
@@ -295,11 +303,6 @@ fn check_supplied_scalar_params_before_defaults(
         ).is_some()
     });
     if !any_scalar {
-        return;
-    }
-    let object_checks = supplied.iter()
-        .any(|(param_index, source_index)| object_checked(ctx, *param_index, *source_index, source_values[*source_index]));
-    if !throwing_default && !object_checks {
         return;
     }
     // Every owned source is rooted before the first check can throw: the regular parameters'
@@ -344,13 +347,21 @@ fn check_supplied_scalar_params_before_defaults(
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     for (param_index, source_index) in supplied {
+        // PHP checks each parameter in order: an earlier class-like (or `callable`, or
+        // by-reference) parameter refuses its argument before a later scalar is checked or
+        // converted. The check its source deferred runs here instead of in the ordered pass.
+        if let Some(check) = super::call_arg_coercion::take_deferred_param_check(ctx, param_index) {
+            source_values[source_index] = super::call_arg_coercion::run_deferred_param_check(
+                ctx, sig, &check, source_values[source_index],
+            );
+            object_guarded[param_index] = !check.callable;
+            continue;
+        }
         if object_checked(ctx, param_index, source_index, source_values[source_index]) {
-            // PHP checks each parameter in order: an earlier object parameter refuses its
-            // argument before a later scalar is checked or converted.
             super::call_arg_coercion::emit_property_type_guards_before(ctx, param_index);
             let expr = value_expr(source_index).expect("object-checked source has an expression");
             let lowered = lowered_value_from_id(ctx, source_values[source_index]);
-            if let Some(object) = super::call_arg_coercion::guard_object_param_argument(
+            if let Some(object) = super::call_arg_coercion::guard_object_param_argument_at_once(
                 ctx, sig, param_index, lowered, &expr,
             ) {
                 source_values[source_index] =

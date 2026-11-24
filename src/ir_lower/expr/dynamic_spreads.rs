@@ -108,6 +108,7 @@ pub(super) fn lower_boxed_spread_args(
     let check_in_order = !hidden && !preserve_values;
     let mut converted: Vec<Option<ValueId>> = vec![None; state.slots.len()];
     let mut guarded = vec![false; state.slots.len()];
+    let mut object_checked = vec![false; state.slots.len()];
     let mut string_slots: Vec<Option<String>> = vec![None; state.slots.len()];
     let bound = check_in_order.then(|| emit_unpassed_parameter_checks(ctx, sig, &state, span));
     for (index, filled) in state.filled.iter().enumerate() {
@@ -160,10 +161,12 @@ pub(super) fn lower_boxed_spread_args(
         if check_in_order {
             // The rooted slot keeps the value alive if the check throws; the check borrows it.
             let value = ctx.load_local(&state.slots[index], Some(span));
-            // An object parameter is checked at its turn too, so an earlier scalar parameter's
-            // refusal (or `Stringable` conversion) comes first, as in PHP.
-            let slot = Expr::new(ExprKind::Variable(state.slots[index].clone()), span);
-            super::call_arg_coercion::check_runtime_object_param(ctx, sig, index, value, &slot);
+            // A class-like parameter is checked at its turn too, so an earlier scalar
+            // parameter's refusal (or `Stringable` conversion) comes first, as in PHP.
+            if super::call_arg_coercion::boxed_slot_object_param(sig, index) {
+                super::call_arg_coercion::check_boxed_slot_object_param(ctx, sig, index, value, span);
+                object_checked[index] = true;
+            }
             let source = super::scalar_param_guards::GuardSource::Unrecorded;
             if super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, value.value, source).is_some() {
                 guarded[index] = true;
@@ -253,7 +256,7 @@ pub(super) fn lower_boxed_spread_args(
                 super::scalar_param_guards::GuardSource::Unrecorded
             })
             .collect::<Vec<_>>();
-        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false)
+        coerce_boxed_operands_to_params(ctx, sig, operands, span, &sources, &object_checked)
     } })
 }
 

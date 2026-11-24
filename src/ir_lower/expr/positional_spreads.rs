@@ -50,13 +50,12 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // A call through a callable alias (`$f = 'take'; $f($v, ...$rows)`) has no checker record
     // for its prefix, so the prefix is then checked from its values.
     let previous_deferral = ctx.scalar_guard_deferral;
-    let previous_object_deferral = ctx.object_guard_deferral.take();
     if !capture_values {
         ctx.scalar_guard_deferral = Some((ctx.expression_depth, unrecorded_sources));
-        // A prefix object check after a deferred one waits with it, so the prefix is checked
-        // in parameter order once the spread was read.
-        crate::ir_lower::context::begin_object_guard_deferral(ctx, ctx.expression_depth);
     }
+    // The prefix's class checks wait with its scalar checks, so the prefix is checked in
+    // parameter order once the spread was read.
+    super::call_arg_coercion::begin_deferred_object_param_checks(ctx);
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
         let previous = capture_output.filter(|(output, _)| *output == index && !capture_values)
@@ -71,8 +70,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
         }
     }
     ctx.scalar_guard_deferral = previous_deferral;
-    let prefix_object_guards =
-        crate::ir_lower::context::finish_object_guard_deferral(ctx, previous_object_deferral);
+    let prefix_object_checks = super::call_arg_coercion::finish_deferred_object_param_checks(ctx);
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
@@ -83,7 +81,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     let spread_value = lower_expr(ctx, &spread_expr);
     // The prefix parameters come before the unpacked ones, so their checks run before the
     // unpacked count is checked, as PHP's parameter-order binding does.
-    if !capture_values && spread_idx > 0 {
+    if (!capture_values || !prefix_object_checks.is_empty()) && spread_idx > 0 {
         let sources = args[..spread_idx]
             .iter()
             .map(|arg| if unrecorded_sources {
@@ -92,13 +90,14 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 super::scalar_param_guards::GuardSource::Recorded(arg.span)
             })
             .collect::<Vec<_>>();
-        operands = super::call_arg_coercion::coerce_operands_to_params_guarded_with_objects(
-            ctx, sig, operands, Some(&sources), true, &prefix_object_guards,
+        let sources = (!capture_values).then_some(sources.as_slice());
+        operands = super::call_arg_coercion::coerce_operands_to_params_with_checks(
+            ctx, sig, operands, sources, true, &prefix_object_checks,
         );
         // A deferred check converts without rooting its result (a `Stringable`'s string), but
         // the spread elements and defaults lowered next can still throw: root what it made.
         for (index, arg) in args[..spread_idx].iter().enumerate() {
-            if sig.ref_params.get(index).copied().unwrap_or(false) {
+            if capture_values || sig.ref_params.get(index).copied().unwrap_or(false) {
                 continue;
             }
             let lowered = lowered_value_from_id(ctx, operands[index]);
