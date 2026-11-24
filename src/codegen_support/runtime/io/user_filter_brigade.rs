@@ -12,12 +12,11 @@
 
 use elephc_memoir::strings::str_new_owned;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::runtime::exceptions::guards;
+use elephc_memoir::{FrameOffset, guarded_owners::GuardedFrameOwners};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 const FRAME_BYTES: usize = 624;
-const OWNER_BASE: usize = 128;
-const OWNER_COUNT: usize = 14;
+const OWNERS: GuardedFrameOwners = GuardedFrameOwners::new(FrameOffset::new(128), 14, FRAME_BYTES);
 const IN: usize = 0;
 const BUCKET: usize = 1;
 const VALUE: usize = 2;
@@ -53,44 +52,22 @@ fn save(emitter: &mut Emitter, offset: usize, reg: &str) {
     abi::emit_store_to_address(emitter, reg, frame(emitter), offset);
 }
 
-/// Returns the word where a guard owns its current heap value.
-fn owner(slot: usize) -> usize {
-    OWNER_BASE + slot * 32 + 24
-}
-
-/// Saves a newly allocated or replaced owner before any subsequent allocation or PHP call.
-fn own(emitter: &mut Emitter, slot: usize) {
-    save(emitter, owner(slot), result(emitter));
-}
-
-/// Clears a transferred owner while retaining its empty exception record until normal return.
-fn transfer(emitter: &mut Emitter, slot: usize) {
-    abi::emit_store_zero_to_address(emitter, frame(emitter), owner(slot));
-}
-
-/// Retires one independent owner before calling its potentially throwing destructor.
-fn release(emitter: &mut Emitter, slot: usize) {
-    load(emitter, owner(slot), result(emitter));
-    transfer(emitter, slot);
-    abi::emit_call_label(emitter, "__rt_decref_any");
-}
-
 /// Boxes a value supplied in the target's native payload registers.
 fn boxed(emitter: &mut Emitter, tag: i64, slot: usize) {
     abi::emit_load_int_immediate(emitter, result(emitter), tag);
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    own(emitter, slot);
+    OWNERS.emit_save(emitter, slot);
 }
 
 /// Transfers a boxed owner into a newly populated brigade or bucket property.
 fn property(emitter: &mut Emitter, object: usize, value: usize, name: &str, len: i64) {
     let arm = emitter.target.arch == Arch::AArch64;
-    load(emitter, owner(value), if arm { "x3" } else { "rcx" });
-    load(emitter, owner(object), if arm { "x0" } else { "rdi" });
+    load(emitter, OWNERS.owner_offset(value), if arm { "x3" } else { "rcx" });
+    load(emitter, OWNERS.owner_offset(object), if arm { "x0" } else { "rdi" });
     abi::emit_symbol_address(emitter, if arm { "x1" } else { "rsi" }, name);
     abi::emit_load_int_immediate(emitter, if arm { "x2" } else { "rdx" }, len);
     abi::emit_call_label(emitter, "__rt_stdclass_set");
-    transfer(emitter, value);
+    OWNERS.emit_clear(emitter, value);
 }
 
 /// Emits a four-argument filter call with independent guarded brigades and an owned result.
@@ -107,16 +84,12 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     for (offset, reg) in [(0, arg0), (8, arg1), (16, arg2), (24, arg3)] {
         save(emitter, offset, reg);
     }
-    for slot in 0..OWNER_COUNT {
-        abi::emit_load_int_immediate(emitter, ret, 0);
-        let offset = OWNER_BASE + slot * 32;
-        guards::guard(emitter, offset, FRAME_BYTES - 16 - offset);
-    }
+    OWNERS.emit_publish_empty(emitter);
     // -- build the input bucket and transfer its property cells into its hash --
     abi::emit_call_label(emitter, "__rt_stdclass_new");
-    own(emitter, IN);
+    OWNERS.emit_save(emitter, IN);
     abi::emit_call_label(emitter, "__rt_stdclass_new");
-    own(emitter, BUCKET);
+    OWNERS.emit_save(emitter, BUCKET);
     load(emitter, 8, if arm { "x1" } else { "rdi" });
     load(emitter, 16, if arm { "x2" } else { "rsi" });
     boxed(emitter, 1, VALUE);
@@ -126,28 +99,28 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     boxed(emitter, 0, VALUE);
     property(emitter, BUCKET, VALUE, "_brigade_datalen_key", 7);
     // -- boxing retains each child, so retire its original independent owner --
-    load(emitter, owner(BUCKET), if arm { "x1" } else { "rdi" });
+    load(emitter, OWNERS.owner_offset(BUCKET), if arm { "x1" } else { "rdi" });
     abi::emit_load_int_immediate(emitter, if arm { "x2" } else { "rsi" }, 0);
     boxed(emitter, 6, BOXED_BUCKET);
-    release(emitter, BUCKET);
+    OWNERS.emit_release(emitter, BUCKET);
     abi::emit_load_int_immediate(emitter, arg0, 4);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
-    own(emitter, ARRAY);
+    OWNERS.emit_save(emitter, ARRAY);
     // The array consumes Mixed pointers and must retain that element shape during GC.
     elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
-    load(emitter, owner(ARRAY), arg0);
-    load(emitter, owner(BOXED_BUCKET), arg1);
+    load(emitter, OWNERS.owner_offset(ARRAY), arg0);
+    load(emitter, OWNERS.owner_offset(BOXED_BUCKET), arg1);
     abi::emit_call_label(emitter, "__rt_array_push_int");
-    own(emitter, ARRAY);
-    transfer(emitter, BOXED_BUCKET);
-    load(emitter, owner(ARRAY), if arm { "x1" } else { "rdi" });
+    OWNERS.emit_save(emitter, ARRAY);
+    OWNERS.emit_clear(emitter, BOXED_BUCKET);
+    load(emitter, OWNERS.owner_offset(ARRAY), if arm { "x1" } else { "rdi" });
     abi::emit_load_int_immediate(emitter, if arm { "x2" } else { "rsi" }, 0);
     boxed(emitter, 4, BOXED_ARRAY);
-    release(emitter, ARRAY);
+    OWNERS.emit_release(emitter, ARRAY);
     property(emitter, IN, BOXED_ARRAY, "_brigade_buckets_key", 8);
     abi::emit_call_label(emitter, "__rt_stdclass_new");
-    own(emitter, OUT);
+    OWNERS.emit_save(emitter, OUT);
     // -- select parameter representations from the source method signature --
     load(emitter, 0, arg0);
     emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r9, QWORD PTR [rdi]" });// recover the receiver class ID
@@ -160,7 +133,7 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
         load(emitter, 120, if arm { "x9" } else { "r9" });
         emitter.instruction(&if arm { format!("tst x9, #{bit}") } else { format!("test r9, {bit}") });// only Mixed parameters need an object box
         emitter.instruction(&format!("{} __rt_ufbi_boxed_{cell}", if arm { "b.eq" } else { "jz" }));// raw object parameters borrow the brigade directly
-        load(emitter, owner(object), if arm { "x1" } else { "rdi" });
+        load(emitter, OWNERS.owner_offset(object), if arm { "x1" } else { "rdi" });
         abi::emit_load_int_immediate(emitter, if arm { "x2" } else { "rsi" }, 0);
         boxed(emitter, 6, cell);
         emitter.label(&format!("__rt_ufbi_boxed_{cell}"));
@@ -177,31 +150,31 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     }
     // -- borrow the prepared owners through the user's declared method ABI --
     for (object, cell, reg) in [(IN, BOXED_IN, arg1), (OUT, BOXED_OUT, arg2)] {
-        load(emitter, owner(cell), reg);
+        load(emitter, OWNERS.owner_offset(cell), reg);
         emitter.instruction(&if arm { format!("cbnz {reg}, __rt_ufbi_arg_{cell}") } else { format!("test {reg}, {reg}") });// prefer the boxed object when the signature requires it
         if !arm { emitter.instruction(&format!("jnz __rt_ufbi_arg_{cell}")); }  // retain the boxed parameter representation
-        load(emitter, owner(object), reg);
+        load(emitter, OWNERS.owner_offset(object), reg);
         emitter.label(&format!("__rt_ufbi_arg_{cell}"));
     }
-    load(emitter, owner(CONSUMED), arg3);
+    load(emitter, OWNERS.owner_offset(CONSUMED), arg3);
     emitter.instruction(if arm { "cbz x3, __rt_ufbi_consumed_scalar" } else { "test rcx, rcx" });// Mixed references point to the owner's pointer word
     if !arm { emitter.instruction("jz __rt_ufbi_consumed_scalar"); }            // native integer references use their scalar word instead
-    emitter.instruction(&if arm { format!("add x3, sp, #{}", owner(CONSUMED)) }
-        else { format!("lea rcx, [rsp + {}]", owner(CONSUMED)) });              // writes replace the cell tracked by the existing exception guard
+    emitter.instruction(&if arm { format!("add x3, sp, #{}", OWNERS.owner_offset(CONSUMED)) }
+        else { format!("lea rcx, [rsp + {}]", OWNERS.owner_offset(CONSUMED)) });              // writes replace the cell tracked by the existing exception guard
     abi::emit_jump(emitter, "__rt_ufbi_consumed_ready");
     emitter.label("__rt_ufbi_consumed_scalar");
     emitter.instruction(if arm { "add x3, sp, #112" } else { "lea rcx, [rsp + 112]" });// native integer references borrow a scalar word
     emitter.label("__rt_ufbi_consumed_ready");
-    load(emitter, owner(CLOSING), if arm { "x4" } else { "r8" });
+    load(emitter, OWNERS.owner_offset(CLOSING), if arm { "x4" } else { "r8" });
     load(emitter, 0, arg0);
     load(emitter, 24, if arm { "x11" } else { "r11" });
     abi::emit_call_reg(emitter, if arm { "x11" } else { "r11" });
     // -- retain the output array while property getters and result growth can allocate --
-    load(emitter, owner(OUT), arg0);
+    load(emitter, OWNERS.owner_offset(OUT), arg0);
     abi::emit_symbol_address(emitter, arg1, "_brigade_buckets_key");
     abi::emit_load_int_immediate(emitter, arg2, 8);
     abi::emit_call_label(emitter, "__rt_stdclass_get");
-    own(emitter, OUTPUT_ARRAY);
+    OWNERS.emit_save(emitter, OUTPUT_ARRAY);
     abi::emit_store_zero_to_address(emitter, frame(emitter), 56);
     abi::emit_store_zero_to_address(emitter, frame(emitter), 72);
     emitter.instruction(if arm { "cbz x0, __rt_ufbi_done" } else { "test rax, rax" });// absent output leaves an empty result
@@ -233,7 +206,7 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, arg1, "_brigade_data_key");
     abi::emit_load_int_immediate(emitter, arg2, 4);
     abi::emit_call_label(emitter, "__rt_stdclass_get");
-    own(emitter, DATA);
+    OWNERS.emit_save(emitter, DATA);
     emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r9, QWORD PTR [rax]" });// getters return an owned Mixed cell, including null
     emitter.instruction(if arm { "cmp x9, #1" } else { "cmp r9, 1" });          // concatenate string payloads only
     emitter.instruction(if arm { "b.ne __rt_ufbi_data_done" } else { "jne __rt_ufbi_data_done" });// malformed values still retire their getter owner
@@ -250,15 +223,15 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     emitter.instruction(if arm { "b.ls __rt_ufbi_copy" } else { "jbe __rt_ufbi_copy" });// avoid reallocating between small buckets
     emitter.instruction(if arm { "add x9, x9, x10" } else { "add r9, r10" });   // grow geometrically as well as covering this bucket
     save(emitter, 72, if arm { "x9" } else { "r9" });
-    load(emitter, owner(RESULT), if arm { "x0" } else { "rax" });
+    load(emitter, OWNERS.owner_offset(RESULT), if arm { "x0" } else { "rax" });
     load(emitter, 56, if arm { "x1" } else { "rdi" });
     load(emitter, 72, if arm { "x2" } else { "rsi" });
     // Republish an independent string owner before any subsequent destructor can throw.
     str_new_owned::emit_grow_owned_string(emitter, "r9");
-    own(emitter, RESULT);
+    OWNERS.emit_save(emitter, RESULT);
     emitter.label("__rt_ufbi_copy");
     load(emitter, 80, if arm { "x9" } else { "r9" });
-    load(emitter, owner(RESULT), if arm { "x10" } else { "r10" });
+    load(emitter, OWNERS.owner_offset(RESULT), if arm { "x10" } else { "r10" });
     load(emitter, 88, if arm { "x11" } else { "r11" });
     load(emitter, 56, if arm { "x12" } else { "r8" });
     abi::emit_load_int_immediate(emitter, if arm { "x14" } else { "rcx" }, 0);
@@ -274,7 +247,7 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     load(emitter, 96, if arm { "x9" } else { "r9" });
     save(emitter, 56, if arm { "x9" } else { "r9" });
     emitter.label("__rt_ufbi_data_done");
-    release(emitter, DATA);
+    OWNERS.emit_release(emitter, DATA);
     emitter.label("__rt_ufbi_next");
     load(emitter, 48, if arm { "x9" } else { "r9" });
     emitter.instruction(if arm { "add x9, x9, #1" } else { "inc r9" });         // advance the output bucket index after retiring its getter
@@ -282,16 +255,11 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_ufbi_walk");
     // -- cleanup can invoke destructors while the independent output remains guarded --
     emitter.label("__rt_ufbi_done");
-    for slot in (0..OWNER_COUNT).rev().filter(|slot| *slot != RESULT) {
-        release(emitter, slot);
-    }
-    load(emitter, owner(RESULT), ret);
+    OWNERS.emit_release_except(emitter, RESULT);
+    load(emitter, OWNERS.owner_offset(RESULT), ret);
     save(emitter, 64, ret);
-    transfer(emitter, RESULT);
-    for slot in (0..OWNER_COUNT).rev() {
-        let offset = OWNER_BASE + slot * 32;
-        guards::unguard(emitter, offset, FRAME_BYTES - 16 - offset);
-    }
+    OWNERS.emit_clear(emitter, RESULT);
+    OWNERS.emit_detach(emitter);
     load(emitter, 64, if arm { "x1" } else { "rax" });
     load(emitter, 56, if arm { "x2" } else { "rdx" });
     abi::emit_frame_restore(emitter, FRAME_BYTES);

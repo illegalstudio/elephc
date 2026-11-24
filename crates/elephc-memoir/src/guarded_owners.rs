@@ -9,7 +9,8 @@
 //! - Taking an owner clears its slot before any release can invoke user code.
 //! - Constructor policy and exception-handler installation stay in the compiler.
 
-use crate::{abi, Arch, Emitter, GuardLayout, RecordOffset, TargetAbi};
+use crate::{abi, Arch, Emitter, FrameOffset, GuardLayout, RecordOffset, TargetAbi};
+use crate::activation_records::{CLEANUP, GUARD_BYTES, GUARD_OWNER};
 
 /// Emits guard insertion/removal for the host activation-chain ABI.
 pub fn emit_guard_chain(emitter: &mut impl Emitter, layout: GuardLayout, head_symbol: &str) {
@@ -127,7 +128,7 @@ pub fn emit_load_indexed_owner(emitter: &mut impl Emitter, table: &str, index: &
     emitter.instruction(&match emitter.arch() {
         Arch::AArch64 => format!("ldr {owner}, [{table}, {index}, lsl #3]"),
         Arch::X86_64 => format!("mov {owner}, QWORD PTR [{table} + {index}*8]"),
-    });                                                                       // read the current owner without retaining it
+    });                                                                         // read the current owner without retaining it
 }
 
 /// Clears an indexed slot whose ownership has been transferred to the caller.
@@ -135,5 +136,105 @@ pub fn emit_clear_indexed_owner(emitter: &mut impl Emitter, table: &str, index: 
     emitter.instruction(&match emitter.arch() {
         Arch::AArch64 => format!("str xzr, [{table}, {index}, lsl #3]"),
         Arch::X86_64 => format!("mov QWORD PTR [{table} + {index}*8], 0"),
-    });                                                                       // detach the table's owner before it can be released
+    });                                                                         // detach the table's owner before it can be released
+}
+
+/// Registers the native result-register owner in a 32-byte stack record at the supplied offsets.
+pub fn emit_publish_in_frame(emitter: &mut impl Emitter, arm: usize, x86: usize) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.instruction(&format!("str x0, [sp, #{}]", arm + GUARD_OWNER));  // publish exceptional ownership before running PHP
+        abi::emit_symbol_address(emitter, "x9", "__rt_exception_release_owned");
+        emitter.instruction(&format!("str x9, [sp, #{}]", arm + CLEANUP));      // use the protected heap-owner release callback
+        emitter.instruction(&format!("add x0, sp, #{arm}"));                    // provide the aligned activation record
+        emitter.instruction("mov x1, #0");                                      // insert this owner at the current activation head
+    } else {
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", x86 - GUARD_OWNER));// retain the owner in exceptional cleanup storage
+        abi::emit_symbol_address(emitter, "r10", "__rt_exception_release_owned");
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", x86 - CLEANUP));// install protected release for the staged owner
+        emitter.instruction(&format!("lea rdi, [rbp - {x86}]"));                // identify this stack-local activation
+        emitter.instruction("xor esi, esi");                                    // insert ownership at the activation chain head
+    }
+    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+}
+
+/// Detaches one exceptional owner before ordinary release or transfer to the caller.
+pub fn emit_detach_in_frame(emitter: &mut impl Emitter, arm: usize, x86: usize) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.instruction(&format!("add x0, sp, #{arm}"));                    // identify the completed exceptional ownership scope
+    } else {
+        emitter.instruction(&format!("lea rdi, [rbp - {x86}]"));                // identify the exact activation to retire
+    }
+    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
+}
+
+/// A contiguous group of exceptional owner records within a fixed native frame.
+pub struct GuardedFrameOwners {
+    start: FrameOffset,
+    count: usize,
+    frame_bytes: usize,
+}
+
+impl GuardedFrameOwners {
+    /// Reserves a consecutive guard area, including the native frame-link convention.
+    pub const fn new(start: FrameOffset, count: usize, frame_bytes: usize) -> Self {
+        // The SysV frame prologue describes its two-word frame link in frame_bytes.
+        assert!(start.bytes() + count * GUARD_BYTES <= frame_bytes - 16);
+        Self { start, count, frame_bytes }
+    }
+
+    /// Computes a guard record's stack-relative address.
+    const fn record_offset(&self, slot: usize) -> usize {
+        assert!(slot < self.count);
+        self.start.bytes() + slot * GUARD_BYTES
+    }
+
+    /// Returns the offset of the mutable owner word for callers passing it by address.
+    pub const fn owner_offset(&self, slot: usize) -> usize {
+        self.record_offset(slot) + GUARD_OWNER
+    }
+
+    /// Publishes every initially vacant owner record in slot order.
+    pub fn emit_publish_empty(&self, emitter: &mut impl Emitter) {
+        let result = emitter.int_result_reg();
+        for slot in 0..self.count {
+            emitter.emit_load_int_immediate(result, 0);
+            let offset = self.record_offset(slot);
+            emit_publish_in_frame(emitter, offset, self.frame_bytes - 16 - offset);
+        }
+    }
+
+    /// Stores the latest native result in a live guard before the next operation can reenter.
+    pub fn emit_save(&self, emitter: &mut impl Emitter, slot: usize) {
+        let stack = if emitter.arch() == Arch::AArch64 { "sp" } else { "rsp" };
+        emitter.emit_store_to_address(emitter.int_result_reg(), stack, self.owner_offset(slot));
+    }
+
+    /// Transfers the owner without detaching the now-vacant guard.
+    pub fn emit_clear(&self, emitter: &mut impl Emitter, slot: usize) {
+        let stack = if emitter.arch() == Arch::AArch64 { "sp" } else { "rsp" };
+        emitter.emit_store_zero_to_address(stack, self.owner_offset(slot));
+    }
+
+    /// Takes a slot owner before calling its potentially reentrant native release.
+    pub fn emit_release(&self, emitter: &mut impl Emitter, slot: usize) {
+        let stack = if emitter.arch() == Arch::AArch64 { "sp" } else { "rsp" };
+        emitter.emit_load_from_address(emitter.int_result_reg(), stack, self.owner_offset(slot));
+        self.emit_clear(emitter, slot);
+        emitter.emit_call_label("__rt_decref_any");
+    }
+
+    /// Releases all temporary owners in reverse order while the selected result stays guarded.
+    pub fn emit_release_except(&self, emitter: &mut impl Emitter, result: usize) {
+        for slot in (0..self.count).rev().filter(|slot| *slot != result) {
+            self.emit_release(emitter, slot);
+        }
+    }
+
+    /// Detaches the completed guard area in reverse publication order.
+    pub fn emit_detach(&self, emitter: &mut impl Emitter) {
+        for slot in (0..self.count).rev() {
+            let offset = self.record_offset(slot);
+            emit_detach_in_frame(emitter, offset, self.frame_bytes - 16 - offset);
+        }
+    }
 }
