@@ -21,8 +21,18 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Heap bytes one automatic safe point may pay for before the collector has to run.
-pub(crate) const GC_SAFE_POINT_SCAN_CREDIT: u64 = 64 * 1024;
+/// Credit one automatic safe point earns: the collector runs once `GC_SAFEPOINT_THRESHOLD` safe
+/// points (php-src's possible-root buffer, `GC_THRESHOLD_DEFAULT`) have passed since the last pass,
+/// so the observable destructor order of a cycle is php's, and the work of a collection is spread
+/// over that many unsets.
+pub(crate) const GC_SAFE_POINT_SCAN_CREDIT: u64 = 1;
+
+/// Live bytes below which no safe point collects before the first pass: the fixed arena has no
+/// swap, so garbage must not outgrow it, but php itself (whose heap is larger) runs its
+/// collector only when its root buffer fills; one MiB keeps small programs on php's order
+/// while a program stranding large cycles still stays bounded (peak under 2 MB for 200 KB
+/// cycles).
+pub(crate) const GC_LIVE_LIMIT_FLOOR: i64 = 1024 * 1024;
 
 /// Emits `__rt_gc_collect_cycles_budgeted` for the target architecture.
 pub(super) fn emit_gc_collect_budget(emitter: &mut Emitter) {
@@ -50,19 +60,33 @@ pub(super) fn emit_gc_collect_budget(emitter: &mut Emitter) {
             emitter.instruction(&format!("add r10, {GC_SAFE_POINT_SCAN_CREDIT}")); // add this safe point's credit to the saved budget
         }
     }
-    super::gc_candidates::load(emitter, "x9", "r8", "_heap_off");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cmp x11, x9");                                 // compare the budget with the heap extent a collection walks
-            emitter.instruction("b.hs __rt_gc_collect_cycles_budget_collect");  // collect once the saved credit pays for the full scan
+            abi::emit_load_int_immediate(emitter, "x9", super::gc_safepoint::GC_SAFEPOINT_THRESHOLD);
+            emitter.instruction("cmp x11, x9");                                 // compare the safe points seen with php's possible-root threshold
+            emitter.instruction("b.hs __rt_gc_collect_cycles_budget_collect");  // collect once the root buffer would have filled
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp r10, r8");                                 // compare the budget with the heap extent a collection walks
-            emitter.instruction("jae __rt_gc_collect_cycles_budget_collect");   // collect once the saved credit pays for the full scan
+            emitter.instruction(&format!("cmp r10, {}", super::gc_safepoint::GC_SAFEPOINT_THRESHOLD)); // compare the safe points seen with php's possible-root threshold
+            emitter.instruction("jae __rt_gc_collect_cycles_budget_collect");   // collect once the root buffer would have filled
         }
     }
     super::gc_candidates::load(emitter, "x9", "r8", "_gc_live");
     super::gc_candidates::load(emitter, "x12", "r11", "_gc_safe_point_live_limit");
+    // Before the first collection the limit is unset: start it at `GC_LIVE_LIMIT_FLOOR`, so a small
+    // program never collects before php's root buffer would (`gc_status()['runs']` stays 0).
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x13", GC_LIVE_LIMIT_FLOOR);
+            emitter.instruction("cmp x12, #0");                                 // is the live-byte limit still unset?
+            emitter.instruction("csel x12, x13, x12, eq");                      // an unset limit starts at the floor
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdx, {GC_LIVE_LIMIT_FLOOR}"));    // the floor an unset live-byte limit starts at
+            emitter.instruction("test r11, r11");                               // is the live-byte limit still unset?
+            emitter.instruction("cmove r11, rdx");                              // an unset limit starts at the floor
+        }
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cmp x9, x12");                                 // compare live bytes, stranded garbage included, with the growth limit
@@ -171,7 +195,7 @@ mod tests {
             let asm = emitter.output();
             let candidates = asm.find("_gc_candidates_enabled").expect("candidate mode check");
             let credit = asm.find("_gc_safe_point_credit").expect("saved scan credit");
-            let heap = asm.find("_heap_off").expect("heap extent");
+            let heap = asm.find("10000").expect("php's possible-root threshold");
             assert!(candidates < credit && credit < heap, "{target:?}\n{asm}");
             assert!(asm.contains("__rt_gc_collect_cycles_budget_collect:"), "{target:?}\n{asm}");
             assert!(asm.contains(&GC_SAFE_POINT_SCAN_CREDIT.to_string()), "{target:?}\n{asm}");

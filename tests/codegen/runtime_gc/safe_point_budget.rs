@@ -1,21 +1,25 @@
 //! Purpose:
-//! Checks that automatic unset safe points collect at once on small heaps and defer on large
-//! heaps until their saved scan credit covers the heap, while explicit collection stays eager.
+//! Checks that automatic unset safe points follow php: no collection until php's possible-root
+//! buffer would fill (10,000 roots), whatever the heap size, while explicit collection stays eager.
+//! `php -n` prints `small=0`, `deferred=0 later=0` and the four destructors only at the explicit
+//! `gc_collect_cycles()`. A pass forced by garbage outgrowing the live bytes (the heap is a fixed
+//! arena, php's is not) is the one deviation.
 //!
 //! Called from:
 //! - The `codegen_tests` runtime GC suite.
 //!
 //! Key details:
 //! - `gc_status()['runs']` counts only productive passes, so each probe strands one cycle.
-//! - The ballast list pushes the heap well past one 64 KiB credit; the unset right after it
-//!   collects because live bytes outgrew their limit, which resets both budgets.
+//! - The ballast lists stay well under the 1 MiB live-byte floor of the arena guard, so only
+//!   php's own rule (10,000 roots, or an explicit call) decides when a pass runs; the guard's
+//!   own pass is checked by the garbage-outgrows-live-bytes test.
 //! - Deferred cycles and their destructors are reclaimed by a later safe point, explicitly,
 //!   or by the shutdown collection, also in builds without heap debugging.
 //! - Garbage that outgrows the reachable heap forces a collection whatever the scan credit.
 
 use crate::support::*;
 
-/// Small heaps collect at every unset; large heaps defer, then reclaim within the budget.
+/// Unsets defer collection, as php's root buffer does, until an explicit or threshold pass.
 #[test]
 fn test_safe_point_budget_defers_on_large_heaps_only() {
     let source = r#"<?php
@@ -37,7 +41,7 @@ echo "small=", runs() - $before, "\n";
 $nodes = [];
 for ($i = 0; $i < $argc + 299; $i++) { $nodes[$i] = new Node(); }
 $ballast = [];
-for ($i = 0; $i < $argc + 19999; $i++) { $ballast[] = str_repeat('x', 40) . $i; }
+for ($i = 0; $i < $argc + 4999; $i++) { $ballast[] = str_repeat('x', 40) . $i; }
 unset($few[1]);
 strandCycle();
 strandLoud('a');
@@ -54,7 +58,7 @@ echo "explicit ", count($nodes), count($ballast), "\n";
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert_eq!(
         output.stdout,
-        "small=1\ndeferred=0 gone:a gone:a later=1\ngone:b gone:b explicit 120000\n"
+        "small=0\ndeferred=0 later=0\ngone:a gone:a gone:b gone:b explicit 15000\n"
     );
 }
 
@@ -122,7 +126,7 @@ class Loud
 function strandBig(): void { $a = new G(); $b = new G(); $a->peer = $b; $b->peer = $a; $a->payload = str_repeat('x', 200000); }
 function strandLoud(string $name): void { $a = new Loud($name); $b = new Loud($name); $a->peer = $b; $b->peer = $a; }
 $ballast = [];
-for ($i = 0; $i < $argc + 19999; $i++) { $ballast[] = str_repeat('x', 40) . $i; }
+for ($i = 0; $i < $argc + 1999; $i++) { $ballast[] = str_repeat('x', 40) . $i; }
 $nodes = [new G(), new G(), new G()];
 gc_disable();
 strandBig();
@@ -134,5 +138,6 @@ echo "after ", count($nodes), count($ballast), "\n";
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
-    assert_eq!(output.stdout, "gone:x gone:x after 120000\n");
+    // php -n (ballast 2000): "after 12000\ngone:x gone:x " -- the cycle waits for the shutdown pass. The ballast is small so live bytes stay under the arena guard (a pass forced by garbage outgrowing live bytes is the one deviation from php).
+    assert_eq!(output.stdout, "after 12000\ngone:x gone:x ");
 }
