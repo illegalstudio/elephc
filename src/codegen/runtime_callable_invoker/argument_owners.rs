@@ -211,7 +211,7 @@ mod tests {
                 assert!(assembly.contains(&address), "{name}: missing slot {index}: {assembly}");
             }
             let data = if target.arch == crate::codegen_support::platform::Arch::AArch64 {
-                "mov x0, sp\n    add x0, x0, #48"
+                "add x0, sp, #48"
             } else { "lea rax, [rsp + 48]" };
             assert!(assembly.contains(data), "{name}: an extended inventory cannot use the compact guard marker");
             assert!(assembly.contains("invoker_owners_probe_cleanup"), "{name}: {assembly}");

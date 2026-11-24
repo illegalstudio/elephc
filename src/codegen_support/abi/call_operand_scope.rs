@@ -262,7 +262,7 @@ mod tests {
             let (owners, detach_inner, detach_outer) = if target == "linux-x86_64" {
                 (["[rsp + 112]", "[rsp + 160]"], "lea r10, [rsp + 144]", "lea r10, [rsp + 96]")
             } else {
-                (["[sp, #112]", "[sp, #160]"], "add x10, x10, #144", "add x10, x10, #96")
+                (["[sp, #112]", "[sp, #160]"], "add x10, sp, #144", "add x10, sp, #96")
             };
             for offset in owners { assert!(asm.contains(offset), "{target}: {asm}"); }
             assert!(asm.rfind(detach_inner).unwrap() < asm.rfind(detach_outer).unwrap(), "{target}: {asm}");
