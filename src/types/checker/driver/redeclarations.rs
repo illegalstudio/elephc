@@ -16,8 +16,9 @@
 //!   the first one. Every other declaration of the name fails when PHP declares it (`Cannot
 //!   redeclare ...`), so its error is at its own statement and ordered there, as a declaration
 //!   PHP links at run time.
-//! - A parent the program does not declare is bound when it is a builtin class-like
-//!   (`elephc_builtin_contract::lookup_class`); an unknown parent leaves the class to run time.
+//! - A parent is bound when an earlier declaration of it is early-bound, or, with no earlier
+//!   declaration, when it is a builtin class-like (`elephc_builtin_contract::lookup_class`); an
+//!   unknown parent leaves the class to run time.
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,8 +50,10 @@ struct Declaration<'a> {
 pub(super) fn redeclarations(program: &Program) -> Redeclarations {
     let mut declarations: Vec<Declaration<'_>> = Vec::new();
     collect_declarations(program, &mut declarations);
-    let declared: HashSet<String> = declarations.iter().map(|declaration| declaration.key.clone()).collect();
-    // Whether each key has an early-bound declaration so far, in source order.
+    // The keys declared so far, and those with an early-bound declaration so far, in source
+    // order: a parent is bound when an earlier declaration of it is, or, with none earlier, when
+    // it is a builtin class-like (a later declaration does not hide the builtin).
+    let mut seen: HashSet<String> = HashSet::new();
     let mut bound: HashSet<String> = HashSet::new();
     for index in 0..declarations.len() {
         let early_bound = match &declarations[index].stmt.kind {
@@ -61,7 +64,7 @@ pub(super) fn redeclarations(program: &Program) -> Redeclarations {
                     && implements.is_empty()
                     && extends.as_ref().is_none_or(|parent| {
                         let key = php_symbol_key(parent.as_str());
-                        if declared.contains(&key) {
+                        if seen.contains(&key) {
                             bound.contains(&key)
                         } else {
                             elephc_builtin_contract::lookup_class(parent.as_str()).is_some()
@@ -71,6 +74,7 @@ pub(super) fn redeclarations(program: &Program) -> Redeclarations {
             _ => false,
         };
         declarations[index].early_bound = early_bound;
+        seen.insert(declarations[index].key.clone());
         if early_bound {
             bound.insert(declarations[index].key.clone());
         }
@@ -123,5 +127,32 @@ fn collect_declarations<'a>(stmts: &'a [Stmt], declarations: &mut Vec<Declaratio
             StmtKind::NamespaceBlock { body, .. } => collect_declarations(body, declarations),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redeclarations;
+
+    /// The messages of the declarations `source` rejects, in source order.
+    fn rejected_messages(source: &str) -> Vec<String> {
+        let tokens = crate::lexer::tokenize(source).expect("test source must tokenize");
+        let program = crate::parser::parse(&tokens).expect("test source must parse");
+        redeclarations(&program).errors.into_iter().map(|(_, error)| error.message).collect()
+    }
+
+    /// A child of a builtin early-binds before a later declaration of the builtin's name, so the
+    /// later declaration does not hide the builtin: the class keeps `E` (elephc rejects the
+    /// redeclared builtin itself before checking).
+    #[test]
+    fn later_declaration_does_not_hide_a_builtin_parent() {
+        assert_eq!(
+            rejected_messages("<?php enum E { case A; } class E extends Exception {} class Exception {}"),
+            ["Duplicate class or enum declaration: E"],
+        );
+        assert_eq!(
+            rejected_messages("<?php interface E extends Iterator {} class E extends Exception {} class Exception {}"),
+            ["Duplicate interface declaration: E"],
+        );
     }
 }

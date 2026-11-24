@@ -167,6 +167,26 @@ pub fn flatten_classes(
                     errors.extend(error.flatten());
                     continue;
                 }
+                // A redeclaration never binds its traits: PHP compiles its body (a duplicate member
+                // or a private final constant is still an error), then rejects it.
+                if rejected.contains(&stmt.span) {
+                    flattened.push(FlattenedClass {
+                        name: name.clone(),
+                        span: stmt.span,
+                        extends: extends.as_ref().map(|name| name.as_str().to_string()),
+                        implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
+                        is_abstract: *is_abstract,
+                        is_final: *is_final,
+                        is_readonly_class: *is_readonly_class,
+                        properties: properties.clone(),
+                        methods: methods.clone(),
+                        attributes: stmt.attributes.clone(),
+                        constants: constants.clone(),
+                        used_traits: Vec::new(),
+                        trait_aliases: Vec::new(),
+                    });
+                    continue;
+                }
                 let (imported_props, imported_methods, imported_constants, bound_methods) =
                     match expand::resolve_trait_uses(
                         trait_uses,
@@ -270,6 +290,10 @@ pub fn flatten_classes(
                     validation::validate_direct_members(&[], methods, stmt.span, name)
                 {
                     errors.extend(error.flatten());
+                    continue;
+                }
+                // A redeclaration never binds its traits (see the class arm).
+                if rejected.contains(&stmt.span) {
                     continue;
                 }
                 let (imported_props, imported_methods, imported_constants, bound_methods) =

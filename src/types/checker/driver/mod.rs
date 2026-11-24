@@ -372,7 +372,7 @@ pub(super) fn check_types_impl(
     // Enums are built after every class, so a class method may return an enum that only its
     // declaration can relate to the interface the parent method returns. Every enum also
     // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
-    for stmt in program {
+    for stmt in program.iter().filter(|stmt| !rejected.contains(&stmt.span)) {
         if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
             let implements = implements
                 .iter()

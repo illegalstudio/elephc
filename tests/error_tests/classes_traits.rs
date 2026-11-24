@@ -1996,6 +1996,12 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         ("interface I {}\nclass E implements I {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface E {}".to_string(), "Duplicate class declaration: E"),
         ("interface J {}\ninterface E extends J {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I {}\nclass E implements I {}".to_string(), "bar"),
         ("interface J {}\ninterface E extends J {}\nclass E {}".to_string(), "Duplicate interface declaration: E"),
+        // A redeclaration never binds its traits, but its body is still compiled.
+        ("enum E { case A; }\ntrait A { public function foo() {} }\ntrait B { public function foo() {} }\nclass E { use A, B; }".to_string(), "Duplicate class declaration: E"),
+        ("enum E { case A; }\nclass E { use Missing; }".to_string(), "Duplicate class declaration: E"),
+        ("trait E {}\ntrait A { public function foo() {} }\ntrait B { public function foo() {} }\nenum E { use A, B; case X; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("class B { private final const X = 1; }\ninterface I {}\nenum E { case A; }\ntrait A { public function foo() {} }\ntrait C { public function foo() {} }\nclass E implements I { use A, C; }".to_string(), "Private constant B::X cannot be final"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I { public function foo() {} public function foo() {} }".to_string(), "Duplicate method declaration in E: foo"),
         ("enum E { case A; }\ntrait Q {}\ntrait E { use Q; }".to_string(), "Duplicate trait declaration: E"),
         ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface J {}\ninterface E extends J {}".to_string(), "bar"),
         ("enum E { case A; }\ninterface E extends Missing {}".to_string(), "Duplicate interface declaration: E"),
