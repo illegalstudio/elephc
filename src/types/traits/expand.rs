@@ -194,6 +194,7 @@ pub(super) fn resolve_trait_uses(
                     .push(ImportedMethod {
                         source_trait: trait_name.to_string(),
                         origin,
+                        method_name: method.name.clone(),
                         decl: method,
                         binding: (trait_position, method_position, usize::MAX),
                     });
@@ -299,6 +300,7 @@ pub(super) fn resolve_trait_uses(
                         alias_methods.push(ImportedMethod {
                             source_trait: selected_trait,
                             origin: imported.origin.clone(),
+                            method_name: imported.method_name.clone(),
                             decl: alias_decl,
                             binding: (imported.binding.0, imported.binding.1, alias_position),
                         });

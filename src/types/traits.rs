@@ -83,6 +83,9 @@ struct TraitMethod {
 struct ImportedMethod {
     source_trait: String,
     origin: String,
+    /// The method's name in `source_trait`, which an `as` alias does not change (`decl.name`
+    /// is the alias): PHP names a rejected alias by it in a collision.
+    method_name: String,
     decl: ClassMethod,
     binding: (usize, usize, usize),
 }
@@ -112,7 +115,9 @@ pub fn flatten_classes(
 ) {
     let mut trait_map = HashMap::new();
     let mut trait_keys = HashSet::new();
-    let mut class_like_keys = HashSet::new();
+    // Each class-like name with the span of an enum that declared it: PHP never early-binds an
+    // enum, so a later trait without `use`, which it binds while compiling, takes the name.
+    let mut class_like_keys: HashMap<String, Option<Span>> = HashMap::new();
     let mut errors = Vec::new();
     let mut redeclarations = Vec::new();
     let mut final_abstract_imports = Vec::new();
@@ -130,13 +135,22 @@ pub fn flatten_classes(
                 constants,
             } => {
                 let trait_key = php_symbol_key(name);
-                if class_like_keys.contains(&trait_key) || !trait_keys.insert(trait_key) {
+                let earlier_enum = class_like_keys.get(&trait_key).copied().flatten();
+                if let Some(enum_span) = earlier_enum.filter(|_| trait_uses.is_empty()) {
+                    // The enum is the redeclaration, when PHP declares it.
+                    redeclarations.push(CompileError::new(
+                        enum_span,
+                        &format!("Duplicate trait declaration: {}", name),
+                    ));
+                    class_like_keys.remove(&trait_key);
+                } else if class_like_keys.contains_key(&trait_key) || trait_keys.contains(&trait_key) {
                     redeclarations.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate trait declaration: {}", name),
                     ));
                     continue;
                 }
+                trait_keys.insert(trait_key);
                 trait_map.insert(
                     name.clone(),
                     TraitDeclInfo {
@@ -159,7 +173,8 @@ pub fn flatten_classes(
                     ));
                     continue;
                 }
-                class_like_keys.insert(class_like_key);
+                let enum_span = matches!(stmt.kind, StmtKind::EnumDecl { .. }).then_some(stmt.span);
+                class_like_keys.entry(class_like_key).or_insert(enum_span);
             }
             _ => {}
         }

@@ -1981,6 +1981,15 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         // An enum whose backed case values fail is still declared.
         ("enum E: int { case A = \"x\"; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
         ("enum E: int { case A = 1; case C = 1; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
+        // An enum never binds while PHP compiles: a later trait without `use` takes its name,
+        // and a later interface with parents loses to it.
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait E {}".to_string(), "Duplicate trait declaration: E"),
+        ("enum E { case A; }\ntrait Q {}\ntrait E { use Q; }".to_string(), "Duplicate trait declaration: E"),
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface J {}\ninterface E extends J {}".to_string(), "bar"),
+        ("enum E { case A; }\ninterface E extends Missing {}".to_string(), "Duplicate interface declaration: E"),
+        // A rejected alias is named by its method, then by the alias it would take.
+        ("trait A { public function foo() {} }\ntrait B { public function bar() {} }\nclass C { use A, B { A::foo as baz; B::bar as final baz; } }".to_string(), "Trait method B::bar has not been applied as C::baz, because of collision with A::baz"),
+        ("trait A { public function foo() {} }\ntrait B { public function bar() {} }\nclass C { use A, B { A::foo as baz; B::bar as baz; } }".to_string(), "Trait method B::bar has not been applied as C::baz, because of collision with A::baz"),
     ] {
         let error = check_source_full(&format!("<?php\n{source}\n"))
             .err()

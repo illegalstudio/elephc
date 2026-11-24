@@ -282,7 +282,8 @@ pub(super) fn is_same_trait_method(
 }
 
 /// PHP's error for two different trait methods with one name: `rejected` is the later one,
-/// which is not applied.
+/// which is not applied, named by its method in its trait and then by the name it would take
+/// (`Trait method B::bar has not been applied as C::baz` for `B::bar as baz`).
 pub(super) fn trait_method_collision(
     span: Span,
     owner_label: &str,
@@ -297,7 +298,7 @@ pub(super) fn trait_method_collision(
         &format!(
             "Trait method {}::{} has not been applied as {}::{}, because of collision with {}::{}",
             rejected.source_trait,
-            rejected.decl.name,
+            rejected.method_name,
             owner,
             rejected.decl.name,
             applied.source_trait,

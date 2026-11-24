@@ -176,6 +176,16 @@ pub(super) fn check_types_impl(
     }
     let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::new();
     checker.declared_classes = class_map.keys().cloned().collect();
+    // The first enum statement of each name: PHP declares an enum and an interface with parents
+    // in source order, so the later of the two is the redeclaration.
+    let mut enum_statements: HashMap<String, crate::span::Span> = HashMap::new();
+    for stmt in program {
+        if let StmtKind::EnumDecl { name, .. } = &stmt.kind {
+            enum_statements.entry(php_symbol_key(name)).or_insert(stmt.span);
+        }
+    }
+    let statement_position =
+        |span: &crate::span::Span| statement_positions.get(span).copied().unwrap_or(usize::MAX);
     for stmt in program {
         if let StmtKind::InterfaceDecl {
             generics: _,
@@ -187,15 +197,20 @@ pub(super) fn check_types_impl(
         } = &stmt.kind
         {
             let interface_key = php_symbol_key(name);
-            if interface_map
-                .keys()
-                .any(|existing| php_symbol_key(existing) == interface_key)
+            let after_enum = !extends.is_empty()
+                && enum_statements.get(&interface_key).is_some_and(|enum_span| {
+                    statement_position(enum_span) < statement_position(&stmt.span)
+                });
+            if after_enum
+                || interface_map
+                    .keys()
+                    .any(|existing| php_symbol_key(existing) == interface_key)
                 || class_map
                     .keys()
                     .any(|existing| php_symbol_key(existing) == interface_key)
             {
                 linked.push((
-                    (true, statement_positions.get(&stmt.span).copied().unwrap_or(usize::MAX)),
+                    (true, statement_position(&stmt.span)),
                     CompileError::new(
                         stmt.span,
                         &format!("Duplicate interface declaration: {}", name),
