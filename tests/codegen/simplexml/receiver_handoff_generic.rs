@@ -11,11 +11,20 @@
 
 use crate::support::*;
 
-/// Generic field types and dynamic entries hand off actual XML children in AOT and opaque eval.
-fn assert_generic_property_handoff(eval_mode: bool) {
-    if skip_without_xml_native("test_simplexml_generic_property_handoff_bundle") { return; }
-    let source = r#"<?php
+/// Shared definitions used by both the holder and lifetime cases.
+const GENERIC_HANDOFF_SETUP: &str = r#"
 interface GenericXmlHolderMarker {}
+class GenericXmlReadonly implements GenericXmlHolderMarker {
+    private mixed $view;
+    public readonly mixed $items;
+    public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'readonly:', count($this->view), ':', $this->view[0], '|'; }
+}
+function GenericXmlNode(): SimpleXMLElement { return (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+"#;
+
+/// Declared, opaque, and dynamic holders exercise append, set and compound writes.
+const GENERIC_HANDOFF_HOLDERS: (&str, &str) = (r#"
 class GenericXmlMixed implements GenericXmlHolderMarker {
     private mixed $view;
     public mixed $items;
@@ -52,12 +61,6 @@ class GenericXmlUntyped implements GenericXmlHolderMarker {
     public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
     public function __destruct() { echo 'untyped:', count($this->view), ':', $this->view[0], '|'; }
 }
-class GenericXmlReadonly implements GenericXmlHolderMarker {
-    private mixed $view;
-    public readonly mixed $items;
-    public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
-    public function __destruct() { echo 'readonly:', count($this->view), ':', $this->view[0], '|'; }
-}
 class GenericXmlPrivateSet implements GenericXmlHolderMarker {
     private mixed $view;
     public private(set) object $items;
@@ -74,7 +77,6 @@ class GenericXmlGetter implements GenericXmlHolderMarker {
     public function __destruct() { $items = get_object_vars($this)['items']; echo 'getter:', count($items), ':', $items[0], '|'; }
 }
 function GenericXmlSeed(mixed $box, mixed $node): void { $box->items = $node; }
-function GenericXmlNode(): SimpleXMLElement { return (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
 function GenericXmlMakeMixed(): mixed { return new GenericXmlMixed(GenericXmlNode()); }
 function GenericXmlMakeObject(): mixed { return new GenericXmlObject(GenericXmlNode()); }
 function GenericXmlMakeCountable(): mixed { return new GenericXmlCountable(GenericXmlNode()); }
@@ -121,6 +123,11 @@ GenericXmlMakeGetter()->items[0] .= 'x';
 GenericXmlKnown()->items[] = 2;
 GenericXmlErasedObject()->items[] = 2;
 GenericXmlErasedInterface()->items[] = 2;
+"#,
+    "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|");
+
+/// Parent destruction, fallback arrays and getter hooks preserve selected child ownership.
+const GENERIC_HANDOFF_LIFETIMES: (&str, &str) = (r#"
 class GenericXmlMutating {
     public function __construct(public mixed $items) {}
     public function __destruct() { $this->items[0] = 'D'; }
@@ -183,6 +190,11 @@ $genericKey = 0;
 $keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
 GenericXmlHookErased($keyRoot->item)->items[$genericKey] = 'S';
 echo 'hook-key-erased:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+"#,
+    "final:S|array:1|shared:2|array:2|readonly:1:1|Cannot indirectly modify readonly property GenericXmlReadonly::$items|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|");
+
+/// Private and protected slots, magic access and literal or computed names.
+const GENERIC_HANDOFF_VISIBILITY: (&str, &str) = (r#"
 class GenericXmlVisProtected { protected mixed $items; public function __construct(mixed $node) { $this->items = $node; } }
 class GenericXmlVisPrivate { private mixed $items; public function __construct(mixed $node) { $this->items = $node; } }
 class GenericXmlVisMagic {
@@ -219,31 +231,58 @@ $visMagicPrivate->items[0] = 'Q'; echo 'magic-private-literal:', $visHidden->ite
 try { $visProtected->items[] = 'S'; } catch (Throwable $visError) { echo $visError->getMessage(), '|'; }
 try { $visPrivate->items[] = 'S'; } catch (Throwable $visError) { echo $visError->getMessage(), '|'; }
 echo 'append-hidden:', count($visHidden->item), ':', $visHidden->item[0], '|';
-"#;
-    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|shared:2|array:2|readonly:1:1|Cannot indirectly modify readonly property GenericXmlReadonly::$items|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|";
+"#,
+    "Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|");
+
+/// Compiles the selected cases together and checks their ordered output and heap balance.
+fn assert_generic_property_handoff(setup: &str, cases: &[(&str, &str)], eval_mode: bool) {
+    if skip_without_xml_native("test_simplexml_generic_property_handoff_bundle") { return; }
+    let mut source = String::from("<?php\n");
+    source.push_str(setup);
+    let mut expected = String::new();
+    for &(body, output) in cases {
+        source.push_str(body);
+        expected.push_str(output);
+    }
     let (source, expected) = if eval_mode {
         let renamed = source.replace("GenericXml", "EvalGenericXml");
         let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
         (format!("<?php class GenericHandoffXmlCapability extends SimpleXMLElement {{}} \
             $source = $argc > 0 ? '{body}' : ''; eval($source);"),
             expected.replace("GenericXml", "EvalGenericXml"))
-    } else { (source.to_string(), expected.to_string()) };
+    } else { (source, expected) };
     let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Native handoff cases compile without importing opaque eval's complete class catalog.
+/// Native handoff covers declared, erased and dynamic holder layouts.
 #[test]
 fn test_simplexml_generic_property_handoff_native_bundle() {
-    assert_generic_property_handoff(false);
+    assert_generic_property_handoff(GENERIC_HANDOFF_SETUP, &[GENERIC_HANDOFF_HOLDERS], false);
 }
 
-/// Opaque eval retains every handoff case without duplicating its classes as native declarations.
+/// Native handoff checks destructors, fallback arrays, hooks and computed keys together.
+#[test]
+fn test_simplexml_generic_property_handoff_lifetime_native_bundle() {
+    assert_generic_property_handoff(GENERIC_HANDOFF_SETUP, &[GENERIC_HANDOFF_LIFETIMES], false);
+}
+
+/// Native handoff keeps the independent property visibility cases in their own program.
+#[test]
+fn test_simplexml_generic_property_handoff_visibility_native_bundle() {
+    assert_generic_property_handoff("", &[GENERIC_HANDOFF_VISIBILITY], false);
+}
+
+/// Opaque eval retains all handoff cases in one program.
 #[test]
 fn test_simplexml_generic_property_handoff_eval_bundle() {
-    assert_generic_property_handoff(true);
+    assert_generic_property_handoff(
+        GENERIC_HANDOFF_SETUP,
+        &[GENERIC_HANDOFF_HOLDERS, GENERIC_HANDOFF_LIFETIMES, GENERIC_HANDOFF_VISIBILITY],
+        true,
+    );
 }
 
 /// Ordinary magic and dynamic names select one accessible child for indexed writes.

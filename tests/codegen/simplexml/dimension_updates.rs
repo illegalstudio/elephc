@@ -11,9 +11,19 @@
 use crate::support::*;
 
 /// Computed XML indexed incdec keeps native no-writeback with one name conversion per update.
-/// Opaque eval calls compiled incdec helpers and interprets supported indexed compound writes.
-fn assert_computed_indexed_incdec(eval_mode: bool) {
+/// Opaque eval calls the compiled incdec helper and interprets the indexed compound write.
+fn assert_computed_indexed_incdec(eval_receiver: Option<&str>) {
     if skip_without_xml_native("test_simplexml_computed_indexed_incdec_bundle") { return; }
+    let eval_mode = eval_receiver.is_some();
+    let receivers: Vec<_> = [
+        ("Typed", "SimpleXMLElement", "SimpleXMLElement"),
+        ("Mixed", "mixed", "SimpleXMLElement"),
+        ("Child", "ComputedXmlChild", "ComputedXmlChild"),
+    ].into_iter()
+        .filter(|(suffix, _, _)| eval_receiver.is_none_or(|receiver| receiver == *suffix))
+        .collect();
+    assert!(!receivers.is_empty());
+
     let mut source = String::from(r#"<?php
 class ComputedXmlChild extends SimpleXMLElement {}
 class ComputedXmlName {
@@ -21,67 +31,75 @@ class ComputedXmlName {
     public function __destruct() { echo 'd|'; }
 }
 function computedXmlName(int $kind): mixed { echo 'f|'; return $kind === 0 ? 'a' : new ComputedXmlName(); }
-function computedXmlTyped(SimpleXMLElement $node): SimpleXMLElement { echo 'g|'; return $node; }
-function computedXmlMixed(mixed $node): mixed { echo 'g|'; return $node; }
-function computedXmlChild(ComputedXmlChild $node): ComputedXmlChild { echo 'g|'; return $node; }
 "#);
-    for (suffix, ty) in [("Typed", "SimpleXMLElement"), ("Mixed", "mixed"), ("Child", "ComputedXmlChild")] {
+    let mut calls = String::from("for ($kind = 0; $kind < 2; $kind++) {\n");
+    for &(suffix, ty, class) in &receivers {
         source.push_str(&format!(r#"
+function computedXml{suffix}({ty} $node): {ty} {{ echo 'g|'; return $node; }}
 function updateComputedXml{suffix}({ty} $node, int $kind): void {{
     computedXml{suffix}($node)->{{computedXmlName($kind)}}[0]++;
     echo (string)$node->a, '|';
     --computedXml{suffix}($node)->{{computedXmlName($kind)}}[0];
     echo (string)$node->a, '|';
-    computedXml{suffix}($node)->{{computedXmlName($kind)}}[0] += 2;
-    echo (string)$node->a, '|';
-}}
 "#));
-    }
-    source.push_str(r#"
-for ($kind = 0; $kind < 2; $kind++) {
-    updateComputedXmlTyped(new SimpleXMLElement('<r><a>5</a></r>'), $kind);
-    updateComputedXmlMixed(new SimpleXMLElement('<r><a>5</a></r>'), $kind);
-    updateComputedXmlChild(new ComputedXmlChild('<r><a>5</a></r>'), $kind);
-}
+        let compound = format!(r#"    computedXml{suffix}($node)->{{computedXmlName($kind)}}[0] += 2;
+    echo (string)$node->a, '|';
 "#);
-    let renamed = source.replace("ComputedXml", "EvalComputedXml").replace("computedXml", "evalComputedXml");
-    let (setup, _) = renamed.split_once("for ($kind = 0; $kind < 2; $kind++)").unwrap();
-    let mut setup = setup.to_string();
-    let mut calls = String::from("for ($kind = 0; $kind < 2; $kind++) {\n");
-    for (suffix, class) in [("Typed", "SimpleXMLElement"), ("Mixed", "SimpleXMLElement"), ("Child", "EvalComputedXmlChild")] {
-        // The compiled helper keeps actual ++/--; the compound operation stays inside eval.
-        let compound = format!("    evalComputedXml{suffix}($node)->{{evalComputedXmlName($kind)}}[0] += 2;\n    echo (string)$node->a, '|';\n");
-        assert!(setup.contains(&compound));
-        setup = setup.replace(&compound, "");
-        calls.push_str(&format!(r#"
+        if eval_mode {
+            calls.push_str(&format!(r#"
     $node = new {class}('<r><a>5</a></r>');
-    updateEvalComputedXml{suffix}($node, $kind);
-    evalComputedXml{suffix}($node)->{{evalComputedXmlName($kind)}}[0] += 2;
-    echo (string)$node->a, '|';
-"#));
+    updateComputedXml{suffix}($node, $kind);
+{compound}"#));
+        } else {
+            source.push_str(&compound);
+            calls.push_str(&format!(
+                "    updateComputedXml{suffix}(new {class}('<r><a>5</a></r>'), $kind);\n"
+            ));
+        }
+        source.push_str("}\n");
     }
-    calls.push_str("}\nunset($node);\n");
-    let body = calls.replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = format!("{setup}\n$code = $argc > 0 ? '{body}' : ''; eval($code);");
-    let expected = ["g|f|5|g|f|5|g|f|7|".repeat(3),
-        "g|f|s|d|5|g|f|s|d|5|g|f|s|d|7|".repeat(3)].concat();
-    let source = if eval_mode { &eval } else { &source };
-    let output = compile_and_run_with_heap_debug(source);
+    calls.push_str("}\n");
+    if eval_mode {
+        calls.push_str("unset($node);\n");
+        source = source.replace("ComputedXml", "EvalComputedXml").replace("computedXml", "evalComputedXml");
+        let body = calls.replace("ComputedXml", "EvalComputedXml").replace("computedXml", "evalComputedXml")
+            .replace('\\', "\\\\").replace('\'', "\\'");
+        source.push_str(&format!("\n$code = $argc > 0 ? '{body}' : ''; eval($code);"));
+    } else {
+        source.push_str(&calls);
+    }
+    let expected = [
+        "g|f|5|g|f|5|g|f|7|".repeat(receivers.len()),
+        "g|f|s|d|5|g|f|s|d|5|g|f|s|d|7|".repeat(receivers.len()),
+    ].concat();
+    let output = compile_and_run_with_heap_debug(&source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, expected);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
-/// Native indexed updates keep every typed, erased and subclass case in their own program.
+/// Native indexed updates keep every typed, erased and subclass case in one program.
 #[test]
 fn test_simplexml_computed_indexed_incdec_native_bundle() {
-    assert_computed_indexed_incdec(false);
+    assert_computed_indexed_incdec(None);
 }
 
-/// Eval still invokes compiled incdec helpers and performs its own compound writes.
+/// Eval calls compiled increment and decrement helpers for a declared XML receiver.
 #[test]
-fn test_simplexml_computed_indexed_incdec_eval_bundle() {
-    assert_computed_indexed_incdec(true);
+fn test_simplexml_computed_indexed_incdec_typed_eval_bundle() {
+    assert_computed_indexed_incdec(Some("Typed"));
+}
+
+/// Eval calls compiled increment and decrement helpers for a receiver erased to mixed.
+#[test]
+fn test_simplexml_computed_indexed_incdec_mixed_eval_bundle() {
+    assert_computed_indexed_incdec(Some("Mixed"));
+}
+
+/// Eval calls compiled increment and decrement helpers for an XML subclass.
+#[test]
+fn test_simplexml_computed_indexed_incdec_subclass_eval_bundle() {
+    assert_computed_indexed_incdec(Some("Child"));
 }
 
 /// Local, static and array-held XML incdec selects without writing its numeric result back.
