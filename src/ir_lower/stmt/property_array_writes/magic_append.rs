@@ -63,7 +63,7 @@ pub(super) fn lower(
 }
 
 /// Refuses a missing overloaded lvalue until receiver-to-result lifetime handoff is supported.
-fn refuse_missing_getter(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+pub(super) fn refuse_missing_getter(ctx: &mut LoweringContext<'_, '_>, span: Span) {
     lower_throw_access_exception(ctx, "Error", "Unsupported property append through an overloaded __get()", span);
 }
 

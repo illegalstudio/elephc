@@ -219,6 +219,14 @@ pub(super) fn attached_append(
         Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
         effects_lookup::runtime_effects(), Some(span));
     let (array, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
+    append_to_hash_cell(ctx, array, value, span);
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+}
+
+/// Appends `value` to a fetched dynamic hash cell (the class-independent half of `attached_append`).
+pub(super) fn append_to_hash_cell(
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: LoweredValue, span: Span,
+) {
     let borrowed = ctx.emit_value(Op::Borrow, vec![array.value], None, PhpType::Mixed,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
@@ -229,7 +237,6 @@ pub(super) fn attached_append(
         ctx.emit_void(Op::MixedArrayAppend, vec![borrowed.value, value.value], None,
             Op::MixedArrayAppend.default_effects(), Some(span));
     }
-    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
 
 /// Appends through an ordinary runtime property with an independent COW cell and explicit writeback.

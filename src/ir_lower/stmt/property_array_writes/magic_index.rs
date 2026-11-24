@@ -307,7 +307,7 @@ fn kind(ctx: &LoweringContext<'_, '_>, class: &str, info: &crate::types::ClassIn
 
 /// Parks a fetched dynamic property hash cell in the slot `cell` shared by every arm, as
 /// `root_owned_call_operand` parks one in a slot of its own, and publishes its owner record.
-fn park_hash_cell(
+pub(super) fn park_hash_cell(
     ctx: &mut LoweringContext<'_, '_>, cell: &str, slot: crate::ir::LocalSlotId, array: LoweredValue, span: Span,
 ) {
     let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, array, Some(span));

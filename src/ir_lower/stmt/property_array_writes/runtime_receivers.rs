@@ -32,7 +32,7 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, span: Span, diagnosed: bool,
 ) -> bool {
-    dispatch(ctx, object, property, span, FetchMode::Write, false, false, |ctx, receiver, _| {
+    dispatch(ctx, object, property, span, FetchMode::Write, false, false, None, |ctx, receiver, _| {
         lower_property_array_assign_value_direct(ctx, receiver, property, index, value, span, diagnosed);
     })
 }
@@ -42,7 +42,7 @@ pub(super) fn lower_append(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     value: LoweredValue, span: Span,
 ) -> bool {
-    dispatch(ctx, object, property, span, FetchMode::Write, false, true, |ctx, receiver, selected| {
+    dispatch(ctx, object, property, span, FetchMode::Write, false, true, Some(value), |ctx, receiver, selected| {
         if selected {
             if !magic_append::lower(ctx, receiver, property, value, span) {
                 lower_property_array_push_value_direct(ctx, receiver, property, value, span);
@@ -75,14 +75,14 @@ pub(super) fn has_dynamic_slot(
 pub(super) fn guard_readwrite(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
 ) {
-    dispatch(ctx, object, property, span, FetchMode::ReadWrite, true, false, |_, _, _| {});
+    dispatch(ctx, object, property, span, FetchMode::ReadWrite, true, false, None, |_, _, _| {});
 }
 
 /// Refuses invalid null initialization before append or nested write traversal selects storage.
 pub(super) fn guard_write(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
 ) {
-    dispatch(ctx, object, property, span, FetchMode::Write, true, false, |_, _, _| {});
+    dispatch(ctx, object, property, span, FetchMode::Write, true, false, None, |_, _, _| {});
 }
 
 /// Recognizes work for one fetch mode without evaluating any PHP input.
@@ -162,7 +162,7 @@ pub(super) fn has_declared_readwrite_candidate(
 /// Shares exact-class selection between final stores and guards that precede element reads.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
-    mode: FetchMode, guard_only: bool, include_dynamic: bool,
+    mode: FetchMode, guard_only: bool, include_dynamic: bool, append_value: Option<LoweredValue>,
     mut apply: impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue, bool),
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
@@ -209,19 +209,25 @@ fn dispatch(
     // container's `privates`, and an arm per class made the helper 200 000 instructions.
     let mut groups: Vec<(String, Option<SlotGuard>, bool, Vec<String>)> = Vec::new();
     let mut by_key: crate::fast_hash::FastMap<String, usize> = Default::default();
+    // Classes written through their own dynamic hash cell, and whether each is overloaded.
+    let mut special: crate::fast_hash::FastMap<String, bool> = Default::default();
     for (class, null_error, writable) in classes {
         let info = &ctx.classes[&class];
         let key = if include_dynamic && (dynamic_slot(info, &class, property)
             || magic_append::is_candidate(ctx, &class, info, property)) {
-            // Dynamic storage and overloaded names are written by name through the runtime, but
-            // the hash sits at an offset of the class layout (its property count) and the creation
-            // diagnostic names the class: classes share an arm only when both are the same.
+            // Dynamic storage and overloaded names are written by name through the runtime, but the
+            // hash sits at an offset of the class layout and the creation diagnostic names the
+            // class, so each such class fetches its own hash cell; the append that follows is ONE
+            // shared block (`park_hash_cell`). A name no hash can hold is refused alike by all.
             let hashed = info.dynamic_property_hash_is_name_addressable()
                 || crate::types::checker::builtin_stdclass::is_stdclass(&class);
-            let layout = if crate::types::checker::builtin_stdclass::is_stdclass(&class) { 0 } else { info.properties.len() };
-            let diagnostic = if info.dynamic_property_creation_is_deprecated() { class.as_str() } else { "" };
-            let kind = if dynamic_slot(info, &class, property) { "dynamic" } else if hashed { "magic-hash" } else { "magic-bare" };
-            Some(if kind == "magic-bare" { kind.to_string() } else { format!("{kind}|{layout}|{diagnostic}") })
+            let dynamic = dynamic_slot(info, &class, property);
+            if append_value.is_some() && (dynamic || hashed) {
+                special.insert(class.clone(), !dynamic);
+                Some(format!("class|{class}"))
+            } else {
+                Some("magic-bare".to_string())
+            }
         } else {
             let declaring = info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class.clone());
             let shape = object_type_property_type(ctx, &PhpType::Object(class.clone()), property);
@@ -301,6 +307,11 @@ fn dispatch(
         None
     };
     let mut merged = initial.clone();
+    // The slot the fetched hash cell is parked in, the block that appends to it, and the block
+    // that refuses an overloaded name with no stored entry.
+    let mut hash_cell: Option<(String, crate::ir::LocalSlotId, BlockId)> = None;
+    let mut hash_cell_state = None;
+    let mut refusal: Option<BlockId> = None;
     for (class, null_error, writable, members) in groups {
         let matched = ctx.builder.create_named_block("property.array.declared", vec![]);
         let next = ctx.builder.create_named_block("property.array.next_class", vec![]);
@@ -362,6 +373,7 @@ fn dispatch(
             if miss != next { ctx.builder.position_at_end(miss); }
         }
         ctx.builder.position_at_end(matched);
+        let own_hash = special.get(&class).copied();
         let concrete = PhpType::Object(class);
         // The object was unboxed once to read its class id; an arm views that same object as its class.
         let receiver = if let Some(unboxed) = unboxed_object {
@@ -375,6 +387,45 @@ fn dispatch(
                 Op::Borrow.default_effects(), Some(span))
         };
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+        if let (Some(value), Some(overloaded)) = (append_value, own_hash) {
+            let _ = value;
+            let property_name = {
+                let data = ctx.intern_string(property);
+                ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+                    Op::ConstStr.default_effects(), Some(span))
+            };
+            if overloaded {
+                // An entry that is not stored yet would be read through __get: refused.
+                let present = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, property_name.value],
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashContains)), PhpType::Bool,
+                    effects_lookup::runtime_effects(), Some(span));
+                let stored = ctx.builder.create_named_block("property.array.dynamic_stored", vec![]);
+                let refuse = *refusal.get_or_insert_with(||
+                    ctx.builder.create_named_block("property.array.getter_refused", vec![]));
+                ctx.builder.terminate(Terminator::CondBr { cond: present.value,
+                    then_target: stored, then_args: vec![], else_target: refuse, else_args: vec![] });
+                ctx.builder.position_at_end(stored);
+            }
+            let (cell, cell_slot, mutation) = match &hash_cell {
+                Some((cell, slot, mutation)) => (cell.clone(), *slot, *mutation),
+                None => {
+                    let cell = ctx.declare_hidden_temp(PhpType::Mixed);
+                    let slot = ctx.local_slots[&cell];
+                    let mutation = ctx.builder.create_named_block("property.array.hash_mutation", vec![]);
+                    hash_cell = Some((cell.clone(), slot, mutation));
+                    (cell, slot, mutation)
+                }
+            };
+            let array = ctx.emit_owned_value(Op::RuntimeCall, vec![receiver.value, property_name.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
+                effects_lookup::runtime_effects(), Some(span));
+            magic_index::park_hash_cell(ctx, &cell, cell_slot, array, span);
+            hash_cell_state.get_or_insert_with(|| ctx.initialized_slots_snapshot());
+            ctx.builder.terminate(Terminator::Br { target: mutation, args: vec![] });
+            ctx.builder.position_at_end(next);
+            ctx.restore_initialized_slots(before);
+            continue;
+        }
         if let Some(guard) = null_error {
             apply_slot_guard(ctx, receiver, property, &guard, span, mode);
         }
@@ -387,6 +438,21 @@ fn dispatch(
         ctx.restore_initialized_slots(before);
     }
     ctx.builder.terminate(Terminator::Br { target: missing, args: vec![] });
+    if let (Some((cell, slot, mutation)), Some(state), Some(value)) = (&hash_cell, hash_cell_state, append_value) {
+        // The one append of every fetched dynamic property hash cell.
+        ctx.builder.position_at_end(*mutation);
+        ctx.restore_initialized_slots(state);
+        let array = ctx.load_local(cell, Some(span));
+        ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
+        native_xml::append_to_hash_cell(ctx, array, value, span);
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, *slot, span);
+        merged = merged.intersection(&ctx.initialized_slots_snapshot()).copied().collect();
+        ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+    }
+    if let Some(refuse) = refusal {
+        ctx.builder.position_at_end(refuse);
+        magic_append::refuse_missing_getter(ctx, span);
+    }
     ctx.builder.position_at_end(missing);
     ctx.restore_initialized_slots(initial);
     apply(ctx, object, false);
