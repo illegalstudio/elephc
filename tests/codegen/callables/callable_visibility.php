@@ -35,4 +35,16 @@ foreach (["viaCuf", "viaCufa", "viaMap", "viaDirect", "viaUsort"] as $route) {
         catch (Throwable $e) { echo "$route $i: ", get_class($e), ": ", $e->getMessage(), "\n"; }
     }
 }
+class Other {
+    private function hidden() {}
+    public function run(mixed $c) { return $c("id"); }
+    public function viaCuf(mixed $c) { return call_user_func($c, "id"); }
+}
+foreach ([3, 4, 5, 6, 7, 8] as $i) {
+    foreach (["run", "viaCuf"] as $m) {
+        try { (new Other())->$m(opaque($i)); } catch (Throwable $e) { echo "scope $m $i: ", get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+}
+try { (new Other())->run(["H", "spriv"]); } catch (Throwable $e) { echo "literal: ", get_class($e), ": ", $e->getMessage(), "\n"; }
+try { (new Other())->run(["H", "nosuch"]); } catch (Throwable $e) { echo "literal: ", get_class($e), ": ", $e->getMessage(), "\n"; }
 EVAL_LINE

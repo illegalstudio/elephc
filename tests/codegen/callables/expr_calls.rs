@@ -2584,6 +2584,18 @@ fn test_inaccessible_boxed_callables_name_their_visibility_with_eval_linked() {
     assert_eq!(compile_and_run(&source), include_str!("callable_visibility.expected.txt"));
 }
 
+/// `unset($h->item->value)` on a property declared with an interface type (`Root`) works on the
+/// object's real class, also after the property was rewritten between its `instanceof` guard and
+/// the unset (the guard then names no class): no "class that could not be loaded" fatal.
+/// Oracle: `php -n` printed `unset_interface_receiver.expected.txt`.
+#[test]
+fn test_unset_on_an_interface_typed_property_receiver_uses_the_runtime_class() {
+    assert_eq!(
+        compile_and_run(include_str!("unset_interface_receiver.php")),
+        include_str!("unset_interface_receiver.expected.txt")
+    );
+}
+
 /// `iterator_apply()` with an opaque (`mixed`) callback resolves it when the call runs: a valid
 /// name applies, a missing function or a non-callable raises php's `TypeError` with its reason.
 /// Oracle: `php -n` printed `iterator_apply_mixed.expected.txt`.

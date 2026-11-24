@@ -1021,6 +1021,22 @@ pub(in crate::codegen) fn emit_mixed_callable_resolver(
         }
         CallableResolverMiss::DirectCall => InaccessibleMethodError::DirectCall,
     });
+    // The sites that share this body recorded their wording for THEIR function; the body raises
+    // for the same callable, so it records the wording its spec carries for itself. Without it
+    // every miss that has no dedicated diagnostic ended in the uncatchable "callable array did
+    // not resolve to an invokable target" fatal where php throws an `Error` or a `TypeError`.
+    let prefix = match (&spec.miss, spec.string_type_error) {
+        (_, Some(message)) => Some(message.to_string()),
+        (Some(CallableResolverMiss::InvalidCallback(prefix)), None) => Some(prefix.clone()),
+        (Some(CallableResolverMiss::DirectCall), None) => Some(String::new()),
+        _ => None,
+    };
+    if let Some(prefix) = prefix {
+        INVALID_CALLBACK_SITE.with(|site| {
+            *site.borrow_mut() =
+                Some((label.to_string(), helper_value(), InvalidCallbackPrefix::Static(prefix)));
+        });
+    }
     emit_inline_mixed_callable_descriptor_value(
         &mut ctx,
         helper_value(),

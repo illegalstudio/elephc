@@ -150,27 +150,34 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             ("write_static_dynamic", Op::DynamicPropSet),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            // The merged backend publishes a delayed-view write either as the instruction itself or,
-            // for a boxed receiver, as the shared runtime property-write call whose first operand
-            // borrows the boxed receiver (measured in the EIR: `call v22 v23` after a
-            // `property.write.null` / `property.write.present` split). Both write through the
-            // boxed `Root` view and neither retypes the receiver to `Label`.
-            let write = function.instructions.iter().find(|inst| inst.op == op)
-                .or_else(|| function.instructions.iter().find(|inst| inst.op == Op::Call
-                    && function.instructions.iter().any(|producer| producer.result == Some(inst.operands[0])
-                        && producer.op == Op::Borrow)))
-                .unwrap_or_else(|| panic!("{target}: {name}: no {op:?} or boxed-receiver call"));
-            let mut receiver_value = write.operands[0];
+            // The merged backend writes through the shared erased-write helper
+            // (`__eir_erased_write@<form>...@<property>`): the site boxes the `Root` view and calls
+            // the helper with it as the first operand, and the helper's body holds the one write
+            // instruction on a `Mixed` receiver parameter. The site must not write the property
+            // itself, which would be a receiver retyped to `Label`.
+            assert!(function.instructions.iter().all(|inst| inst.op != op),
+                "{target}: {name}: the site must not write through a retyped receiver");
+            let call = function.instructions.iter().find(|inst| super::is_erased_write_call(&module, inst))
+                .unwrap_or_else(|| panic!("{target}: {name}: no erased-write helper call"));
+            let mut receiver_value = call.operands[0];
             if let Some(borrow) = function.instructions.iter()
                 .find(|inst| inst.result == Some(receiver_value) && inst.op == Op::Borrow)
             {
                 receiver_value = borrow.operands[0];
             }
-            let receiver = function.value(receiver_value).unwrap();
-            assert_eq!(receiver.php_type, PhpType::Mixed, "{target}: {name}");
             let boxed = function.instructions.iter().find(|inst| inst.result == Some(receiver_value)).unwrap();
             assert_eq!(boxed.op, Op::MixedBox, "{target}: {name}: delayed runtime view");
             assert_eq!(function.value(boxed.operands[0]).unwrap().php_type, PhpType::Object("Root".into()));
+            let helper_name = match call.immediate {
+                Some(crate::ir::Immediate::Data(id)) => module.data.function_names[id.as_raw() as usize].as_str(),
+                _ => panic!("{target}: {name}: the helper call names no function"),
+            };
+            let helper = module.functions.iter().find(|candidate| candidate.name == helper_name).unwrap();
+            assert_eq!(helper.params[0].php_type, PhpType::Mixed, "{target}: {name}: helper receiver parameter");
+            let write = helper.instructions.iter().find(|inst| inst.op == op)
+                .unwrap_or_else(|| panic!("{target}: {name}: {helper_name} holds no {op:?}"));
+            assert_eq!(helper.value(write.operands[0]).unwrap().php_type, PhpType::Mixed,
+                "{target}: {name}: the helper writes through the Mixed receiver view");
         }
         for optimized in [false, true] {
             if optimized { crate::ir_passes::optimize_module(&mut module); }

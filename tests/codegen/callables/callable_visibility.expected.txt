@@ -53,3 +53,17 @@ viaUsort 7: TypeError: usort(): Argument #2 ($callback) must be a valid callback
 viaUsort 8: TypeError: usort(): Argument #2 ($callback) must be a valid callback, class "NoClass" not found
 viaUsort 9: TypeError: usort(): Argument #2 ($callback) must be a valid callback, function "nofunction" not found or invalid function name
 viaUsort 10: TypeError: usort(): Argument #2 ($callback) must be a valid callback, no array or string given
+scope run 3: Error: Call to private method H::spriv() from scope Other
+scope viaCuf 3: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+scope run 4: Error: Call to protected method H::sprot() from scope Other
+scope viaCuf 4: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+scope run 5: Error: Call to private method H::spriv() from scope Other
+scope viaCuf 5: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method H::spriv()
+scope run 6: Error: Call to protected method H::sprot() from scope Other
+scope viaCuf 6: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method H::sprot()
+scope run 7: Error: Call to undefined method H::nosuch()
+scope viaCuf 7: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class H does not have a method "nosuch"
+scope run 8: Error: Class "NoClass" not found
+scope viaCuf 8: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class "NoClass" not found
+literal: Error: Call to private method H::spriv() from scope Other
+literal: Error: Call to undefined method H::nosuch()

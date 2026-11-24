@@ -1016,7 +1016,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
 ) -> bool {
     if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
     if checked_unset_receiver_class(ctx, object, member).is_none()
-        && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && unset_receiver_resolves_at_runtime(ctx, object)
     {
         return true;
     }
@@ -1029,6 +1029,18 @@ pub(super) fn unset_property_access_has_direct_lowering(
                 | UnsetPropertyAction::RemoveDynamic
         )
     ) || unset_property_receiver_is_gradual(ctx, object, property, member)
+}
+
+/// Whether the receiver of an `unset()` whose class is not statically known is resolved on its
+/// runtime class: a boxed value, a union, or an object typed only by an INTERFACE (a property
+/// declared `Root`, rewritten between its `instanceof` guard and the unset, so the guard no longer
+/// names a class). php removes the slot of whatever class the object really has.
+fn unset_receiver_resolves_at_runtime(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
+    match unset_operand_type(ctx, object).codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => true,
+        PhpType::Object(class) => ctx.interfaces.contains_key(class.trim_start_matches('\\')),
+        _ => false,
+    }
 }
 
 /// Returns true when `unset($object->name)` has no statically known class to ask, but the receiver
@@ -1064,7 +1076,7 @@ pub(super) fn lower_unset_property_access(
     // An eval barrier can widen a named receiver to Mixed. The runtime-name ladder
     // still resolves its physical slot and access rights on the current object.
     if checked_unset_receiver_class(ctx, object, expr).is_none()
-        && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && unset_receiver_resolves_at_runtime(ctx, object)
     {
         let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
         lower_unset_dynamic_property_access(ctx, object, &name, expr);
