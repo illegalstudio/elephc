@@ -207,6 +207,65 @@ fn conditional_read_on_one_path_keeps_store_live() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// Preserves catch-visible writes and kills earlier overwritten values across slot words.
+#[test]
+fn handler_observations_and_normal_successors_preserve_wide_slot_liveness() {
+    let mut function = Function::new("wide_handler_slots".into(), IrType::I64, PhpType::Int);
+    let stores = {
+        let mut builder = Builder::new(&mut function);
+        let slots: Vec<_> = (0..70).map(|index| {
+            add_int_local(&mut builder, &format!("slot_{index}"))
+        }).collect();
+        let low_slot = slots[0];
+        let high_slot = slots[69];
+        let entry = builder.create_named_block("entry", vec![]);
+        let body = builder.create_named_block("body", vec![]);
+        let normal_exit = builder.create_named_block("normal", vec![]);
+        let handler = builder.create_named_block("handler", vec![]);
+        let token = Immediate::I64(i64::from(handler.as_raw()));
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(Op::TryPushHandler, vec![], Some(token.clone()), IrType::Void,
+            PhpType::Void, Ownership::NonHeap);
+        let initial = builder.emit_const_i64(1);
+        let low_entry = builder.function().instructions.len();
+        builder.emit_store_local(low_slot, initial);
+        let high_entry = builder.function().instructions.len();
+        builder.emit_store_local(high_slot, initial);
+        builder.terminate(Terminator::Br { target: body, args: vec![] });
+
+        builder.position_at_end(body);
+        let updated = builder.emit_const_i64(2);
+        let high_before_call = builder.function().instructions.len();
+        builder.emit_store_local(high_slot, updated);
+        builder.emit(Op::Call, vec![], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let low_after_call = builder.function().instructions.len();
+        builder.emit_store_local(low_slot, updated);
+        let high_after_call = builder.function().instructions.len();
+        builder.emit_store_local(high_slot, updated);
+        builder.terminate(Terminator::Br { target: normal_exit, args: vec![] });
+
+        builder.position_at_end(normal_exit);
+        builder.emit(Op::TryPopHandler, vec![], Some(token.clone()), IrType::Void,
+            PhpType::Void, Ownership::NonHeap);
+        let low = builder.emit_load_local(low_slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return { value: Some(low) });
+        builder.position_at_end(handler);
+        builder.emit(Op::TryPopHandler, vec![], Some(token), IrType::Void,
+            PhpType::Void, Ownership::NonHeap);
+        let high = builder.emit_load_local(high_slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return { value: Some(high) });
+        [low_entry, high_entry, high_before_call, low_after_call, high_after_call]
+    };
+    assert_eq!(validate_function(&function), Ok(()));
+    assert!(run_once(&mut function));
+    assert_eq!(
+        stores.map(|index| function.instructions[index].op),
+        [Op::StoreLocal, Op::Nop, Op::StoreLocal, Op::StoreLocal, Op::Nop],
+    );
+    assert_eq!(validate_function(&function), Ok(()));
+}
+
 /// A store to a refcounted slot is preserved because dropping it in isolation
 /// would unbalance the acquire/release ownership ops lowering emits around it.
 #[test]

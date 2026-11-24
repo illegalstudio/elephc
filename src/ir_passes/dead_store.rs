@@ -25,7 +25,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, LocalKind, LocalSlotId, Op, Ownership, Value,
+    BasicBlock, BlockId, DataPool, Effects, Function, Immediate, InstId, LocalKind,
+    LocalSlotId, Op, Ownership, Terminator, Value,
 };
 
 use super::cfg::successors;
@@ -180,146 +181,202 @@ fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {
     }
 }
 
-/// Returns the eligible local slot loaded or stored by an instruction, if any.
+/// Maps an eligible load or store to its dense liveness index.
 fn instruction_slot(
     function: &Function,
     inst_id: InstId,
-    eligible: &HashSet<LocalSlotId>,
-) -> Option<(Op, LocalSlotId)> {
+    indices: &[Option<usize>],
+) -> Option<(Op, usize)> {
     let inst = function.instruction(inst_id)?;
     let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
         return None;
     };
-    if !eligible.contains(&slot) {
+    if !matches!(inst.op, Op::LoadLocal | Op::StoreLocal) {
         return None;
     }
-    match inst.op {
-        Op::LoadLocal | Op::StoreLocal => Some((inst.op, slot)),
-        _ => None,
+    Some((inst.op, indices.get(slot.as_raw() as usize).copied().flatten()?))
+}
+
+/// Identifies a possible observation of all eligible locals by an implicit catch edge.
+fn observes_handler(function: &Function, inst_id: InstId, handled: bool) -> bool {
+    handled && function.instruction(inst_id).is_some_and(|inst| inst.effects.contains(Effects::MAY_THROW))
+}
+
+/// Occupancy bits indexed only by eligible local slots.
+#[derive(Clone, PartialEq, Eq)]
+struct LiveSlots {
+    words: Vec<u64>,
+}
+
+impl LiveSlots {
+    /// Creates the empty liveness set for the given slot count.
+    fn empty(count: usize) -> Self {
+        Self { words: vec![0; count.div_ceil(u64::BITS as usize)] }
+    }
+
+    /// Tests whether a slot is live.
+    fn contains(&self, slot: usize) -> bool {
+        self.words[slot / 64] & (1 << (slot % 64)) != 0
+    }
+
+    /// Marks a slot as live.
+    fn insert(&mut self, slot: usize) {
+        self.words[slot / 64] |= 1 << (slot % 64);
+    }
+
+    /// Kills the previous value of a slot.
+    fn remove(&mut self, slot: usize) {
+        self.words[slot / 64] &= !(1 << (slot % 64));
+    }
+
+    /// Marks every slot from another flow path as live.
+    fn include(&mut self, other: &Self) {
+        for (word, incoming) in self.words.iter_mut().zip(&other.words) {
+            *word |= incoming;
+        }
     }
 }
 
-/// Whether an instruction can transfer control to a catch handler in this function.
-///
-/// The CFG walk sees terminator successors only, so a `may_throw` instruction inside a
-/// `try` must conservatively make every eligible slot live at that point. Otherwise a
-/// later store on the normal path can incorrectly make the value observed by the catch
-/// handler look dead.
-fn instruction_may_reach_a_handler(function: &Function, inst_id: InstId) -> bool {
-    function
-        .instruction(inst_id)
-        .is_some_and(|inst| inst.effects.contains(crate::ir::Effects::MAY_THROW))
+/// Summarizes a block's effect on its entry set without rescanning every instruction.
+struct BlockLiveness {
+    successors: Vec<BlockId>,
+    first_reads: Vec<usize>,
+    first_writes: Vec<usize>,
+    observes_handler: bool,
+    throw_exit: bool,
 }
 
-/// Returns whether this function installs a catch handler.
-fn function_has_handler(function: &Function) -> bool {
-    function
-        .instructions
-        .iter()
-        .any(|inst| inst.op == Op::TryPushHandler)
-}
-
-/// Computes per-block slot live-in sets via backward dataflow to a fixed point.
-///
-/// A slot is live entering a block when it may be read before the next store on
-/// some path. Block live-out is the union of successor live-in sets; the backward
-/// walk over a block then gens a slot at each `load_local` and kills it at each
-/// `store_local`. The CFG is small, so repeated full sweeps converge without an
-/// explicit worklist. Throwing instructions inside a handled function also make
-/// every eligible slot live because the handler can observe the current value.
-fn compute_slot_live_in(
-    function: &Function,
-    eligible: &HashSet<LocalSlotId>,
-) -> HashMap<crate::ir::BlockId, HashSet<LocalSlotId>> {
-    let mut live_in: HashMap<crate::ir::BlockId, HashSet<LocalSlotId>> = function
-        .blocks
-        .iter()
-        .map(|block| (block.id, HashSet::new()))
-        .collect();
-
-    let handled = function_has_handler(function);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in function.blocks.iter().rev() {
-            let mut live = block_live_out(block, &live_in, eligible, handled);
-            for &inst_id in block.instructions.iter().rev() {
-                if handled && instruction_may_reach_a_handler(function, inst_id) {
-                    live.extend(eligible.iter().copied());
-                    continue;
-                }
-                match instruction_slot(function, inst_id, eligible) {
-                    Some((Op::StoreLocal, slot)) => {
-                        live.remove(&slot);
-                    }
-                    Some((Op::LoadLocal, slot)) => {
-                        live.insert(slot);
-                    }
-                    _ => {}
-                }
+impl BlockLiveness {
+    /// Retains each slot's first access before the first possible handler observation.
+    fn new(function: &Function, block: &BasicBlock, indices: &[Option<usize>], handled: bool,
+        seen: &mut [bool]) -> Self {
+        let mut first_reads = Vec::new();
+        let mut first_writes = Vec::new();
+        let throw_exit = handled && matches!(block.terminator.as_ref(), Some(Terminator::Throw { .. }));
+        let mut has_handler_observation = throw_exit;
+        for &inst_id in &block.instructions {
+            if observes_handler(function, inst_id, handled) {
+                has_handler_observation = true;
+                break;
             }
-            if live != live_in[&block.id] {
-                live_in.insert(block.id, live);
-                changed = true;
+            let Some((op, slot)) = instruction_slot(function, inst_id, indices) else { continue; };
+            if std::mem::replace(&mut seen[slot], true) {
+                continue;
+            }
+            if op == Op::LoadLocal {
+                first_reads.push(slot);
+            } else {
+                first_writes.push(slot);
+            }
+        }
+        for &slot in first_reads.iter().chain(&first_writes) {
+            seen[slot] = false;
+        }
+        Self {
+            successors: block.terminator.as_ref().map_or_else(Vec::new, successors),
+            first_reads,
+            first_writes,
+            observes_handler: has_handler_observation,
+            throw_exit,
+        }
+    }
+
+    /// Merges normal successor entry sets, accounting for an implicit throw edge.
+    fn live_out(&self, live_in: &[LiveSlots], all: &LiveSlots, live: &mut LiveSlots) {
+        if self.throw_exit {
+            live.words.copy_from_slice(&all.words);
+            return;
+        }
+        live.words.fill(0);
+        for successor in &self.successors {
+            if let Some(incoming) = live_in.get(successor.as_raw() as usize) {
+                live.include(incoming);
+            }
+        }
+    }
+
+    /// Applies the precomputed block transfer to the current successor state.
+    fn live_in(&self, live_in: &[LiveSlots], all: &LiveSlots, live: &mut LiveSlots) {
+        if self.observes_handler {
+            live.words.copy_from_slice(&all.words);
+        } else {
+            self.live_out(live_in, all, live);
+        }
+        for &slot in &self.first_writes {
+            live.remove(slot);
+        }
+        for &slot in &self.first_reads {
+            live.insert(slot);
+        }
+    }
+}
+
+/// Solves backward liveness by revisiting predecessors whose successor set changed.
+fn compute_slot_live_in(blocks: &[BlockLiveness], all: &LiveSlots) -> Vec<LiveSlots> {
+    let mut live = LiveSlots { words: vec![0; all.words.len()] };
+    let mut live_in = vec![live.clone(); blocks.len()];
+    let mut predecessors = vec![Vec::new(); blocks.len()];
+    for (index, block) in blocks.iter().enumerate() {
+        if block.observes_handler {
+            continue;
+        }
+        for successor in &block.successors {
+            if let Some(incoming) = predecessors.get_mut(successor.as_raw() as usize) {
+                incoming.push(index);
+            }
+        }
+    }
+    // Seed every block, including dead continuations, in reverse layout order.
+    let mut pending: Vec<usize> = (0..blocks.len()).collect();
+    let mut queued = vec![true; blocks.len()];
+    while let Some(index) = pending.pop() {
+        queued[index] = false;
+        blocks[index].live_in(&live_in, all, &mut live);
+        if live == live_in[index] {
+            continue;
+        }
+        std::mem::swap(&mut live, &mut live_in[index]);
+        for &predecessor in &predecessors[index] {
+            if !std::mem::replace(&mut queued[predecessor], true) {
+                pending.push(predecessor);
             }
         }
     }
     live_in
 }
 
-/// Returns the slots live on exit from a block.
-///
-/// This is normally the union of successor live-in sets. A literal `throw` inside a
-/// handled function also makes every eligible slot live because the terminator's catch
-/// edge is implicit and therefore absent from [`successors`].
-fn block_live_out(
-    block: &crate::ir::BasicBlock,
-    live_in: &HashMap<crate::ir::BlockId, HashSet<LocalSlotId>>,
-    eligible: &HashSet<LocalSlotId>,
-    handled: bool,
-) -> HashSet<LocalSlotId> {
-    let mut live = HashSet::new();
-    if let Some(term) = block.terminator.as_ref() {
-        if handled && matches!(term, crate::ir::Terminator::Throw { .. }) {
-            live.extend(eligible.iter().copied());
-        }
-        for succ in successors(term) {
-            if let Some(succ_live) = live_in.get(&succ) {
-                live.extend(succ_live.iter().copied());
-            }
-        }
-    }
-    live
-}
-
-/// Finds every `store_local` whose stored value is dead: the slot is not live
-/// immediately after the store, so the value is overwritten or the function
-/// exits before any read.
+/// Finds scalar stores overwritten or never observed before the function exits.
 fn collect_dead_stores(function: &Function, eligible: &HashSet<LocalSlotId>) -> Vec<InstId> {
-    let live_in = compute_slot_live_in(function, eligible);
-    let handled = function_has_handler(function);
+    let mut indices = vec![None; function.locals.len()];
+    let mut all = LiveSlots::empty(eligible.len());
+    for (index, slot) in function.locals.iter().map(|local| local.id)
+        .filter(|slot| eligible.contains(slot)).enumerate() {
+        indices[slot.as_raw() as usize] = Some(index);
+        all.insert(index);
+    }
+    let handled = function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler);
+    let mut seen = vec![false; eligible.len()];
+    let blocks: Vec<_> = function.blocks.iter().map(|block| {
+        BlockLiveness::new(function, block, &indices, handled, &mut seen)
+    }).collect();
+    let live_in = compute_slot_live_in(&blocks, &all);
+    let mut live = LiveSlots::empty(eligible.len());
     let mut dead = Vec::new();
-    for block in &function.blocks {
-        let mut live = block_live_out(block, &live_in, eligible, handled);
+    for (block, flow) in function.blocks.iter().zip(&blocks) {
+        flow.live_out(&live_in, &all, &mut live);
         for &inst_id in block.instructions.iter().rev() {
-            // The same rule the live-in fixpoint used. Applying it in only one
-            // of the two walks would leave them describing different programs.
-            if handled && instruction_may_reach_a_handler(function, inst_id) {
-                live.extend(eligible.iter().copied());
+            if observes_handler(function, inst_id, handled) {
+                live.words.copy_from_slice(&all.words);
                 continue;
             }
-            match instruction_slot(function, inst_id, eligible) {
+            match instruction_slot(function, inst_id, &indices) {
                 Some((Op::StoreLocal, slot)) => {
-                    if !live.contains(&slot) && store_value_is_non_heap(function, inst_id) {
+                    if !live.contains(slot) && store_value_is_non_heap(function, inst_id) {
                         dead.push(inst_id);
                     }
-                    // The store fully overwrites the slot, so any earlier store
-                    // to it (with no intervening read) is dead too.
-                    live.remove(&slot);
+                    live.remove(slot);
                 }
-                Some((Op::LoadLocal, slot)) => {
-                    live.insert(slot);
-                }
+                Some((Op::LoadLocal, slot)) => live.insert(slot),
                 _ => {}
             }
         }
