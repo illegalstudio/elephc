@@ -266,8 +266,20 @@ fn abstract_method_keys(program: &Program) -> Vec<String> {
 
 /// `$prefix === ""`: the callable was invoked directly rather than validated by a builtin.
 fn is_direct() -> Expr {
-    e_binop(e_var("prefix"), BinOp::StrictEq, e_str(""))
+    e_binop(
+        e_binop(e_var("prefix"), BinOp::StrictEq, e_str("")),
+        BinOp::Or,
+        e_binop(
+            e_call("substr", vec![e_var("prefix"), e_int(0), e_int(1)]),
+            BinOp::StrictEq,
+            e_str(SCOPE_MARKER),
+        ),
+    )
 }
+
+/// Marks a direct call's wording prefix that carries the caller's class: `"\u{1}Scope"`. The empty
+/// prefix is a direct call from the global scope.
+pub(crate) const SCOPE_MARKER: &str = "\u{1}";
 
 /// Throws the direct-call `Error` or the callback-validation `TypeError` with the given reasons.
 fn fail(direct: Expr, validation: Expr) -> Vec<Stmt> {
@@ -421,7 +433,15 @@ fn helper(abstract_methods: &[String], classes: &[String], tables: &MethodTables
                         e_var("class"),
                         e_str("::"),
                         e_var("method"),
-                        e_str("() from global scope"),
+                        e_str("() from "),
+                        e_ternary(
+                            e_binop(e_var("prefix"), BinOp::StrictEq, e_str("")),
+                            e_str("global scope"),
+                            e_concat_all(vec![
+                                e_str("scope "),
+                                e_call("substr", vec![e_var("prefix"), e_int(1)]),
+                            ]),
+                        ),
                     ]),
                     e_concat_all(vec![
                         e_str(&format!("cannot access {word} method ")),

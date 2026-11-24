@@ -173,7 +173,9 @@ echo many("q", true), many("q", false), "\n";
     let asm = aarch64_asm(source);
     let body = function_asm(&asm, "_fn_many");
     let walks = body.matches("bl __rt_release_slot_table").count();
-    assert!(walks >= 2, "each exit walks the table ({walks} found):\n{body}");
+    // Both returns send the one shared cleanup (`shared_return_cleanup`, selected by a frame word),
+    // so the function carries one table walk, not one per exit: measured on the merged backend.
+    assert!(walks >= 1, "the exits walk the table ({walks} found):\n{body}");
     // Every table walk is followed by the frame teardown, not by per-slot release calls.
     for (at, _) in body.match_indices("epilogue cleanup table of") {
         let after_walk: Vec<&str> = body[at..].lines().skip(1).take(8).collect();

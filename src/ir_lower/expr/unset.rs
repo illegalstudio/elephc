@@ -1015,7 +1015,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
     member: &Expr,
 ) -> bool {
     if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
-    if checked_object_expr_class(ctx, object, member).is_none()
+    if checked_unset_receiver_class(ctx, object, member).is_none()
         && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
         return true;
@@ -1057,13 +1057,13 @@ pub(super) fn lower_unset_property_access(
     expr: &Expr,
 ) {
     if needs_native_xml_property_dispatch(ctx, object, property) {
-        let object = lower_member_receiver(ctx, object, expr);
+        let object = lower_unset_member_receiver(ctx, object, expr);
         lower_boxed_xml_property_unset(ctx, object, property, expr);
         return;
     }
     // An eval barrier can widen a named receiver to Mixed. The runtime-name ladder
     // still resolves its physical slot and access rights on the current object.
-    if checked_object_expr_class(ctx, object, expr).is_none()
+    if checked_unset_receiver_class(ctx, object, expr).is_none()
         && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
         let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
@@ -1073,11 +1073,11 @@ pub(super) fn lower_unset_property_access(
     let action = property_unset_action(ctx, object, property, expr);
     match action {
         Some(UnsetPropertyAction::Magic) => {
-            let object = lower_member_receiver(ctx, object, expr);
+            let object = lower_unset_member_receiver(ctx, object, expr);
             lower_magic_property_unset(ctx, object, property, expr);
         }
         Some(UnsetPropertyAction::Noop) => {
-            let object = lower_member_receiver(ctx, object, expr);
+            let object = lower_unset_member_receiver(ctx, object, expr);
             // A runtime SUBCLASS can declare `__unset` where the static class does not, and php
             // calls it on such an instance instead of doing nothing. The receiver is lowered once,
             // before the guard, so php's evaluation order is unchanged either way.
@@ -1087,7 +1087,7 @@ pub(super) fn lower_unset_property_access(
         // receiver's property storage, so it picks the fixed-slot marker or the
         // dynamic-hash removal from the same instruction.
         Some(UnsetPropertyAction::ClearSlot | UnsetPropertyAction::RemoveDynamic) => {
-            let object = lower_member_receiver(ctx, object, expr);
+            let object = lower_unset_member_receiver(ctx, object, expr);
             lower_guarded_magic_property_unset(ctx, object, property, expr, |ctx, object| {
                 let data = ctx.intern_string(property);
                 ctx.emit_void(
@@ -1307,7 +1307,7 @@ pub(super) fn property_unset_action(
     property: &str,
     member: &Expr,
 ) -> Option<UnsetPropertyAction> {
-    let (class_name, _) = checked_object_expr_class(ctx, object, member)?;
+    let (class_name, _) = checked_unset_receiver_class(ctx, object, member)?;
     // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
     // `stdClass` declares no magic methods that could intercept it.
     if is_builtin_stdclass_name(&class_name) {

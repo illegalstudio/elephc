@@ -44,11 +44,33 @@ pub(crate) fn refine_member_receiver_at_span(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let original = ctx.builder.value_php_type(value.value);
+    refine_member_receiver_view(ctx, value, span, false)
+}
+
+/// Lowers the receiver of `unset($object->name)`: a receiver read from a declared property keeps
+/// its checked class, because removing a declared slot needs the slot of the class the
+/// `instanceof` guard proved, whatever else implements the interface.
+pub(crate) fn lower_unset_member_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    member: &Expr,
+) -> LoweredValue {
+    let value = lower_expr(ctx, object);
     let declared_storage = matches!(
         ctx.builder.value_defining_op(value.value),
         Some(Op::PropGet | Op::LoadStaticProperty)
     );
+    refine_member_receiver_view(ctx, value, member.span, declared_storage)
+}
+
+/// Shared body of the receiver refinements; `declared_storage` lifts the sibling-implementer guard.
+fn refine_member_receiver_view(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    declared_storage: bool,
+) -> LoweredValue {
+    let original = ctx.builder.value_php_type(value.value);
     let Some(PhpType::Object(class)) =
         checked_member_receiver_type_at_span(ctx, &original, span, declared_storage) else {
         return value;

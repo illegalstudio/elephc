@@ -2094,8 +2094,36 @@ fn emit_inaccessible_method_error(
                     ctx.emitter.instruction(&format!("jz {direct}"));           // a plain call
                 }
             }
+            // The sites that leave a wording leave one of two texts, told apart by their length.
+            let user_func = ctx.next_label("callable_array_inaccessible_stored_user_func");
+            let user_func_array = ctx.next_label("callable_array_inaccessible_stored_user_func_array");
+            for (text, label) in [
+                (CALL_USER_FUNC_CALLBACK_PREFIX, &user_func),
+                (CALL_USER_FUNC_ARRAY_CALLBACK_PREFIX, &user_func_array),
+            ] {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction(&format!("cmp {word}, #{}", text.len())); // is the stored wording this builtin's?
+                        ctx.emitter.instruction(&format!("b.eq {label}"));      // word that builtin's validation error
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction(&format!("cmp {word}, {}", text.len())); // is the stored wording this builtin's?
+                        ctx.emitter.instruction(&format!("je {label}"));        // word that builtin's validation error
+                    }
+                }
+            }
             ctx.emitter.label(&generic);
             emit_inaccessible_method_throw(ctx, &InaccessibleMethodError::InvalidCallback(prefix.clone()));
+            ctx.emitter.label(&user_func);
+            emit_inaccessible_method_throw(
+                ctx,
+                &InaccessibleMethodError::InvalidCallback(CALL_USER_FUNC_CALLBACK_PREFIX.to_string()),
+            );
+            ctx.emitter.label(&user_func_array);
+            emit_inaccessible_method_throw(
+                ctx,
+                &InaccessibleMethodError::InvalidCallback(CALL_USER_FUNC_ARRAY_CALLBACK_PREFIX.to_string()),
+            );
             ctx.emitter.label(&direct);
             emit_inaccessible_method_throw(ctx, &InaccessibleMethodError::DirectCall);
         }
@@ -5981,6 +6009,16 @@ fn emit_invalid_callback_throw(ctx: &mut FunctionContext<'_>) {
             abi::int_arg_reg_name(ctx.emitter.target, 0),
             abi::int_result_reg(ctx.emitter),
         );
+        // A plain call words its reachability errors with the caller's scope ("from scope X");
+        // the helper reads the class after the marker, the empty text is the global scope.
+        let scoped;
+        let text = match ctx.function.lexical_class.as_deref() {
+            Some(class) if text.is_empty() => {
+                scoped = format!("{}{}", crate::invalid_callback_prelude::SCOPE_MARKER, class.trim_start_matches('\\'));
+                scoped.as_str()
+            }
+            _ => text,
+        };
         let (label, len) = ctx.data.add_string(text.as_bytes());
         abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &label);
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), len as i64);

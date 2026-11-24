@@ -493,11 +493,31 @@ pub(super) fn checked_object_expr_class(
     object: &Expr,
     member: &Expr,
 ) -> Option<(String, bool)> {
+    checked_object_expr_class_with(ctx, object, member, false)
+}
+
+/// The receiver class of an `unset()`: a receiver read from a declared property keeps the class
+/// its `instanceof` guard proved, although other classes implement the interface.
+pub(super) fn checked_unset_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    member: &Expr,
+) -> Option<(String, bool)> {
+    let declared_storage = matches!(
+        object.kind,
+        ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    );
+    checked_object_expr_class_with(ctx, object, member, declared_storage)
+}
+
+/// Shared body: `declared_storage` lifts the sibling-implementer guard of the checked view.
+fn checked_object_expr_class_with(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    member: &Expr,
+    declared_storage: bool,
+) -> Option<(String, bool)> {
     let checked = isset_object_expr_type(ctx, object).and_then(|ty| {
-        let declared_storage = matches!(
-            object.kind,
-            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
-        );
         let ty = checked_member_receiver_type(ctx, &ty, member, declared_storage).unwrap_or(ty);
         let (class_name, nullable) = singular_object_class(&ty)?;
         normalized_class_name(class_name).map(|name| (name, nullable))

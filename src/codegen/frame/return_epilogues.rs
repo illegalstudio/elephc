@@ -140,7 +140,9 @@ mod tests {
             let shared = body.lines().filter(|line|
                 line.ends_with(':') && line.contains("shared_return_cleanup")).count();
             assert_eq!(shared, 1, "{name}: the runtime selector preserves the transferred local in shared cleanup");
-            let cleanup = body.matches("epilogue cleanup $owned").count();
+            // Whatever form the epilogue takes (one guarded slot, or a table walk over the frame's
+            // owners), the count of cleanup blocks must not grow with the 24 return sites.
+            let cleanup = body.matches("epilogue cleanup").count();
             // The merged backend walks one cleanup table for the normal and the exceptional exit
             // (one `epilogue cleanup` block); main kept two inline blocks. Either is bounded.
             assert!((1..=2).contains(&cleanup),
