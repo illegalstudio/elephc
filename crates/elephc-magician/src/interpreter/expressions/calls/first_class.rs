@@ -62,20 +62,9 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
-        let object = args[0].borrowed();
-        if values.type_tag(object)? == EVAL_TAG_CALLABLE {
-            if let Some(signature) = values.native_callable_signature(object)? {
-                return eval_closure_object_expr(
-                    EvalClosureObjectTarget::NativeDescriptor {
-                        callback: object,
-                        display_name: signature.display_name,
-                    },
-                    context,
-                    values,
-                );
-            }
-        }
-        eval_first_class_callable_from_value(object, context, scope, values)
+        // A compiled Closure (a native descriptor) is its own first-class callable: php hands
+        // back the same instance, so `$c(...) === $c` and its reflection keeps the signature.
+        eval_first_class_callable_from_value(args[0].borrowed(), context, scope, values)
     })
 }
 
