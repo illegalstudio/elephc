@@ -2924,22 +2924,34 @@ mod source_entry_tests {
             target,
         );
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        for entry in [
-            "__elephc_eval_value_method_call:",
-            "__elephc_eval_value_static_method_call:",
+        for symbol in [
+            "__elephc_eval_value_method_call",
+            "__elephc_eval_value_static_method_call",
         ] {
-            let body = assembly
-                .split_once(entry)
+            let entry = format!("{symbol}:");
+            let body_entry = format!("{symbol}_sysv_body:");
+            let after_export = assembly
+                .split_once(&entry)
                 .unwrap_or_else(|| panic!("missing {entry}"))
-                .1
+                .1;
+            let (wrapper, body) = after_export
+                .split_once(&body_entry)
+                .unwrap_or_else(|| panic!("missing {body_entry}"));
+            assert!(
+                wrapper.contains(&format!("call {symbol}_sysv_body")),
+                "{entry} must dispatch through its SysV preservation shim"
+            );
+            let body = assembly
+                .split_once(&body_entry)
+                .map_or(body, |(_, body)| body)
                 .split_once("    ret")
                 .expect("bridge return")
                 .0;
             for (register, offset) in X86_64_HOST_CALLEE_SAVED {
                 let save = format!("mov QWORD PTR [rbp - {offset}], {register}");
                 let restore = format!("mov {register}, QWORD PTR [rbp - {offset}]");
-                assert!(body.contains(&save), "{entry} must save {register}");
-                assert!(body.contains(&restore), "{entry} must restore {register}");
+                assert!(body.contains(&save), "{body_entry} must save {register}");
+                assert!(body.contains(&restore), "{body_entry} must restore {register}");
                 assert!(body.find(&save).unwrap() < body.rfind(&restore).unwrap());
             }
         }
