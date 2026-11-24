@@ -12,6 +12,7 @@
 //!   exactly as they do in the compiled runtime.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_count_values",
@@ -62,22 +63,24 @@ pub(in crate::interpreter) fn eval_array_count_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
-            continue;
-        }
-        let one = values.int(1)?;
-        let present = values.array_key_exists(value, result)?;
-        let next = if values.truthy(present)? {
-            let existing = values.array_get(result, value)?;
-            values.add(existing, one)?
-        } else {
-            one
-        };
-        result = values.array_set(result, value, next)?;
+        result.update(|values, owners, result| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, key)?);
+            if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
+                return Ok(None);
+            }
+            let one = owners.stage(values.int(1)?);
+            let present = owners.stage(values.array_key_exists(value, result)?);
+            let next = if values.truthy(present)? {
+                let existing = owners.stage(values.array_get(result, value)?);
+                owners.stage(values.add(existing, one)?)
+            } else {
+                one
+            };
+            Ok(Some((value, next)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

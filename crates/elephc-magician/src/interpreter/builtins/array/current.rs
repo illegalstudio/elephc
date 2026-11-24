@@ -56,6 +56,5 @@ pub(in crate::interpreter) fn eval_current_result(
     else {
         return values.bool_value(false);
     };
-    let key = values.array_iter_key(array, position)?;
-    values.array_get(array, key)
+    super::array_pointer::eval_array_pointer_value(array, position, values)
 }

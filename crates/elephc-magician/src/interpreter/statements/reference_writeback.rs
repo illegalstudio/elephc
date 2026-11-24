@@ -9,6 +9,7 @@
 //! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
 use elephc_memoir::owner_layout::InvokerSlotWords;
 
 /// Returns the calling-scope class when PHP's private-method shadowing rule
@@ -283,12 +284,7 @@ pub(super) fn write_back_owned_variable_ref_target(
 ) -> Result<(), EvalStatus> {
     let retained = values.retain(value)?;
     let replaced = set_owned_scope_cell(context, scope, name.to_string(), retained, values)?;
-    let mut result = Ok(());
-    for replaced in replaced {
-        let released = eval_release_value(context, values, replaced);
-        if result.is_ok() { result = released; }
-    }
-    result
+    retire_replaced_scope_cells(replaced, context, values)
 }
 
 /// Transfers a staged box to variable storage, or lends it to a retaining container setter.
@@ -304,12 +300,7 @@ pub(in crate::interpreter) fn write_back_owned_ref_target(
             return Err(EvalStatus::RuntimeFatal);
         };
         let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
-        let mut result = Ok(());
-        for replaced in replaced {
-            let released = eval_release_value(context, values, replaced);
-            if result.is_ok() { result = released; }
-        }
-        return result;
+        return retire_replaced_scope_cells(replaced, context, values);
     }
     with_eval_value_lease(value, context, values, |value, context, values| {
         write_back_method_ref_target(target, value.borrowed(), context, values)
@@ -538,7 +529,6 @@ pub(super) fn write_back_method_array_element_ref_target(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
     if let Some(current) = visible_scope_cell(context, scope, array_name) {
         for declared in generic_local_contracts(scope, array_name, context) {
             validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
@@ -548,7 +538,6 @@ pub(super) fn write_back_method_array_element_ref_target(
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {
         if values.is_array_like(existing.cell())? {
-            ownership = existing.flags().ownership;
             let array = values.array_clone_shallow(existing.cell())?;
             context.copy_array_metadata(existing.cell(), array);
             array
@@ -558,11 +547,32 @@ pub(super) fn write_back_method_array_element_ref_target(
     } else {
         eval_new_array_for_index(index, values)?
     };
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership, values)? {
-        values.release(replaced)?;
+    let array = RuntimeOwnerSlot::new(array);
+    with_runtime_owners(&array, || {
+        let written = values.array_set(array.borrowed(), index, value);
+        let written = written.map(|updated| array.update_receiver(updated));
+        let updated = array.finish(written, |cell| eval_release_value(context, values, cell))?;
+        let replaced = set_owned_scope_cell(context, scope, array_name.to_string(), updated, values)?;
+        retire_replaced_scope_cells(replaced, context, values)
+    })
+}
+
+/// Retires displaced cells after writeback while preserving every outstanding owner across reentry.
+fn retire_replaced_scope_cells(
+    replaced: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if replaced.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let owners = StagedRuntimeOwners::default();
+    for cell in replaced {
+        owners.stage(cell);
+    }
+    with_runtime_owners(&owners, || owners.release(Ok(()), |cell| {
+        eval_release_value(context, values, cell)
+    }))
 }
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.

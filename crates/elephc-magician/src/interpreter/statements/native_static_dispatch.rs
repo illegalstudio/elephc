@@ -8,6 +8,7 @@
 //! - Native receiver metadata, enum backing values, and PHP-visible errors share this boundary.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Dispatches one generated/AOT method reached through PHP static-call syntax.
 pub(super) fn eval_native_static_syntax_method_result(
@@ -193,15 +194,13 @@ pub(super) fn eval_builtin_property_hook_type_cases(
         return Err(EvalStatus::RuntimeFatal);
     }
     let case_names = ["Get", "Set"];
-    let mut array = values.array_new(case_names.len())?;
+    let mut array = EvalArrayBuilder::indexed(values, case_names.len())?;
     for (index, case_name) in case_names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let case =
-            eval_builtin_property_hook_type_case("PropertyHookType", case_name, context, values)?
-                .ok_or(EvalStatus::RuntimeFatal)?;
-        array = values.array_set(array, key, case)?;
+        array.index(index, |values| {
+            eval_builtin_property_hook_type_case("PropertyHookType", case_name, context, values)?.ok_or(EvalStatus::RuntimeFatal)
+        })?;
     }
-    Ok(array)
+    Ok(array.finish())
 }
 
 /// Evaluates builtin `PropertyHookType::from()` or `tryFrom()` inside eval.
@@ -321,14 +320,13 @@ pub(super) fn eval_enum_cases_result(
         .iter()
         .map(|case| case.name().to_string())
         .collect::<Vec<_>>();
-    let mut array = values.array_new(case_names.len())?;
+    let mut array = EvalArrayBuilder::indexed(values, case_names.len())?;
     for (index, case_name) in case_names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let case = eval_enum_case_object(enum_name, case_name, context, values)?
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        array = values.array_set(array, key, case)?;
+        array.index(index, |values| {
+            eval_enum_case_object(enum_name, case_name, context, values)?.ok_or(EvalStatus::RuntimeFatal)
+        })?;
     }
-    Ok(array)
+    Ok(array.finish())
 }
 
 /// Evaluates `EnumName::from()` or `EnumName::tryFrom()` for eval-backed enums.

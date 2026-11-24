@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates `stream_socket_pair($domain, $type, $protocol)`.
 pub(in crate::interpreter) fn eval_stream_socket_pair_declared_call(
@@ -52,11 +53,15 @@ pub(in crate::interpreter) fn eval_stream_socket_pair_result(
     let Some((left, right)) = context.stream_resources_mut().open_socket_pair() else {
         return values.bool_value(false);
     };
-    let mut result = values.array_new(2)?;
-    let key = values.int(0)?;
-    let value = values.resource(left)?;
-    result = values.array_set(result, key, value)?;
-    let key = values.int(1)?;
-    let value = values.resource(right)?;
-    values.array_set(result, key, value)
+    let result = (|| {
+        let mut result = EvalArrayBuilder::indexed(values, 2)?;
+        result.index(0, |values| values.resource(left))?;
+        result.index(1, |values| values.resource(right))?;
+        Ok(result.finish())
+    })();
+    if result.is_err() {
+        context.stream_resources_mut().close(left);
+        context.stream_resources_mut().close(right);
+    }
+    result
 }

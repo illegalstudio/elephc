@@ -1769,6 +1769,36 @@ echo "DONE\n";
     }
 }
 
+/// A native descriptor can use a cURL callback's argument while its caller retains the lease.
+#[test]
+fn eval_curl_native_descriptor_borrows_callback_arguments() {
+    if skip_without_curl_native("eval_curl_native_descriptor_borrows_callback_arguments") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let callback = r#"
+        $handle = curl_init("__URL__");
+        curl_setopt($handle, CURLOPT_WRITEFUNCTION, $writer);
+        echo curl_exec($handle) ? 'ok' : 'failed';
+        curl_setopt($handle, CURLOPT_WRITEFUNCTION, null);
+        unset($handle);
+    "#.replace("__URL__", &server.url("/hello"));
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        r#"<?php
+        function memoir_curl_writer($handle, string $chunk): int { return strlen($chunk); }
+        if ($argc < 0) { curl_version(); }
+        $writer = memoir_curl_writer(...);
+        eval($argv[1]);
+        unset($writer);
+        "#,
+        &[&[&callback]],
+    );
+    let out = &outputs[0];
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Curl callbacks retire arguments/results on borrowed string returns and thrown exceptions.
 #[test]
 fn eval_curl_array_callback_result_and_throw_ownership() {

@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{with_collection_cells, with_collection_result};
 
 eval_builtin! {
     contract: "array_reduce",
@@ -34,7 +35,7 @@ pub(in crate::interpreter) fn eval_array_reduce_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [array, callback] => {
-            let initial = values.null()?;
+            let initial = None;
             eval_array_reduce_result_from_scope(
                 *array,
                 *callback,
@@ -47,7 +48,7 @@ pub(in crate::interpreter) fn eval_array_reduce_declared_values_result(
         [array, callback, initial] => eval_array_reduce_result_from_scope(
             *array,
             *callback,
-            *initial,
+            Some(*initial),
             lexical_scope,
             context,
             values,
@@ -63,28 +64,17 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, callback, initial) = match args {
-        [array, callback] => {
-            let array = eval_expr(array, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            (array, callback, values.null()?)
-        }
-        [array, callback, initial] => {
-            let array = eval_expr(array, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let initial = eval_expr(initial, context, scope, values)?;
-            (array, callback, initial)
-        }
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    eval_array_reduce_result_from_scope(array, callback, initial, Some(scope), context, values)
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
+        eval_array_reduce_declared_values_result(args, Some(scope), context, values)
+    })
 }
 
 /// Reduces one eval array with optional lexical scope for callback names.
 fn eval_array_reduce_result_from_scope(
     array: RuntimeCellHandle,
     callback: RuntimeCellHandle,
-    initial: RuntimeCellHandle,
+    initial: Option<RuntimeCellHandle>,
     lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -92,13 +82,27 @@ fn eval_array_reduce_result_from_scope(
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
-        let mut carry = initial;
-        for position in 0..len {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            carry =
-                eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
-        }
-        Ok(carry)
+        with_collection_result(values, |values, carry| {
+            let initial = match initial {
+                Some(initial) => values.retain(initial)?,
+                None => values.null()?,
+            };
+            carry.replace(Some(initial));
+            for position in 0..len {
+                with_collection_cells(values, |values, owners| {
+                    let key = owners.stage(values.array_iter_key(array, position)?);
+                    let value = owners.stage(values.array_get(array, key)?);
+                    let next = eval_evaluated_callable_with_values(
+                        &callback, vec![carry.borrowed(), value.borrowed()], context, values,
+                    )?;
+                    let next = promote_borrowed_result(next, values)?;
+                    if let Some(previous) = carry.replace(Some(next)) {
+                        owners.stage(previous);
+                    }
+                    Ok(())
+                })?;
+            }
+            Ok(())
+        })
     })
 }

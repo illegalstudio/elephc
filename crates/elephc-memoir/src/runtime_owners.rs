@@ -268,6 +268,16 @@ impl StagedRuntimeOwners {
         release_staged_cells(operation, cells, release)
     }
 
+    /// Runs cleanup before returning a caller-rooted or non-cell result.
+    pub fn complete<R, E>(
+        &self,
+        operation: Result<R, E>,
+        release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<R, E> {
+        let cleanup = self.release(Ok(()), release);
+        operation.and_then(|result| cleanup.map(|()| result))
+    }
+
     /// Detaches each temporary immediately before release, with an explicit error policy.
     pub fn release_with_policy<E>(
         &self,

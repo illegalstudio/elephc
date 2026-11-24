@@ -8,6 +8,10 @@
 //! - Direct calls stay on the source-sensitive by-reference path.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{
+    EvalArrayBuilder, with_collection_call, with_collection_cells, with_collection_result,
+};
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 eval_builtin! {
     contract: "sort",
@@ -60,37 +64,45 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
     flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut entries = match name {
-        "krsort" | "ksort" => eval_array_key_sort_entries(array, values)?,
-        "natcasesort" => eval_array_natural_sort_entries(array, true, values)?,
-        "natsort" => eval_array_natural_sort_entries(array, false, values)?,
-        "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, values)?,
-        "shuffle" => return eval_array_shuffle_replacement(array, values),
-        _ => return Err(EvalStatus::UnsupportedConstruct),
-    };
-    if matches!(name, "ksort" | "krsort") {
-        let mode = super::key_sort_flags::eval_key_sort_mode(flags);
-        let descending = name == "krsort";
-        if mode == super::key_sort_flags::EvalKeySortMode::Regular {
-            eval_array_regular_key_sort_entries(&mut entries, descending, values)?;
-        } else {
-            eval_array_flagged_key_sort_entries(&mut entries, mode, descending, values)?;
-        }
-    } else {
-        eval_array_value_sort_entries_stable(
-            &mut entries,
-            matches!(name, "arsort" | "rsort"),
-            values,
-        )?;
+    if name == "shuffle" {
+        return eval_array_shuffle_replacement(array, values);
     }
+    with_collection_result(values, |values, result| {
+        with_collection_cells(values, |values, owners| {
+            let mut entries = match name {
+                "krsort" | "ksort" => eval_array_key_sort_entries(array, values, owners)?,
+                "natcasesort" => eval_array_natural_sort_entries(array, true, values, owners)?,
+                "natsort" => eval_array_natural_sort_entries(array, false, values, owners)?,
+                "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, values, owners)?,
+                _ => return Err(EvalStatus::UnsupportedConstruct),
+            };
+            if matches!(name, "ksort" | "krsort") {
+                let mode = super::key_sort_flags::eval_key_sort_mode(flags);
+                let descending = name == "krsort";
+                if mode == super::key_sort_flags::EvalKeySortMode::Regular {
+                    eval_array_regular_key_sort_entries(&mut entries, descending, values)?;
+                } else {
+                    eval_array_flagged_key_sort_entries(&mut entries, mode, descending, values)?;
+                }
+            } else {
+                eval_array_value_sort_entries_stable(
+                    &mut entries,
+                    matches!(name, "arsort" | "rsort"),
+                    values,
+                )?;
+            }
 
-    if matches!(
-        name,
-        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort"
-    ) {
-        return eval_array_preserve_key_sort_result(entries, values);
-    }
-    eval_array_reindex_sort_result(entries, values)
+            if matches!(
+                name,
+                "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort"
+            ) {
+                result.replace(Some(eval_array_preserve_key_sort_result(entries, values)?));
+            } else {
+                result.replace(Some(eval_array_reindex_sort_result(entries, values)?));
+            }
+            Ok(())
+        })
+    })
 }
 
 /// Stably orders eval array keys through the runtime's native key comparator.
@@ -156,23 +168,25 @@ pub(in crate::interpreter) fn eval_array_shuffle_replacement(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        entries.push(values.array_get(array, source_key)?);
-    }
-
-    for index in (1..entries.len()).rev() {
-        let swap_with = (eval_random_u128() % ((index + 1) as u128)) as usize;
-        entries.swap(index, swap_with);
-    }
-
-    let mut result = values.array_new(entries.len())?;
-    for (index, value) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, value)?;
-    }
-    Ok(result)
+    with_collection_result(values, |values, result| {
+        with_collection_cells(values, |values, owners| {
+            let mut entries = Vec::with_capacity(len);
+            for position in 0..len {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                entries.push(owners.stage(values.array_get(array, key)?));
+            }
+            for index in (1..entries.len()).rev() {
+                let swap_with = (eval_random_u128() % ((index + 1) as u128)) as usize;
+                entries.swap(index, swap_with);
+            }
+            let mut output = EvalArrayBuilder::indexed(values, entries.len())?;
+            for (index, value) in entries.into_iter().enumerate() {
+                output.index(index, |_| Ok(value.borrowed()))?;
+            }
+            result.replace(Some(output.finish()));
+            Ok(())
+        })
+    })
 }
 
 /// Builds an indexed result for `sort()` / `rsort()` after value ordering.
@@ -180,12 +194,11 @@ pub(in crate::interpreter) fn eval_array_reindex_sort_result(
     entries: Vec<EvalArraySortEntry>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(entries.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, entries.len())?;
     for (index, entry) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, entry.value)?;
+        result.index(index, |_| Ok(entry.value.borrowed()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds a key-preserving associative result after value or key ordering.
@@ -193,25 +206,26 @@ pub(in crate::interpreter) fn eval_array_preserve_key_sort_result(
     entries: Vec<EvalArraySortEntry>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(entries.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, entries.len())?;
     for entry in entries {
-        result = values.array_set(result, entry.source_key, entry.value)?;
+        result.entry(|_| Ok(entry.value.borrowed()), |_, _| Ok(entry.source_key.borrowed()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Collects values and comparable value-sort keys from one eval array.
 pub(in crate::interpreter) fn eval_array_value_sort_entries(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
     let len = values.array_len(array)?;
     let mut entries = Vec::with_capacity(len);
     let mut expects_numeric = None;
 
     for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
+        let source_key = owners.stage(values.array_iter_key(array, position)?);
+        let value = owners.stage(values.array_get(array, source_key)?);
         let sort_key = eval_array_sort_key(value, values)?;
         let is_numeric = match sort_key {
             EvalArraySortKey::Numeric(_) => Some(true),
@@ -286,14 +300,15 @@ pub(in crate::interpreter) fn eval_array_natural_sort_entries(
     array: RuntimeCellHandle,
     case_insensitive: bool,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
     let len = values.array_len(array)?;
     let mut entries = Vec::with_capacity(len);
     let mut expects_numeric = None;
 
     for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
+        let source_key = owners.stage(values.array_iter_key(array, position)?);
+        let value = owners.stage(values.array_get(array, source_key)?);
         let sort_key = eval_array_natural_sort_key(value, case_insensitive, values)?;
         let is_numeric = matches!(sort_key, EvalArraySortKey::Numeric(_));
         match expects_numeric {
@@ -315,13 +330,14 @@ pub(in crate::interpreter) fn eval_array_natural_sort_entries(
 pub(in crate::interpreter) fn eval_array_key_sort_entries(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
     let len = values.array_len(array)?;
     let mut entries = Vec::with_capacity(len);
 
     for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
+        let source_key = owners.stage(values.array_iter_key(array, position)?);
+        let value = owners.stage(values.array_get(array, source_key)?);
         let sort_key = eval_array_sort_key(source_key, values)?;
         entries.push(EvalArraySortEntry {
             sort_key,
@@ -487,13 +503,13 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, target, flags) =
-        eval_array_sort_direct_args(name, args, context, scope, values)?;
-
-    let replacement = eval_array_sort_replacement(name, array, flags, values)?;
-    let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
-    Ok(result)
+    with_collection_call(context, values, |context, values, owners, result| {
+        let (array, target, flags) =
+            eval_array_sort_direct_args(name, args, context, scope, values, owners)?;
+        result.replace(Some(values.bool_value(true)?));
+        let replacement = eval_array_sort_replacement(name, array, flags, values)?;
+        write_back_owned_ref_target(&target, replacement, context, values)
+    })
 }
 
 /// Extracts the writable array lvalue accepted by eval array ordering builtins.
@@ -502,11 +518,12 @@ pub(in crate::interpreter) fn eval_array_sort_direct_arg(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget), EvalStatus> {
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)
+    super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values, owners)
 }
 
 /// Extracts the receiver and, for a key sort, PHP's optional `$flags` word.
@@ -519,9 +536,10 @@ fn eval_array_sort_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, i64), EvalStatus> {
     if !matches!(name, "ksort" | "krsort") {
-        let (array, target) = eval_array_sort_direct_arg(args, context, scope, values)?;
+        let (array, target) = eval_array_sort_direct_arg(args, context, scope, values, owners)?;
         return Ok((array, target, 0));
     }
 
@@ -554,14 +572,14 @@ fn eval_array_sort_direct_args(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 receiver = Some(super::mutation::eval_array_mutation_lvalue_arg(
-                    arg, context, scope, values,
+                    arg, context, scope, values, owners,
                 )?);
             }
             "flags" => {
                 if flags.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let value = eval_expr(arg.value(), context, scope, values)?;
+                let value = owners.stage(eval_expr(arg.value(), context, scope, values)?);
                 flags = Some(eval_int_value(value, values)?);
             }
             _ => return Err(EvalStatus::RuntimeFatal),

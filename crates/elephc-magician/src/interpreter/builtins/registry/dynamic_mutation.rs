@@ -14,6 +14,7 @@
 
 use super::super::super::*;
 use super::super::*;
+use crate::interpreter::builtins::collection_builder::with_collection_call;
 
 /// Dispatches dynamic builtin calls that must preserve by-reference caller targets.
 pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
@@ -190,9 +191,11 @@ fn eval_dynamic_array_pop_shift_call(
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let (result, replacement) = eval_array_pop_shift_replacement(name, array.value, values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    with_collection_call(context, values, |context, values, _, result| {
+        let (removed, replacement) = eval_array_pop_shift_replacement(name, array.value, values)?;
+        result.replace(Some(removed));
+        write_back_owned_ref_target(target, replacement, context, values)
+    }).map(Some)
 }
 
 /// Evaluates dynamic `array_push()` or `array_unshift()` calls against a writable array.
@@ -212,11 +215,11 @@ fn eval_dynamic_array_push_unshift_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
-    let replacement =
-        eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
-    let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    with_collection_call(context, values, |context, values, _, result| {
+        result.replace(Some(eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?));
+        let replacement = eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
+        write_back_owned_ref_target(target, replacement, context, values)
+    }).map(Some)
 }
 
 /// Evaluates a dynamic `array_splice()` call against a writable array.
@@ -237,15 +240,13 @@ fn eval_dynamic_array_splice_call(
     };
     let length = optional_evaluated_ref_arg(&bound, 2).map(|arg| arg.value);
     let replacement_arg = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    let (removed, replacement) = eval_array_splice_removed_and_replacement(
-        array.value,
-        offset.value,
-        length,
-        replacement_arg,
-        values,
-    )?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(removed))
+    with_collection_call(context, values, |context, values, _, result| {
+        let (removed, replacement) = eval_array_splice_removed_and_replacement(
+            array.value, offset.value, length, replacement_arg, values,
+        )?;
+        result.replace(Some(removed));
+        write_back_owned_ref_target(target, replacement, context, values)
+    }).map(Some)
 }
 
 /// Evaluates a dynamic internal array pointer call against a writable array.
@@ -286,10 +287,11 @@ fn eval_dynamic_array_sort_call(
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let replacement = eval_array_sort_replacement(name, array.value, flags, values)?;
-    let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    with_collection_call(context, values, |context, values, _, result| {
+        result.replace(Some(values.bool_value(true)?));
+        let replacement = eval_array_sort_replacement(name, array.value, flags, values)?;
+        write_back_owned_ref_target(target, replacement, context, values)
+    }).map(Some)
 }
 
 /// Evaluates a dynamic user-comparator sort call against a writable array.
@@ -306,11 +308,11 @@ fn eval_dynamic_user_sort_call(
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let replacement =
-        eval_user_sort_replacement(name, array.value, callback.value, context, values)?;
-    let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    with_collection_call(context, values, |context, values, _, result| {
+        result.replace(Some(values.bool_value(true)?));
+        let replacement = eval_user_sort_replacement(name, array.value, callback.value, context, values)?;
+        write_back_owned_ref_target(target, replacement, context, values)
+    }).map(Some)
 }
 
 /// Evaluates a dynamic `preg_match()` call when `$matches` is a writable lvalue.

@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_column",
@@ -57,24 +58,26 @@ pub(in crate::interpreter) fn eval_array_column_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.array_new(len)?;
+    let mut result = EvalArrayBuilder::indexed(values, len)?;
     let mut output_index = 0_i64;
     for position in 0..len {
-        let row_key = values.array_iter_key(array, position)?;
-        let row = values.array_get(array, row_key)?;
-        if !matches!(values.type_tag(row)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-            continue;
-        }
-        let exists = values.array_key_exists(column_key, row)?;
-        if !values.truthy(exists)? {
-            continue;
-        }
-        let column = values.array_get(row, column_key)?;
-        let target_key = values.int(output_index)?;
-        output_index = output_index
-            .checked_add(1)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        result = values.array_set(result, target_key, column)?;
+        result.update(|values, owners, _| {
+            let row_key = owners.stage(values.array_iter_key(array, position)?);
+            let row = owners.stage(values.array_get(array, row_key)?);
+            if !matches!(values.type_tag(row)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return Ok(None);
+            }
+            let exists = owners.stage(values.array_key_exists(column_key, row)?);
+            if !values.truthy(exists)? {
+                return Ok(None);
+            }
+            let column = owners.stage(values.array_get(row, column_key)?);
+            let target_key = owners.stage(values.int(output_index)?);
+            output_index = output_index
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            Ok(Some((target_key, column)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

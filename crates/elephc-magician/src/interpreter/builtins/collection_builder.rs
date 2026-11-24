@@ -8,10 +8,11 @@
 //! - Runtime array setters borrow their operands and retain stored values.
 //! - An unfinished builder releases its array, including already inserted entries.
 
+use crate::context::ElephcEvalContext;
 use crate::errors::EvalStatus;
-use crate::interpreter::RuntimeValueOps;
+use crate::interpreter::{RuntimeValueOps, operands::release_expr_result};
 use crate::value::RuntimeCellHandle;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
 use elephc_memoir::runtime_owners::release_staged_cells;
 
 /// Owns one result array until it is returned to the caller or abandoned on error.
@@ -52,6 +53,24 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
     /// Calls native operations with the partly constructed array visible to the collector.
     pub(in crate::interpreter) fn with_values<R>(&mut self, use_values: impl FnOnce(&mut V) -> R) -> R {
         with_runtime_owners(&self.cell, || use_values(self.values))
+    }
+
+    /// Stages temporary cells for one conditional insertion while keeping the result rooted.
+    pub(in crate::interpreter) fn update(
+        &mut self,
+        prepare: impl FnOnce(&mut V, &StagedRuntimeOwners, RuntimeCellHandle)
+            -> Result<Option<(RuntimeCellHandle, RuntimeCellHandle)>, EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        let result = &self.cell;
+        let values = &mut *self.values;
+        with_runtime_owners(result, || {
+            with_collection_cells(values, |values, owners| {
+                if let Some((key, value)) = prepare(values, owners, result.borrowed())? {
+                    result.update_receiver(values.array_set(result.borrowed(), key, value)?);
+                }
+                Ok(())
+            })
+        })
     }
 
     /// Inserts a freshly materialized value under a freshly boxed string key.
@@ -161,6 +180,47 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
     pub(in crate::interpreter) fn finish(self) -> RuntimeCellHandle {
         self.cell.take()
     }
+}
+
+/// Runs a collection step and drains all its temporary owners, including on error.
+/// Any returned runtime cell must be held by a separate rooted result slot.
+pub(in crate::interpreter) fn with_collection_cells<V: RuntimeValueOps, R>(
+    values: &mut V,
+    operation: impl FnOnce(&mut V, &StagedRuntimeOwners) -> Result<R, EvalStatus>,
+) -> Result<R, EvalStatus> {
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = operation(values, &owners);
+        owners.complete(result, |cell| values.release(cell))
+    })
+}
+
+/// Builds or updates a result while keeping it visible through each step's cleanup.
+pub(in crate::interpreter) fn with_collection_result<V: RuntimeValueOps>(
+    values: &mut V,
+    operation: impl FnOnce(&mut V, &RuntimeOwnerSlot) -> Result<(), EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&result, || {
+        let outcome = operation(values, &result);
+        result.finish(outcome, |cell| values.release(cell))
+    })
+}
+
+/// Roots a direct eval call's operands and result through source evaluation and writeback.
+pub(in crate::interpreter) fn with_collection_call<V: RuntimeValueOps>(
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    operation: impl FnOnce(
+        &mut ElephcEvalContext, &mut V, &StagedRuntimeOwners, &RuntimeOwnerSlot,
+    ) -> Result<(), EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &result), || {
+        let outcome = operation(context, values, &owners, &result);
+        owners.finish(outcome, &result, |cell| release_expr_result(cell, context, values))
+    })
 }
 
 impl<V: RuntimeValueOps> Drop for EvalArrayBuilder<'_, V> {

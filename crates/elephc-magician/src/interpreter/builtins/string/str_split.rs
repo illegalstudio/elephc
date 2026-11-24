@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `str_split(...)` over one string and optional chunk length.
 pub(in crate::interpreter) fn eval_builtin_str_split(
@@ -52,12 +53,9 @@ pub(in crate::interpreter) fn eval_str_split_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let length = usize::try_from(length).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let mut result = values.array_new(0)?;
+    let mut result = EvalArrayBuilder::indexed(values, 0)?;
     for (index, chunk) in bytes.chunks(length).enumerate() {
-        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(index)?;
-        let value = values.string_bytes_value(chunk)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string_bytes_value(chunk))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

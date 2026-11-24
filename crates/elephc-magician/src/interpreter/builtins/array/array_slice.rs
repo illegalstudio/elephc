@@ -12,6 +12,7 @@
 //!   gate asserts.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{EvalArrayBuilder, with_collection_cells};
 
 eval_builtin! {
     contract: "array_slice",
@@ -101,32 +102,40 @@ pub(in crate::interpreter) fn eval_array_slice_result(
         _ => len,
     };
 
-    let mut keys = Vec::with_capacity(end.saturating_sub(start));
-    let mut has_string_key = false;
-    for source_position in start..end {
-        let key = values.array_iter_key(array, source_position)?;
-        has_string_key |= values.type_tag(key)? == EVAL_TAG_STRING;
-        keys.push(key);
-    }
-
-    let mut result = if preserve_keys || has_string_key {
-        values.assoc_new(end.saturating_sub(start))?
+    let has_string_key = if preserve_keys {
+        false
     } else {
-        values.array_new(end.saturating_sub(start))?
+        with_collection_cells(values, |values, owners| {
+            for position in start..end {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                if values.type_tag(key)? == EVAL_TAG_STRING {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?
+    };
+    let mut result = if preserve_keys || has_string_key {
+        EvalArrayBuilder::assoc(values, end.saturating_sub(start))?
+    } else {
+        EvalArrayBuilder::indexed(values, end.saturating_sub(start))?
     };
     let mut next_numeric_key = 0_i64;
-    for key in keys {
-        let source_value = values.array_get(array, key)?;
-        let target_key = if preserve_keys || values.type_tag(key)? == EVAL_TAG_STRING {
-            key
-        } else {
-            let target_key = values.int(next_numeric_key)?;
-            next_numeric_key += 1;
-            target_key
-        };
-        result = values.array_set(result, target_key, source_value)?;
+    for position in start..end {
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, key)?);
+            let target_key = if preserve_keys || values.type_tag(key)? == EVAL_TAG_STRING {
+                key
+            } else {
+                let key = owners.stage(values.int(next_numeric_key)?);
+                next_numeric_key += 1;
+                key
+            };
+            Ok(Some((target_key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Converts a PHP array-slice offset into a bounded source position.

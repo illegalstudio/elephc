@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_merge",
@@ -61,33 +62,24 @@ pub(in crate::interpreter) fn eval_array_merge_result(
     let capacity = left_len
         .checked_add(right_len)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let mut result = values.assoc_new(capacity)?;
+    let mut result = EvalArrayBuilder::assoc(values, capacity)?;
     let mut next_numeric_key = 0_i64;
-    result = eval_array_merge_append_operand(result, left, &mut next_numeric_key, values)?;
-    eval_array_merge_append_operand(result, right, &mut next_numeric_key, values)
-}
-
-/// Appends one source array to an `array_merge()` result using PHP key handling.
-pub(in crate::interpreter) fn eval_array_merge_append_operand(
-    mut result: RuntimeCellHandle,
-    source: RuntimeCellHandle,
-    next_numeric_key: &mut i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = values.array_len(source)?;
-    for position in 0..len {
-        let source_key = values.array_iter_key(source, position)?;
-        let source_value = values.array_get(source, source_key)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_STRING {
-            source_key
-        } else {
-            let target_key = values.int(*next_numeric_key)?;
-            *next_numeric_key = (*next_numeric_key)
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            target_key
-        };
-        result = values.array_set(result, target_key, source_value)?;
+    for (source, len) in [(left, left_len), (right, right_len)] {
+        for position in 0..len {
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(source, position)?);
+                let value = owners.stage(values.array_get(source, key)?);
+                let target_key = if values.type_tag(key)? == EVAL_TAG_STRING {
+                    key
+                } else {
+                    let key = owners.stage(values.int(next_numeric_key)?);
+                    next_numeric_key = next_numeric_key.checked_add(1)
+                        .ok_or(EvalStatus::RuntimeFatal)?;
+                    key
+                };
+                Ok(Some((target_key, value)))
+            })?;
+        }
     }
-    Ok(result)
+    Ok(result.finish())
 }

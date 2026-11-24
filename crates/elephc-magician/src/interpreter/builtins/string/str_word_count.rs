@@ -20,6 +20,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `str_word_count(...)` over one subject and its optional format/characters.
 pub(in crate::interpreter) fn eval_builtin_str_word_count(
@@ -81,20 +82,18 @@ pub(in crate::interpreter) fn eval_str_word_count_result(
     // Format 2 keys words by their byte offset, which is sparse: an indexed array would pad
     // every skipped offset with an empty element, so the map is built as an associative array.
     let mut result = if format == 1 {
-        values.array_new(words.len())?
+        EvalArrayBuilder::indexed(values, words.len())?
     } else {
-        values.assoc_new(words.len())?
+        EvalArrayBuilder::assoc(values, words.len())?
     };
     for (index, (offset, word)) in words.iter().enumerate() {
         let key = match format {
             1 => i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?,
             _ => i64::try_from(*offset).map_err(|_| EvalStatus::RuntimeFatal)?,
         };
-        let key = values.int(key)?;
-        let value = values.string_bytes_value(word)?;
-        result = values.array_set(result, key, value)?;
+        result.entry_key_first(|values| values.int(key), |values| values.string_bytes_value(word))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns each `(byte offset, word bytes)` pair php-src's `str_word_count()` would emit.

@@ -29,6 +29,7 @@ mod codegen {
     mod eval_callable_ref_errors;
     mod eval_callables;
     mod eval_callback_receiver_ownership;
+    mod eval_collection_ownership;
     mod eval_closures;
     mod eval_constructors;
     mod eval_reflection_invocation;

@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates direct `get_declared_classes()` calls.
 pub(in crate::interpreter) fn eval_get_declared_classes_declared_call(
@@ -78,12 +79,9 @@ fn eval_dynamic_string_array_result(
     items: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(items.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, items.len())?;
     for (index, item) in items.iter().enumerate() {
-        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(index)?;
-        let value = values.string(item)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(item))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

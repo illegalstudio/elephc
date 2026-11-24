@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the array-flip hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_flip",
@@ -55,14 +56,14 @@ pub(in crate::interpreter) fn eval_array_flip_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
-            continue;
-        }
-        result = values.array_set(result, value, key)?;
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            let value = owners.stage(values.array_get(array, key)?);
+            let valid = matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING);
+            Ok(valid.then_some((value, key)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

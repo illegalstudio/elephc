@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_fill",
@@ -65,15 +66,14 @@ pub(in crate::interpreter) fn eval_array_fill_result(
     }
     let count = usize::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut result = if start == 0 {
-        values.array_new(count)?
+        EvalArrayBuilder::indexed(values, count)?
     } else {
-        values.assoc_new(count)?
+        EvalArrayBuilder::assoc(values, count)?
     };
     for offset in 0..count {
         let offset = i64::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?;
         let key = start.checked_add(offset).ok_or(EvalStatus::RuntimeFatal)?;
-        let key = values.int(key)?;
-        result = values.array_set(result, key, value)?;
+        result.entry(|_| Ok(value.borrowed()), |values, _| values.int(key))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

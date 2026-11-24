@@ -8,6 +8,10 @@
 //! - Direct calls stay on the source-sensitive by-reference path.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{
+    EvalArrayBuilder, with_collection_call, with_collection_cells, with_collection_result,
+};
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 eval_builtin! {
     contract: "usort",
@@ -70,12 +74,19 @@ pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        let mut entries = eval_user_sort_entries(array, values)?;
-        eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
-        if name == "usort" {
-            return eval_user_sort_reindex_result(entries, values);
-        }
-        eval_user_sort_preserve_key_result(entries, values)
+        with_collection_result(values, |values, result| {
+            with_collection_cells(values, |values, owners| {
+                let mut entries = eval_user_sort_entries(array, values, owners)?;
+                eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
+                let sorted = if name == "usort" {
+                    eval_user_sort_reindex_result(entries, values)?
+                } else {
+                    eval_user_sort_preserve_key_result(entries, values)?
+                };
+                result.replace(Some(sorted));
+                Ok(())
+            })
+        })
     })
 }
 
@@ -83,12 +94,13 @@ pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
 pub(in crate::interpreter) fn eval_user_sort_entries(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalUserSortEntry>, EvalStatus> {
     let len = values.array_len(array)?;
     let mut entries = Vec::with_capacity(len);
     for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
+        let source_key = owners.stage(values.array_iter_key(array, position)?);
+        let value = owners.stage(values.array_get(array, source_key)?);
         entries.push(EvalUserSortEntry { source_key, value });
     }
     Ok(entries)
@@ -131,12 +143,14 @@ pub(in crate::interpreter) fn eval_user_sort_compare(
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     let args = if name == "uksort" {
-        vec![left.source_key, right.source_key]
+        vec![left.source_key.borrowed(), right.source_key.borrowed()]
     } else {
-        vec![left.value, right.value]
+        vec![left.value.borrowed(), right.value.borrowed()]
     };
-    let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-    eval_int_value(result, values)
+    with_collection_cells(values, |values, owners| {
+        let result = owners.stage(eval_evaluated_callable_with_values(callback, args, context, values)?);
+        eval_int_value(result, values)
+    })
 }
 
 /// Builds the reindexed result for `usort()`.
@@ -144,12 +158,11 @@ pub(in crate::interpreter) fn eval_user_sort_reindex_result(
     entries: Vec<EvalUserSortEntry>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(entries.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, entries.len())?;
     for (index, entry) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, entry.value)?;
+        result.index(index, |_| Ok(entry.value.borrowed()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds the key-preserving result for `uksort()` and `uasort()`.
@@ -157,11 +170,11 @@ pub(in crate::interpreter) fn eval_user_sort_preserve_key_result(
     entries: Vec<EvalUserSortEntry>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(entries.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, entries.len())?;
     for entry in entries {
-        result = values.array_set(result, entry.source_key, entry.value)?;
+        result.entry(|_| Ok(entry.value.borrowed()), |_, _| Ok(entry.source_key.borrowed()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Evaluates direct by-reference user-comparator sort calls and writes back the array.
@@ -172,19 +185,14 @@ pub(in crate::interpreter) fn eval_user_sort_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
-
-    let replacement = eval_user_sort_replacement_from_scope(
-        name,
-        array,
-        callback,
-        Some(scope),
-        context,
-        values,
-    )?;
-    let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
-    Ok(result)
+    with_collection_call(context, values, |context, values, owners, result| {
+        let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values, owners)?;
+        result.replace(Some(values.bool_value(true)?));
+        let replacement = eval_user_sort_replacement_from_scope(
+            name, array, callback, Some(scope), context, values,
+        )?;
+        write_back_owned_ref_target(&target, replacement, context, values)
+    })
 }
 
 /// Evaluates and binds direct user-sort arguments while preserving source order.
@@ -193,6 +201,7 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
     let mut array = None;
     let mut callback = None;
@@ -225,14 +234,15 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 array = Some(super::mutation::eval_array_mutation_lvalue_arg(
-                    arg, context, scope, values,
+                    arg, context, scope, values, owners,
                 )?);
             }
             "callback" => {
                 if callback.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                callback = Some(eval_expr(arg.value(), context, scope, values)?);
+                let value = eval_owned_expr(arg.value(), context, scope, values)?;
+                callback = Some(owners.stage(value).borrowed());
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         }

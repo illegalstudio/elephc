@@ -17,6 +17,9 @@
 //!   computes the same move over PHP's temporary copy and leaves the source alone.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{
+    with_collection_call, with_collection_cells, with_collection_result,
+};
 
 /// Returns the addressable internal pointer position for one array cell, if any.
 pub(in crate::interpreter) fn eval_array_pointer_position(
@@ -61,13 +64,18 @@ pub(in crate::interpreter) fn eval_array_pointer_move(
 }
 
 /// Reads the array value stored at one internal pointer position.
-fn eval_array_pointer_value(
+pub(super) fn eval_array_pointer_value(
     array: RuntimeCellHandle,
     position: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.array_iter_key(array, position)?;
-    values.array_get(array, key)
+    with_collection_result(values, |values, result| {
+        with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            result.replace(Some(values.array_get(array, key)?));
+            Ok(())
+        })
+    })
 }
 
 /// Evaluates direct by-reference internal pointer calls and stores the moved cursor.
@@ -81,11 +89,15 @@ pub(in crate::interpreter) fn eval_array_pointer_declared_call(
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let (array, _target) =
-        super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)?;
-    let (cursor, result) = eval_array_pointer_move(name, array, context, values)?;
-    context.set_array_cursor(array, cursor);
-    Ok(result)
+    with_collection_call(context, values, |context, values, owners, output| {
+        let (array, _target) = super::mutation::eval_array_mutation_lvalue_arg(
+            arg, context, scope, values, owners,
+        )?;
+        let (cursor, result) = eval_array_pointer_move(name, array, context, values)?;
+        output.replace(Some(result));
+        context.set_array_cursor(array, cursor);
+        Ok(())
+    })
 }
 
 /// Evaluates by-value callable internal pointer calls without moving the source cursor.

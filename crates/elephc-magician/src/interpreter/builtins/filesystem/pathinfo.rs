@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Dispatches direct eval calls for the `pathinfo` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_pathinfo_declared_call(
@@ -83,29 +84,18 @@ pub(in crate::interpreter) fn eval_pathinfo_array_result(
     path: &[u8],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(4)?;
+    let mut result = EvalArrayBuilder::assoc(values, 4)?;
     if !path.is_empty() {
         let dirname = eval_pathinfo_dirname_bytes(path);
-        result = eval_pathinfo_array_set(result, "dirname", &dirname, values)?;
+        result.string("dirname", |values| values.string_bytes_value(&dirname))?;
     }
     let parts = eval_pathinfo_parts(path);
-    result = eval_pathinfo_array_set(result, "basename", &parts.basename, values)?;
+    result.string("basename", |values| values.string_bytes_value(&parts.basename))?;
     if parts.has_extension {
-        result = eval_pathinfo_array_set(result, "extension", &parts.extension, values)?;
+        result.string("extension", |values| values.string_bytes_value(&parts.extension))?;
     }
-    eval_pathinfo_array_set(result, "filename", &parts.filename, values)
-}
-
-/// Inserts one string component into a PHP `pathinfo()` associative result.
-pub(in crate::interpreter) fn eval_pathinfo_array_set(
-    array: RuntimeCellHandle,
-    key: &str,
-    value: &[u8],
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    let value = values.string_bytes_value(value)?;
-    values.array_set(array, key, value)
+    result.string("filename", |values| values.string_bytes_value(&parts.filename))?;
+    Ok(result.finish())
 }
 
 /// Returns one PHP `pathinfo()` component for a non-all bitmask.

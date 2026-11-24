@@ -10,6 +10,7 @@
 //! - Prototype traversal preserves parent and interface declaration order.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Returns function or method metadata registered for a synthetic reflection owner object.
 pub(super) fn eval_reflection_function_method_target(
@@ -283,19 +284,13 @@ pub(super) fn eval_reflection_function_method_static_variables_result(
     else {
         return values.array_new(0);
     };
-    let mut result = values.assoc_new(static_variables.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, static_variables.len())?;
     for variable in static_variables {
-        let key = values.string(&variable.name)?;
-        let value = eval_reflection_static_local_value(
-            static_key,
-            variable,
-            declaring_class,
-            context,
-            values,
-        )?;
-        result = values.array_set(result, key, value)?;
+        result.string(&variable.name, |values| {
+            eval_reflection_static_local_value(static_key, variable, declaring_class, context, values)
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns static-local storage details retained for a reflected eval function or method.
@@ -517,13 +512,11 @@ pub(super) fn eval_reflection_function_closure_used_variables_result(
     else {
         return values.array_new(0);
     };
-    let mut result = values.assoc_new(closure_captures.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, closure_captures.len())?;
     for capture in closure_captures {
-        let key = values.string(capture.name())?;
-        let value = values.retain(capture.value())?;
-        result = values.array_set(result, key, value)?;
+        result.string(capture.name(), |_| Ok(capture.value().borrowed()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds `ReflectionFunction::getClosureThis()` from retained Closure target metadata.

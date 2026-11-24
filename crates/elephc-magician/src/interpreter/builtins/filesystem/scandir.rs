@@ -15,6 +15,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
 
 /// Dispatches direct eval calls for the `scandir` filesystem builtin through the area dispatcher.
@@ -68,11 +69,11 @@ pub(in crate::interpreter) fn eval_scandir_result(
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
     names.sort();
-    let mut result = values.array_new(names.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, names.len())?;
     for (index, name) in names.iter().enumerate() {
-        result = eval_array_set_indexed_bytes(result, index, name.as_bytes(), values)?;
+        result.index(index, |values| values.string_bytes_value(name.as_bytes()))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Writes one byte-string value into an indexed runtime array at a zero-based position.

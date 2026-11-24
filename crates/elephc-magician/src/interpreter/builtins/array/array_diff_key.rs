@@ -8,6 +8,7 @@
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 eval_builtin! {
     contract: "array_diff_key",
@@ -59,20 +60,20 @@ pub(in crate::interpreter) fn eval_array_key_set_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let left_len = values.array_len(left)?;
-    let mut result = values.assoc_new(left_len)?;
+    let mut result = EvalArrayBuilder::assoc(values, left_len)?;
     for position in 0..left_len {
-        let key = values.array_iter_key(left, position)?;
-        let value = values.array_get(left, key)?;
-        let exists = values.array_key_exists(key, right)?;
-        let found = values.truthy(exists)?;
-        let keep = match name {
-            "array_diff_key" => !found,
-            "array_intersect_key" => found,
-            _ => return Err(EvalStatus::UnsupportedConstruct),
-        };
-        if keep {
-            result = values.array_set(result, key, value)?;
-        }
+        result.update(|values, owners, _| {
+            let key = owners.stage(values.array_iter_key(left, position)?);
+            let value = owners.stage(values.array_get(left, key)?);
+            let exists = owners.stage(values.array_key_exists(key, right)?);
+            let found = values.truthy(exists)?;
+            let keep = match name {
+                "array_diff_key" => !found,
+                "array_intersect_key" => found,
+                _ => return Err(EvalStatus::UnsupportedConstruct),
+            };
+            Ok(keep.then_some((key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

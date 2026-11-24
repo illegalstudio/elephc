@@ -8,6 +8,9 @@
 //! - Direct calls stay on the source-sensitive by-reference path.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::{
+    EvalArrayBuilder, with_collection_call, with_collection_cells, with_collection_result,
+};
 
 eval_builtin! {
     contract: "array_splice",
@@ -38,13 +41,14 @@ pub(in crate::interpreter) fn eval_builtin_array_splice_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, target, offset, length, replacement_arg) =
-        eval_array_splice_direct_args(args, context, scope, values)?;
-
-    let (removed, replacement) =
-        eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, values)?;
-    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
-    Ok(removed)
+    with_collection_call(context, values, |context, values, owners, output| {
+        let (array, target, offset, length, replacement_arg) =
+            eval_array_splice_direct_args(args, context, scope, values, owners)?;
+        let (removed, replacement) =
+            eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, values)?;
+        output.replace(Some(removed));
+        write_back_owned_ref_target(&target, replacement, context, values)
+    })
 }
 
 /// Evaluates and binds direct `array_splice()` arguments while preserving source order.
@@ -53,6 +57,7 @@ pub(in crate::interpreter) fn eval_array_splice_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    owners: &crate::runtime_hooks::owner_frames::StagedRuntimeOwners,
 ) -> Result<EvalArraySpliceDirectArgs, EvalStatus> {
     let mut array = None;
     let mut offset = None;
@@ -89,26 +94,26 @@ pub(in crate::interpreter) fn eval_array_splice_direct_args(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 array = Some(super::mutation::eval_array_mutation_lvalue_arg(
-                    arg, context, scope, values,
+                    arg, context, scope, values, owners,
                 )?);
             }
             "offset" => {
                 if offset.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                offset = Some(eval_expr(arg.value(), context, scope, values)?);
+                offset = Some(owners.stage(eval_owned_expr(arg.value(), context, scope, values)?));
             }
             "length" => {
                 if length.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                length = Some(eval_expr(arg.value(), context, scope, values)?);
+                length = Some(owners.stage(eval_owned_expr(arg.value(), context, scope, values)?));
             }
             "replacement" => {
                 if replacement.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                replacement = Some(eval_expr(arg.value(), context, scope, values)?);
+                replacement = Some(owners.stage(eval_owned_expr(arg.value(), context, scope, values)?));
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         }
@@ -142,10 +147,23 @@ pub(in crate::interpreter) fn eval_array_splice_removed_and_replacement(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
-    let removed = eval_array_splice_removed(array, start, end, values)?;
-    let inserted = eval_array_splice_insert_values(replacement, values)?;
-    let replacement = eval_array_splice_replacement(array, start, end, &inserted, values)?;
-    Ok((removed, replacement))
+    let mut removed = None;
+    let replacement = with_collection_result(values, |values, rebuilt| {
+        let original = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+            eval_array_splice_removed(array, start, end, values)?,
+        );
+        crate::runtime_hooks::owner_frames::with_runtime_owners(&original, || {
+            let outcome = with_collection_cells(values, |values, owners| {
+                let inserted = eval_array_splice_insert_values(replacement, values, owners)?;
+                let replacement = eval_array_splice_replacement(array, start, end, &inserted, values)?;
+                rebuilt.replace(Some(replacement));
+                Ok(())
+            });
+            removed = Some(original.finish(outcome, |cell| values.release(cell))?);
+            Ok(())
+        })
+    })?;
+    Ok((removed.expect("successful splice"), replacement))
 }
 
 /// Converts splice offset and length cells into bounded source positions.
@@ -176,41 +194,46 @@ pub(in crate::interpreter) fn eval_array_splice_removed(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = end.saturating_sub(start);
     if eval_array_range_keys_are_int(array, start, end, values)? {
-        let mut result = values.array_new(len)?;
+        let mut result = EvalArrayBuilder::indexed(values, len)?;
         let mut target = 0_i64;
         for position in start..end {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                let target_key = owners.stage(values.int(target)?);
+                target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                Ok(Some((target_key, value)))
+            })?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
 
-    let mut result = values.assoc_new(len)?;
+    let mut result = EvalArrayBuilder::assoc(values, len)?;
     let mut next_int_key = 0_i64;
     for position in start..end {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
-            next_int_key = next_int_key
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(array, position)?);
+            let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+                let key = owners.stage(values.int(next_int_key)?);
+                next_int_key = next_int_key
+                    .checked_add(1)
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                key
+            } else {
+                source_key
+            };
+            let value = owners.stage(values.array_get(array, source_key)?);
+            Ok(Some((target_key, value)))
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Expands the optional `array_splice()` replacement value into inserted values.
 pub(in crate::interpreter) fn eval_array_splice_insert_values(
     replacement: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
+    owners: &crate::runtime_hooks::owner_frames::StagedRuntimeOwners,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let Some(replacement) = replacement else {
         return Ok(Vec::new());
@@ -225,8 +248,8 @@ pub(in crate::interpreter) fn eval_array_splice_insert_values(
     let len = values.array_len(replacement)?;
     let mut inserted = Vec::with_capacity(len);
     for position in 0..len {
-        let key = values.array_iter_key(replacement, position)?;
-        inserted.push(values.array_get(replacement, key)?);
+        let key = owners.stage(values.array_iter_key(replacement, position)?);
+        inserted.push(owners.stage(values.array_get(replacement, key)?));
     }
     Ok(inserted)
 }
@@ -245,68 +268,80 @@ pub(in crate::interpreter) fn eval_array_splice_replacement(
         .checked_add(inserted.len())
         .ok_or(EvalStatus::RuntimeFatal)?;
     if eval_array_splice_remaining_keys_are_int(array, start, end, len, values)? {
-        let mut result = values.array_new(new_len)?;
+        let mut result = EvalArrayBuilder::indexed(values, new_len)?;
         let mut target = 0_i64;
         for position in 0..start {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                let target_key = owners.stage(values.int(target)?);
+                target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                Ok(Some((target_key, value)))
+            })?;
         }
         for value in inserted {
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, *value)?;
+            result.update(|values, owners, _| {
+                let target_key = owners.stage(values.int(target)?);
+                target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                Ok(Some((target_key, *value)))
+            })?;
         }
         for position in end..len {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
+            result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let value = owners.stage(values.array_get(array, key)?);
+                let target_key = owners.stage(values.int(target)?);
+                target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                Ok(Some((target_key, value)))
+            })?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
 
-    let mut result = values.assoc_new(new_len)?;
+    let mut result = EvalArrayBuilder::assoc(values, new_len)?;
     let mut next_int_key = 0_i64;
     for position in 0..start {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
-            next_int_key = next_int_key
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(array, position)?);
+            let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+                let key = owners.stage(values.int(next_int_key)?);
+                next_int_key = next_int_key
+                    .checked_add(1)
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                key
+            } else {
+                source_key
+            };
+            let value = owners.stage(values.array_get(array, source_key)?);
+            Ok(Some((target_key, value)))
+        })?;
     }
     for value in inserted {
-        let target_key = values.int(next_int_key)?;
-        next_int_key = next_int_key
-            .checked_add(1)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        result = values.array_set(result, target_key, *value)?;
-    }
-    for position in end..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
+        result.update(|values, owners, _| {
+            let target_key = owners.stage(values.int(next_int_key)?);
             next_int_key = next_int_key
                 .checked_add(1)
                 .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
+            Ok(Some((target_key, *value)))
+        })?;
     }
-    Ok(result)
+    for position in end..len {
+        result.update(|values, owners, _| {
+            let source_key = owners.stage(values.array_iter_key(array, position)?);
+            let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+                let key = owners.stage(values.int(next_int_key)?);
+                next_int_key = next_int_key
+                    .checked_add(1)
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                key
+            } else {
+                source_key
+            };
+            let value = owners.stage(values.array_get(array, source_key)?);
+            Ok(Some((target_key, value)))
+        })?;
+    }
+    Ok(result.finish())
 }
 
 /// Returns true when every key in one source position range is integer-shaped.
@@ -317,8 +352,11 @@ pub(in crate::interpreter) fn eval_array_range_keys_are_int(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     for position in start..end {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
+        let integer = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.array_iter_key(array, position)?);
+            Ok(values.type_tag(key)? == EVAL_TAG_INT)
+        })?;
+        if !integer {
             return Ok(false);
         }
     }
@@ -333,14 +371,6 @@ pub(in crate::interpreter) fn eval_array_splice_remaining_keys_are_int(
     len: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    for position in 0..len {
-        if (start..end).contains(&position) {
-            continue;
-        }
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Ok(eval_array_range_keys_are_int(array, 0, start, values)?
+        && eval_array_range_keys_are_int(array, end, len, values)?)
 }

@@ -627,41 +627,48 @@ fn eval_curl_run_callback<V: RuntimeValueOps>(
     //
     // This invocation owns the generated argument cells. Keep their leases until the
     // callable returns, retaining a borrowed result before retiring those arguments.
-    let mut args = vec![values.curl_handle(table_id)?];
-    let outcome = (|| {
-        let argc = usize::try_from(spec.argc).unwrap_or(0);
-        for index in 0..argc {
-            // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
-            // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
-            // their own stacks).
-            let arg = unsafe { &*spec.argv.add(index) };
-            let cell = match arg.tag {
-                ffi::CALL_TAG_INT => values.int(arg.lo)?,
-                ffi::CALL_TAG_NULL => values.null()?,
-                ffi::CALL_TAG_STRING => {
-                    let len = usize::try_from(arg.hi).unwrap_or(0);
-                    let ptr = arg.lo as usize as *const u8;
-                    if len == 0 || ptr.is_null() {
-                        values.string_bytes_value(&[])?
-                    } else {
-                        // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
-                        // buffer, valid only for this call.
-                        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-                        values.string_bytes_value(bytes)?
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
+
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    let result = with_runtime_owners(&(&owners, &result), || {
+        let outcome = (|| {
+            let handle = owners.stage(values.curl_handle(table_id)?);
+            let mut args = vec![handle.borrowed()];
+            let argc = usize::try_from(spec.argc).unwrap_or(0);
+            for index in 0..argc {
+                // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
+                // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
+                // their own stacks).
+                let arg = unsafe { &*spec.argv.add(index) };
+                let cell = match arg.tag {
+                    ffi::CALL_TAG_INT => values.int(arg.lo)?,
+                    ffi::CALL_TAG_NULL => values.null()?,
+                    ffi::CALL_TAG_STRING => {
+                        let len = usize::try_from(arg.hi).unwrap_or(0);
+                        let ptr = arg.lo as usize as *const u8;
+                        if len == 0 || ptr.is_null() {
+                            values.string_bytes_value(&[])?
+                        } else {
+                            // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
+                            // buffer, valid only for this call.
+                            let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+                            values.string_bytes_value(bytes)?
+                        }
                     }
-                }
-                // Defensively, any tag a future bridge might add: the three named above are the
-                // only ones the six trampolines produce today, and PHP `null` is the least
-                // surprising stand-in for one this build does not know.
-                _ => values.null()?,
-            };
-            args.push(cell);
-        }
-        eval_evaluated_callable_with_values(callable, args.clone(), context, values)
-    })();
-    let result = crate::interpreter::operands::finish_eval_argument_values(
-        outcome, args, context, values,
-    )?;
+                    // Defensively, any tag a future bridge might add: the three named above are the
+                    // only ones the six trampolines produce today, and PHP `null` is the least
+                    // surprising stand-in for one this build does not know.
+                    _ => values.null()?,
+                };
+                args.push(owners.stage(cell).borrowed());
+            }
+            let returned = eval_evaluated_callable_with_values(callable, args, context, values)?;
+            result.replace(Some(promote_borrowed_result(returned, values)?));
+            Ok(())
+        })();
+        owners.finish(outcome, &result, |cell| release_expr_result(cell, context, values))
+    })?;
     let converted = (|| {
         debug_assert!(
             spec.result_kind == ffi::RESULT_INT || spec.result_kind == ffi::RESULT_STRING,

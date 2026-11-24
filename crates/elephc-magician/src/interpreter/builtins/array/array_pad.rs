@@ -11,6 +11,7 @@
 //!   driving the interpreter through a multi-billion-element build loop.
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// The largest `array_pad()` `$length` magnitude reference PHP will build an array for.
 ///
@@ -82,46 +83,19 @@ pub(in crate::interpreter) fn eval_array_pad_result(
         .and_then(|value| usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal))?;
     let result_len = usize::max(len, target_len);
     let pad_count = result_len.saturating_sub(len);
-    let mut result = values.array_new(result_len)?;
-    let mut output_index = 0usize;
-
-    if target < 0 {
-        let (padded, next_index) =
-            eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?;
-        result = padded;
-        output_index = next_index;
+    let mut result = EvalArrayBuilder::indexed(values, result_len)?;
+    let left = if target < 0 { pad_count } else { 0 };
+    for index in 0..result_len {
+        match index.checked_sub(left) {
+            Some(position) if position < len => result.update(|values, owners, _| {
+                let key = owners.stage(values.array_iter_key(array, position)?);
+                let element = owners.stage(values.array_get(array, key)?);
+                let key = owners.stage(values.int(i64::try_from(index)
+                    .map_err(|_| EvalStatus::RuntimeFatal)?)?);
+                Ok(Some((key, element)))
+            })?,
+            _ => result.index(index, |_| Ok(value.borrowed()))?,
+        }
     }
-
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let source_value = values.array_get(array, source_key)?;
-        let target_key = i64::try_from(output_index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let target_key = values.int(target_key)?;
-        result = values.array_set(result, target_key, source_value)?;
-        output_index += 1;
-    }
-
-    if target > 0 {
-        result = eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?.0;
-    }
-
-    Ok(result)
-}
-
-/// Appends the same pad value at consecutive indexed positions in an array result.
-pub(in crate::interpreter) fn eval_array_pad_append_repeated(
-    mut array: RuntimeCellHandle,
-    start_index: usize,
-    count: usize,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, usize), EvalStatus> {
-    let mut next_index = start_index;
-    for _ in 0..count {
-        let key = i64::try_from(next_index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(key)?;
-        array = values.array_set(array, key, value)?;
-        next_index += 1;
-    }
-    Ok((array, next_index))
+    Ok(result.finish())
 }
