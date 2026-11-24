@@ -352,12 +352,7 @@ pub(in crate::codegen::lower_inst::builtins) fn load_optional_sprintf_eval_conte
     arg_index: usize,
 ) -> Result<()> {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
-    let slot = ctx
-        .function
-        .locals
-        .iter()
-        .find(|local| local.kind == LocalKind::EvalContext)
-        .map(|local| local.id);
+    let slot = ctx.eval_context_local();
     if let Some(slot) = slot {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, arg_reg, offset);

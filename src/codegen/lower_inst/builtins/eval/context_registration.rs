@@ -60,12 +60,7 @@ pub(in crate::codegen::lower_inst::builtins) fn register_eval_inventory(
 /// accepts a null handle for that case and resolves the retained callback-owner contexts instead
 /// of forcing every AOT function to reserve a persistent eval frame slot.
 pub(super) fn load_eval_context_or_null(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    if ctx
-        .function
-        .locals
-        .iter()
-        .any(|local| local.kind == LocalKind::EvalContext)
-    {
+    if ctx.eval_context_local().is_some() {
         return ensure_eval_context(ctx);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -923,11 +918,7 @@ pub(super) fn mark_eval_web_sapi(ctx: &mut FunctionContext<'_>) {
 
 /// Returns the hidden frame slot that owns this function's persistent eval context.
 pub(super) fn eval_context_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
-    ctx.function
-        .locals
-        .iter()
-        .find(|local| local.kind == LocalKind::EvalContext)
-        .map(|local| local.id)
+    ctx.eval_context_local()
         .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval context local"))
 }
 

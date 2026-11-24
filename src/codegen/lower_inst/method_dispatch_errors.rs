@@ -100,19 +100,81 @@ pub(super) fn emit_undefined_or_arity_error(
     receiver_reg: &str,
     method_name: &str,
 ) -> Result<()> {
-    let arity = arity_mismatches(ctx, method_name, inst.operands.len())?;
+    // The classes declaring the method at another count, and their messages, live in ONE helper per
+    // (method, operand count): the site used to carry a class-id ladder and one raise per such
+    // class. The helper answers the message of the receiver's class, or nothing.
+    let helper = arity_message_helper(ctx, method_name, inst.operands.len())?;
+    let target = ctx.emitter.target;
+    abi::emit_push_reg(ctx.emitter, receiver_reg);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 0), receiver_reg);
+    abi::emit_call_label(ctx.emitter, &helper);
     let undefined = ctx.next_label("mixed_method_undefined");
-    let pairs = arity.iter().map(|mismatch| (
-        mismatch.class_id, ctx.next_label(&format!("method_arity_{}", mismatch.class_id)),
-    )).collect::<Vec<_>>();
-    emit_class_id_ladder(ctx, receiver_reg, &pairs, &undefined);
-    ctx.emitter.label(&undefined);
-    emit_undefined_method_fatal(ctx, receiver_reg, method_name);
-    for (mismatch, (_, label)) in arity.iter().zip(&pairs) {
-        ctx.emitter.label(label);
-        super::exceptions::emit_argument_count_error(ctx, &mismatch.message, None);
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {ptr_reg}, {undefined}"));    // no arity message: the method is undefined
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {ptr_reg}, {ptr_reg}"));     // no arity message: the method is undefined
+            ctx.emitter.instruction(&format!("jz {undefined}"));                // the method is undefined
+        }
     }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::exceptions::emit_argument_count_error_from_string_result(ctx);
+    ctx.emitter.label(&undefined);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, receiver_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_undefined_method_fatal(ctx, receiver_reg, method_name);
     Ok(())
+}
+
+/// Returns the entry of the shared helper that names the arity error of a receiver's class.
+///
+/// In: the receiver object in the first argument register. Out: the static message in the
+/// string-result registers when the receiver's class declares the method at another count, a null
+/// pointer otherwise. The helper is a leaf with no frame; its messages are data.
+fn arity_message_helper(
+    ctx: &mut FunctionContext<'_>,
+    method_name: &str,
+    operand_count: usize,
+) -> Result<String> {
+    let key = format!("arity_message:{}:{}", php_symbol_key(method_name), operand_count);
+    let label = ctx.keyed_global_label(&key, "arity_message");
+    if !ctx.shared.first_keyed_helper_emission(&key) {
+        return Ok(label);
+    }
+    let arity = arity_mismatches(ctx, method_name, operand_count)?;
+    let messages = arity
+        .iter()
+        .map(|mismatch| ctx.data.add_string(mismatch.message.as_bytes()))
+        .collect::<Vec<_>>();
+    let frame_slot_base = ctx.emitter.frame_slot_base.take();
+    let scope = ctx.emitter.begin_out_of_line();
+    ctx.emit_keyed_helper(&key, |ctx| {
+        ctx.emitter.label_global(&label);
+        let target = ctx.emitter.target;
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        let class_id_reg = abi::symbol_scratch_reg(ctx.emitter);
+        let compare_reg = abi::temp_int_reg(target);
+        abi::emit_load_from_address(ctx.emitter, class_id_reg, abi::int_arg_reg_name(target, 0), 0);
+        let labels = arity.iter().map(|_| ctx.next_label("arity_message_class")).collect::<Vec<_>>();
+        for (mismatch, class_label) in arity.iter().zip(&labels) {
+            abi::emit_load_int_immediate(ctx.emitter, compare_reg, mismatch.class_id as i64);
+            emit_cmp_regs(ctx, class_id_reg, compare_reg);
+            abi::emit_branch_if_equal_wide(ctx.emitter, class_label);
+        }
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_return(ctx.emitter);
+        for ((data_label, len), class_label) in messages.iter().zip(&labels) {
+            ctx.emitter.label(class_label);
+            abi::emit_symbol_address(ctx.emitter, ptr_reg, data_label);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, *len as i64);
+            abi::emit_return(ctx.emitter);
+        }
+    });
+    ctx.emitter.end_out_of_line(scope);
+    ctx.emitter.frame_slot_base = frame_slot_base;
+    Ok(label)
 }
 
 /// The PHP type name for a static non-object receiver, or `None` when the bool must be loaded.
@@ -172,28 +234,6 @@ fn emit_undefined_method_fatal(
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::exceptions::emit_error_from_string_result(ctx);
-}
-
-/// Compares the receiver's class id with each pair and jumps to `fallthrough` otherwise.
-fn emit_class_id_ladder(
-    ctx: &mut FunctionContext<'_>,
-    receiver_reg: &str,
-    pairs: &[(u64, String)],
-    fallthrough: &str,
-) {
-    if pairs.is_empty() {
-        abi::emit_jump(ctx.emitter, fallthrough);
-        return;
-    }
-    let class_id_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let compare_reg = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
-    for (class_id, label) in pairs {
-        abi::emit_load_int_immediate(ctx.emitter, compare_reg, *class_id as i64);
-        emit_cmp_regs(ctx, class_id_reg, compare_reg);
-        abi::emit_branch_if_equal_wide(ctx.emitter, label);
-    }
-    abi::emit_jump(ctx.emitter, fallthrough);
 }
 
 /// Compares two integer registers. The following branch reads the condition.

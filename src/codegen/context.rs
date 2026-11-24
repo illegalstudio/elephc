@@ -156,6 +156,9 @@ pub(crate) struct FunctionContext<'a> {
     /// `Function::value_use_counts` of this body, counted on first use: a `yield` asked it per
     /// site and recounted the whole body each time.
     use_counts: std::cell::OnceCell<crate::ir::ValueUseCounts>,
+    /// The body's eval-context local, found on first use: `has_eval_context` is asked by every
+    /// property read and call, and each ask scanned all the body's locals.
+    eval_context_slot: std::cell::OnceCell<Option<LocalSlotId>>,
     numeric_proof: std::cell::OnceCell<std::cell::RefCell<crate::ir_passes::numeric_domain::NumericInputs<'a>>>,
     callable_reachability: CallableReachabilityAnalysis,
     /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
@@ -332,6 +335,7 @@ impl<'a> FunctionContext<'a> {
             local_store_operands: std::cell::OnceCell::new(),
             numeric_proof: std::cell::OnceCell::new(),
             use_counts: std::cell::OnceCell::new(),
+            eval_context_slot: std::cell::OnceCell::new(),
             callable_reachability,
             label_scope,
             adopt_mixed_box_source: false,
@@ -453,6 +457,17 @@ impl<'a> FunctionContext<'a> {
         self.label_counter = saved_counter;
         self.helper_scope = saved_helper;
         result
+    }
+
+    /// The body's eval-context local, scanned for once.
+    pub(crate) fn eval_context_local(&self) -> Option<LocalSlotId> {
+        *self.eval_context_slot.get_or_init(|| {
+            self.function
+                .locals
+                .iter()
+                .find(|local| local.kind == LocalKind::EvalContext)
+                .map(|local| local.id)
+        })
     }
 
     /// Mints a shared helper's entry symbol from its cache key, emitting nothing.

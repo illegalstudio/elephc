@@ -99,6 +99,9 @@ pub(crate) struct SharedCodegenState {
     /// Every by-reference physical method implementation, by method key: `entries` asked it of
     /// every class of the module at every resolved method call.
     reference_return_index: std::cell::OnceCell<super::lower_inst::reference_return_dispatch::ReferenceReturnIndex>,
+    /// The abstract classes of the module by the method key they leave abstract: a method call site
+    /// asked every class of the module whether it was abstract and lacked the method.
+    abstract_classes_by_method: std::cell::OnceCell<crate::fast_hash::FastMap<String, Vec<String>>>,
     /// Whether the module has enough classes with a `__set` method or a per-instance hash for a
     /// write site to call the shared tail instead of carrying the arms itself.
     magic_set_tail_worthwhile: std::cell::OnceCell<bool>,
@@ -748,6 +751,14 @@ impl SharedCodegenState {
         *self.magic_set_tail_worthwhile.get_or_init(build)
     }
 
+    /// The abstract-class index, built once by `build`; see the field.
+    pub(super) fn abstract_classes_by_method(
+        &self,
+        build: impl FnOnce() -> crate::fast_hash::FastMap<String, Vec<String>>,
+    ) -> &crate::fast_hash::FastMap<String, Vec<String>> {
+        self.abstract_classes_by_method.get_or_init(build)
+    }
+
     /// The by-reference implementation index, built once by `build`; see the field.
     pub(super) fn reference_return_index(
         &self,
@@ -889,6 +900,7 @@ impl SharedCodegenState {
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),
             reference_return_index: std::cell::OnceCell::new(),
+            abstract_classes_by_method: std::cell::OnceCell::new(),
             magic_set_tail_worthwhile: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),

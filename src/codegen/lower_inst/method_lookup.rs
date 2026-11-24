@@ -25,12 +25,25 @@ pub(super) fn lower_method_lookup(ctx: &mut FunctionContext<'_>, inst: &Instruct
     lower_native_method_lookup(ctx, object, &method)
 }
 
+/// Every abstract class of the module by the method keys it leaves abstract, built once.
+fn abstract_classes_index(module: &crate::ir::Module) -> crate::fast_hash::FastMap<String, Vec<String>> {
+    let mut index: crate::fast_hash::FastMap<String, Vec<String>> = crate::fast_hash::FastMap::default();
+    for (class, info) in &module.class_infos {
+        if !info.is_abstract { continue; }
+        for method in &info.abstract_methods {
+            index.entry(method.clone()).or_default().push(class.clone());
+        }
+    }
+    index
+}
+
 /// Rejects native abstract targets through the existing class and lexical visibility metadata.
 fn lower_native_method_lookup(ctx: &mut FunctionContext<'_>, object: ValueId, method: &str) -> Result<()> {
     let key = php_symbol_key(method);
     if method_is_definitely_concrete(ctx, object, method)? { return Ok(()); }
-    let mut candidates = ctx.module.class_infos.iter()
-        .filter(|(_, info)| info.is_abstract && info.abstract_methods.contains(&key))
+    let abstract_classes = ctx.shared.abstract_classes_by_method(|| abstract_classes_index(ctx.module));
+    let mut candidates = abstract_classes.get(&key).into_iter().flatten()
+        .filter_map(|class| ctx.module.class_infos.get(class).map(|info| (class, info)))
         .filter_map(|(class, info)| {
             let declaring = info.method_declaring_classes.get(&key).unwrap_or(class);
             let declarations = ctx.module.class_infos.get(declaring).map(|info| &info.method_decls)

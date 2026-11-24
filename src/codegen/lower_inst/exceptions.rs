@@ -327,6 +327,15 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     Ok(())
 }
 
+/// Throws a catchable PHP `ArgumentCountError` whose message already sits in the string-result
+/// registers, naming the line of the throwing statement.
+pub(super) fn emit_argument_count_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ArgumentCountError");
+    emit_dynamic_throwable_object(ctx, "_spl_argument_count_error_class_id");
+}
+
 /// Throws a catchable PHP `Error` whose message already sits in the string-result registers.
 pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -688,6 +697,10 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
                 abi::emit_load_symbol_to_reg(ctx.emitter, "x9", &site, 0);
                 ctx.emitter.instruction("ldr x9, [x9, #8]");                    // the calling statement's line
                 abi::emit_store_to_address(ctx.emitter, "x9", "x0", crate::codegen_support::throwable_layout::LINE_OFFSET);
+            } else if let Some((_, line)) = ctx.current_source_location() {
+                // The throwing statement's own line, as php names it.
+                abi::emit_load_int_immediate(ctx.emitter, "x9", i64::from(line));
+                abi::emit_store_to_address(ctx.emitter, "x9", "x0", crate::codegen_support::throwable_layout::LINE_OFFSET);
             } else {
                 crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             }
@@ -714,6 +727,9 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
                 let site = abi::php_site_symbol(&ctx.emitter.target);
                 abi::emit_load_symbol_to_reg(ctx.emitter, "r10", &site, 0);
                 ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");        // the calling statement's line
+                abi::emit_store_to_address(ctx.emitter, "r10", "rax", crate::codegen_support::throwable_layout::LINE_OFFSET);
+            } else if let Some((_, line)) = ctx.current_source_location() {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", i64::from(line));
                 abi::emit_store_to_address(ctx.emitter, "r10", "rax", crate::codegen_support::throwable_layout::LINE_OFFSET);
             } else {
                 crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");

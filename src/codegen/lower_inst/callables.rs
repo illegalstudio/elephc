@@ -309,7 +309,7 @@ fn uses_shared_boxed_normalizer(ctx: &FunctionContext<'_>, inst: &Instruction, c
     ctx.runtime_callable_candidates(callable).is_none()
         && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
         && crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module)
-        && !ctx.function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::EvalContext)
+        && ctx.eval_context_local().is_none()
         && !crate::codegen::shared_mixed_callable::scope_reaches_non_public_methods(ctx)
 }
 
