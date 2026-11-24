@@ -393,11 +393,21 @@ pub struct FinalAbstractImport {
 }
 
 /// The class-body or concrete imported methods that are checked as overrides of a visible
-/// ancestor method before an abstract `as final` import they replace is reported, by lowercase
-/// class and method name, with the importing trait and the import's method name. The class
-/// schema reports `Cannot override final method T::foo()` for one only after its ordinary
-/// override checks pass, as PHP inherits the parent before it binds abstract trait methods.
-pub(crate) type FinalAbstractBodyOverrides = HashMap<(String, String), (String, String)>;
+/// ancestor method before the abstract trait methods of their name are bound, by lowercase class
+/// and method name, with the error that binding reports (an overridden `as final` import, or a
+/// plain abstract import of the other kind). The class schema reports it only after its
+/// ordinary override checks pass, as PHP inherits the parent before it binds abstract trait
+/// methods.
+pub(crate) type FinalAbstractBodyOverrides = HashMap<(String, String), String>;
+
+/// The first failure of the abstract trait methods bound under one name
+/// (`first_overridden_final_import`).
+enum AbstractBindingFailure {
+    /// An abstract `as final` import that the method holding the name overrides.
+    Final(usize),
+    /// A plain abstract import of the other kind (static or instance) than that method.
+    Kind,
+}
 
 /// Groups `bound` (in binding order) by method name, keeping the groups an abstract `as final`
 /// import takes part in.
@@ -440,7 +450,10 @@ fn concrete_import(imports: &[ImportedMethod]) -> Option<&ImportedMethod> {
 /// reports, so no final import is reported after it. A later copy of the abstract trait method
 /// already bound is skipped. `held` is whether the holder before the abstract ones bind (an own
 /// method, a concrete import or an ancestor method) is static, or `None` without one.
-fn first_overridden_final_import(held: Option<bool>, imports: &[ImportedMethod]) -> Option<usize> {
+fn first_overridden_final_import(
+    held: Option<bool>,
+    imports: &[ImportedMethod],
+) -> Option<AbstractBindingFailure> {
     let mut holder_is_static = held;
     let mut bound: Option<&ImportedMethod> = None;
     for (index, method) in imports.iter().enumerate() {
@@ -461,10 +474,10 @@ fn first_overridden_final_import(held: Option<bool>, imports: &[ImportedMethod])
             continue;
         }
         if method.decl.is_final {
-            return Some(index);
+            return Some(AbstractBindingFailure::Final(index));
         }
         if method.decl.is_static != is_static {
-            return None;
+            return Some(AbstractBindingFailure::Kind);
         }
     }
     None
@@ -496,7 +509,9 @@ fn reject_overridden_final_imports(
         let held = own
             .map(|method| method.is_static)
             .or_else(|| concrete_import(imports).map(|method| method.decl.is_static));
-        if let Some(index) = first_overridden_final_import(held, imports) {
+        if let Some(AbstractBindingFailure::Final(index)) =
+            first_overridden_final_import(held, imports)
+        {
             let at = own.map_or(span, |method| method.span);
             return Err(final_import_override(at, &imports[index]));
         }
@@ -510,7 +525,8 @@ fn reject_overridden_final_imports(
 /// every method of the name is dropped so the schema reports nothing more about it, except when
 /// the method holding the name is the class's own or a concrete import and a visible ancestor
 /// method declares it too: PHP checks that override first, so the method stays, the others of
-/// the name are dropped, and it is returned in the body-override map for the class schema.
+/// the name are dropped, and the binding failure (an overridden final import, or a plain
+/// abstract import of the other kind) is returned in the body-override map for the schema.
 pub(crate) fn final_abstract_import_overrides(
     groups: &[FinalAbstractImport],
     classes: &mut HashMap<String, FlattenedClass>,
@@ -533,25 +549,38 @@ pub(crate) fn final_abstract_import_overrides(
             .map(|(_, is_static)| is_static)
             .or_else(|| concrete.map(|method| method.decl.is_static))
             .or_else(|| ancestor.map(|method| method.is_static));
-        let Some(index) = first_overridden_final_import(held, &group.imports) else {
+        let Some(failure) = first_overridden_final_import(held, &group.imports) else {
             continue;
         };
-        let import = &group.imports[index];
         let holder = own.or(concrete.map(|method| method.decl.span));
         let checked_first =
             ancestor.is_some_and(|method| method.visibility != Visibility::Private);
-        match holder {
-            Some(holder) if checked_first => {
+        match (holder, failure) {
+            (Some(holder), failure) if checked_first => {
+                let message = match failure {
+                    AbstractBindingFailure::Final(index) => {
+                        final_import_override(holder, &group.imports[index]).message
+                    }
+                    AbstractBindingFailure::Kind => format!(
+                        "Cannot change method kind when overriding {}::{}",
+                        group.class, name
+                    ),
+                };
                 body_overrides.insert(
                     (php_symbol_key(&group.class), php_symbol_key(name)),
-                    (import.source_trait.clone(), import.decl.name.clone()),
+                    message,
                 );
                 dropped.push((&group.class, name, Some(holder)));
             }
-            _ => {
-                errors.push(final_import_override(own.unwrap_or(group.span), import));
+            (_, AbstractBindingFailure::Final(index)) => {
+                errors.push(final_import_override(
+                    own.unwrap_or(group.span),
+                    &group.imports[index],
+                ));
                 dropped.push((&group.class, name, None));
             }
+            // Without an ancestor checked first, the schema reports the kind conflict itself.
+            (_, AbstractBindingFailure::Kind) => {}
         }
     }
     for (class_name, name, kept) in dropped {

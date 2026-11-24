@@ -1774,8 +1774,9 @@ fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
 /// Abstract `as final` imports bind after the class's own and concrete imported methods and after
 /// the parent is inherited, as in php-src's `zend_do_link_class`: with any other method of the
 /// name the earliest final import in `use` order is reported, with only the imports the first
-/// one that a later final import overrides; a concrete import is checked as an override of a
-/// visible ancestor first (#2352).
+/// one that a later final import overrides; a concrete import or class body is checked as an
+/// override of a visible ancestor first, also before a plain abstract import of the other kind
+/// fails (#2352).
 #[test]
 fn test_error_trait_alias_as_final_abstract_method_binding_model() {
     let ab = "trait A { abstract public function foo(); }\ntrait B { abstract public function foo(); }\n";
@@ -1809,7 +1810,20 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         let reported = single_error(&source);
         assert!(reported.contains(message), "{source}: {reported}");
     }
+    // A plain abstract import of the other kind fails while binding too, but only after the class
+    // body passes its checks against a visible ancestor.
+    let kinds = "trait A { abstract public static function foo(); }\ntrait B { abstract public function foo(); }\n";
+    for (source, message) in [
+        (format!("{kinds}class P {{ final public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot override final method P::foo"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function foo() {{ return 1; }} }}"), "Cannot reduce visibility"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot make concrete method abstract"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} }}"), "Cannot change method kind when overriding C::foo"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
     for source in [
+        format!("{kinds}class P {{ public function foo(): int {{ return 1; }} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): string {{ return 'x'; }} }}"),
         format!("{ab}class P {{ public function foo(): int {{ return 1; }} }}\nabstract class C extends P {{ use A, B {{ {both} }} public function foo(): string {{ return 'x'; }} }}"),
         format!("class P {{ public function foo(): int {{ return 1; }} }}\n{a}trait B {{ public function foo(): string {{ return 'x'; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"),
     ] {

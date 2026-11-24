@@ -441,9 +441,10 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
     )
 }
 
-/// Reports a class-body method that replaces an abstract `as final` trait import, once it has
-/// passed the checks against the ancestor method it overrides: PHP checks that override first,
-/// then the import (`Cannot override final method A::foo()`).
+/// Reports the abstract trait binding failure recorded for a class-body or concrete imported
+/// method beside an abstract `as final` import (`Cannot override final method A::foo()`, or a
+/// kind change), once the method has passed the checks against the ancestor method it
+/// overrides: PHP checks that override first, then binds the abstract trait methods.
 fn reject_final_abstract_body_override(
     checker: &Checker,
     class: &FlattenedClass,
@@ -451,10 +452,7 @@ fn reject_final_abstract_body_override(
 ) -> Result<(), CompileError> {
     let key = (php_symbol_key(&class.name), php_symbol_key(&method.name));
     match checker.final_abstract_body_overrides.get(&key) {
-        Some((source_trait, name)) => Err(CompileError::new(
-            method.span,
-            &format!("Cannot override final method {}::{}", source_trait, name),
-        )),
+        Some(message) => Err(CompileError::new(method.span, message)),
         None => Ok(()),
     }
 }
