@@ -370,6 +370,9 @@ pub(super) fn check_types_impl(
             checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
         }
     }
+    // Where each class's build error starts in `errors`, so a used trait's own requirement
+    // incompatibility can take its place (`validate_class_trait_requirements`).
+    let mut class_build_errors: HashMap<String, usize> = HashMap::new();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -378,6 +381,7 @@ pub(super) fn check_types_impl(
             &mut next_class_id,
             &mut building,
         ) {
+            class_build_errors.insert(php_symbol_key(&class_name), errors.len());
             errors.extend(error.flatten());
         }
     }
@@ -460,8 +464,13 @@ pub(super) fn check_types_impl(
     }
     // A trait requirement that another trait's method or the class's own method satisfied is
     // gone from the flattened class, but that method must still be compatible with it.
-    let requirement_errors =
-        validate_class_trait_requirements(&checker, program, &flattened_classes, &mut errors);
+    let requirement_errors = validate_class_trait_requirements(
+        &checker,
+        program,
+        &flattened_classes,
+        &mut errors,
+        &class_build_errors,
+    );
     errors.extend(requirement_errors);
     checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);

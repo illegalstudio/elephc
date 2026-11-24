@@ -1838,6 +1838,8 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         (format!("interface I {{ final public const Y = 1; }}\nclass P implements I {{ final public const X = 1; }}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const Y = 2; public const X = 2; }}"), "X cannot override final constant"),
         // A compatible abstract redeclaration of an earlier requirement stays on the final error.
         (format!("{ab}abstract class C {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot override final method B::foo"),
+        // Interface final constants follow the parent's interface and constant order.
+        ("interface I { final public const Y = 1; }\ninterface J { final public const Z = 1; }\nclass P implements I, J {}\nclass C extends P { public const Z = 2; public const Y = 2; }".to_string(), "Y cannot override final"),
         // A final constant of an interface the parent implements is inherited with the parent.
         (format!("interface I {{ final public const X = 1; }}\nclass P implements I {{}}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const X = 2; }}"), "final interface constant"),
         (format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nabstract class C extends P {{ use B, A {{ B::foo as final; }} }}"), "Cannot override final method B::foo"),
@@ -1858,6 +1860,10 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         "abstract class P { abstract public function bar(): int; }\ntrait T { abstract public function bar(): string; }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use T, A { A::foo as final; } abstract public function bar(): int; public function foo() {} }".to_string(),
         // A used trait's own satisfied requirement is checked while compiling that trait.
         "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass C { use A, T { A::foo as final; } public function foo() {} }".to_string(),
+        // A used trait's own satisfied requirement is still the error when the class failed an
+        // inheritance check first, and is reported once for two classes.
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass P { final public const X = 1; }\nclass C extends P { use A, T { A::foo as final; } public function foo() {} public const X = 2; }".to_string(),
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass C { use A, T { A::foo as final; } public function foo() {} }\nclass E { use A, T { A::foo as final; } public function foo() {} }".to_string(),
         // A requirement bound before the failure is checked first.
         format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} }}"),
         format!("{kinds}class P {{ public function foo(): int {{ return 1; }} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): string {{ return 'x'; }} }}"),

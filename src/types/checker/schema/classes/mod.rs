@@ -352,12 +352,26 @@ fn validate_final_constant_constraints(
         }
     }
     // PHP checks the parent class's own final constants before those it inherited from its
-    // interfaces, whatever order the child declares them in.
+    // interfaces, and those in the parent's interface order and each interface's constant
+    // order, whatever order the child declares them in.
     let parent_interfaces = parent_info.map_or(&[][..], |parent| &parent.interfaces[..]);
-    for constant in &class.constants {
-        if let Some(error) = interface_final_constant_error(class, constant, parent_interfaces, checker)
-        {
-            return Err(error);
+    for interface_info in parent_interfaces
+        .iter()
+        .filter_map(|interface_name| checker.interfaces.get(interface_name))
+    {
+        for name in &interface_info.constant_order {
+            if !interface_info.final_constants.contains(name) {
+                continue;
+            }
+            if let Some(constant) = class.constants.iter().find(|constant| &constant.name == name) {
+                return Err(CompileError::new(
+                    constant.span,
+                    &format!(
+                        "{}::{} cannot override final interface constant",
+                        class.name, constant.name
+                    ),
+                ));
+            }
         }
     }
     Ok(())

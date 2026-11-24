@@ -71,14 +71,15 @@ pub(crate) fn validate_enum_trait_requirements(
 /// Checks every recursively imported abstract trait method of each class against the concrete
 /// method the class ended up with: its own method or another trait's. A requirement still
 /// abstract after flattening (left to a subclass, or satisfied by an inherited method) has no
-/// such method and is not checked here. `reported` holds the errors already produced by the
-/// class schema, where a used trait's own incompatibility replaces a class's abstract trait
-/// binding failure (`replace_binding_failure`).
+/// such method and is not checked here. `reported` holds the errors already produced, where a
+/// used trait's own incompatibility replaces the error of a class with an abstract trait
+/// binding failure (the failure, or the build error `class_build_errors` locates).
 pub(crate) fn validate_class_trait_requirements(
     checker: &Checker,
     program: &Program,
     classes: &[FlattenedClass],
-    reported: &mut [CompileError],
+    reported: &mut Vec<CompileError>,
+    class_build_errors: &HashMap<String, usize>,
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
     if classes.iter().all(|class| class.used_traits.is_empty()) {
@@ -93,6 +94,11 @@ pub(crate) fn validate_class_trait_requirements(
     // it names `self`, `parent` or `static`: those resolve against each consuming class, so the
     // pair is checked for every user and the outcome does not depend on declaration order.
     let mut checked_pairs = HashSet::new();
+    // Recorded pairs that failed, so a later class reports the same trait error only once.
+    let mut failed_pairs = HashSet::new();
+    // Edits to `reported`, applied once every class is walked so the indices stay valid.
+    let mut replacements: Vec<(usize, CompileError)> = Vec::new();
+    let mut removals: Vec<usize> = Vec::new();
     for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
@@ -102,60 +108,87 @@ pub(crate) fn validate_class_trait_requirements(
         // so its error takes the place of the class's binding failure.
         let binding_failure =
             checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name));
-        let satisfied = contract.satisfied.iter().filter(|(required, actual)| {
+        // The error the class schema reported for a class with a binding failure: the failure
+        // itself, or an inheritance error PHP reports before it, either one after the used
+        // traits are compiled.
+        let class_error = binding_failure.and_then(|failure| {
+            reported
+                .iter()
+                .position(|reported| {
+                    reported.span == failure.span && reported.message == failure.message
+                })
+                .or_else(|| class_build_errors.get(&php_symbol_key(&class.name)).copied())
+        });
+        let mut pairs: Vec<(&ClassMethod, &ClassMethod, Option<RequirementPairKey>)> = Vec::new();
+        for (required, actual) in &contract.satisfied {
             let key = (required.identity(), actual.identity());
             // Only pairs free of relative types are recorded, so a recorded pair is skipped.
             if checked_pairs.contains(&key) {
-                return false;
+                if failed_pairs.contains(&key) {
+                    removals.extend(class_error);
+                }
+                continue;
             }
-            if !mentions_relative_class_types(&required.method)
-                && !mentions_relative_class_types(&actual.method)
-            {
-                checked_pairs.insert(key);
+            let recorded = !mentions_relative_class_types(&required.method)
+                && !mentions_relative_class_types(&actual.method);
+            if recorded {
+                checked_pairs.insert(key.clone());
             }
-            true
-        });
-        let mut pairs: Vec<(&ClassMethod, &ClassMethod)> =
-            satisfied.map(|(required, actual)| (&required.method, &actual.method)).collect();
+            pairs.push((&required.method, &actual.method, recorded.then_some(key)));
+        }
         for required in contract.required.iter().filter(|_| binding_failure.is_none()) {
             if let Some(actual) = class.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.method.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.method.name)
             }) {
-                pairs.push((&required.method, actual));
+                pairs.push((&required.method, actual, None));
             }
         }
-        for (required, actual) in pairs {
+        for (required, actual, key) in pairs {
             if let Err(error) = validate_class_requirement(checker, class, required, actual) {
-                match binding_failure {
-                    Some(failure) => {
-                        replace_binding_failure(reported, failure, error);
-                    }
+                if let Some(key) = key {
+                    failed_pairs.insert(key);
+                }
+                match class_error {
+                    Some(index) => replacements.push((index, error)),
                     None => errors.extend(error.flatten()),
                 }
                 break;
             }
         }
     }
+    apply_class_error_edits(reported, replacements, removals);
     errors
 }
 
-/// Puts `error`, a used trait's own requirement incompatibility, in place of the class's
-/// abstract trait binding `failure` in `reported`, the errors the class schema already
-/// produced, because PHP compiles that trait before it binds the class. When the class failed
-/// for another reason first, that error stays and `error` is dropped.
-fn replace_binding_failure(
-    reported: &mut [CompileError],
-    failure: &crate::types::traits::FinalAbstractBindingFailure,
-    error: CompileError,
+/// Applies the class error edits of `validate_class_trait_requirements` to `reported`: each
+/// replacement puts a used trait's own requirement incompatibility in place of a class's error
+/// (PHP compiles that trait before it binds the class), and each removal drops a class's error
+/// whose trait incompatibility an earlier class already reported.
+fn apply_class_error_edits(
+    reported: &mut Vec<CompileError>,
+    replacements: Vec<(usize, CompileError)>,
+    mut removals: Vec<usize>,
 ) {
-    if let Some(slot) = reported
-        .iter_mut()
-        .find(|reported| reported.span == failure.span && reported.message == failure.message)
-    {
-        *slot = error;
+    for (index, error) in replacements {
+        if let Some(slot) = reported.get_mut(index) {
+            *slot = error;
+        }
+    }
+    removals.sort_unstable();
+    removals.dedup();
+    for index in removals.into_iter().rev() {
+        if index < reported.len() {
+            reported.remove(index);
+        }
     }
 }
+
+/// The identity of one trait method (`DeclaredMethod::identity`).
+type RequirementIdentity = (String, Span, String, bool, String);
+
+/// The identity of a required trait method and the method that satisfies it.
+type RequirementPairKey = (RequirementIdentity, RequirementIdentity);
 
 /// Whether `method`'s parameter, variadic or return types name `self`, `parent` or `static`,
 /// which resolve against the class that consumes the trait.
