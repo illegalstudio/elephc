@@ -7,18 +7,9 @@
       "attempts": 0,
       "last_observed": 1795552013,
       "runs": []
-    },
-    "93fdd9c01324b1b151305e3c2b45e3d68a076be5": {
-      "first_seen": 1795555596,
-      "attempts": 0
     }
   },
   "completed": [
-    {
-      "sha": "bc5b97bfd42dc248c9557c8d3c4f1f794a018cd1",
-      "run_id": 44128550140,
-      "observed_at": 1794947344
-    },
     {
       "sha": "f0cf9726fcbb7181a49042af67566e49217be3b1",
       "run_id": 44157537507,
@@ -263,6 +254,11 @@
       "sha": "883763d381d1f6f9d17ed1629b29b03464068a0d",
       "run_id": 45437625645,
       "observed_at": 1795541168
+    },
+    {
+      "sha": "93fdd9c01324b1b151305e3c2b45e3d68a076be5",
+      "run_id": 45484137036,
+      "observed_at": 1795555596
     }
   ]
 }
