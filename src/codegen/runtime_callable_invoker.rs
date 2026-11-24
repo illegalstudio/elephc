@@ -3626,9 +3626,9 @@ fn call_target_with_pushed_args(
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
-    emit_restore_invoker_php_frame_head(emitter);
+    emit_restore_invoker_php_frame_head(emitter, &ctx.argument_owners);
     abi::emit_call_reg(emitter, call_reg);
-    emit_restore_invoker_php_frame_head(emitter);
+    emit_restore_invoker_php_frame_head(emitter, &ctx.argument_owners);
     let return_ty = if sig.by_ref_return { PhpType::Pointer(None) } else { sig.return_type.clone() };
     let owned_label = ctx.next_label("invoker_string_owned");
     restore_concat_offset_after_nested_call(
@@ -3644,10 +3644,15 @@ fn call_target_with_pushed_args(
 /// prevents a helper or an invisible synthetic builtin wrapper from severing the reader chain
 /// consumed by `debug_backtrace()`. Repeating the store after a normal return also gives later
 /// invoker cleanup the same caller head without making the synthetic wrapper PHP-visible.
-fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
+///
+/// The head republished is the invoker's own argument-owner record, whose predecessor is that
+/// caller activation (the record has no reader, so a backtrace walks past it). Publishing the bare
+/// caller head instead hid the owner record from the collector for the whole call, so a Fiber
+/// suspended in the callee kept its arguments as external roots and was never collected.
+fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter, owners: &InvokerArgumentOwners) {
     emitter.comment("republish descriptor invoker PHP caller frame");
     let scratch = abi::temp_int_reg(emitter.target);
-    abi::load_at_offset(emitter, scratch, INVOKER_BOUNDARY_BASE_OFFSET - 8);
+    owners.record_address(emitter, scratch);
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 

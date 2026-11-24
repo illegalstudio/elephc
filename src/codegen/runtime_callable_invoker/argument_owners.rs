@@ -63,6 +63,11 @@ impl InvokerArgumentOwners {
             &format!("{visitor}_cleanup"), visitor, 0);
     }
 
+    /// Loads the address of this invoker's owner record into `register`.
+    pub(super) fn record_address(&self, emitter: &mut Emitter, register: &str) {
+        abi::emit_frame_slot_address(emitter, register, self.frame_size - 16);
+    }
+
     /// Removes the exact record after the local exception boundary has finished its cleanup.
     pub(super) fn unlink_frame(&self, emitter: &mut Emitter) {
         abi::emit_unlink_call_operand_owner_in_frame(emitter, self.frame_size - 16);
