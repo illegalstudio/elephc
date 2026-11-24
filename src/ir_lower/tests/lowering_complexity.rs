@@ -1499,3 +1499,87 @@ echo (new E())->make()->getContent(), $m->getCharset();
         assert!(passes <= 4, "fixpoint needed {passes} passes");
     }
 }
+
+/// `count` classes with public defaults and one `get_class_vars($name)` of a computed name, which
+/// lowers a case-insensitive name ladder with one rung per class.
+fn many_class_vars_rungs(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "class V{index} {{ public $a = 1; public ?string $b = null; public static $c = 'x{index}'; }}\n"
+        ));
+    }
+    source.push_str("$n = 'V' . ($argc - 1);\necho json_encode(get_class_vars($n)), \"\\n\";\n");
+    source
+}
+
+/// (locals, instructions) of the body that holds the ladder.
+fn ladder_body_size(source: &str) -> (usize, usize) {
+    let module = lower_source(source);
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("a main body");
+    (main.locals.len(), main.instructions.len())
+}
+
+/// Every rung of a runtime class-name ladder was lowered as a PHP expression: a `||` and two
+/// calls, each of which declared hidden locals and joined the type of every local of the body,
+/// so the ladder's cost grew with the square of the class count (the `get_class_vars` wrapper of
+/// the Symfony demo took 22 to 34 s). A rung is a few instructions now and declares no local.
+#[test]
+fn class_name_ladder_rungs_add_no_locals_and_a_bounded_number_of_instructions() {
+    let (small_locals, small_instructions) = ladder_body_size(&many_class_vars_rungs(40));
+    let (large_locals, large_instructions) = ladder_body_size(&many_class_vars_rungs(160));
+    assert_eq!(small_locals, large_locals, "a ladder rung declared locals");
+    let per_rung = (large_instructions - small_instructions) / 120;
+    assert!(per_rung <= 30, "a class-name ladder rung took {per_rung} instructions");
+}
+
+/// `count` functions, methods and closures that each read a local assigned on one branch only
+/// (`if ($n > i) { $v = ...; } return $v;`): every read may find its binding missing, so each body
+/// needs the definedness flags of its names.
+fn many_maybe_missing_reads(count: usize) -> String {
+    let mut source = String::from("<?php\nclass Reader {\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "    public function m{index}(int $n) {{ if ($n > {index}) {{ $v = {index}; $w = [$n]; }} return [@$v, @$w]; }}\n"
+        ));
+    }
+    source.push_str("}\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "function f{index}(int $n) {{ if ($n > {index}) {{ $v = \"s{index}\"; }} $g = function () use ($n) {{ if ($n) {{ $c = 1.5; }} return @$c; }}; return [@$v, $g()]; }}\n"
+        ));
+    }
+    source.push_str("$r = new Reader();\n");
+    for index in 0..count {
+        source.push_str(&format!("echo json_encode([$r->m{index}($argc), f{index}($argc)]), \"\\n\";\n"));
+    }
+    source
+}
+
+/// (bodies lowered, bodies lowered twice) while lowering `source`.
+fn definedness_replays(source: &str) -> (usize, usize) {
+    let before = crate::ir_lower::local_definedness::stats::snapshot();
+    let _module = lower_source(source);
+    let after = crate::ir_lower::local_definedness::stats::snapshot();
+    (after.bodies - before.bodies, after.replayed - before.replayed)
+}
+
+/// A read the checker found possibly unbound gives its name the definedness flag before the first
+/// lowering, so the body is lowered once. Discovering the name by lowering the body, then lowering
+/// it again with the flag, doubled the lowering of every such body of a framework build; the count
+/// of lowered-twice bodies must not grow with the number of bodies that read a maybe-missing local.
+#[test]
+fn maybe_missing_reads_are_flagged_without_lowering_the_body_twice() {
+    let (small_bodies, small_replays) = definedness_replays(&many_maybe_missing_reads(10));
+    let (large_bodies, large_replays) = definedness_replays(&many_maybe_missing_reads(40));
+    assert!(
+        large_bodies >= small_bodies + 60,
+        "the fixture no longer scales with its size: {small_bodies} then {large_bodies}"
+    );
+    assert_eq!(small_replays, 0, "bodies lowered twice for 10 maybe-missing reads");
+    assert_eq!(large_replays, 0, "bodies lowered twice for 40 maybe-missing reads");
+}

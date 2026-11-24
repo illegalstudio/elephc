@@ -13,7 +13,41 @@ use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
+/// Span under which [`Checker::note_possibly_missing_read`] files its marker in the local value
+/// read table: no source node has it, so no read of a real position can collide with a marker.
+fn missing_read_marker_span() -> Span {
+    Span::dummy()
+}
+
+/// Table key of the marker that says the checker found a read of `name` in `scope` possibly
+/// unbound.
+pub(crate) fn possibly_missing_read_key(scope: &str, name: &str) -> (String, Span, String) {
+    (scope.to_string(), missing_read_marker_span(), name.to_string())
+}
+
 impl Checker {
+    /// Files a marker for a read of `name` outside any loop that finds its binding possibly
+    /// missing, so EIR lowering can give the name its definedness flag before the first lowering
+    /// of the body instead of discovering the need by lowering the body twice. Only a hint: a
+    /// name the checker does not file is still found, and replayed, by lowering itself.
+    pub(crate) fn note_possibly_missing_read(&mut self, name: &str, span: Span) {
+        if !span.identifies_a_node()
+            || self.loop_stmt_depth != 0
+            || self.definitely_bound_locals.contains(name)
+            || name.starts_with('\u{1}')
+            || crate::superglobals::is_superglobal(name)
+            || super::builtins::is_callback_argument_placeholder(name)
+            || self.member_receiver_analysis_scopes.iter().any(|(function, scope)| {
+                function == &self.current_function
+                    && crate::types::loop_storage_scope_is_within(&self.current_loop_storage_scope, scope)
+            })
+        {
+            return;
+        }
+        let key = possibly_missing_read_key(&self.current_loop_storage_scope, name);
+        self.local_value_read_types.insert(key, PhpType::Void);
+    }
+
     /// Records a value contract and reports whether every authoritative visit proves an integer.
     pub(crate) fn record_local_value_read(&mut self, name: &str, span: Span, ty: &PhpType, env: &TypeEnv) -> bool {
         if !span.identifies_a_node() { return false; }

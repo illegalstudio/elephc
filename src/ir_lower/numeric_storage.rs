@@ -237,7 +237,14 @@ pub(crate) fn lower_body(
     // A read that found a local possibly unassigned needs that local's every write to set its
     // definedness flag, the writes lowered before the read included: lower the body again with
     // the flag installed. Bodies whose reads all see a stored slot never get here.
+    super::local_definedness::stats::body();
+    let tracked_before = super::local_definedness::tracked_count(ctx);
+    let first_pass_instructions = ctx.builder.function().instructions.len();
     if super::local_definedness::take_replay_request(ctx) {
+        super::local_definedness::stats::replay(
+            super::local_definedness::tracked_count(ctx) - tracked_before,
+            first_pass_instructions,
+        );
         ctx.restore(base);
         super::local_definedness::begin_body(ctx, body);
         checkpoint = ctx.snapshot();

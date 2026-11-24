@@ -110,6 +110,7 @@ use crate::types::{
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use functions::call_validation::is_call_result_argument;
 pub(crate) use loop_storage::loop_assigned_local_names;
+pub(crate) use local_values::possibly_missing_read_key;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use type_compat::{set_program_evaluates_code, take_ref_param_demotions};
 pub(crate) use inference::php_declared_type_spelling;

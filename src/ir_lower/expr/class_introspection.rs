@@ -182,16 +182,7 @@ fn lower_class_methods_by_name(
         let next_block = ctx
             .builder
             .create_named_block("class.methods.next", Vec::new());
-        let condition = class_name_match_expr(&name_var, &class_name, expr.span);
-        let condition = lower_expr(ctx, &condition);
-        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: condition.value,
-            then_target: match_block,
-            then_args: Vec::new(),
-            else_target: next_block,
-            else_args: Vec::new(),
-        });
+        branch_on_class_name(ctx, &name_var, &class_name, match_block, next_block, expr);
         ctx.builder.position_at_end(match_block);
         let methods = materialize_class_introspection(
             ctx,
@@ -364,16 +355,7 @@ fn lower_dynamic_class_introspection(
         let next_block = ctx
             .builder
             .create_named_block("class.introspection.next", Vec::new());
-        let condition = class_name_match_expr(&name_var, &class_name, expr.span);
-        let condition = lower_expr(ctx, &condition);
-        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: condition.value,
-            then_target: match_block,
-            then_args: Vec::new(),
-            else_target: next_block,
-            else_args: Vec::new(),
-        });
+        branch_on_class_name(ctx, &name_var, &class_name, match_block, next_block, expr);
 
         ctx.builder.position_at_end(match_block);
         let value = materialize_class_introspection(ctx, kind, &class_name, expr);
@@ -410,24 +392,72 @@ fn class_introspection_candidates(ctx: &LoweringContext<'_, '_>) -> Vec<String> 
     candidates
 }
 
-/// Builds a case-insensitive match for both bare and leading-backslash class-name strings.
-fn class_name_match_expr(name_var: &Expr, class_name: &str, span: Span) -> Expr {
-    let bare = class_name.trim_start_matches('\\');
-    let direct = dynamic_new_class_name_match_expr(name_var, bare, true, span);
-    let qualified = dynamic_new_class_name_match_expr(
-        name_var,
-        &format!("\\{}", bare),
-        true,
-        span,
+/// Emits `strcasecmp($name, $text) === 0` for the string held by `name_var`.
+///
+/// Built from instructions rather than lowered as a PHP expression: a ladder holds one such test
+/// per known class-like, and every lowered `||` or call joined the type of every local of the
+/// body, which grew with the ladder (an ordinary-expression ladder made a build's `get_class_vars`
+/// wrapper superlinear in the class count).
+fn emit_class_name_equals(
+    ctx: &mut LoweringContext<'_, '_>,
+    name_var: &Expr,
+    text: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let name = lower_expr(ctx, name_var);
+    let literal = lower_string_literal(ctx, text, expr);
+    let target = crate::ir::RuntimeFnId::Strcasecmp;
+    let order = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![name.value, literal.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+        PhpType::Int,
+        target.effects(),
+        Some(expr.span),
     );
-    Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(direct),
-            op: BinOp::Or,
-            right: Box::new(qualified),
-        },
-        span,
+    let zero = lower_int_literal(ctx, 0, expr);
+    ctx.emit_value(
+        Op::StrictEq,
+        vec![order.value, zero.value],
+        None,
+        PhpType::Bool,
+        Op::StrictEq.default_effects(),
+        Some(expr.span),
     )
+}
+
+/// Ends the current block with a case-insensitive test of the name held by `name_var` against
+/// `class_name`, bare and with a leading backslash: it continues in `match_block` on a match and
+/// in `next_block` otherwise.
+fn branch_on_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    name_var: &Expr,
+    class_name: &str,
+    match_block: BlockId,
+    next_block: BlockId,
+    expr: &Expr,
+) {
+    let bare = class_name.trim_start_matches('\\');
+    let direct = emit_class_name_equals(ctx, name_var, bare, expr);
+    let qualified_block = ctx
+        .builder
+        .create_named_block("class.introspection.qualified", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: direct.value,
+        then_target: match_block,
+        then_args: Vec::new(),
+        else_target: qualified_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(qualified_block);
+    let qualified = emit_class_name_equals(ctx, name_var, &format!("\\{bare}"), expr);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: qualified.value,
+        then_target: match_block,
+        then_args: Vec::new(),
+        else_target: next_block,
+        else_args: Vec::new(),
+    });
 }
 
 /// Materializes the selected class variable or method inventory.

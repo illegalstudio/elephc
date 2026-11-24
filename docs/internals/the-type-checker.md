@@ -494,7 +494,20 @@ exactly those reads as `mixed` behind the run-time definedness flag, so the warn
 come from the flag and the value is never read out of uninitialized storage. A variable every read
 of which finds it bound keeps its unboxed slot and its code. Inside a loop statement the read keeps
 its type (the loop analysis unbinds far more names than a loop can leave undefined, and a counter
-must stay an `int`); the lowering still boxes it behind the flag.
+must stay an `int`); the lowering still boxes it behind the flag. The loop depth belongs to the
+function-like frame: a body checked on demand from inside another body's loop starts outside any
+loop.
+
+The `null` is a property of the read view, not of the binding. A plain store to such a name
+merges against the type the binding held before the view was widened
+(`Checker::restore_widened_binding_view`), so `$p = $a->cp(); return …;` followed by `$p = $a->ep();`
+rebinds `$p` to the second class instead of keeping the first.
+
+Each such read outside a loop also files a marker in `local_value_read_types` (key: scope, dummy
+span, name; `Checker::note_possibly_missing_read`). Lowering gives the marked names their
+definedness flag before the first lowering of the body, so the body is lowered once; a name the
+checker does not mark is still discovered by lowering and the body replayed
+(`ELEPHC_DEFINEDNESS_STATS=1` prints the counts).
 
 ### Null-coalesce results
 

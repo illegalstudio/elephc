@@ -119,6 +119,7 @@ fn program_names_weak_map(program: &Program, check_result: &CheckResult) -> bool
 /// Under `ELEPHC_LOWER_TIMES`, prints the program's EIR size and its forty largest functions: a
 /// lowering that multiplies code shows up here before it exhausts memory in the passes below.
 fn report_function_sizes(module: &Module) {
+    super::local_definedness::stats::report();
     if std::env::var_os("ELEPHC_LOWER_TIMES").is_none() {
         return;
     }

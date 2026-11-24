@@ -62,6 +62,77 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
 
+/// Program-wide counters of the definedness replays, read by `ELEPHC_DEFINEDNESS_STATS=1` and by
+/// the complexity tests: how many bodies were lowered, how many needed a second lowering, how many
+/// names that tracked and how many instructions the discarded first lowerings emitted.
+pub(crate) mod stats {
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Lowering runs on one thread, and a thread-local keeps parallel tests apart.
+        static COUNTS: Cell<Snapshot> = const { Cell::new(Snapshot {
+            bodies: 0, replayed: 0, tracked_names: 0, discarded_instructions: 0, hinted_names: 0,
+        }) };
+    }
+
+    /// A snapshot of the counters: bodies, replayed bodies, tracked names, discarded instructions.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct Snapshot {
+        pub(crate) bodies: usize,
+        pub(crate) replayed: usize,
+        pub(crate) tracked_names: usize,
+        pub(crate) discarded_instructions: usize,
+        pub(crate) hinted_names: usize,
+    }
+
+    /// Counts one lowered body.
+    pub(crate) fn body() {
+        COUNTS.with(|counts| {
+            let mut s = counts.get();
+            s.bodies += 1;
+            counts.set(s);
+        });
+    }
+
+    /// Counts one body lowered a second time, the names that made it replay, and the
+    /// instructions its first lowering emitted before they were thrown away.
+    pub(crate) fn replay(names: usize, discarded: usize) {
+        COUNTS.with(|counts| {
+            let mut s = counts.get();
+            s.replayed += 1;
+            s.tracked_names += names;
+            s.discarded_instructions += discarded;
+            counts.set(s);
+        });
+    }
+
+    /// Counts one name the checker's hint tracked before the first lowering.
+    pub(crate) fn hinted() {
+        COUNTS.with(|counts| {
+            let mut s = counts.get();
+            s.hinted_names += 1;
+            counts.set(s);
+        });
+    }
+
+    /// Reads the counters of this thread.
+    pub(crate) fn snapshot() -> Snapshot {
+        COUNTS.with(Cell::get)
+    }
+
+    /// Prints the counters when `ELEPHC_DEFINEDNESS_STATS` is set.
+    pub(crate) fn report() {
+        if std::env::var_os("ELEPHC_DEFINEDNESS_STATS").is_none() {
+            return;
+        }
+        let s = snapshot();
+        eprintln!(
+            "[definedness] {} bodies, {} replayed, {} names tracked by replay, {} instructions discarded, {} names tracked from the checker hint",
+            s.bodies, s.replayed, s.tracked_names, s.discarded_instructions, s.hinted_names
+        );
+    }
+}
+
 /// Per-body state of the run-time definedness flags.
 #[derive(Default)]
 pub(crate) struct DefinednessState {
@@ -198,6 +269,22 @@ pub(crate) fn begin_body(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
                 }
                 ctx.definedness.seeded.insert(name);
             }
+            // The checker already walked this body's flow: a name it found a read of with no
+            // binding on some path gets its flag now. Left to the first lowering to discover,
+            // each such body was lowered twice. A hint only, as a name it misses is still
+            // discovered and replayed.
+            let mut hinted: Vec<&String> = read.iter().filter(|name| {
+                !params.contains(*name)
+                    && ctx.local_value_read_types.contains_key(
+                        &crate::types::checker::possibly_missing_read_key(&ctx.loop_storage_scope, name),
+                    )
+                    && is_trackable_name(ctx, name)
+            }).collect();
+            hinted.sort();
+            for name in hinted {
+                ctx.definedness.tracked.insert(name.clone());
+                stats::hinted();
+            }
         }
     }
     if !ctx.definedness.is_eligible() {
@@ -249,6 +336,11 @@ pub(crate) fn take_replay_request(ctx: &mut LoweringContext<'_, '_>) -> bool {
         grew |= ctx.definedness.tracked.insert(name);
     }
     grew
+}
+
+/// How many names the body tracks so far, for the replay counters.
+pub(crate) fn tracked_count(ctx: &LoweringContext<'_, '_>) -> usize {
+    ctx.definedness.tracked.len()
 }
 
 /// Whether a read of `name` here lowers to a boxed `mixed` because the variable may still be
