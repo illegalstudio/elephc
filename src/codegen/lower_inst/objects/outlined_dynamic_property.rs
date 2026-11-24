@@ -115,7 +115,7 @@ pub(super) fn try_lower_outlined_mixed_prop_get(
             DynamicPropHelperKind::MixedGetRuntimeScope(mode),
             None,
         );
-        emit_runtime_scope_helper_call(ctx, object, property_value, None, scope_slot, &label)?;
+        emit_runtime_scope_helper_call(ctx, object, property_value, None, false, scope_slot, &label)?;
         store_if_result(ctx, inst)?;
         return Ok(true);
     }
@@ -232,7 +232,8 @@ pub(super) fn scope_overrides_write(
     value: ValueId,
     inst: &Instruction,
 ) -> Result<Option<crate::fast_hash::FastSet<(String, String)>>> {
-    let value_ty = ctx.value_php_type(value)?;
+    // The helper receives every value boxed, so the pairs are resolved for a boxed `Mixed` one.
+    let value_ty = PhpType::Mixed;
     Ok(scope_overrides_with(ctx, true, |ctx, class_name, property| {
         matches!(
             mixed_property_write_candidate(
@@ -327,6 +328,7 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
             ),
             DynamicPropHelperKind::MixedSet
             | DynamicPropHelperKind::MixedUnset
+            | DynamicPropHelperKind::MixedSetTail
             | DynamicPropHelperKind::MixedGetRuntimeScope(_)
             | DynamicPropHelperKind::MixedSetRuntimeScope
             | DynamicPropHelperKind::MixedUnsetRuntimeScope => {
@@ -726,14 +728,24 @@ pub(super) fn try_lower_outlined_mixed_prop_set(
 ) -> Result<bool> {
     if outlining_disabled()
         || inside_function_helper(ctx, SET_PREFIX)
-        || ctx.value_php_type(value)?.codegen_repr() != PhpType::Mixed
+        || inside_magic_set_tail(ctx)
+        || ctx.value_php_type(value)?.codegen_repr() == PhpType::Void
         || ctx.value_php_type(property_value)?.codegen_repr() != PhpType::Str
     {
         return Ok(false);
     }
+    // The helper takes a boxed value. Any other representation is boxed into an owned temporary
+    // parked on the stack for the call, so a site writing an int, a string or an array shares the
+    // helper too instead of carrying a whole-program ladder of its own.
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let boxed = value_ty != PhpType::Mixed;
     if let Some(scope_slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) {
         let label = request_runtime_scope_helper(ctx, SET_PREFIX, DynamicPropHelperKind::MixedSetRuntimeScope);
-        emit_runtime_scope_helper_call(ctx, object, property_value, Some(value), scope_slot, &label)?;
+        if boxed {
+            materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        emit_runtime_scope_helper_call(ctx, object, property_value, Some(value), boxed, scope_slot, &label)?;
     } else {
         let Some(overrides) = scope_overrides_write(ctx, value, inst)? else {
             return Ok(false);
@@ -742,7 +754,16 @@ pub(super) fn try_lower_outlined_mixed_prop_set(
         let key = function_helper_key(SET_PREFIX, scope.as_deref());
         let label = ctx.keyed_global_label(&key, SET_PREFIX);
         ctx.shared.request_dynamic_prop_helper(&key, &label, DynamicPropHelperKind::MixedSet, scope.as_deref());
-        emit_function_helper_call(ctx, object, property_value, Some(value), &label)?;
+        if boxed {
+            materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        emit_function_helper_call(ctx, object, property_value, Some(value), boxed, &label)?;
+    }
+    if boxed {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        return Ok(true);
     }
     // The inline ladder ADOPTS an owning box into the slot, and the lowering that emitted this
     // write relies on it: it releases such a temporary only when the store would not take it
@@ -753,6 +774,72 @@ pub(super) fn try_lower_outlined_mixed_prop_set(
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     }
     Ok(true)
+}
+
+/// Readable part of the shared magic-setter tail's entry symbol.
+pub(super) const MAGIC_SET_TAIL_PREFIX: &str = "magic_set_tail";
+
+/// Returns whether the body being lowered IS the module-wide magic-setter tail.
+pub(super) fn inside_magic_set_tail(ctx: &FunctionContext<'_>) -> bool {
+    inside_function_helper(ctx, MAGIC_SET_TAIL_PREFIX)
+}
+
+/// Returns whether a site may hand the classes it did not answer itself to the shared tail.
+///
+/// The tail receives the value as a boxed `Mixed` parameter, so a site holding any other value
+/// representation keeps its inline arms.
+pub(super) fn magic_set_tail_applies(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    // The module-wide write helpers keep their own arms: they are one body per module already, and
+    // a call into the tail would add a frame to every write that reaches them.
+    Ok(!outlining_disabled()
+        && !inside_magic_set_tail(ctx)
+        && !inside_function_helper(ctx, SET_PREFIX)
+        && ctx.value_php_type(value)?.codegen_repr() != PhpType::Void)
+}
+
+/// Calls the module-wide tail of a runtime-name write: the classes with a `__set` method and the
+/// classes holding undeclared names in a per-instance hash.
+///
+/// Every site used to carry one arm per such class, each with its own guarded `__set` call, so a
+/// site's size grew with the number of classes of the program (14 GB of assembly for the DeepClone
+/// hydrators of the Symfony Demo). The tail is one body per module: the site only calls it, with the
+/// receiver, the runtime name and the boxed value. The value is a borrowed parameter of the tail,
+/// which retains where the inline arm adopted an owning temporary; the site releases that temporary
+/// after the call, exactly as for `try_lower_outlined_mixed_prop_set`.
+pub(super) fn emit_magic_set_tail_call(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let key = function_helper_key(MAGIC_SET_TAIL_PREFIX, None);
+    let label = ctx.keyed_global_label(&key, MAGIC_SET_TAIL_PREFIX);
+    ctx.shared.request_dynamic_prop_helper(&key, &label, DynamicPropHelperKind::MixedSetTail, None);
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if value_ty != PhpType::Mixed {
+        // The tail takes a boxed value: box this one into an owned temporary, parked on the stack
+        // for the call, and release it afterwards.
+        let target = ctx.emitter.target;
+        materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_reg(object, abi::int_arg_reg_name(target, 0))?;
+        ctx.load_string_value_to_regs(
+            property_value,
+            abi::int_arg_reg_name(target, 1),
+            abi::int_arg_reg_name(target, 2),
+        )?;
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+        abi::emit_call_label(ctx.emitter, &label);
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        return Ok(());
+    }
+    emit_function_helper_call(ctx, object, property_value, Some(value), false, &label)?;
+    if ctx.value_can_own_mixed_box_source(value)? {
+        ctx.load_value_to_result(value)?;
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
+    Ok(())
 }
 
 /// Lowers a runtime-name removal on a boxed `Mixed` receiver through the shared helper.
@@ -772,7 +859,7 @@ pub(super) fn try_lower_outlined_mixed_prop_unset(
     if let Some(scope_slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) {
         let label =
             request_runtime_scope_helper(ctx, UNSET_PREFIX, DynamicPropHelperKind::MixedUnsetRuntimeScope);
-        emit_runtime_scope_helper_call(ctx, object, property_value, None, scope_slot, &label)?;
+        emit_runtime_scope_helper_call(ctx, object, property_value, None, false, scope_slot, &label)?;
         return Ok(true);
     }
     let Some(overrides) = scope_overrides_unset(ctx, inst)? else {
@@ -782,7 +869,7 @@ pub(super) fn try_lower_outlined_mixed_prop_unset(
     let key = function_helper_key(UNSET_PREFIX, scope.as_deref());
     let label = ctx.keyed_global_label(&key, UNSET_PREFIX);
     ctx.shared.request_dynamic_prop_helper(&key, &label, DynamicPropHelperKind::MixedUnset, scope.as_deref());
-    emit_function_helper_call(ctx, object, property_value, None, &label)?;
+    emit_function_helper_call(ctx, object, property_value, None, false, &label)?;
     Ok(true)
 }
 
@@ -918,17 +1005,27 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
 ) -> Result<bool> {
     if outlining_disabled()
         || arm_count.is_some_and(|count| count < NAMED_GET_MIN_ARMS)
-        || inst.op != Op::PropSet
+        || !matches!(inst.op, Op::PropSet | Op::DynamicPropSet)
         || inside_function_helper(ctx, NAMED_SET_PREFIX)
         || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
         || ctx.value_php_type(object)?.codegen_repr() != PhpType::Mixed
         || ctx.value_php_type(value)?.codegen_repr() != PhpType::Mixed
-        || !matches!(inst.immediate, Some(Immediate::Data(_)))
+        || (inst.op == Op::PropSet && !matches!(inst.immediate, Some(Immediate::Data(_))))
     {
         return Ok(false);
     }
+    // `$o->{'name'} = $v` (a literal name operand) is the same write as `$o->name = $v`; the helper
+    // re-creates the literal from its data id.
+    let name_data = if inst.op == Op::DynamicPropSet {
+        match literal_name_data(ctx, expect_operand(inst, 1)?)? {
+            Some(data) => Some(data),
+            None => return Ok(false),
+        }
+    } else {
+        None
+    };
     let scope = named_helper_scope(ctx, property, true);
-    let key = format!("{}:{}:{}", NAMED_SET_PREFIX, property, scope.as_deref().unwrap_or(""));
+    let key = format!("{}:{}:{}:{}", NAMED_SET_PREFIX, inst.op.name(), property, scope.as_deref().unwrap_or(""));
     if arm_count.is_none() && !ctx.shared.dynamic_prop_helper_requested(&key) {
         return Ok(false);
     }
@@ -939,7 +1036,7 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
         DynamicPropHelperKind::NamedMixedSet { property: property.to_string() },
         scope.as_deref(),
     );
-    pending_named_get_ops(ctx, &key, inst, None);
+    pending_named_get_ops(ctx, &key, inst, name_data);
     let target = ctx.emitter.target;
     ctx.load_value_to_reg(object, abi::int_arg_reg_name(target, 0))?;
     ctx.load_value_to_reg(value, abi::int_arg_reg_name(target, 1))?;
@@ -1062,7 +1159,7 @@ fn emit_named_set_helper(
 ) -> Result<()> {
     use crate::ir::{Builder, Function, FunctionParam, LocalKind, LocalSlotId, Terminator};
 
-    let Some((op, immediate, _)) = shared.named_get_templates.get(&pending.key).cloned() else {
+    let Some((op, immediate, name_data)) = shared.named_get_templates.get(&pending.key).cloned() else {
         return Err(CodegenIrError::invalid_module(format!(
             "named property write helper {} has no template",
             pending.key
@@ -1087,11 +1184,15 @@ fn emit_named_set_helper(
         let entry = builder.create_named_block("entry", Vec::new());
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let operands = (0..2)
+        let mut operands = (0..2)
             .map(|index| {
                 builder.emit_load_local(LocalSlotId::from_raw(index), mixed.clone(), PhpType::Mixed)
             })
             .collect::<Vec<_>>();
+        if let Some(data) = name_data {
+            let name = builder.emit_const_str(data);
+            operands.insert(1, name);
+        }
         builder.emit_with_effects(
             op,
             operands,
@@ -1433,6 +1534,7 @@ fn emit_runtime_scope_helper_call(
     object: ValueId,
     property_value: ValueId,
     value: Option<ValueId>,
+    value_boxed_on_stack: bool,
     scope_slot: crate::ir::LocalSlotId,
     label: &str,
 ) -> Result<()> {
@@ -1444,7 +1546,10 @@ fn emit_runtime_scope_helper_call(
         abi::int_arg_reg_name(target, 2),
     )?;
     let mut next = 3;
-    if let Some(value) = value {
+    if value_boxed_on_stack {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+        next = 4;
+    } else if let Some(value) = value {
         ctx.load_value_to_reg(value, abi::int_arg_reg_name(target, 3))?;
         next = 4;
     }
@@ -1479,6 +1584,7 @@ fn emit_function_helper_call(
     object: ValueId,
     property_value: ValueId,
     value: Option<ValueId>,
+    value_boxed_on_stack: bool,
     label: &str,
 ) -> Result<()> {
     let target = ctx.emitter.target;
@@ -1488,7 +1594,9 @@ fn emit_function_helper_call(
         abi::int_arg_reg_name(target, 1),
         abi::int_arg_reg_name(target, 2),
     )?;
-    if let Some(value) = value {
+    if value_boxed_on_stack {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+    } else if let Some(value) = value {
         ctx.load_value_to_reg(value, abi::int_arg_reg_name(target, 3))?;
     }
     abi::emit_call_label(ctx.emitter, label);
@@ -1509,7 +1617,7 @@ fn emit_function_helper(
 
     let is_set = matches!(
         pending.kind,
-        DynamicPropHelperKind::MixedSet | DynamicPropHelperKind::MixedSetRuntimeScope
+        DynamicPropHelperKind::MixedSet | DynamicPropHelperKind::MixedSetRuntimeScope | DynamicPropHelperKind::MixedSetTail
     );
     let read_mode = match pending.kind {
         DynamicPropHelperKind::MixedGetRuntimeScope(mode) => Some(mode),

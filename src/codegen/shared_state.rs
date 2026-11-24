@@ -381,6 +381,10 @@ pub(crate) enum DynamicPropHelperKind {
     MixedGet(crate::ir::PropertyFetchMode),
     /// `$mixed->{$name} = $boxed`, emitted as a synthetic function.
     MixedSet,
+    /// The part of a `$mixed->{$name} = $boxed` write no declared slot answered: the classes with a
+    /// `__set` method and the classes with a per-instance hash. One body per module, called by
+    /// every site, emitted as a synthetic function.
+    MixedSetTail,
     /// `unset($mixed->{$name})`, emitted as a synthetic function.
     MixedUnset,
     /// `$mixed->{$name}` read or probe from a body with a RUNTIME closure scope (see

@@ -1584,6 +1584,51 @@ fn maybe_missing_reads_are_flagged_without_lowering_the_body_twice() {
     assert_eq!(large_replays, 0, "bodies lowered twice for 40 maybe-missing reads");
 }
 
+/// `magic` subclasses of one `__set` base, a few plain classes with dynamic properties, and `sites`
+/// functions writing a property of an untyped receiver: a runtime name with a boxed value, a
+/// runtime name with an int, and a literal name.
+fn dynamic_writes_over_magic_classes(magic: usize, sites: usize) -> String {
+    let mut source = String::from("<?php\nclass Magic { private array $d = []; public function __set($n, $v) { $this->d[$n] = $v; } }\n");
+    for index in 0..magic {
+        source.push_str(&format!("class Mg{index} extends Magic {{ public int $x{index} = {index}; }}\n"));
+    }
+    for index in 0..3 {
+        source.push_str(&format!("#[\\AllowDynamicProperties] class Pl{index} {{ public $a{index} = 1; public $name = 'n'; }}\n"));
+    }
+    for site in 0..sites {
+        source.push_str(&format!("function w{site}($o, $n, $v) {{ $o->$n = $v; }}\n"));
+        source.push_str(&format!("function i{site}($o, $n) {{ $o->$n = {site}; }}\n"));
+        source.push_str(&format!("function l{site}($o, $v) {{ $o->{{'name'}} = $v; }}\n"));
+    }
+    source.push_str("$o = $argc > 1 ? new Mg0() : new Pl0();\n");
+    for site in 0..sites {
+        source.push_str(&format!("w{site}($o, 'a0', 1); i{site}($o, 'q'); l{site}($o, 2);\n"));
+    }
+    source
+}
+
+/// Lines of user assembly emitted for `source`.
+fn emitted_lines(source: &str) -> usize {
+    let module = lower_source(source);
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen").lines().count()
+}
+
+/// A dynamic property write on an untyped receiver is a call: what a site costs does not follow the
+/// number of classes declaring `__set` (the tail with their guarded calls exists once per module).
+#[test]
+fn dynamic_write_sites_do_not_grow_with_magic_classes() {
+    let per_site = |magic: usize| {
+        let few = emitted_lines(&dynamic_writes_over_magic_classes(magic, 2));
+        let many = emitted_lines(&dynamic_writes_over_magic_classes(magic, 12));
+        (many - few) / 10
+    };
+    let small = per_site(1);
+    let large = per_site(40);
+    assert_eq!(small, large, "a site cost {small} lines with 1 magic class, {large} with 40");
+    // Three small functions: their frames and cleanups are most of it; the writes are calls.
+    assert!(large < 2300, "a group of three writes costs {large} lines");
+}
+
 /// Source with `classes` unrelated classes, one by-reference `items()` family of two classes, and
 /// `sites` calls of `items()` and `size()` through typed receivers.
 fn by_reference_family_with_many_classes(classes: usize, sites: usize) -> String {

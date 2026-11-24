@@ -151,6 +151,12 @@ pub(super) fn lower_const_dynamic_prop_set(
         // Keep runtime class, magic and dynamic-hash precedence while pruning declared slots
         // whose names cannot match this literal. The named fast path cannot stage a guarded
         // `__set` call or preserve existing-entry-before-magic precedence on its own.
+        // One helper per name and scope group holds the declared-slot ladder of that name, so the
+        // site is a call; its size no longer follows the classes declaring the name.
+        let declaring = ctx.module.classes_by_property().get(property).map_or(0, Vec::len);
+        if try_lower_outlined_named_mixed_prop_set(ctx, inst, object, value, property, Some(declaring))? {
+            return Ok(());
+        }
         return lower_runtime_mixed_prop_set(ctx, object, property_value, value, Some(property), inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
@@ -1535,6 +1541,158 @@ fn emit_runtime_magic_set_call(
     Ok(())
 }
 
+/// The classes of a write helper that resolve to one `__set` implementation, with the labels the
+/// class-id ladder jumps to.
+struct MagicSetGroup {
+    /// Entry of the shared guarded call.
+    entry: String,
+    /// Indexes into the arm list, in class-id order.
+    members: Vec<usize>,
+    /// The label each member's ladder entry jumps to: the member's own existing-entry probe when
+    /// its class keeps a dynamic hash, the shared entry otherwise.
+    stubs: Vec<String>,
+}
+
+/// Groups the `__set` classes by the implementation they call.
+///
+/// A class calls the `__set` its `method_impl_classes` names, whatever its own name, so two
+/// classes resolving to the same implementation need one guarded call between them. What stays
+/// per class is only what reads the class itself: the probe of its dynamic hash and the text of
+/// its creation notice or refusal. Without the grouping a program with hundreds of subclasses of
+/// one magic base emitted a whole guarded call sequence for each of them.
+fn plan_magic_set_groups(ctx: &mut FunctionContext<'_>, arms: &[RuntimeMagicSetArm]) -> Vec<MagicSetGroup> {
+    let mut by_target: crate::fast_hash::FastMap<(String, String, Option<usize>, bool), usize> =
+        crate::fast_hash::FastMap::default();
+    let mut groups: Vec<MagicSetGroup> = Vec::new();
+    for (index, arm) in arms.iter().enumerate() {
+        let key = (
+            arm.target.impl_class.clone(),
+            arm.target.method_key.clone(),
+            arm.target.dynamic_slot,
+            arm.target.source_abi,
+        );
+        let position = *by_target.entry(key).or_insert_with(|| {
+            groups.push(MagicSetGroup {
+                entry: ctx.next_label("mixed_dyn_prop_set_magic"),
+                members: Vec::new(),
+                stubs: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let stub = if arm.hash_offset.is_some() {
+            ctx.next_label("mixed_dyn_prop_set_magic_probe")
+        } else {
+            groups[position].entry.clone()
+        };
+        groups[position].members.push(index);
+        groups[position].stubs.push(stub);
+    }
+    groups
+}
+
+/// Emits the guarded `__set` call of one group once, with the class-specific tails around it.
+///
+/// Receiver at stack offset 16, runtime name at 0, a 32-byte staged frame, as in the inline arm
+/// this replaces: an existing dynamic entry is written before magic runs, an active receiver/name
+/// pair falls back to the dynamic hash (deprecation, then store) or the readonly refusal, and an
+/// escaping Throwable unlinks the guard node before it resumes.
+fn emit_runtime_magic_set_group(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    arms: &[RuntimeMagicSetArm],
+    group: &MagicSetGroup,
+    done_label: &str,
+    line: u32,
+) -> Result<()> {
+    let recursive_label = ctx.next_label("runtime_magic_set_recursive");
+    let caught_label = ctx.next_label("runtime_magic_set_caught");
+    let existing_labels = group
+        .members
+        .iter()
+        .map(|member| {
+            arms[*member].hash_offset.map(|_| ctx.next_label("runtime_magic_set_existing"))
+        })
+        .collect::<Vec<_>>();
+    // Per-class entry: write an entry the dynamic hash already holds before magic is considered.
+    for ((member, stub), existing) in group.members.iter().zip(&group.stubs).zip(&existing_labels) {
+        let (Some(hash_offset), Some(existing)) = (arms[*member].hash_offset, existing) else {
+            continue;
+        };
+        ctx.emitter.label(stub);
+        emit_branch_if_stacked_runtime_hash_contains(ctx, hash_offset, 16, 0, existing);
+        abi::emit_jump(ctx.emitter, &group.entry);
+    }
+    ctx.emitter.label(&group.entry);
+    let target = &arms[group.members[0]].target;
+    abi::emit_reserve_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
+    let guarded_receiver_offset = 16 + MAGIC_SET_GUARD_FRAME_BYTES;
+    emit_magic_set_guard_push(
+        ctx,
+        guarded_receiver_offset,
+        MAGIC_SET_GUARD_FRAME_BYTES,
+        MAGIC_SET_GUARD_NODE_OFFSET,
+    );
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &recursive_label);
+    emit_magic_set_exception_handler(ctx, &caught_label);
+    emit_runtime_magic_set_method_call(
+        ctx,
+        object,
+        property_value,
+        value,
+        &target.impl_class,
+        target,
+        guarded_receiver_offset,
+    )?;
+    emit_magic_set_exception_handler_pop(ctx);
+    emit_magic_set_guard_pop(ctx, MAGIC_SET_GUARD_NODE_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES + 32);
+    abi::emit_jump(ctx.emitter, done_label);
+
+    ctx.emitter.label(&caught_label);
+    emit_magic_set_exception_handler_pop(ctx);
+    emit_magic_set_guard_pop(ctx, MAGIC_SET_GUARD_NODE_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES + 32);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    // The pair is already inside `__set`: the name goes to the dynamic hash of the receiver's own
+    // class, which only the receiver's class id tells apart.
+    ctx.emitter.label(&recursive_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
+    let tails = group
+        .members
+        .iter()
+        .map(|_| ctx.next_label("runtime_magic_set_class_tail"))
+        .collect::<Vec<_>>();
+    let last = group.members.len() - 1;
+    for (position, member) in group.members.iter().enumerate() {
+        if position != last {
+            emit_branch_if_stacked_object_class_matches(ctx, arms[*member].class_id, 16, &tails[position]);
+        }
+    }
+    for (position, member) in group.members.iter().enumerate() {
+        let arm = &arms[*member];
+        ctx.emitter.label(&tails[position]);
+        if let Some(hash_offset) = arm.hash_offset {
+            emit_dynamic_property_creation_deprecation(ctx, &arm.class_name, hash_offset, 16, 0, line)?;
+            lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
+            abi::emit_jump(ctx.emitter, done_label);
+        } else {
+            emit_readonly_runtime_dynamic_property_error(ctx, &arm.class_name, 0, 32);
+        }
+    }
+    for (member, existing) in group.members.iter().zip(&existing_labels) {
+        let (Some(hash_offset), Some(existing)) = (arms[*member].hash_offset, existing) else {
+            continue;
+        };
+        ctx.emitter.label(existing);
+        lower_runtime_allow_dynamic_prop_set(ctx, value, hash_offset, 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+    Ok(())
+}
+
 /// Throws the readonly dynamic-property error with the active runtime name appended.
 fn emit_readonly_runtime_dynamic_property_error(
     ctx: &mut FunctionContext<'_>,
@@ -1729,7 +1887,9 @@ pub(super) fn lower_runtime_mixed_prop_set(
 ) -> Result<()> {
     // The shared helper probes every declared candidate; a literal name keeps its own ladder,
     // pruned to the slots that name can reach.
-    if known_name.is_none()
+    // A literal name inside a body with a runtime closure scope has no named helper (those take no
+    // scope capture), so it shares the runtime-scope helper like any other name.
+    if (known_name.is_none() || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some())
         && try_lower_outlined_mixed_prop_set(ctx, object, property_value, value, inst)?
     {
         return Ok(());
@@ -1746,9 +1906,17 @@ pub(super) fn lower_runtime_mixed_prop_set(
     };
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     let write_kind = PropertyAccessKind::RuntimeWrite;
-    let candidates = declared_mixed_property_set_candidates(
-        ctx, value, known_name, write_kind, inst, only.as_ref(),
-    )?;
+    // The shared tail holds the classes no declared slot answers; a site that can call it leaves
+    // them out, so its size stays independent of how many classes the program has.
+    let in_tail = inside_magic_set_tail(ctx);
+    let use_tail_call = delegate.is_none() && magic_set_tail_applies(ctx, value)?;
+    let candidates = if in_tail {
+        Vec::new()
+    } else {
+        declared_mixed_property_set_candidates(
+            ctx, value, known_name, write_kind, inst, only.as_ref(),
+        )?
+    };
     let done_label = ctx.next_label("mixed_dyn_prop_set_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_set_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_set_stdclass");
@@ -1764,7 +1932,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
     // A runtime name a class does not DECLARE still belongs in that class's own per-instance
     // hash. The declared (class, name) probes above run first, so a name the class declares keeps
     // its declared answer, and only the rest reach this per-CLASS arm.
-    let hash_arms = if delegate.is_some() { Vec::new() } else { mixed_class_hash_arms(ctx, "", &[])? };
+    let hash_arms = if delegate.is_some() || use_tail_call { Vec::new() } else { mixed_class_hash_arms(ctx, "", &[])? };
     let hash_labels = hash_arms
         .iter()
         .map(|arm| {
@@ -1774,16 +1942,8 @@ pub(super) fn lower_runtime_mixed_prop_set(
             ))
         })
         .collect::<Vec<_>>();
-    let magic_arms = if delegate.is_some() { Vec::new() } else { runtime_magic_set_arms(ctx)? };
-    let magic_labels = magic_arms
-        .iter()
-        .map(|arm| {
-            ctx.next_label(&format!(
-                "mixed_dyn_prop_set_magic_{}",
-                label_fragment(&arm.class_name)
-            ))
-        })
-        .collect::<Vec<_>>();
+    let magic_arms = if delegate.is_some() || use_tail_call { Vec::new() } else { runtime_magic_set_arms(ctx)? };
+    let magic_groups = plan_magic_set_groups(ctx, &magic_arms);
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -1796,7 +1956,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
     // Eval subclasses can retain any native parent's physical class id. Claim their
     // writes by object identity before declared slots, magic methods or property hashes.
     // A scoped helper has no stdClass arm of its own: the global helper it delegates to claims them.
-    if delegate.is_none() {
+    if delegate.is_none() && !in_tail {
         emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
         let value_ty = ctx.value_php_type(value)?.codegen_repr();
         emit_runtime_property_set_for_stacked_name_after_eval_probe(
@@ -1843,33 +2003,30 @@ pub(super) fn lower_runtime_mixed_prop_set(
         emit_branch_if_mixed_dynamic_property_group_matches(ctx, group, target);
     }
     ctx.emitter.label(&no_match_label);
-    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
-        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
+    for group in &magic_groups {
+        for (member, label) in group.members.iter().zip(&group.stubs) {
+            emit_branch_if_stacked_object_class_matches(ctx, magic_arms[*member].class_id, 16, label);
+        }
     }
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
-    if delegate.is_none() {
+    if delegate.is_none() && !in_tail {
         emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
-        ctx.emitter.label(label);
-        emit_runtime_magic_set_call(
+    for group in &magic_groups {
+        emit_runtime_magic_set_group(
             ctx,
             object,
             property_value,
             value,
-            &arm.class_name,
-            arm.hash_offset,
-            &arm.target,
-            None,
-            16,
-            32,
+            &magic_arms,
+            group,
+            &done_label,
             inst.span.map_or(0, |span| span.line),
         )?;
-        abi::emit_jump(ctx.emitter, &done_label);
     }
 
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
@@ -1980,7 +2137,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
         }
     }
 
-    if delegate.is_none() {
+    if delegate.is_none() && !in_tail {
         ctx.emitter.label(&stdclass_label);
         let value_ty = ctx.value_php_type(value)?.codegen_repr();
         emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(ctx, value, &value_ty, 16, 0, 32)?;
@@ -1992,6 +2149,8 @@ pub(super) fn lower_runtime_mixed_prop_set(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     if let Some(base_label) = &delegate {
         emit_delegate_call_to_global_helper(ctx, object, property_value, Some(value), base_label)?;
+    } else if use_tail_call {
+        emit_magic_set_tail_call(ctx, object, property_value, value)?;
     }
     ctx.emitter.label(&done_label);
     Ok(())
