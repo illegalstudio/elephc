@@ -205,10 +205,12 @@ echo "end";
     assert_both_modes(source, "hash:10 list:20 mixed:replaced end");
 }
 
-/// Shutdown removes a sole owner's name and preserves the global and array aliases of shared objects.
+/// Shutdown distinguishes sole and shared objects without dereferencing native constant values.
 #[test]
 fn test_shutdown_destructor_reads_published_global_owners() {
     let source = r#"<?php
+function installShutdownConstant() { define('SHUTDOWN_LIMIT', 7); }
+installShutdownConstant();
 final class ShutdownProbe
 {
     public function __destruct()
@@ -229,9 +231,9 @@ final class SoleShutdownProbe
 $owner = new ShutdownProbe();
 $bucket = [$owner];
 $sole = new SoleShutdownProbe();
-echo 'end:';
+echo 'end:', SHUTDOWN_LIMIT, ' ';
 "#;
-    assert_both_modes(source, "end:sole:missing live");
+    assert_both_modes(source, "end:7 sole:missing live");
 }
 
 /// Reference-bound, uninitialized, unset and nested properties take the write the same way,
