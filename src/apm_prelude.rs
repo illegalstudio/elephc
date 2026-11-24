@@ -268,8 +268,9 @@ impl Search<'_> {
         for used in owner.traits.iter().filter(|used| !excluded(used)) {
             if let Some(mut found) = self.resolve_in(used, method, &mut seen.clone()) {
                 // `run as private` (or `T::run as protected`) changes the imported
-                // method's visibility on this class without renaming it.
-                if let Some(visibility) = owner.adaptations.iter().find_map(|adaptation| match adaptation {
+                // method's visibility on this class without renaming it. The last one
+                // written wins, as in trait flattening.
+                if let Some(visibility) = owner.adaptations.iter().rev().find_map(|adaptation| match adaptation {
                     TraitAdaptation::Alias { trait_name, method: changed, alias: None, visibility: Some(visibility) }
                         if same_name(changed, method)
                             && trait_name.as_ref().is_none_or(|name| owner_key(name.as_str()) == *used) =>
@@ -734,7 +735,7 @@ mod tests {
     /// trait, at the class or at its parent; an alias names the trait's
     /// method by its declared name; a private trait method used by the class
     /// itself is still its own; a visibility-only `as` narrows or widens what a
-    /// subclass inherits (review of #2534).
+    /// subclass inherits, the last one written winning (review of #2534).
     #[test]
     fn an_inherited_target_follows_visibility_and_trait_adaptations() {
         let source = "<?php
@@ -751,7 +752,11 @@ mod tests {
             class NarrowBase { use A { run as private; } }
             class NarrowChild extends NarrowBase {}
             class WideBase { use Hidden { hidden as protected; } }
-            class WideChild extends WideBase {}";
+            class WideChild extends WideBase {}
+            class LastWideBase { use A { run as private; run as protected; } }
+            class LastWideChild extends LastWideBase {}
+            class LastNarrowBase { use A { run as protected; run as private; } }
+            class LastNarrowChild extends LastNarrowBase {}";
         let warnings = not_found_warnings(
             source,
             &[
@@ -763,6 +768,8 @@ mod tests {
                 "UsesHidden::hidden",
                 "NarrowChild::run",
                 "WideChild::hidden",
+                "LastWideChild::run",
+                "LastNarrowChild::run",
             ],
         );
         assert!(warnings[0].starts_with("no such method"), "a private parent method: {}", warnings[0]);
@@ -773,6 +780,8 @@ mod tests {
         assert!(warnings[5].contains("name Hidden::hidden"), "a private trait method of the class: {}", warnings[5]);
         assert!(warnings[6].starts_with("no such method"), "`as private` on the parent: {}", warnings[6]);
         assert!(warnings[7].contains("name Hidden::hidden"), "`as protected` on the parent: {}", warnings[7]);
+        assert!(warnings[8].contains("name A::run"), "the last visibility wins, protected: {}", warnings[8]);
+        assert!(warnings[9].starts_with("no such method"), "the last visibility wins, private: {}", warnings[9]);
     }
 
     /// The wrap's locals are compiler-generated, so `get_defined_vars()`,
