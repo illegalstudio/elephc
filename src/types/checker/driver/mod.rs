@@ -460,7 +460,9 @@ pub(super) fn check_types_impl(
     }
     // A trait requirement that another trait's method or the class's own method satisfied is
     // gone from the flattened class, but that method must still be compatible with it.
-    errors.extend(validate_class_trait_requirements(&checker, program, &flattened_classes));
+    let requirement_errors =
+        validate_class_trait_requirements(&checker, program, &flattened_classes, &mut errors);
+    errors.extend(requirement_errors);
     checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(

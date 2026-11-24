@@ -1834,6 +1834,10 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         // PHP stops binding at the failure, so a requirement bound later is never checked.
         (format!("class P {{ public function foo() {{}} public static function bar() {{}} }}\n{a}trait T {{ abstract public function bar(); }}\nclass C extends P {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
         (format!("{kinds}enum E {{ use A, B {{ B::foo as final; }} public function foo() {{}} case X; }}"), "Cannot change method kind when overriding E::foo"),
+        // The parent's own final constant is checked before an inherited interface one.
+        (format!("interface I {{ final public const Y = 1; }}\nclass P implements I {{ final public const X = 1; }}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const Y = 2; public const X = 2; }}"), "X cannot override final constant"),
+        // A compatible abstract redeclaration of an earlier requirement stays on the final error.
+        (format!("{ab}abstract class C {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot override final method B::foo"),
         // A final constant of an interface the parent implements is inherited with the parent.
         (format!("interface I {{ final public const X = 1; }}\nclass P implements I {{}}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const X = 2; }}"), "final interface constant"),
         (format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nabstract class C extends P {{ use B, A {{ B::foo as final; }} }}"), "Cannot override final method B::foo"),
@@ -1849,6 +1853,11 @@ fn test_error_trait_alias_as_final_abstract_method_binding_model() {
         format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} }}"),
         format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): int {{ return 1; }} }}"),
         format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} public function bar(): int {{ return 1; }} }}"),
+        // An abstract redeclaration is checked against an earlier requirement too.
+        "trait A { abstract public function foo(): string; }\ntrait B { abstract public function foo(): string; }\nabstract class C { use A, B { B::foo as final; } abstract public function foo(): int; }".to_string(),
+        "abstract class P { abstract public function bar(): int; }\ntrait T { abstract public function bar(): string; }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use T, A { A::foo as final; } abstract public function bar(): int; public function foo() {} }".to_string(),
+        // A used trait's own satisfied requirement is checked while compiling that trait.
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass C { use A, T { A::foo as final; } public function foo() {} }".to_string(),
         // A requirement bound before the failure is checked first.
         format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} }}"),
         format!("{kinds}class P {{ public function foo(): int {{ return 1; }} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): string {{ return 'x'; }} }}"),

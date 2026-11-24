@@ -71,11 +71,14 @@ pub(crate) fn validate_enum_trait_requirements(
 /// Checks every recursively imported abstract trait method of each class against the concrete
 /// method the class ended up with: its own method or another trait's. A requirement still
 /// abstract after flattening (left to a subclass, or satisfied by an inherited method) has no
-/// such method and is not checked here.
+/// such method and is not checked here. `reported` holds the errors already produced by the
+/// class schema, where a used trait's own incompatibility replaces a class's abstract trait
+/// binding failure (`replace_binding_failure`).
 pub(crate) fn validate_class_trait_requirements(
     checker: &Checker,
     program: &Program,
     classes: &[FlattenedClass],
+    reported: &mut [CompileError],
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
     if classes.iter().all(|class| class.used_traits.is_empty()) {
@@ -90,16 +93,15 @@ pub(crate) fn validate_class_trait_requirements(
     // it names `self`, `parent` or `static`: those resolve against each consuming class, so the
     // pair is checked for every user and the outcome does not depend on declaration order.
     let mut checked_pairs = HashSet::new();
-    // A class with an abstract trait binding failure checked the requirements bound before it
-    // while it was built, and PHP never binds the ones after it.
-    for class in classes.iter().filter(|class| {
-        !class.used_traits.is_empty()
-            && !checker
-                .final_abstract_binding_failures
-                .contains_key(&php_symbol_key(&class.name))
-    }) {
+    for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
+        // A class with an abstract trait binding failure checked the requirements bound before
+        // it while it was built, and PHP never binds the ones after it. A pair a used trait
+        // satisfied itself is still checked: PHP compiles that trait before it binds the class,
+        // so its error takes the place of the class's binding failure.
+        let binding_failure =
+            checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name));
         let satisfied = contract.satisfied.iter().filter(|(required, actual)| {
             let key = (required.identity(), actual.identity());
             // Only pairs free of relative types are recorded, so a recorded pair is skipped.
@@ -115,7 +117,7 @@ pub(crate) fn validate_class_trait_requirements(
         });
         let mut pairs: Vec<(&ClassMethod, &ClassMethod)> =
             satisfied.map(|(required, actual)| (&required.method, &actual.method)).collect();
-        for required in &contract.required {
+        for required in contract.required.iter().filter(|_| binding_failure.is_none()) {
             if let Some(actual) = class.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.method.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.method.name)
@@ -125,12 +127,34 @@ pub(crate) fn validate_class_trait_requirements(
         }
         for (required, actual) in pairs {
             if let Err(error) = validate_class_requirement(checker, class, required, actual) {
-                errors.extend(error.flatten());
+                match binding_failure {
+                    Some(failure) => {
+                        replace_binding_failure(reported, failure, error);
+                    }
+                    None => errors.extend(error.flatten()),
+                }
                 break;
             }
         }
     }
     errors
+}
+
+/// Puts `error`, a used trait's own requirement incompatibility, in place of the class's
+/// abstract trait binding `failure` in `reported`, the errors the class schema already
+/// produced, because PHP compiles that trait before it binds the class. When the class failed
+/// for another reason first, that error stays and `error` is dropped.
+fn replace_binding_failure(
+    reported: &mut [CompileError],
+    failure: &crate::types::traits::FinalAbstractBindingFailure,
+    error: CompileError,
+) {
+    if let Some(slot) = reported
+        .iter_mut()
+        .find(|reported| reported.span == failure.span && reported.message == failure.message)
+    {
+        *slot = error;
+    }
 }
 
 /// Whether `method`'s parameter, variadic or return types name `self`, `parent` or `static`,

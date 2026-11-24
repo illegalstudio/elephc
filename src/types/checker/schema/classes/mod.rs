@@ -148,11 +148,11 @@ fn build_loaded_class_info(
         checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name))
     {
         // The abstract trait methods bound before the failure are checked first, against the
-        // class's own or concrete imported method that satisfies them.
+        // class's own method (abstract redeclarations included) or the concrete import that
+        // satisfies them.
         for required in &failure.earlier_requirements {
             if let Some(actual) = class.methods.iter().find(|method| {
-                !method.is_abstract
-                    && method.is_static == required.is_static
+                method.is_static == required.is_static
                     && method.name.eq_ignore_ascii_case(&required.name)
             }) {
                 super::enum_traits::validate_class_requirement(checker, &class, required, actual)?;
@@ -350,7 +350,11 @@ fn validate_final_constant_constraints(
                 ),
             ));
         }
-        let parent_interfaces = parent_info.map_or(&[][..], |parent| &parent.interfaces[..]);
+    }
+    // PHP checks the parent class's own final constants before those it inherited from its
+    // interfaces, whatever order the child declares them in.
+    let parent_interfaces = parent_info.map_or(&[][..], |parent| &parent.interfaces[..]);
+    for constant in &class.constants {
         if let Some(error) = interface_final_constant_error(class, constant, parent_interfaces, checker)
         {
             return Err(error);
