@@ -103,6 +103,12 @@ fn sensitive_scope<'a>(sharing: &MixedCallableSharing, scope: Option<&'a str>) -
     sharing.sensitive.contains(scope).then_some(scope)
 }
 
+/// Whether the lexical scope of the current function reaches a non-public method, so a callable
+/// array resolved there needs the scope-aware dispatcher rather than a scope-less shared helper.
+pub(super) fn scope_reaches_non_public_methods(ctx: &FunctionContext<'_>) -> bool {
+    sensitive_scope(ctx.shared.mixed_callable_sharing(), ctx.lexical_class()).is_some()
+}
+
 /// Returns the shared helper label for an eligible call site.
 pub(super) fn shared_helper_label(
     ctx: &mut FunctionContext<'_>,
@@ -186,6 +192,8 @@ fn mixed_callable_site_counts(
     sensitive: &crate::fast_hash::FastSet<String>,
 ) -> crate::fast_hash::FastMap<(bool, Option<String>), usize> {
     let mut counts = crate::fast_hash::FastMap::default();
+    let eval_support =
+        crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
     for function in module_functions(module).filter(|function| !function_has_eval_context(function))
     {
         let reachability = CallableReachabilityAnalysis::new(module, function);
@@ -207,6 +215,11 @@ fn mixed_callable_site_counts(
                 .map(|scope| scope.trim_start_matches('\\'))
                 .filter(|scope| sensitive.contains(*scope))
                 .map(str::to_string);
+            // A program that links the eval bridge resolves scope-free sites through the
+            // module-wide callback normalizer (see `uses_shared_boxed_normalizer`).
+            if class.is_none() && eval_support {
+                continue;
+            }
             *counts.entry((strict_php, class)).or_insert(0) += 1;
         }
     }

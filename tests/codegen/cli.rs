@@ -1232,17 +1232,27 @@ echo second('plus_one');
     );
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read callable assembly");
-    assert_eq!(asm.matches("_eir_callable_argument_normalizer:\n").count(), 1,
-        "unrestricted call sites must share one candidate resolver");
-    assert!(asm.contains("_callable_invoker_"), "the shared resolver emits native invokers");
-    for name in ["first", "second"] {
-        let body = asm.split_once(&format!("@fn name={name} symbol=")).unwrap().1
-            .split_once(&format!("@endfn name={name}")).unwrap().0;
-        assert_eq!(body.matches("_eir_callable_argument_normalizer").count(), 1,
-            "{name}: each call site reuses the module resolver");
-        assert!(!asm.contains(&format!("_eir_{name}_callable_invoker")),
-            "{name}: candidate invokers must not be attributed to a call site");
-    }
+    // An ordinary build writes compact assembly (no `@fn` comments), so the sites are told apart
+    // by the dispatcher they call: both unrestricted `call_user_func()` sites reach the one
+    // module-wide helper, which also owns the calling-scope visibility and the callback diagnostics.
+    assert_eq!(
+        asm.matches("_eir_shared_mixed_callable_invoke:").count(),
+        1,
+        "equivalent open callback sites must emit one shared dispatch helper"
+    );
+    assert!(
+        asm.matches("_eir_shared_mixed_callable_invoke").count() >= 3,
+        "both dynamic call sites must invoke the shared helper"
+    );
+    assert!(
+        !asm.contains("_eir_first_callable_invoker") && !asm.contains("_eir_second_callable_invoker"),
+        "per-function callable catalogs must not be regenerated"
+    );
+    assert_eq!(
+        asm.matches("_eir_callable_argument_normalizer:\n").count(),
+        0,
+        "a program without eval resolves its callbacks in the scope-aware helper, not the eval normalizer"
+    );
 
     let run = run_binary(&dir.join("main"), &dir);
     assert!(

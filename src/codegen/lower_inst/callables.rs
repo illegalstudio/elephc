@@ -252,9 +252,7 @@ pub(super) fn lower_callable_descriptor_invoke(
             "callable_descriptor_invoke",
         ),
         PhpType::Mixed | PhpType::Union(_) => {
-            if ctx.runtime_callable_candidates(callable).is_none()
-                && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
-            {
+            if uses_shared_boxed_normalizer(ctx, inst, callable) {
                 lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
             } else {
                 lower_mixed_callable_descriptor_invoke(
@@ -293,6 +291,24 @@ pub(super) fn lower_callable_descriptor_invoke(
             other
         ))),
     }
+}
+
+/// Chooses between the module-wide callback normalizer and the scope-aware open dispatcher.
+///
+/// The normalizer resolves a boxed callback to a descriptor once per module and discovers the
+/// owner of an eval-created callback, which only a program that links the eval bridge needs. It
+/// has no lexical class, so it cannot decide whether `[$object, 'method']` reaches a protected or
+/// private method from the calling scope, and its failures carry no callee name. A function that
+/// owns an eval context reaches the eval bridge itself, and every other site keeps the open
+/// Mixed dispatcher (`shared_mixed_callable`): one shared body per scope that reaches
+/// non-public methods, the inline ladder for a lone site, so the callback diagnostics name
+/// `call_user_func()` and the calling scope decides visibility like php.
+fn uses_shared_boxed_normalizer(ctx: &FunctionContext<'_>, inst: &Instruction, callable: ValueId) -> bool {
+    ctx.runtime_callable_candidates(callable).is_none()
+        && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
+        && crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module)
+        && !ctx.function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::EvalContext)
+        && !crate::codegen::shared_mixed_callable::scope_reaches_non_public_methods(ctx)
 }
 
 /// Resolves an unrestricted boxed callback once per module instead of expanding every candidate.

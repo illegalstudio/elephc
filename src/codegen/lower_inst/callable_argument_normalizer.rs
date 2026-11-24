@@ -67,14 +67,16 @@ pub(in crate::codegen) fn emit_callable_argument_normalizer(
 mod tests {
     use crate::codegen_support::platform::Target;
 
-    /// Multiple unrestricted boxed invocation sites reuse one complete candidate resolver.
+    /// Multiple unrestricted boxed invocation sites reuse one complete candidate resolver in a
+    /// program that links the eval bridge (the scope-aware open dispatcher serves the others).
     #[test]
     fn boxed_descriptor_invocations_share_candidate_tables_on_every_target() {
         let source = "<?php function sharedBoxedFirst(mixed $callback, array $args): mixed { \
             return call_user_func_array($callback, $args); } \
             function sharedBoxedSecond(mixed $callback, array $args): mixed { \
             return call_user_func_array($callback, $args); } \
-            function sharedBoxedTarget(string $value): string { return $value; }";
+            function sharedBoxedTarget(string $value): string { return $value; } \
+            $code = $argc > 0 ? 'return 1;' : ''; eval($code);";
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let module = crate::ir_lower::tests::lower_source_at_for_target(
                 source, std::path::Path::new("main.php"), std::path::Path::new("."),
