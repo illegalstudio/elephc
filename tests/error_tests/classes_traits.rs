@@ -1717,6 +1717,60 @@ fn test_error_trait_alias_as_final_abstract_method_binding_order() {
     ));
 }
 
+/// A class body method that overrides both an abstract `as final` import and a final, non
+/// private ancestor method is reported against the ancestor, as PHP binds the parent first;
+/// without such an ancestor it is reported against the import. Each program reports exactly one
+/// error, so a remaining method of the name adds no kind or final diagnostic (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
+    let a = "trait A { abstract public function foo(); }\n";
+    for (source, message) in [
+        (
+            format!("class P {{ final public function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class P {{ final public static function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public static function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class G {{ final public function foo() {{}} }}\nclass P extends G {{}}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method G::foo",
+        ),
+        (
+            format!("{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}\nclass P {{ final public function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class P {{ final public function bar() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final bar; }} public function bar() {{}} }}"),
+            "Cannot override final method P::bar",
+        ),
+        (
+            format!("class P {{ public function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ final private function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ final public function foo() {{}} }}\n{a}trait B {{ abstract public static function foo(); }}\nabstract class C extends P {{ use A, B {{ A::foo as final; }} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ abstract public static function foo(); }}\nabstract class C extends P {{ use A, B {{ A::foo as final; }} }}"),
+            "Cannot override final method A::foo",
+        ),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+}
+
 /// The same abstract trait method reached through two traits is one method, final only when its
 /// first copy is; `insteadof` keeps an abstract `as final` import as a requirement; two
 /// concrete methods collide before any final requirement is compared; `foo as final foo` makes

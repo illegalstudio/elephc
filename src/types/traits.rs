@@ -14,6 +14,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
     ClassConst, ClassMethod, ClassProperty, Program, StmtKind, TraitAdaptation, TraitUse,
+    Visibility,
 };
 use crate::span::Span;
 
@@ -208,14 +209,25 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let mut local_final_overrides = Vec::new();
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
                     name,
                     stmt.span,
                     &format!("class {}", name),
+                    Some(&mut local_final_overrides),
                 ) {
                     Ok(methods) => {
+                        final_abstract_imports.extend(local_final_overrides.drain(..).map(
+                            |(method, source_trait, local)| FinalAbstractImport {
+                                class: name.clone(),
+                                method,
+                                source_trait,
+                                span: local,
+                                local: true,
+                            },
+                        ));
                         final_abstract_imports.extend(
                             methods
                                 .iter()
@@ -225,6 +237,7 @@ pub fn flatten_classes(
                                     method: method.decl.name.clone(),
                                     source_trait: method.source_trait.clone(),
                                     span: stmt.span,
+                                    local: false,
                                 }),
                         );
                         methods.into_iter().map(|method| method.decl).collect()
@@ -313,6 +326,7 @@ pub fn flatten_classes(
                     name,
                     stmt.span,
                     &format!("enum {}", name),
+                    None,
                 ) {
                     Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
                     Err(error) => {
@@ -372,18 +386,23 @@ pub fn flatten_classes(
 }
 
 /// An abstract trait method made `as final` on a class, recorded while flattening the class.
+/// `local` marks one the class body replaces, with `span` at that method; otherwise it is kept
+/// on the class and `span` is the class declaration.
 struct FinalAbstractImport {
     class: String,
     method: String,
     source_trait: String,
     span: Span,
+    local: bool,
 }
 
-/// Reports each abstract `as final` import that a parent class already defines. Zend binds a
-/// class's traits after its parent's methods, so any ancestor method of that name (private or
-/// static included) overrides the final import: `Cannot override final method A::foo()`.
-/// The reported import is dropped from its class, so the class schema does not report the same
-/// override again as a kind or signature mismatch.
+/// Reports the abstract `as final` imports that another method overrides, once every class is
+/// flattened. Zend binds a class's traits after its parent's methods, so an import the class
+/// keeps is overridden by any ancestor method of that name, private or static included. One the
+/// class body replaces is overridden by that body, unless the nearest ancestor declaring the
+/// name has it final and not private: that final method is reported first, by the class schema.
+/// Both report `Cannot override final method A::foo()` with the importing trait, and drop every
+/// method of the name from the class, so the schema reports nothing more about it.
 fn final_abstract_parent_overrides(
     imports: &[FinalAbstractImport],
     flattened: &mut [FlattenedClass],
@@ -395,46 +414,60 @@ fn final_abstract_parent_overrides(
     let mut errors = Vec::new();
     let mut overridden = Vec::new();
     for import in imports {
-        let mut visited = HashSet::new();
-        let mut parent = classes
-            .get(&php_symbol_key(&import.class))
-            .and_then(|class| class.extends.as_deref());
-        while let Some(parent_name) = parent {
-            let parent_key = php_symbol_key(parent_name.trim_start_matches('\\'));
-            if !visited.insert(parent_key.clone()) {
-                break;
-            }
-            let Some(parent_class) = classes.get(&parent_key) else {
-                break;
-            };
-            if parent_class
-                .methods
-                .iter()
-                .any(|method| method.name.eq_ignore_ascii_case(&import.method))
-            {
-                errors.push(CompileError::new(
-                    import.span,
-                    &format!(
-                        "Cannot override final method {}::{}",
-                        import.source_trait, import.method
-                    ),
-                ));
-                overridden.push(import);
-                break;
-            }
-            parent = parent_class.extends.as_deref();
+        let ancestor = nearest_ancestor_method(&classes, &import.class, &import.method);
+        let reported = match (import.local, ancestor) {
+            (true, Some(method)) => !(method.is_final && method.visibility != Visibility::Private),
+            (true, None) => true,
+            (false, ancestor) => ancestor.is_some(),
+        };
+        if reported {
+            errors.push(CompileError::new(
+                import.span,
+                &format!(
+                    "Cannot override final method {}::{}",
+                    import.source_trait, import.method
+                ),
+            ));
+            overridden.push(import);
         }
     }
     for import in overridden {
         if let Some(class) = flattened.iter_mut().find(|class| class.name == import.class) {
-            class.methods.retain(|method| {
-                !(method.is_abstract
-                    && method.is_final
-                    && method.name.eq_ignore_ascii_case(&import.method))
-            });
+            class
+                .methods
+                .retain(|method| !method.name.eq_ignore_ascii_case(&import.method));
         }
     }
     errors
+}
+
+/// Returns the method named `method` of the nearest flattened ancestor of `class` that declares
+/// it (inherited trait methods included), or `None` when no user-declared ancestor does.
+fn nearest_ancestor_method<'a>(
+    classes: &HashMap<String, &'a FlattenedClass>,
+    class: &str,
+    method: &str,
+) -> Option<&'a ClassMethod> {
+    let mut visited = HashSet::new();
+    let mut parent = classes
+        .get(&php_symbol_key(class))
+        .and_then(|class| class.extends.as_deref());
+    while let Some(parent_name) = parent {
+        let parent_key = php_symbol_key(parent_name.trim_start_matches('\\'));
+        if !visited.insert(parent_key.clone()) {
+            return None;
+        }
+        let parent_class = classes.get(&parent_key)?;
+        if let Some(found) = parent_class
+            .methods
+            .iter()
+            .find(|candidate| candidate.name.eq_ignore_ascii_case(method))
+        {
+            return Some(found);
+        }
+        parent = parent_class.extends.as_deref();
+    }
+    None
 }
 
 /// Returns the direct trait names from a group of trait-use declarations.

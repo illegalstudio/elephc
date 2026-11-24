@@ -84,6 +84,7 @@ fn expand_trait(
         trait_name,
         trait_info.span,
         &format!("trait {}", trait_name),
+        None,
     )?;
     // Zend builds a trait's function table from its own declarations first and binds the
     // methods of the traits it uses after them, so a class using it lists them in that order

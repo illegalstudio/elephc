@@ -96,12 +96,18 @@ pub(super) fn merge_property_into(
 /// collision here is reported without trait names.
 /// Returns the merged list: imported-first, then local, each local method with `local_origin`
 /// (the declaring trait, or the class) as its origin.
+///
+/// A local method replacing an abstract `as final` import is an error here, unless
+/// `deferred_final_overrides` is given: a class records the override there instead (method name,
+/// importing trait, local span), because a final ancestor method takes precedence and ancestors
+/// are only known once every class is flattened.
 pub(super) fn merge_methods(
     imported: Vec<TraitMethod>,
     local: &[ClassMethod],
     local_origin: &str,
     span: Span,
     owner_label: &str,
+    mut deferred_final_overrides: Option<&mut Vec<(String, String, Span)>>,
 ) -> Result<Vec<TraitMethod>, CompileError> {
     validate_direct_method_duplicates(local, span, owner_label)?;
 
@@ -121,11 +127,19 @@ pub(super) fn merge_methods(
         // trait method stays replaceable, final or not.
         if imported_method.decl.is_abstract && imported_method.decl.is_final {
             if let Some(local_span) = local_names.get(&key.0) {
-                return Err(final_abstract_import_override(
+                let Some(deferred) = deferred_final_overrides.as_deref_mut() else {
+                    return Err(final_abstract_import_override(
+                        *local_span,
+                        &imported_method.source_trait,
+                        &imported_method.decl.name,
+                    ));
+                };
+                deferred.push((
+                    imported_method.decl.name.clone(),
+                    imported_method.source_trait.clone(),
                     *local_span,
-                    &imported_method.source_trait,
-                    &imported_method.decl.name,
                 ));
+                continue;
             }
         }
         if local_keys.contains(&key) {
