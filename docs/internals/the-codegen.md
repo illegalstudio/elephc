@@ -915,6 +915,14 @@ run time. A `Closure|null` value (`?Closure`) can only hold a descriptor, so its
 invocation calls the descriptor directly and links no selector at all, unless
 the program has eval support, whose closures are objects.
 
+Callable-array dispatch selects its target before normalizing arguments and
+invoking the descriptor. Instance targets converge on one owning invocation
+path, while static targets converge on one borrowed invocation path. This keeps
+the original candidate order, selector storage, eval fallback and cleanup policy
+without copying argument conversion and invocation for every candidate. The
+string-only callable-array form uses the same borrowed join. The argument
+container remains owned by its original EIR lifetime guards.
+
 The EIR module fixed point can specialize an already-direct numeric closure
 call when every actual argument, including captures, is exactly `int` or
 `float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded
