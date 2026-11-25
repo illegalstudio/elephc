@@ -1226,3 +1226,11 @@ rebuilds an indexed array. Ordinary CLI global storage remains boxed.
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
 - Shared runtime, ABI, platform, and metadata helpers belong in
   `src/codegen_support/`.
+
+Compiler-generated surplus-argument collectors can pass unchanged through a
+contravariant method adapter when both signatures have the same trailing
+`array<mixed>` collector, reference shape and optional-count protocol. The
+adapter boxes only the fixed prefix and keeps the original tail alive through
+the call. It does not append an empty collector or infer an unknown source
+variadic count. User-declared variadics and hidden actual-count slots retain
+their existing checks.
