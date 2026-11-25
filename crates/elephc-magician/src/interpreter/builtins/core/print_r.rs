@@ -72,6 +72,7 @@ impl EvalDebugObjectProperties {
     }
 
     /// Transfers the collected property leases to a traversal that outlives the metadata rows.
+    #[cfg(not(test))]
     pub(in crate::interpreter) fn into_values(self) -> Vec<RuntimeCellHandle> {
         self.owners.take_all()
     }

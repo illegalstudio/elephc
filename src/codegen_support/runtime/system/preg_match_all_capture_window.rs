@@ -19,6 +19,7 @@
 //!   match and returns that SET_ORDER row itself instead of a list of rows.
 
 use elephc_builtin_contract::pcre_errors::PREG_INTERNAL_ERROR;
+use elephc_memoir::values::boxed_offset_row::emit_mixed_header;
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -114,7 +115,7 @@ pub(super) fn emit_bad_offset_exit(emitter: &mut Emitter, s: &CaptureWindowSlots
             emitter.instruction("mov x0, #0");                                  // empty-array capacity
             emitter.instruction("mov x1, #8");                                  // Mixed slots store boxed pointers
             emitter.instruction("bl __rt_array_new");                           // allocate the empty $matches array
-            super::preg_match_all_capture::emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
+            emit_mixed_header(emitter, "x0");
             emitter.instruction("mov x1, x0");                                  // return the empty array in x1
             emitter.instruction("mov x0, #-2");                                 // bad-offset sentinel: PHP false, [] written
             emitter.instruction("b __rt_pma_cap_ret");                          // share the common epilogue
@@ -132,7 +133,7 @@ pub(super) fn emit_bad_offset_exit(emitter: &mut Emitter, s: &CaptureWindowSlots
             emitter.instruction("xor edi, edi");                                // empty-array capacity
             emitter.instruction("mov esi, 8");                                  // Mixed slots store boxed pointers
             emitter.instruction("call __rt_array_new");                         // allocate the empty $matches array
-            super::preg_match_all_capture::emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
+            emit_mixed_header(emitter, "rax");
             emitter.instruction("mov rdx, rax");                                // return the empty array in rdx
             emitter.instruction("mov rax, -2");                                 // bad-offset sentinel: PHP false, [] written
             emitter.instruction("jmp __rt_pma_cap_ret_linux_x86_64");           // share the common epilogue

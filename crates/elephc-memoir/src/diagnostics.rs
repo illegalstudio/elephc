@@ -41,3 +41,10 @@ pub const CONCAT_OVERFLOW_MSG: &str =
 
 /// Shared web stream close slot.
 pub const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+
+/// PHP's heap-exhaustion fatal prefix, before the limit in bytes.
+pub(crate) const HEAP_FATAL_PREFIX: &str = "Fatal error: Allowed memory size of ";
+/// Separates the limit from the requested allocation size.
+pub(crate) const HEAP_FATAL_MIDDLE: &str = " bytes exhausted (tried to allocate ";
+/// Closes the heap-exhaustion diagnostic at the stable unknown source location.
+pub(crate) const HEAP_FATAL_SUFFIX: &str = " bytes) in Unknown on line 0\n";

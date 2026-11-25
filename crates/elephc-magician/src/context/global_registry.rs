@@ -51,6 +51,7 @@ pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut El
 ///
 /// # Safety
 /// Context handles must be registered and removed on their owning thread before reclamation.
+#[cfg(not(test))]
 pub(crate) unsafe fn live_native_context_constant(
     excluded: *mut ElephcEvalContext,
     name: &str,

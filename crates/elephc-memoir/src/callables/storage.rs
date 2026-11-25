@@ -128,7 +128,7 @@ pub fn emit_branch_on_kind_flags(
             emitter.instruction(&format!("test QWORD PTR [{descriptor}], {}", first.0)); // test the first semantic descriptor flag
             emitter.instruction(&format!("jnz {}", first.1));                   // branch when the first semantic flag is present
             emitter.instruction(&format!("test QWORD PTR [{descriptor}], {}", second.0)); // test the second semantic descriptor flag
-            emitter.instruction(&format!("jnz {}", second.1));                 // branch when the second semantic flag is present
+            emitter.instruction(&format!("jnz {}", second.1));                  // branch when the second semantic flag is present
         }
     }
 }

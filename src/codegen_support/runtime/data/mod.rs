@@ -27,14 +27,6 @@ pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_m
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
 
-/// PHP's heap-exhaustion fatal prefix, before the limit in bytes.
-pub(crate) const HEAP_FATAL_PREFIX: &str = "Fatal error: Allowed memory size of ";
-/// Separates the limit from the requested allocation size.
-pub(crate) const HEAP_FATAL_MIDDLE: &str = " bytes exhausted (tried to allocate ";
-/// Closes the diagnostic. elephc does not track a source line at allocation time; the `%s`/`%d`
-/// wildcards in php-src's EXPECTF accept this stable location spelling.
-pub(crate) const HEAP_FATAL_SUFFIX: &str = " bytes) in Unknown on line 0\n";
-
 /// Optional native stream closer installed only by an application worker after its startup reset.
 pub(crate) use elephc_memoir::diagnostics::WEB_STREAM_CLOSE_SLOT;
 /// Program-specific close body shared with explicit fclose lowering.

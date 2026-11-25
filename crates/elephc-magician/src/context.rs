@@ -55,9 +55,9 @@ pub use closure_metadata::*;
 pub use core::*;
 pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
-pub(crate) use reflection_registry::{
-    forget_released_reflection_identity, untrack_reflection_identities_for_context,
-};
+pub(crate) use reflection_registry::untrack_reflection_identities_for_context;
+#[cfg(not(test))]
+pub(crate) use reflection_registry::forget_released_reflection_identity;
 use native_catalog::SharedNative;
 pub use native_defaults::*;
 pub use native_function::*;

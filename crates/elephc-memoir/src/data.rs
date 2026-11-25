@@ -112,8 +112,24 @@ pub fn append_buffer_messages(out: &mut String) {
 }
 
 /// Emits the configured heap limit and allocator failure messages.
-pub fn append_heap_limits(out: &mut String, heap_size: usize) {
+pub fn append_heap_limits(out: &mut String, heap_size: usize, memory_limit: usize) {
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str(&format!(".globl _heap_limit\n_heap_limit:\n    .quad {memory_limit}\n"));
+    // The web request reset restores the program's startup ceiling.
+    out.push_str(&format!(".globl _heap_limit_startup\n_heap_limit_startup:\n    .quad {memory_limit}\n"));
+    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
+    out.push_str(&format!(
+        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
+        crate::diagnostics::HEAP_FATAL_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
+        crate::diagnostics::HEAP_FATAL_MIDDLE
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
+        crate::diagnostics::HEAP_FATAL_SUFFIX
+    ));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
