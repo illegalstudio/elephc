@@ -109,7 +109,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 34 records the `as final` flag of a trait alias adaptation.
 /// Format 35 adds the `@` and `throw` expressions, `const` statements, the `@` token, and the
 /// by-reference return flag of eval functions and closures.
-pub(crate) const FORMAT_VERSION: u32 = 35;
+/// Format 36 adds the enum-case receiver check of property fetches in `const` initializers.
+pub(crate) const FORMAT_VERSION: u32 = 36;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

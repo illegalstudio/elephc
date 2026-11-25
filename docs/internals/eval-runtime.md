@@ -644,7 +644,10 @@ handler in place. `EvalExpr::Throw` raises through the pending-Throwable channel
 calls already use. `EvalStmt::ConstDecl` registers a `const` statement's
 namespace-qualified name when it runs, with PHP's profile-dependent redefinition
 warning; lowering first checks that the initializer is a constant expression
-(`lower/constant_expressions.rs`), so an invalid one refuses the whole fragment. `EvalFunction` and `EvalStmt::FunctionDecl` record `function &f()` for
+(`lower/constant_expressions.rs`), so an invalid one refuses the whole fragment, and
+wraps each property-fetch receiver in `EvalExpr::ConstantPropertyReceiver`, which raises
+PHP's `Error` unless the receiver is an enum case. A `throw` statement or expression whose
+operand is not a `Throwable` object raises PHP's catchable `Error` instead. `EvalFunction` and `EvalStmt::FunctionDecl` record `function &f()` for
 reflection; such a function is kept out of the bytecode slice.
 
 `EvalStmt::DimensionWrite` carries a complete receiver expression, an optional

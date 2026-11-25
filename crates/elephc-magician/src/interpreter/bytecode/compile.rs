@@ -501,6 +501,7 @@ impl<'a> Compiler<'a> {
             EvalExpr::PropertyIncDec { .. } => Err(CompileGap::new("PropertyIncDec")),
             EvalExpr::ErrorSuppress(_) => Err(CompileGap::new("ErrorSuppress")),
             EvalExpr::Throw(_) => Err(CompileGap::new("ThrowExpression")),
+            EvalExpr::ConstantPropertyReceiver { .. } => Err(CompileGap::new("ConstantPropertyReceiver")),
             EvalExpr::Match { .. } => Err(CompileGap::new("Match")),
             EvalExpr::Clone(_) => Err(CompileGap::new("Clone")),
             EvalExpr::NamespacedCall { .. } => Err(CompileGap::new("NamespacedCall")),

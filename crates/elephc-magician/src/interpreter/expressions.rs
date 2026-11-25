@@ -16,7 +16,8 @@ mod closures;
 mod control_operators;
 
 use closures::eval_closure_expr;
-use control_operators::{eval_error_suppressed_expr, eval_throw_expr};
+use control_operators::{eval_constant_property_receiver, eval_error_suppressed_expr, eval_throw_expr};
+pub(in crate::interpreter) use control_operators::eval_throwable_operand;
 pub(in crate::interpreter) use closures::eval_closure_object_expr;
 
 pub(in crate::interpreter) use calls::*;
@@ -438,5 +439,8 @@ fn eval_expr_with_result_ownership(
             eval_error_suppressed_expr(operand, own_result, context, scope, values)
         }
         EvalExpr::Throw(operand) => eval_throw_expr(operand, context, scope, values),
+        EvalExpr::ConstantPropertyReceiver { object, nullsafe } => {
+            eval_constant_property_receiver(object, *nullsafe, own_result, context, scope, values)
+        }
     }
 }

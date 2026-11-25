@@ -306,7 +306,11 @@ pub(super) fn parse_const_decl(
         let name_span = tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span);
         let name = match tokens.get(*pos) {
             Some((Token::Identifier(n), _)) => {
-                if validation_only() && crate::syntax::parser::keyword_name::is_reserved_construct_name(n) {
+                // `const array = 1;` is a PHP parse error; runtime `eval()` fragments refuse it
+                // the way the validation parser does.
+                if (validation_only() || crate::syntax::parser::runtime_fragment())
+                    && crate::syntax::parser::keyword_name::is_reserved_construct_name(n)
+                {
                     return Err(CompileError::new(
                         tokens[*pos].1.span,
                         "Expected declaration name",

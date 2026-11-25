@@ -11,6 +11,10 @@
 //! - The mask lives in the generated runtime when one is linked, so diagnostics raised by
 //!   compiled code called from the operand are silenced too.
 //! - A thrown value travels through the pending-Throwable channel that calls already use.
+//!   Throwing a non-object or an object that is not `Throwable` raises PHP's catchable `Error`
+//!   instead, for the `throw` statement and expression alike.
+//! - A property fetch in a `const` initializer goes through a receiver check: PHP allows only
+//!   an enum case there, or `null` behind `?->`.
 
 use super::*;
 
@@ -53,14 +57,77 @@ pub(super) fn eval_throw_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let thrown = eval_owned_expr(operand, context, scope, values)?;
-    let tag = values.type_tag(thrown);
-    if tag != Ok(EVAL_TAG_OBJECT) {
-        let _ = eval_release_value(context, values, thrown);
-        tag?;
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let thrown = eval_throwable_operand(thrown, context, values)?;
     context.set_pending_throw(thrown);
     Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Accepts an owned `throw` operand that implements `Throwable`.
+///
+/// Any other value is released and replaced by PHP's `Error`, raised through the pending
+/// Throwable channel so an enclosing `catch` sees it.
+pub(in crate::interpreter) fn eval_throwable_operand(
+    thrown: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let throwable = match values.type_tag(thrown) {
+        Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(thrown, "Throwable", context, values).map(Some),
+        Ok(_) => Ok(None),
+        Err(status) => Err(status),
+    };
+    match throwable {
+        Ok(Some(true)) => Ok(thrown),
+        Ok(found) => {
+            eval_release_value(context, values, thrown)?;
+            let message = if found.is_some() {
+                "Cannot throw objects that do not implement Throwable"
+            } else {
+                "Can only throw objects"
+            };
+            throwables::eval_throw_error(message, context, values)
+        }
+        Err(status) => {
+            let _ = eval_release_value(context, values, thrown);
+            Err(status)
+        }
+    }
+}
+
+/// Evaluates the receiver of a property fetch in a `const` initializer.
+///
+/// PHP evaluates such a fetch only on an enum case; `nullsafe` also lets `null` through, which
+/// the `?->` fetch then turns into `null`. Any other receiver raises PHP's `Error`.
+pub(super) fn eval_constant_property_receiver(
+    object: &EvalExpr,
+    nullsafe: bool,
+    own_result: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let receiver = eval_expr_with_result_ownership(object, context, scope, values, own_result)?;
+    let allowed = match values.type_tag(receiver) {
+        Ok(EVAL_TAG_NULL) => Ok(nullsafe),
+        Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(receiver, "UnitEnum", context, values),
+        Ok(_) => Ok(false),
+        Err(status) => Err(status),
+    };
+    match allowed {
+        Ok(true) => Ok(receiver),
+        Ok(false) => {
+            release_expr_result(receiver, context, values)?;
+            throwables::eval_throw_error(
+                "Fetching properties on non-enums in constant expressions is not allowed",
+                context,
+                values,
+            )
+        }
+        Err(status) => {
+            let _ = release_expr_result(receiver, context, values);
+            Err(status)
+        }
+    }
 }
 
 /// Restores the mask saved by `@` unless the operand installed one with non-fatal levels.

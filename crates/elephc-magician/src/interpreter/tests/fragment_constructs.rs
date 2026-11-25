@@ -208,3 +208,49 @@ echo CF_A, CF_B ? "t" : "f", CF_C, CF_D, CF_E, CF_F, CF_G;"#);
     assert_eq!(output, "1f73111");
     assert!(warnings.is_empty(), "{warnings:?}");
 }
+
+/// Verifies PHP's reserved construct names cannot name a `const`, inside a namespace too.
+#[test]
+fn const_statement_rejects_reserved_construct_names() {
+    for source in ["echo 'A'; const array = 1; echo array;", "namespace EvalReserved; const isset = 1;", "const EMPTY = 1;"] {
+        assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
+    }
+}
+
+/// Verifies `throw` of a non-object or a non-Throwable raises a catchable `Error`.
+#[test]
+fn throwing_a_non_throwable_raises_a_catchable_error() {
+    let (output, _) = run(r#"try { echo "A"; $x = 0 || throw 1; echo "B"; } catch (Error $e) { echo " ", $e->getMessage(); }
+try { throw new stdClass; } catch (Error $e) { echo "|", $e->getMessage(); }
+try { throw null; } catch (Error $e) { echo "|", $e->getMessage(); }
+echo "|C";"#);
+
+    assert_eq!(
+        output,
+        "A Can only throw objects|Cannot throw objects that do not implement Throwable|Can only throw objects|C",
+    );
+}
+
+/// Verifies `const` initializers fetch properties of enum cases and of `null` behind `?->` only.
+#[test]
+fn const_statement_property_fetches_require_an_enum_case() {
+    let (output, _) = run(r#"enum EvalConstFetchEnum: int { case A = 1; }
+const CPR_VALUE = EvalConstFetchEnum::A->value, CPR_NAME = EvalConstFetchEnum::A->name, CPR_NULL = null?->missing;
+echo CPR_VALUE, CPR_NAME, CPR_NULL === null ? "n" : "-";"#);
+
+    assert_eq!(output, "1An");
+
+    for source in [
+        r#"echo "A"; const CPR_BAD = (new stdClass)->nope; echo "B";"#,
+        r#"echo "A"; const CPR_BAD = (new stdClass)?->nope; echo "B";"#,
+        r#"echo "A"; const CPR_BAD = (new stdClass)->{"nope"}; echo "B";"#,
+    ] {
+        let program = parse_fragment(source.as_bytes()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).map(|_| ());
+
+        assert_eq!(result, Err(EvalStatus::UncaughtThrowable), "{source}");
+        assert_eq!(values.output, "A", "{source}");
+    }
+}

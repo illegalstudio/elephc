@@ -18,6 +18,9 @@
 //!   folds literal operands exactly; one that only a predefined constant would fold is not
 //!   folded, so both branches are still checked.
 //! - Undefined constants and `self::` outside a class fail when the statement runs, as in PHP.
+//! - Property fetches are allowed here only on enum cases, which PHP checks when it evaluates
+//!   the fetch. `mark_property_receivers` wraps each receiver so the interpreter raises PHP's
+//!   `Error` for any other receiver, without affecting code the initializer calls.
 
 use crate::eval_ir::{EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr};
 
@@ -71,6 +74,58 @@ pub(super) fn is_constant_expression(expr: &EvalExpr) -> bool {
                 }
         }
         _ => false,
+    }
+}
+
+/// Wraps every property-fetch receiver of a validated initializer in the enum-case check.
+///
+/// Only the node kinds `is_constant_expression` accepts are traversed; a static closure's body
+/// is ordinary code and is left alone.
+pub(super) fn mark_property_receivers(expr: EvalExpr) -> EvalExpr {
+    let mark = |expr: Box<EvalExpr>| Box::new(mark_property_receivers(*expr));
+    let receiver = |object: Box<EvalExpr>, nullsafe: bool| {
+        Box::new(EvalExpr::ConstantPropertyReceiver { object: Box::new(mark_property_receivers(*object)), nullsafe })
+    };
+    match expr {
+        EvalExpr::PropertyGet { object, property } => EvalExpr::PropertyGet { object: receiver(object, false), property },
+        EvalExpr::NullsafePropertyGet { object, property } => {
+            EvalExpr::NullsafePropertyGet { object: receiver(object, true), property }
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            EvalExpr::DynamicPropertyGet { object: receiver(object, false), property: mark(property) }
+        }
+        EvalExpr::NullsafeDynamicPropertyGet { object, property } => {
+            EvalExpr::NullsafeDynamicPropertyGet { object: receiver(object, true), property: mark(property) }
+        }
+        EvalExpr::Array(elements) => EvalExpr::Array(elements.into_iter().map(|element| match element {
+            EvalArrayElement::Value(value) => EvalArrayElement::Value(mark_property_receivers(value)),
+            EvalArrayElement::KeyValue { key, value } => EvalArrayElement::KeyValue {
+                key: mark_property_receivers(key),
+                value: mark_property_receivers(value),
+            },
+            element => element,
+        }).collect()),
+        EvalExpr::ArrayGet { array, index } => EvalExpr::ArrayGet { array: mark(array), index: mark(index) },
+        EvalExpr::NewObject { class_name, args } => EvalExpr::NewObject {
+            class_name,
+            args: args.into_iter().map(|arg| {
+                let value = mark_property_receivers(arg.value().clone());
+                match arg.name() {
+                    Some(name) => EvalCallArg::named(name, value),
+                    None => EvalCallArg::positional(value),
+                }
+            }).collect(),
+        },
+        EvalExpr::Cast { target, expr } => EvalExpr::Cast { target, expr: mark(expr) },
+        EvalExpr::Unary { op, expr } => EvalExpr::Unary { op, expr: mark(expr) },
+        EvalExpr::Binary { op, left, right } => EvalExpr::Binary { op, left: mark(left), right: mark(right) },
+        EvalExpr::NullCoalesce { value, default } => EvalExpr::NullCoalesce { value: mark(value), default: mark(default) },
+        EvalExpr::Ternary { condition, then_branch, else_branch } => EvalExpr::Ternary {
+            condition: mark(condition),
+            then_branch: then_branch.map(mark),
+            else_branch: mark(else_branch),
+        },
+        expr => expr,
     }
 }
 
