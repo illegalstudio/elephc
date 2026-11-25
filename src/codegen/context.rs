@@ -36,7 +36,7 @@ use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
 mod machine_layout;
-mod operand_owners;
+pub(super) mod operand_owners;
 mod ref_cell_state;
 mod eval_reference_snapshots;
 
@@ -1703,6 +1703,11 @@ impl<'a> FunctionContext<'a> {
                 abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
             }
         }
+    }
+
+    /// Returns the instruction currently being lowered, if lowering has started one.
+    pub(super) fn current_inst(&self) -> Option<InstId> {
+        self.current_inst
     }
 
     /// Returns true when Mixed boxing can consume the value's owned source reference.

@@ -62,6 +62,16 @@ property hook bodies and other input or result representations retain inline
 lowering. The helper inventory is prepared once per module emission, avoiding
 repeated large class-dispatch ladders in the assembly buffer.
 
+Repeated literal-name property writes on boxed receivers share helpers the same
+way, also keyed by the original value type. Borrowed, persistent and scalar
+values are retained by the inner store. An owned Mixed box that the inline store
+would adopt (no EIR release and no scoped cleanup) gets its own body whose
+parameter is owned, so the inner store adopts it exactly as inline, on every
+path. A magic `__set` only borrows its value, so the runtime write retires an
+adopted box once `__set` returns or throws. When the eval bridge is linked, the
+eval-object probe that runs before the native arms hands an adopted box back to
+them untouched.
+
 Literal property reads on known object receivers resolve the runtime class before
 selecting storage or magic accessors. For a dynamic name, the class-specific hash
 entry wins, including a stored null: the `MagicRead`, `MagicIsset`, `MagicEmpty`

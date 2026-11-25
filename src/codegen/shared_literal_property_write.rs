@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - Scope, opcode, exact spelling and the original value type identify one body.
-//! - Borrowed, persistent and Mixed values are shared; the caller releases an owned Mixed box the
-//!   inline store would have adopted. Other owned refcounted values stay inline.
+//! - Borrowed, persistent and Mixed values are shared. An owned Mixed box the inline store would
+//!   adopt (no EIR release, no scoped cleanup) gets its own body that adopts it the same way, on
+//!   every path; other owned refcounted values stay inline.
 //! - The inner write carries a compiler-generated span, so the caller's published site survives.
 //! - Each call passes its source line for dynamic-property diagnostics.
 
@@ -27,6 +28,8 @@ struct WriteKey {
     dynamic: bool,
     value_type: PhpType,
     value_ir: IrType,
+    /// The site's owned Mixed box is adopted by the store, so the body owns its operand.
+    adopt: bool,
 }
 
 /// Immutable helper inventory for one module emission.
@@ -57,9 +60,9 @@ fn literal_site(function: &Function, inst: &Instruction) -> Option<(DataId, Valu
         _ => return None,
     };
     let operand = function.value(value)?;
-    // The helper borrows its operand and retains its own reference. An owned Mixed box is
-    // released by `emit_call` exactly when the inline store would have adopted it; other owned
-    // refcounted values keep the inline store, which decides their transfer itself.
+    // A borrowed body retains its own reference, and an adopting body takes an owned Mixed box
+    // over (see `adopts_owned_box`); other owned refcounted values keep the inline store, which
+    // decides their transfer itself.
     if Ownership::php_type_needs_lifetime_tracking(&operand.php_type)
         && !matches!(operand.ownership, Ownership::Borrowed | Ownership::Persistent)
         && operand.php_type.codegen_repr() != PhpType::Mixed
@@ -73,6 +76,20 @@ fn literal_site(function: &Function, inst: &Instruction) -> Option<(DataId, Valu
     Some((data, value))
 }
 
+/// Returns whether the inline store would adopt this site's owned Mixed box.
+///
+/// This is `FunctionContext::value_can_own_mixed_box_source` for a Mixed value: an owned box with
+/// no EIR `Release` and no scoped call-operand cleanup is EIR's promise that the store takes it
+/// over. `prepare` and `helper_label` both decide through this one predicate.
+fn adopts_owned_box(function: &Function, value: ValueId, inst: InstId) -> bool {
+    function.value(value).is_some_and(|operand| {
+        operand.php_type.codegen_repr() == PhpType::Mixed && operand.ownership == Ownership::Owned
+    }) && !super::context::operand_owners::has_scoped_cleanup(function, value, Some(inst))
+        && !function.instructions.iter().any(|candidate| {
+            candidate.op == Op::Release && candidate.operands.first() == Some(&value)
+        })
+}
+
 /// Counts sites once while keeping visibility, type checks and opcode-specific precedence separate.
 fn prepare(module: &Module, shared: &mut SharedCodegenState) {
     if shared.literal_property_write_helpers.is_some() { return; }
@@ -84,15 +101,16 @@ fn prepare(module: &Module, shared: &mut SharedCodegenState) {
             let operand = function.value(value).expect("eligible write value exists");
             let scope = function.inlined_scopes.get(&InstId::from_raw(index as u32))
                 .cloned().or_else(|| function.lexical_class.clone());
+            let adopt = adopts_owned_box(function, value, InstId::from_raw(index as u32));
             let key = WriteKey { scope, property: property.clone(), dynamic: inst.op == Op::DynamicPropSet,
-                value_type: operand.php_type.clone(), value_ir: operand.ir_type };
+                value_type: operand.php_type.clone(), value_ir: operand.ir_type, adopt };
             counts.entry(key).or_insert((0, data)).0 += 1;
         }
     }
     let mut entries = counts.into_iter().filter_map(|(key, (count, data))|
         (count >= 2).then_some((key, data))).collect::<Vec<_>>();
     entries.sort_by(|(a, _), (b, _)| a.scope.cmp(&b.scope).then_with(|| a.property.cmp(&b.property))
-        .then_with(|| a.dynamic.cmp(&b.dynamic))
+        .then_with(|| a.dynamic.cmp(&b.dynamic)).then_with(|| a.adopt.cmp(&b.adopt))
         .then_with(|| format!("{:?}/{:?}", a.value_type, a.value_ir)
             .cmp(&format!("{:?}/{:?}", b.value_type, b.value_ir))));
     let helpers = entries.into_iter().enumerate().map(|(index, (key, data))|
@@ -106,8 +124,10 @@ pub(super) fn helper_label(ctx: &mut FunctionContext<'_>, inst: &Instruction,
     property: &str) -> Option<String> {
     let (_, value) = literal_site(ctx.function, inst)?;
     let operand = ctx.function.value(value)?;
+    let adopt = adopts_owned_box(ctx.function, value, ctx.current_inst()?);
     let key = WriteKey { scope: ctx.lexical_class().map(str::to_string), property: property.into(),
-        dynamic: inst.op == Op::DynamicPropSet, value_type: operand.php_type.clone(), value_ir: operand.ir_type };
+        dynamic: inst.op == Op::DynamicPropSet, value_type: operand.php_type.clone(), value_ir: operand.ir_type,
+        adopt };
     prepare(ctx.module, ctx.shared);
     ctx.shared.literal_property_write_helpers.as_ref()?.labels.get(&key).cloned()
 }
@@ -136,15 +156,9 @@ pub(super) fn emit_call(ctx: &mut FunctionContext<'_>, object: ValueId, value: V
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, if string_value { 3 } else { 2 }),
         i64::from(inst.span.map_or(0, |span| span.line)));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    // The inline store adopts an owned box EIR emits no cleanup for. The helper retained its own
-    // reference instead, so the caller ends that ownership after the call.
-    let adopted = ctx.function.value(value).is_some_and(|operand| operand.php_type.codegen_repr() == PhpType::Mixed)
-        && ctx.value_can_own_mixed_box_source(value)?;
+    // An adopted box transfers into the helper, whose store takes it over exactly as the inline
+    // store would, including when the store throws; the caller keeps no cleanup for it.
     abi::emit_call_label(ctx.emitter, label);
-    if adopted {
-        ctx.load_value_to_result(value)?;
-        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    }
     Ok(())
 }
 
@@ -178,7 +192,14 @@ fn helper_function(key: &WriteKey, data: DataId, label: &str) -> Function {
     let object = builder.emit_load_local(LocalSlotId::from_raw(0), mixed, PhpType::Mixed);
     let value = builder.emit_load_local(LocalSlotId::from_raw(1), key.value_ir, key.value_type.clone());
     builder.set_value_ownership(object, Ownership::Borrowed);
-    builder.set_value_ownership(value, if Ownership::php_type_needs_lifetime_tracking(&key.value_type) { Ownership::Borrowed } else { Ownership::NonHeap });
+    let value_ownership = if key.adopt {
+        Ownership::Owned
+    } else if Ownership::php_type_needs_lifetime_tracking(&key.value_type) {
+        Ownership::Borrowed
+    } else {
+        Ownership::NonHeap
+    };
+    builder.set_value_ownership(value, value_ownership);
     let _ = builder.emit_load_local(LocalSlotId::from_raw(2), IrType::I64, PhpType::Int);
     // The caller's own instruction already published its source line and backtrace site. A
     // compiler-generated span keeps this inner write from republishing line 0 over them.
@@ -204,8 +225,8 @@ pub(super) fn emit_helpers(module: &Module, emitter: &mut Emitter, data: &mut Da
         let function = helper_function(&key, property, &label);
         crate::ir::validate_function(&function).map_err(|error|
             super::CodegenIrError::invalid_module(format!("shared literal property write: {error:?}")))?;
-        emitter.comment(&format!("shared literal property write: scope={} property={:?} dynamic={} value={:?}",
-            key.scope.as_deref().unwrap_or("global"), key.property, key.dynamic, key.value_type));
+        emitter.comment(&format!("shared literal property write: scope={} property={:?} dynamic={} value={:?} adopt={}",
+            key.scope.as_deref().unwrap_or("global"), key.property, key.dynamic, key.value_type, key.adopt));
         block_emit::emit_synthetic_function_with_label(module, &function, &label, emitter, data, shared, false)?;
     }
     Ok(())
@@ -217,11 +238,12 @@ mod tests {
     use crate::codegen::platform::Target;
 
     /// Builds repeated source sites while allowing scope, opcode and value representation to differ.
+    #[allow(clippy::too_many_arguments)]
     fn add_sites(module: &mut Module, scope: Option<&str>, property: &str,
-        dynamic: bool, php_type: PhpType, ir_type: IrType, count: usize) {
+        dynamic: bool, php_type: PhpType, ir_type: IrType, count: usize, adopt: bool) {
         let data = module.data.intern_string(property);
         let key = WriteKey { scope: scope.map(str::to_string), property: property.into(),
-            dynamic, value_type: php_type, value_ir: ir_type };
+            dynamic, value_type: php_type, value_ir: ir_type, adopt };
         for _ in 0..count {
             let name = format!("write_site_{}", module.functions.len());
             module.functions.push(helper_function(&key, data, &name));
@@ -232,18 +254,19 @@ mod tests {
     fn verify(target: &str) {
         let mut module = Module::new(Target::parse(target).unwrap());
         let mixed = IrType::Heap(IrHeapKind::Mixed);
-        add_sites(&mut module, None, "value", false, PhpType::Mixed, mixed, 2);
-        add_sites(&mut module, None, "value", false, PhpType::Str, IrType::Str, 2);
-        add_sites(&mut module, None, "value", true, PhpType::Mixed, mixed, 2);
-        add_sites(&mut module, None, "value", false, PhpType::Array(Box::new(PhpType::Mixed)), IrType::Heap(IrHeapKind::Array), 2);
-        add_sites(&mut module, Some("Vault"), "value", false, PhpType::Mixed, mixed, 2);
-        add_sites(&mut module, None, "once", false, PhpType::Int, IrType::I64, 1);
-        add_sites(&mut module, None, "float", false, PhpType::Float, IrType::F64, 2);
+        add_sites(&mut module, None, "value", false, PhpType::Mixed, mixed, 2, false);
+        add_sites(&mut module, None, "value", false, PhpType::Str, IrType::Str, 2, false);
+        add_sites(&mut module, None, "value", true, PhpType::Mixed, mixed, 2, false);
+        add_sites(&mut module, None, "value", false, PhpType::Array(Box::new(PhpType::Mixed)), IrType::Heap(IrHeapKind::Array), 2, false);
+        add_sites(&mut module, Some("Vault"), "value", false, PhpType::Mixed, mixed, 2, false);
+        add_sites(&mut module, None, "once", false, PhpType::Int, IrType::I64, 1, false);
+        add_sites(&mut module, None, "float", false, PhpType::Float, IrType::F64, 2, false);
+        add_sites(&mut module, None, "value", true, PhpType::Mixed, mixed, 2, true);
         let mut shared = SharedCodegenState::default();
         prepare(&module, &mut shared);
         let plan = shared.literal_property_write_helpers.as_ref().unwrap();
-        assert_eq!(plan.helpers.len(), 5, "{target}: scope, opcode and value types stay separate");
-        assert_eq!(plan.labels.len(), 5);
+        assert_eq!(plan.helpers.len(), 6, "{target}: scope, opcode, value types and adoption stay separate");
+        assert_eq!(plan.labels.len(), 6);
         for (key, property, label) in &plan.helpers {
             let function = helper_function(key, *property, label);
             crate::ir::validate_function(&function).unwrap();
@@ -258,7 +281,8 @@ mod tests {
             assert_eq!(function.value(inst.operands[0]).unwrap().ownership, Ownership::Borrowed);
             let value = *inst.operands.last().unwrap();
             assert_eq!(function.value(value).unwrap().php_type, key.value_type);
-            assert_eq!(function.value(value).unwrap().ownership, Ownership::Borrowed);
+            let expected = if key.adopt { Ownership::Owned } else { Ownership::Borrowed };
+            assert_eq!(function.value(value).unwrap().ownership, expected, "{target}: adopt={}", key.adopt);
         }
         let mut main = Function::new("main".into(), IrType::Void, PhpType::Void);
         let mut builder = Builder::new(&mut main);
@@ -271,10 +295,11 @@ mod tests {
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
         assert!(asm.contains(PREFIX), "{target}: shared write bodies must be emitted and called");
-        assert_eq!(asm.matches("shared literal property write:").count(), 5);
+        assert_eq!(asm.matches("shared literal property write:").count(), 6);
+        assert_eq!(asm.matches("adopt=true").count(), 1, "{target}: one adopting body");
         // Repeating an independent module emission must not keep another module's helper keys.
         let mut second = Module::new(Target::parse(target).unwrap());
-        add_sites(&mut second, None, "different", false, PhpType::Mixed, mixed, 2);
+        add_sites(&mut second, None, "different", false, PhpType::Mixed, mixed, 2, false);
         let mut second_state = SharedCodegenState::default();
         prepare(&second, &mut second_state);
         let plan = second_state.literal_property_write_helpers.as_ref().unwrap();
@@ -284,6 +309,7 @@ mod tests {
 
     /// Borrowed values and owned Mixed boxes share the helper, other owned refcounted values stay
     /// on the inline store, and the helper's inner store never republishes a source location.
+    /// Only an owned Mixed box without EIR cleanup selects the adopting body.
     #[test]
     fn owned_non_mixed_values_stay_inline_and_inner_stores_keep_the_caller_site() {
         let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
@@ -295,19 +321,30 @@ mod tests {
                 (PhpType::Array(Box::new(PhpType::Mixed)), IrType::Heap(IrHeapKind::Array), false),
             ] {
                 let key = WriteKey { scope: None, property: "value".into(), dynamic,
-                    value_type: value_type.clone(), value_ir };
+                    value_type: value_type.clone(), value_ir, adopt: false };
                 let mut function = helper_function(&key, data, &format!("write_site_{dynamic}"));
                 let opcode = if dynamic { Op::DynamicPropSet } else { Op::PropSet };
                 let index = function.instructions.iter().position(|inst| inst.op == opcode).unwrap();
                 let inst = function.instructions[index].clone();
+                let inst_id = InstId::from_raw(index as u32);
                 assert!(inst.span.is_some_and(|span| !span.is_from_source()), "{inst:?}");
                 assert!(literal_site(&function, &inst).is_some(), "a borrowed {value_type:?} is shared");
                 let value = *inst.operands.last().unwrap();
+                assert!(!adopts_owned_box(&function, value, inst_id), "a borrowed {value_type:?} is retained");
                 for ownership in [Ownership::Owned, Ownership::MaybeOwned, Ownership::Moved] {
                     function.values[value.as_raw() as usize].ownership = ownership;
                     assert_eq!(literal_site(&function, &inst).is_some(), owned_shared,
                         "{ownership:?} {value_type:?}");
+                    // Only an owned Mixed box without EIR cleanup is left for the store to adopt.
+                    assert_eq!(adopts_owned_box(&function, value, inst_id),
+                        owned_shared && ownership == Ownership::Owned, "{ownership:?} {value_type:?}");
                 }
+                function.values[value.as_raw() as usize].ownership = Ownership::Owned;
+                let mut release = inst.clone();
+                release.op = Op::Release;
+                release.operands = vec![value];
+                function.instructions.push(release);
+                assert!(!adopts_owned_box(&function, value, inst_id), "an EIR release keeps the retain body");
             }
         }
     }
