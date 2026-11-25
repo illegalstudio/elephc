@@ -69,7 +69,7 @@ pub use driver_support::{
     generate_runtime_with_features_pic,
 };
 use emitted_classes::collect_emitted_class_names;
-pub(crate) use prescan::collect_constants;
+pub(crate) use prescan::{collect_constants, stmt_declares_scanned_constant};
 pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
     force_runtime_features_for_flag, link_requirements_for_runtime_features,

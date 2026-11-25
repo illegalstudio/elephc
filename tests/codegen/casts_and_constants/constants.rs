@@ -76,3 +76,20 @@ var_dump(\constant('Demo\PHP_EOL'));
         )
     );
 }
+
+/// A top-level `define()` after an `if` keeps its value and type in functions declared earlier.
+#[test]
+fn test_define_after_if_keeps_its_type_in_functions() {
+    let out = compile_and_run(
+        r#"<?php
+function plugin_folder(string $folder): string {
+    return ltrim(substr($folder, strlen(PLUGIN_ROOT)), '/') . '|' . gettype(PLUGIN_ROOT);
+}
+if ($argc > 5) { echo "many\n"; }
+define('PLUGIN_ROOT', '/x/plugins');
+const PLUGIN_LABEL = 'plugins';
+echo plugin_folder(PLUGIN_ROOT . '/akismet'), '|', PLUGIN_LABEL, "\n";
+"#,
+    );
+    assert_eq!(out, "akismet|string|plugins\n");
+}

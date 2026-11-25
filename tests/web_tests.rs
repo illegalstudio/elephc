@@ -1461,6 +1461,32 @@ replace_request_values();
     }
 }
 
+/// Top-level `define()` constants keep their values inside functions under the `--web` catch-all.
+#[test]
+fn web_top_level_define_constants_keep_their_type_in_functions() {
+    let source = r#"<?php
+define('WEB_BASE_DIR', __DIR__ . '/site/');
+define('WEB_PLUGIN_DIR', WEB_BASE_DIR . 'plugins');
+define('WEB_PLUGIN_LABEL', 'plugins');
+function plugin_folder(string $folder): string {
+    return ltrim(substr($folder, strlen(WEB_PLUGIN_DIR)), '/');
+}
+function plugin_label(): string { return gettype(WEB_PLUGIN_LABEL) . ':' . WEB_PLUGIN_LABEL; }
+echo plugin_folder(WEB_PLUGIN_DIR . '/akismet/akismet.php'), "\n", plugin_label();
+"#;
+    let dir = make_test_dir("web_define_constants");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--web-isolation=request"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&bin, &addr, "1");
+    for _ in 0..2 {
+        let response = http_get(&addr, "/");
+        assert_eq!(raw_response_body(&response), "akismet/akismet.php\nstring:plugins");
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
