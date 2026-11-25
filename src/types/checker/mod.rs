@@ -816,7 +816,8 @@ pub(crate) struct Checker {
     /// Intersecting observations also fails closed when included files share a span.
     pub buffer_read_observations: HashMap<Span, bool>,
     /// Argument spans binding a `mixed`/union value to a declared scalar
-    /// parameter, where EIR lowering emits the runtime `TypeError` check.
+    /// parameter, and returned-expression spans reaching a declared `string`/`float`/`bool`
+    /// return, where EIR lowering emits the runtime `TypeError` check.
     pub scalar_guard_arg_sites: HashSet<Span>,
     /// The subset of `scalar_guard_arg_sites` recorded inside a function, method, closure or
     /// class body: the only ones a callee exception summary can see (see

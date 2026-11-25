@@ -49,7 +49,7 @@ use propagate::*;
 pub use reachability::prune_unreachable_declarations;
 pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
 pub use binding_decisions::install_scalar_guard_arg_sites;
-pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
+pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source, active_scalar_return_needs_guard, active_return_boundary_releases_refused_value};
 pub use output::with_hosted_output;
 
 #[cfg(test)]

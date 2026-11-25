@@ -14,16 +14,24 @@ use super::*;
 use crate::ir::IrHeapKind;
 
 /// Coerces a value to the current function return storage type when needed.
+///
+/// `source` is the returned expression's span, which the checker records when its checked
+/// type can hold a value a declared scalar return refuses.
 pub(super) fn coerce_to_return_type(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<Span>,
+    source: Option<Span>,
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     guard_declared_callable_return_value(ctx, value, span.unwrap_or_else(Span::dummy));
     let value = crate::ir_lower::object_boundaries::guard_runtime_object_return(ctx, value, span);
+    let value = match guard_declared_scalar_return(ctx, value, span, source) {
+        ScalarReturnGuard::Converted(converted) => return converted,
+        ScalarReturnGuard::Checked(value) => value,
+    };
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -87,6 +95,72 @@ pub(super) fn coerce_to_return_type(
         }
         IrType::Heap(_) => coerce_heap_return_source(ctx, value, span),
         IrType::Void => value,
+    }
+}
+
+/// What the declared scalar return check left for the rest of the return coercion.
+enum ScalarReturnGuard {
+    /// The `float` the check already converted, in the return storage.
+    Converted(LoweredValue),
+    /// The (possibly checked) value, still to be coerced as before.
+    Checked(LoweredValue),
+}
+
+/// Checks a boxed `mixed`/union value returned from a DECLARED `string`, `float` or `bool`
+/// return type, throwing PHP's `f(): Return value must be of type T, U returned`.
+///
+/// `int` keeps its dedicated `Op::ReturnBoundaryMixedToInt`; nullable, union, `mixed`,
+/// `void`, `never`, class and generator returns are untouched, and inferred (undeclared)
+/// returns never throw. Only a returned expression the checker recorded is checked.
+fn guard_declared_scalar_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+    source: Option<Span>,
+) -> ScalarReturnGuard {
+    let declared = ctx.return_php_type.clone();
+    if !ctx.return_type_is_declared
+        || !matches!(declared, PhpType::Str | PhpType::Float | PhpType::Bool)
+        || !matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+    {
+        return ScalarReturnGuard::Checked(value);
+    }
+    // The checker records the returned expression when its checked type can hold a refused
+    // value; a local whose storage widened to a box while its type stayed scalar (an
+    // overflow-promoted accumulator, for example) is not checked.
+    if !source.is_some_and(|source| ctx.scalar_guard_arg_sites.contains(&source)) {
+        // A boxed scalar union still binds to `bool` by truthiness, not as an integer.
+        if declared == PhpType::Bool {
+            return ScalarReturnGuard::Converted(crate::ir_lower::expr::lower_truthy_bool(ctx, value, span));
+        }
+        return ScalarReturnGuard::Checked(value);
+    }
+    // Named by its PHP label: `{closure:file:line}` for a closure, the PHP name of an
+    // include-variant function, `class@anonymous::m` for an anonymous class's method.
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        crate::ir_lower::object_boundaries::callable_label(ctx),
+        crate::types::diagnostic_names::php_type_name(&declared),
+    );
+    let span = span.unwrap_or_else(Span::dummy);
+    // A returned owned temporary (`return mk();`) is rooted nowhere, so it is pinned over the
+    // check: a refusal throws the `TypeError` first and the unwinder then releases the value,
+    // so a destructor that throws chains the `TypeError` as its previous exception, as in PHP.
+    // A borrowed local is acquired only after this check and is not pinned.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+    let guarded = crate::ir_lower::expr::emit_scalar_guard(
+        ctx, value, &declared, &prefix, " returned", span,
+        crate::ir_lower::expr::ScalarGuardEmit { release_on_refusal: false, also_release: Vec::new(), diagnostic_span: span },
+    );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    match guarded {
+        Some(converted) => ScalarReturnGuard::Converted(converted),
+        // A checked scalar bound to `bool` converts by PHP truthiness (`"abc"` is true); the
+        // generic integer return coercion would read it as `(int)"abc"`, which is false.
+        None if declared == PhpType::Bool => {
+            ScalarReturnGuard::Converted(crate::ir_lower::expr::lower_truthy_bool(ctx, value, Some(span)))
+        }
+        None => ScalarReturnGuard::Checked(value),
     }
 }
 
@@ -169,7 +243,10 @@ fn declared_int_return_boundary(
     ) {
         return None;
     }
-    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    let prefix = format!(
+        "{}(): Return value must be of type int, ",
+        crate::ir_lower::object_boundaries::callable_label(ctx),
+    );
     let data = ctx.intern_string(&prefix);
     let verified = ctx.emit_value(
         Op::ReturnBoundaryMixedToInt,

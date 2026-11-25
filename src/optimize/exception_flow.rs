@@ -714,9 +714,14 @@ impl ExceptionFlowAnalysis {
             StmtKind::Global { vars } => vars.iter().fold(ThrownTypes::default(), |thrown, name|
                 thrown.combined(self.local_retirement_throws(&Expr::var(name)))),
             StmtKind::ConstDecl { value: expr, .. } => operand(expr),
+            // A value a `string`/`float`/`bool` return refuses is released while the
+            // `TypeError` unwinds, so a destructor it runs can throw too.
             StmtKind::Return(Some(expr)) => operand(expr).combined(
                 if super::return_boundaries::active_return_boundary_may_throw(expr) {
-                    ThrownTypes::exact("TypeError")
+                    let thrown = ThrownTypes::exact("TypeError");
+                    if super::return_boundaries::active_return_boundary_releases_refused_value() {
+                        thrown.combined(self.temporary_destruction_throws(expr, class_context))
+                    } else { thrown }
                 } else { ThrownTypes::default() }),
             StmtKind::Throw(expr) => operand(expr)
                 .combined(self.thrown_value_types(expr, bindings, class_context)),

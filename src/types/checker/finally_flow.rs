@@ -74,10 +74,19 @@ impl Checker {
     }
 
     /// Records validation before a return unwinds through its local catches and finally blocks.
+    ///
+    /// A `string`/`float`/`bool` boundary releases a refused value while its `TypeError`
+    /// unwinds, so a destructor of the returned temporary can throw too: its exceptions reach
+    /// the same handlers (`try { return mk(); } catch (LogicException $e) { ... }`).
     pub(super) fn record_return_boundary_exception_flow(&mut self, source: &PhpType, env: &TypeEnv) {
         if self.finally_flow_frames.is_empty()
-            || !crate::optimize::active_return_boundary_checks_source(source) { return; }
+            || !crate::optimize::active_return_boundary_checks_source(source, self.strict_types) { return; }
         self.record_exception_flow(CheckerThrownTypes::from_value(&PhpType::Object("TypeError".into()), true), env);
+        if !crate::optimize::active_return_boundary_releases_refused_value() { return; }
+        let cleanup = self.exception_analysis.as_ref().map(|analysis| analysis.retirement_throws(source));
+        if let Some(cleanup) = cleanup.filter(|cleanup| !cleanup.is_empty()) {
+            self.record_exception_flow(cleanup, env);
+        }
     }
 
     /// Saves a return before an enclosing guard restores its fallthrough view.
