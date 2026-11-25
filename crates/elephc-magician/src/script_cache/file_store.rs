@@ -107,7 +107,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
 /// Format 33 reparses cached scripts and parse failures with the shared Chopper frontend.
 /// Format 34 records the `as final` flag of a trait alias adaptation.
-pub(crate) const FORMAT_VERSION: u32 = 34;
+/// Format 35 adds the `@` and `throw` expressions, `const` statements, the `@` token, and the
+/// by-reference return flag of eval functions and closures.
+/// Format 36 adds the enum-case receiver check of property fetches in `const` initializers.
+pub(crate) const FORMAT_VERSION: u32 = 36;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

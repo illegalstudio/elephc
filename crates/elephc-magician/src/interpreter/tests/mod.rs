@@ -72,6 +72,7 @@ mod dynamic_calls;
 mod early_binding;
 mod enums;
 mod expressions;
+mod fragment_constructs;
 mod functions_namespaces;
 mod jumps;
 mod method_arguments;

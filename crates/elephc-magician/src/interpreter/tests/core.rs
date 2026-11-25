@@ -176,9 +176,13 @@ fn execute_program_catches_specific_exception_inside_eval() {
     assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
     assert_eq!(values.get(result), FakeValue::Int(42));
 }
-/// Verifies eval `catch` clauses can match eval-declared interfaces.
+/// Verifies an object that only implements an eval-declared interface cannot be thrown.
+///
+/// PHP raises `Error` instead, which the interface's catch clause does not match. Catching an
+/// eval-declared interface on a real `Exception` subclass is covered end to end by
+/// `codegen::eval_fragment_constructs`, because the fake runtime cannot construct one.
 #[test]
-fn execute_program_catches_eval_declared_interface_inside_eval() {
+fn execute_program_refuses_to_throw_an_interface_object_that_is_not_throwable() {
     let program = parse_fragment(
         br#"interface EvalCatchable {
     function value();
@@ -189,7 +193,9 @@ class EvalThrownBox implements EvalCatchable {
 try {
     throw new EvalThrownBox();
 } catch (EvalCatchable $caught) {
-    return $caught->value();
+    return "interface";
+} catch (Error $error) {
+    return $error->getMessage();
 }"#,
     )
     .expect("parse eval fragment");
@@ -197,12 +203,12 @@ try {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let caught = scope
-        .visible_cell("caught")
-        .expect("scope should contain catch variable");
 
-    assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
-    assert_eq!(values.get(result), FakeValue::Int(42));
+    assert!(scope.visible_cell("caught").is_none());
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("Cannot throw objects that do not implement Throwable".to_string()),
+    );
 }
 /// Verifies eval catch clauses keep source order and skip non-matching types.
 #[test]

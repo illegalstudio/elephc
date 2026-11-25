@@ -944,9 +944,6 @@ pub(super) fn parse_params(
             )?;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
-                if crate::syntax::parser::runtime_fragment() {
-                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
-                }
                 break;
             }
         }

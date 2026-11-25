@@ -24,6 +24,7 @@ pub(super) fn lower_function(
     variadic_by_ref: bool,
     variadic_type: Option<TypeExpr>,
     return_type: Option<TypeExpr>,
+    returns_by_ref: bool,
     body: Vec<Stmt>,
     span: Span,
 ) -> Option<EvalStmt> {
@@ -41,6 +42,7 @@ pub(super) fn lower_function(
         parameter_is_by_ref: signature.by_ref,
         parameter_is_variadic: signature.is_variadic,
         return_type: signature.return_type,
+        returns_by_ref,
         body,
     })
 }

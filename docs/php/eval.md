@@ -184,14 +184,15 @@ makes it one shared value everywhere.
 |---|---|
 | Comments | PHP comments are accepted inside fragments. |
 | Output | `echo` supports comma-separated arguments. `print` is an expression. |
-| Variables | Reads, writes, by-name assignment, by-reference assignment, `unset()`, `isset()`, and `empty()` are supported. |
+| Variables | Reads, writes, by-name assignment, by-reference assignment, `unset()` (a trailing comma is allowed), `isset()`, and `empty()` are supported. |
 | Assignment forms | Simple variable assignment, by-reference variable, eval object-property, eval static-property, and bridge-supported generated/AOT static-property binding, compound assignment for variables, object properties, and static properties (`+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `.=`), simple variable increment/decrement (`++$x`, `$x++`, `--$x`, `$x--`), object property increment/decrement, and static property increment/decrement are supported. |
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, `continue`, and `goto` with its labels are supported. A fragment is a label scope of its own, as is each function, method, and closure it declares. An invalid jump refuses the whole fragment as a parse error before any of it runs. A declaration bound before the fragment runs (see Declaration binding) stays declared when a jump skips it, and is not declared twice when a jump goes back over it. Any other declaration runs with its statement: a jump that skips it leaves it undeclared, and a jump back over it declares it a second time, which is an error, as in PHP. |
 | Declaration binding | As PHP does when it compiles a file, a fragment or an included file binds some of its top-level declarations before its first statement runs, so code may use them above the line that declares them. These are: every function; a class with no interfaces, no traits and no `__toString` method whose parent, if any, already exists or is bound earlier in the same fragment; an interface with no parents and no `__toString` method; a trait that uses no traits. A function whose name is taken, or a class bound this way that cannot extend its parent, stops the fragment before any statement runs. So does a top-level class or interface whose `__toString` method PHP refuses to compile: a static one, one that takes a parameter other than a variadic one, one whose declared return type is not exactly `string`, or an abstract one in a class that is not abstract. A class, interface or trait whose name is taken is left to its statement, which reports the redeclaration. So is a child class whose overrides can only be checked against its parent with a class that does not exist yet (a return type narrowed to a class declared further down, for example): it is linked when its statement runs. Enums, every other shape, and every declaration inside a block or a function are declared when their statement runs. Binding evaluates no member: a class constant or a property default is evaluated at its first use, so it may read a constant that a later statement defines. |
-| Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
-| Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
+| Exceptions | `throw` as a statement and as an expression (`$ok || throw new E()`, `$value ?? throw new E()`, a ternary arm), `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
+| Functions | Eval fragments can declare functions, including by-reference declarations (`function &f()`, `function &() {}`), and parameter and closure `use` lists may end with a trailing comma. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
 | Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`, on declared and promoted properties), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, comma-separated constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
+| Constants | A top-level `const NAME = value;` statement, including comma-separated declarations, defines the constant when the statement runs, qualified with the current namespace. A name that is already defined keeps its first value and raises PHP's redefinition warning (`Constant NAME already defined`, followed by `, this will be an error in PHP 9` from the PHP 8.5 profile on). The initializer must be a PHP constant expression: literals, constants, class constants, operators, casts, arrays, `new` without argument unpacking, property fetches, static closures and first-class callables. A property fetch on anything but an enum case (or `null` behind `?->`) throws `Error` when the statement runs, as in PHP. A variable, a call, `@`, `throw` or another form PHP refuses at compile time makes the fragment invalid before any of it runs, and so does `const` inside a function, closure or block. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
@@ -249,6 +250,12 @@ runtime include-execution history.
 | Match | Strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default`. A miss without `default` is reported as an eval runtime fatal. |
 
 Supported unary operators are `+`, `-`, `!`, and integer bitwise `~`.
+
+The error-control operator `@` evaluates its operand with only the fatal error
+levels left in `error_reporting()`, as PHP does, so warnings raised by eval code
+or by compiled code it calls are not displayed. The previous mask is restored
+afterwards, also when the operand throws, unless the operand installed a mask
+that reports non-fatal levels. A user error handler is still called.
 
 Nested array writes and appends keep their storage path, including
 `$rows["items"][] = $value` and `$registry->handlers["save"][] = $handler`.
@@ -578,12 +585,12 @@ through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
 `hasTentativeReturnType()`, and `getTentativeReturnType()`.
 `returnsReference()` reports the reflected declaration: `true` for a compiled
-`function &f()` or `function &m()`, for an eval-declared `function &m()` or `&get` property
-hook, and for an abstract or interface `&get` hook contract, whether eval or
-compiled code declares it. Eval retains method reference-return declarations for
-reflection and dimension-write validation. Binding a method return as a reference
-remains unsupported. Eval code cannot declare a by-reference free function or
-closure (the fragment is rejected). `hasReturnType()`
+`function &f()` or `function &m()`, for an eval-declared `function &f()`, `function &() {}`
+closure, `function &m()` or `&get` property hook, and for an abstract or interface `&get`
+hook contract, whether eval or compiled code declares it. Eval retains method
+reference-return declarations for reflection and dimension-write validation. Binding a
+function, closure or method return as a reference remains unsupported: the call returns
+its value. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.

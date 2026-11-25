@@ -301,9 +301,6 @@ pub(super) fn parse_closure(
                 *pos += 1;
                 // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
                 if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
-                    if crate::syntax::parser::runtime_fragment() {
-                        return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected capture after ','"));
-                    }
                     break;
                 }
             }
@@ -715,9 +712,6 @@ fn parse_closure_params(
             *pos += 1;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
-                if crate::syntax::parser::runtime_fragment() {
-                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
-                }
                 break;
             }
         }
@@ -832,11 +826,7 @@ pub(crate) fn parse_statement_unset_call(
     span: Span,
 ) -> Result<Expr, CompileError> {
     let args = parse_args_in(tokens, pos, span, ArgumentSyntax::Unset)?;
-    if crate::syntax::parser::runtime_fragment() {
-        if let Some((Token::Comma, metadata)) = pos.checked_sub(2).and_then(|index| tokens.get(index)) {
-            return Err(CompileError::new(metadata.span, "Expected unset operand after ','"));
-        }
-    } else {
+    if !crate::syntax::parser::runtime_fragment() {
         validate_language_construct("unset", &args, tokens, *pos, span)?;
     }
     let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);
