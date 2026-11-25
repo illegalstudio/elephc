@@ -220,12 +220,7 @@ fn apply_static_property(
     state
         .static_property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
-    state
-        .property_attribute_names
-        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
-    state
-        .property_attribute_args
-        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
+    record_property_attributes(state, prop);
     state
         .static_property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
@@ -291,6 +286,16 @@ fn validate_static_property_override(
         parent_declaring_class,
         prop.span,
     )
+}
+
+/// Records a declaration's own attributes, replacing any list inherited from a parent.
+fn record_property_attributes(state: &mut ClassBuildState, prop: &ClassProperty) {
+    state
+        .property_attribute_names
+        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
+    state
+        .property_attribute_args
+        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
 }
 
 /// Validates and records an instance property declaration. Rejects final+private
@@ -372,12 +377,7 @@ fn apply_instance_property(
         .insert(prop.name.clone(), class.name.clone());
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
-    state
-        .property_attribute_names
-        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
-    state
-        .property_attribute_args
-        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
+    record_property_attributes(state, prop);
     state.defaults.push(untyped_property_schema_default(prop));
     state
         .property_visibilities
@@ -485,6 +485,7 @@ fn apply_instance_property_redeclaration(
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    record_property_attributes(state, prop);
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
@@ -581,12 +582,7 @@ fn apply_private_parent_property_shadowing(
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
-    state
-        .property_attribute_names
-        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
-    state
-        .property_attribute_args
-        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
+    record_property_attributes(state, prop);
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());

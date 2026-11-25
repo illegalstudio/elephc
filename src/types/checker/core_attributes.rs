@@ -2,83 +2,129 @@
 //! Validates predefined Core attribute targets and diagnoses discarded NoDiscard calls.
 //!
 //! Called from:
-//! - Final checker validation and expression-statement checking.
+//! - The checker driver, before declaration tables exist, and expression-statement checking.
+//! - Name resolution and reflection factories, through `flags`.
 //!
 //! Key details:
+//! - Walks resolved declarations so interface, trait, and enum members are covered and each error
+//!   reports the offending attribute's own span. PHP itself reports the declaration's line.
+//! - Runs first and stops at the first error: PHP rejects an invalid target while compiling,
+//!   before inheritance errors exist. This is why `no matching parent` never hides a target error.
+//! - Masks follow the compile profile; a name the profile does not predefine is a user attribute.
 //! - DelayedTargetValidation defers target errors to ReflectionAttribute::newInstance.
 //! - Canonical names keep namespaced user attributes separate from global Core markers.
 
 use super::Checker;
 use crate::errors::{CompileError, CompileWarning};
-use crate::parser::ast::{AttributeGroup, Expr, ExprKind, StaticReceiver};
-use crate::span::Span;
+use crate::parser::ast::{
+    AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, Program,
+    StaticReceiver, StmtKind, TypeExpr,
+};
+use crate::source::SourceMode;
 use crate::types::{collect_attribute_names, PhpType, TypeEnv};
+use elephc_builtin_contract::{
+    core_attribute_target_error, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_CLASS,
+    CORE_ATTRIBUTE_TARGET_CLASS_CONSTANT, CORE_ATTRIBUTE_TARGET_FUNCTION, CORE_ATTRIBUTE_TARGET_METHOD,
+    CORE_ATTRIBUTE_TARGET_PARAMETER, CORE_ATTRIBUTE_TARGET_PROPERTY,
+};
 
-/// Returns the target mask and repeatability of a predefined global Core attribute.
+/// Returns the target mask and repeatability of an attribute the compile profile predefines.
 pub(crate) fn flags(name: &str) -> Option<i64> {
-    elephc_builtin_contract::core_attribute_flags(name)
+    elephc_builtin_contract::core_attribute_flags(name, crate::codegen_support::compile_php_version())
 }
 
-/// Checks all retained declarations, including parameter and member metadata.
-pub(super) fn validate(checker: &Checker) -> Result<(), CompileError> {
-    for declaration in checker.fn_decls.values() {
-        validate_names(&collect_attribute_names(&declaration.attributes), 2, declaration.span)?;
-        if has_no_discard(&declaration.attributes)
-            && matches!(declaration.return_type.as_ref(), Some(crate::parser::ast::TypeExpr::Void | crate::parser::ast::TypeExpr::Never))
+/// Checks user declarations in source order. Preludes declare the newest surface on every profile.
+pub(super) fn validate(program: &Program) -> Result<(), CompileError> {
+    for stmt in program.iter().filter(|stmt| stmt.source_mode != SourceMode::Internal) {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { param_attributes, return_type, .. } => {
+                validate_attributes(&stmt.attributes, CORE_ATTRIBUTE_TARGET_FUNCTION)?;
+                if has_no_discard(&stmt.attributes) && returns_nothing(return_type.as_ref()) {
+                    return Err(CompileError::new(stmt.span, "NoDiscard cannot apply to a void or never function"));
+                }
+                for attributes in param_attributes {
+                    validate_attributes(attributes, CORE_ATTRIBUTE_TARGET_PARAMETER)?;
+                }
+            }
+            StmtKind::ClassDecl { properties, methods, constants, .. }
+            | StmtKind::InterfaceDecl { properties, methods, constants, .. }
+            | StmtKind::TraitDecl { properties, methods, constants, .. } => {
+                validate_attributes(&stmt.attributes, CORE_ATTRIBUTE_TARGET_CLASS)?;
+                validate_members(properties, methods, constants, &[])?;
+            }
+            StmtKind::EnumDecl { cases, methods, constants, .. } => {
+                validate_attributes(&stmt.attributes, CORE_ATTRIBUTE_TARGET_CLASS)?;
+                validate_members(&[], methods, constants, cases)?;
+            }
+            StmtKind::PackedClassDecl { .. } => {
+                validate_attributes(&stmt.attributes, CORE_ATTRIBUTE_TARGET_CLASS)?;
+            }
+            StmtKind::NamespaceBlock { body, .. } => validate(body)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Checks class-like members in source order, then NoDiscard's return contract on methods.
+fn validate_members(
+    properties: &[ClassProperty],
+    methods: &[ClassMethod],
+    constants: &[ClassConst],
+    cases: &[EnumCaseDecl],
+) -> Result<(), CompileError> {
+    // Parameters first: the stable sort then keeps an attribute kept on both copies of a promoted
+    // parameter reported against the parameter, as PHP does.
+    let parameters = methods.iter().flat_map(|method| &method.param_attributes);
+    let mut sites: Vec<_> = parameters.map(|attributes| (attributes, CORE_ATTRIBUTE_TARGET_PARAMETER))
+        .chain(methods.iter().map(|method| (&method.attributes, CORE_ATTRIBUTE_TARGET_METHOD)))
+        .chain(properties.iter().map(|property| (&property.attributes, CORE_ATTRIBUTE_TARGET_PROPERTY)))
+        .chain(constants.iter().map(|constant| (&constant.attributes, CORE_ATTRIBUTE_TARGET_CLASS_CONSTANT)))
+        .chain(cases.iter().map(|case| (&case.attributes, CORE_ATTRIBUTE_TARGET_CLASS_CONSTANT)))
+        .collect();
+    sites.sort_by_key(|(attributes, _)| attributes.first().map(|group| (group.span.line, group.span.col)));
+    for (attributes, target) in sites {
+        validate_attributes(attributes, target)?;
+    }
+    for method in methods {
+        if has_no_discard(&method.attributes)
+            && (returns_nothing(method.return_type.as_ref())
+                || matches!(method.name.to_ascii_lowercase().as_str(), "__construct" | "__destruct"))
         {
-            return Err(CompileError::new(declaration.span, "NoDiscard cannot apply to a void or never function"));
-        }
-        for attributes in &declaration.param_attributes {
-            validate_names(&collect_attribute_names(attributes), 32, declaration.span)?;
-        }
-    }
-    for class in checker.classes.values() {
-        validate_names(&class.attribute_names, 1, Span::dummy())?;
-        // Parameters first: an attribute on a promoted parameter that matches neither the
-        // parameter nor the property target is kept on both, and php-src reports the parameter.
-        for signature in class.methods.values().chain(class.static_methods.values()) {
-            for attributes in &signature.param_attributes {
-                validate_names(&collect_attribute_names(attributes), 32, attribute_span(attributes))?;
-            }
-        }
-        for names in class.property_attribute_names.values() { validate_names(names, 8, Span::dummy())?; }
-        for names in class.constant_attribute_names.values() { validate_names(names, 16, Span::dummy())?; }
-        for names in class.method_attribute_names.values() { validate_names(names, 4, Span::dummy())?; }
-        for method in &class.method_decls {
-            if has_no_discard(&method.attributes)
-                && (matches!(method.return_type.as_ref(), Some(crate::parser::ast::TypeExpr::Void | crate::parser::ast::TypeExpr::Never))
-                    || matches!(method.name.to_ascii_lowercase().as_str(), "__construct" | "__destruct"))
-            {
-                return Err(CompileError::new(method.span, "NoDiscard cannot apply to a void or never method"));
-            }
+            return Err(CompileError::new(method.span, "NoDiscard cannot apply to a void or never method"));
         }
     }
     Ok(())
 }
 
-/// Returns the source span of a declaration's first attribute group, for a target diagnostic.
-fn attribute_span(groups: &[AttributeGroup]) -> Span {
-    groups.first().map_or(Span::dummy(), |group| group.span)
+/// Returns whether a declared return type can never yield a value.
+fn returns_nothing(return_type: Option<&TypeExpr>) -> bool {
+    matches!(return_type, Some(TypeExpr::Void | TypeExpr::Never))
 }
 
-/// Applies immediate Core validation unless a declaration explicitly defers its targets.
-fn validate_names(names: &[String], target: i64, span: Span) -> Result<(), CompileError> {
-    let delayed = names.iter().any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("DelayedTargetValidation"));
-    for (index, name) in names.iter().enumerate() {
+/// Applies PHP's per-attribute order: the target unless deferred, then repetition anywhere in the
+/// declaration's list, so a repeat is reported ahead of a later attribute's target.
+fn validate_attributes(groups: &[AttributeGroup], target: i64) -> Result<(), CompileError> {
+    let attributes: Vec<_> = groups.iter().flat_map(|group| &group.attributes).collect();
+    let delayed = attributes.iter().any(|attribute| is_core_attribute(attribute.name.as_str(), "DelayedTargetValidation"));
+    for attribute in &attributes {
+        let name = attribute.name.as_str();
         let Some(flags) = flags(name) else { continue };
-        if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && names[..index].iter().any(|previous| previous.eq_ignore_ascii_case(name)) {
-            return Err(CompileError::new(span, &format!("Attribute \"{name}\" must not be repeated")));
-        }
         if !delayed && flags & target == 0 {
-            return Err(CompileError::new(span, &format!("Attribute \"{name}\" cannot target {}", target_name(target))));
+            return Err(CompileError::new(attribute.span, &core_attribute_target_error(name, target, flags)));
+        }
+        if flags & CORE_ATTRIBUTE_IS_REPEATABLE == 0
+            && attributes.iter().filter(|other| other.name.as_str().eq_ignore_ascii_case(name)).count() > 1
+        {
+            return Err(CompileError::new(attribute.span, &format!("Attribute \"{name}\" must not be repeated")));
         }
     }
     Ok(())
 }
 
-/// Formats a PHP attribute target bit for diagnostics.
-pub(crate) fn target_name(target: i64) -> &'static str {
-    match target { 1 => "class", 2 => "function", 4 => "method", 8 => "property", 16 => "class constant", 32 => "parameter", _ => "declaration" }
+/// Returns whether `name` is the global Core attribute `core` under the compile profile.
+fn is_core_attribute(name: &str, core: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case(core) && flags(core).is_some()
 }
 
 /// Warns when a directly identified NoDiscard function or method loses its result.
@@ -101,7 +147,7 @@ pub(super) fn check_discarded(checker: &mut Checker, expression: &Expr, env: &Ty
         _ => None,
     };
     if let Some((name, attributes)) = selected {
-        if attributes.iter().any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("NoDiscard")) {
+        if attributes.iter().any(|name| is_core_attribute(name, "NoDiscard")) {
             checker.warnings.push(CompileWarning::new(expression.span,
                 &format!("The return value of {name} should either be used or explicitly ignored")));
         }
@@ -111,5 +157,5 @@ pub(super) fn check_discarded(checker: &mut Checker, expression: &Expr, env: &Ty
 /// Reads the same marker from AST attributes when only the declaration is available.
 pub(crate) fn has_no_discard(attributes: &[AttributeGroup]) -> bool {
     attributes.iter().flat_map(|group| &group.attributes)
-        .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("NoDiscard"))
+        .any(|attribute| is_core_attribute(attribute.name.as_str(), "NoDiscard"))
 }

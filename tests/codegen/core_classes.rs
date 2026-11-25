@@ -114,14 +114,60 @@ fn test_core_classes_delayed_attribute_validation() {
     let out = compile_and_run(r#"<?php
 #[DelayedTargetValidation, SensitiveParameter] class DeferredCoreAttribute {}
 $attributes = (new ReflectionClass(DeferredCoreAttribute::class))->getAttributes(SensitiveParameter::class);
-try { $attributes[0]->newInstance(); } catch (Error $error) { echo 'native:'; }
+try { $attributes[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
 $source = '#[DelayedTargetValidation, SensitiveParameter] class EvalDeferredCoreAttribute {}
 $reflection = new ReflectionClass(EvalDeferredCoreAttribute::class);
 $attributes = $reflection->getAttributes(SensitiveParameter::class);
-try { $attributes[0]->newInstance(); } catch (Error $error) { echo "eval"; }' . ' // ' . $argc;
+try { $attributes[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(); }' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "native:eval");
+    let message = "Attribute \"SensitiveParameter\" cannot target class (allowed targets: parameter)";
+    assert_eq!(out, format!("{message}\n{message}"));
+}
+
+/// Issue #2202: each copy of a promoted parameter reports the target of the owner holding it.
+#[test]
+fn test_core_classes_promoted_attribute_targets() {
+    let out = compile_and_run(r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class PromotedMarker {}
+class PromotedParent { public int $value = 0; }
+class PromotedChild extends PromotedParent {
+    public function __construct(#[PromotedMarker, SensitiveParameter, Override] public int $value) {}
+}
+$parameter = (new ReflectionMethod(PromotedChild::class, '__construct'))->getParameters()[0];
+foreach ($parameter->getAttributes() as $attribute) { echo $attribute->getName(), '=', $attribute->getTarget(), ':'; }
+foreach ((new ReflectionProperty(PromotedChild::class, 'value'))->getAttributes() as $attribute) { echo $attribute->getName(), '=', $attribute->getTarget(), ':'; }
+echo $parameter->getAttributes(SensitiveParameter::class)[0]->getTarget() === Attribute::TARGET_PARAMETER ? 'parameter:' : 'bad:';
+echo (new ReflectionProperty(PromotedChild::class, 'value'))->getAttributes(Override::class)[0]->getTarget() === Attribute::TARGET_PROPERTY ? 'property' : 'bad';
+"#);
+    assert_eq!(
+        out,
+        "PromotedMarker=32:SensitiveParameter=32:PromotedMarker=8:Override=8:parameter:property",
+    );
+}
+
+/// A redeclared property reflects its own attributes instead of inheriting its parent's list.
+#[test]
+fn test_core_classes_redeclared_property_attributes() {
+    let out = compile_and_run(r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class RedeclaredMarker {}
+class RedeclaredBase { public int $plain = 0; #[RedeclaredMarker] public int $marked = 0; #[RedeclaredMarker] public int $kept = 0; }
+class RedeclaredChild extends RedeclaredBase { #[RedeclaredMarker] public int $plain = 1; public int $marked = 1; }
+echo count((new ReflectionProperty('RedeclaredChild', 'plain'))->getAttributes());
+echo count((new ReflectionProperty('RedeclaredChild', 'marked'))->getAttributes());
+echo count((new ReflectionProperty('RedeclaredChild', 'kept'))->getAttributes());
+"#);
+    assert_eq!(out, "101");
+}
+
+/// A Core attribute class declares the target mask of the selected PHP profile.
+#[test]
+fn test_core_classes_attribute_mask_follows_php_version() {
+    let source = r#"<?php
+echo (new ReflectionClass(Override::class))->getAttributes(Attribute::class)[0]->newInstance()->flags;
+"#;
+    assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php84), "4");
+    assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85), "12");
 }
 
 /// Opaque eval emits NoDiscard warnings for ignored returns from interpreted functions.

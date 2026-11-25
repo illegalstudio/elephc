@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - DelayedTargetValidation affects targets only; repeated non-repeatable markers still fail.
+//! - Masks follow the profile the compiled binary selected for eval.
 //! - Warning handlers run while the discarded return value remains owned by its caller.
 
 use super::*;
@@ -23,13 +24,30 @@ mod repeatability_tests {
             assert!(validate_eval_core_attribute_targets(&attributes[..1], 2).is_ok());
         }
     }
+
+    /// Eval applies the selected profile's masks, and its deferral marker only where predefined.
+    #[test]
+    fn eval_targets_follow_the_selected_profile() {
+        let property = [EvalAttribute::new("Override", None)];
+        let deferred = [EvalAttribute::new("DelayedTargetValidation", None), EvalAttribute::new("SensitiveParameter", None)];
+        assert!(validate_eval_core_attribute_targets(&property, 8).is_ok());
+        assert!(validate_eval_core_attribute_targets(&deferred, 1).is_ok());
+        crate::eval_php_profile::set_eval_php_version_id(80400);
+        let property_status = validate_eval_core_attribute_targets(&property, 8);
+        let deferred_status = validate_eval_core_attribute_targets(&deferred, 1);
+        crate::eval_php_profile::set_eval_php_version_id(80500);
+        assert_eq!(property_status, Err(EvalStatus::RuntimeFatal));
+        assert_eq!(deferred_status, Err(EvalStatus::RuntimeFatal));
+    }
 }
 
 /// Validates predefined attribute targets using the same masks as the native checker.
 pub(super) fn validate_eval_core_attribute_targets(attributes: &[EvalAttribute], target: i64) -> Result<(), EvalStatus> {
-    let delayed = eval_attributes_have_global_builtin_attribute(attributes, "DelayedTargetValidation");
+    let php_version = crate::eval_php_profile::eval_php_version();
+    let delayed = elephc_builtin_contract::core_attribute_flags("DelayedTargetValidation", php_version).is_some()
+        && eval_attributes_have_global_builtin_attribute(attributes, "DelayedTargetValidation");
     for (index, attribute) in attributes.iter().enumerate() {
-        let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute.name()) else { continue };
+        let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute.name(), php_version) else { continue };
         if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && attributes[..index].iter().any(|other| other.name().eq_ignore_ascii_case(attribute.name())) {
             return Err(EvalStatus::RuntimeFatal);
         }
