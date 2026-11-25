@@ -72,7 +72,11 @@ pub(crate) fn build_class_info_recursive(
         ));
     }
 
-    let class = load_class(class_name, class_map)?;
+    // An unknown class leaves `building` as it found it, so a later build that reaches it
+    // reports it unknown again rather than circular.
+    let class = load_class(class_name, class_map).inspect_err(|_| {
+        building.remove(class_name);
+    })?;
     let result = build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
         .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)));
     // A failed build must not poison later sibling builds with a stale "circular inheritance"
@@ -141,7 +145,26 @@ fn build_loaded_class_info(
     properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
-    validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
+    validate_final_constant_constraints(&class, parent_info.as_ref(), checker)?;
+    // PHP binds abstract trait methods after the parent inheritance checked above, and before
+    // interfaces (`final_abstract_import_overrides`).
+    if let Some(failure) =
+        checker.final_abstract_binding_failures.get(&php_symbol_key(&class.name))
+    {
+        // The abstract trait methods bound before the failure are checked first, against the
+        // class's own method (abstract redeclarations included) or the concrete import that
+        // satisfies them.
+        for required in &failure.earlier_requirements {
+            if let Some(actual) = class.methods.iter().find(|method| {
+                method.is_static == required.is_static
+                    && method.name.eq_ignore_ascii_case(&required.name)
+            }) {
+                super::enum_traits::validate_class_requirement(checker, &class, required, actual)?;
+            }
+        }
+        return Err(CompileError::new(failure.span, &failure.message));
+    }
+    validate_interface_final_constants(&class, &state, checker)?;
     interfaces::validate_interface_contracts(
         &mut state,
         &class,
@@ -228,6 +251,46 @@ fn validate_class_modifiers(class: &FlattenedClass) -> Result<(), CompileError> 
     Ok(())
 }
 
+/// PHP's internal final classes the checker does not always declare: a class extending one is
+/// rejected as extending a final class, not reported as an unknown parent.
+const FINAL_INTERNAL_CLASSES: [&str; 5] = ["Closure", "Fiber", "Generator", "WeakMap", "WeakReference"];
+
+/// The canonical name of `name` when it is one of [`FINAL_INTERNAL_CLASSES`].
+pub(crate) fn final_internal_class(name: &str) -> Option<&'static str> {
+    FINAL_INTERNAL_CLASSES
+        .into_iter()
+        .find(|internal| internal.eq_ignore_ascii_case(name.trim_start_matches('\\')))
+}
+
+/// The error for a class `class_name` whose parent `parent_name` is not a class it can extend:
+/// an interface, a declared trait, or an internal final class the program does not declare.
+pub(crate) fn parent_kind_error(
+    class_name: &str,
+    parent_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> Option<String> {
+    if checker.interfaces.contains_key(parent_name) {
+        return Some(format!(
+            "Class {} cannot extend interface {}; use implements instead",
+            class_name, parent_name
+        ));
+    }
+    if class_map.contains_key(parent_name) {
+        return None;
+    }
+    let parent_key = crate::names::php_symbol_key(parent_name);
+    if let Some(declared) = checker
+        .declared_traits
+        .iter()
+        .find(|declared| crate::names::php_symbol_key(declared) == parent_key)
+    {
+        return Some(format!("Class {} cannot extend trait {}", class_name, declared));
+    }
+    final_internal_class(parent_name)
+        .map(|internal| format!("Class {} cannot extend final class {}", class_name, internal))
+}
+
 /// Resolves the parent class for `class` by recursively building its `ClassInfo`.
 ///
 /// Returns `Ok(None)` if `class` has no `extends` clause. If the parent name refers to an interface,
@@ -244,14 +307,8 @@ fn resolve_parent_info(
     let Some(parent_name) = &class.extends else {
         return Ok(None);
     };
-    if checker.interfaces.contains_key(parent_name) {
-        return Err(CompileError::new(
-            crate::span::Span::dummy(),
-            &format!(
-                "Class {} cannot extend interface {}; use implements instead",
-                class_name, parent_name
-            ),
-        ));
+    if let Some(message) = parent_kind_error(class_name, parent_name, class_map, checker) {
+        return Err(CompileError::new(crate::span::Span::dummy(), &message));
     }
     checker
         .pending_class_parents
@@ -303,23 +360,17 @@ fn validate_parent_constraints(
     Ok(())
 }
 
-/// Validates PHP final class-constant inheritance constraints for one class.
+/// Validates PHP final class-constant inheritance constraints for one class against its own
+/// declarations and its parent, including the final constants of the interfaces the parent
+/// already implements (inherited with it). Interfaces this class adds are checked later
+/// (`validate_interface_final_constants`).
 fn validate_final_constant_constraints(
     class: &FlattenedClass,
     parent_info: Option<&ClassInfo>,
-    state: &ClassBuildState,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    // A private final constant is reported before any class is built (checker driver).
     for constant in &class.constants {
-        if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
-            return Err(CompileError::new(
-                constant.span,
-                &format!(
-                    "Private constant {}::{} cannot be final",
-                    class.name, constant.name
-                ),
-            ));
-        }
         if parent_info.is_some_and(|parent| parent.final_constants.contains(&constant.name)) {
             return Err(CompileError::new(
                 constant.span,
@@ -329,11 +380,20 @@ fn validate_final_constant_constraints(
                 ),
             ));
         }
-        for interface_name in &state.interfaces {
-            let Some(interface_info) = checker.interfaces.get(interface_name) else {
+    }
+    // PHP checks the parent class's own final constants before those it inherited from its
+    // interfaces, and those in the parent's interface order and each interface's constant
+    // order, whatever order the child declares them in.
+    let parent_interfaces = parent_info.map_or(&[][..], |parent| &parent.interfaces[..]);
+    for interface_info in parent_interfaces
+        .iter()
+        .filter_map(|interface_name| checker.interfaces.get(interface_name))
+    {
+        for name in &interface_info.constant_order {
+            if !interface_info.final_constants.contains(name) {
                 continue;
-            };
-            if interface_info.final_constants.contains(&constant.name) {
+            }
+            if let Some(constant) = class.constants.iter().find(|constant| &constant.name == name) {
                 return Err(CompileError::new(
                     constant.span,
                     &format!(
@@ -342,6 +402,45 @@ fn validate_final_constant_constraints(
                     ),
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the error for `constant` redeclaring a final constant of one of `interfaces`.
+fn interface_final_constant_error(
+    class: &FlattenedClass,
+    constant: &crate::parser::ast::ClassConst,
+    interfaces: &[String],
+    checker: &Checker,
+) -> Option<CompileError> {
+    interfaces
+        .iter()
+        .filter_map(|interface_name| checker.interfaces.get(interface_name))
+        .any(|interface_info| interface_info.final_constants.contains(&constant.name))
+        .then(|| {
+            CompileError::new(
+                constant.span,
+                &format!(
+                    "{}::{} cannot override final interface constant",
+                    class.name, constant.name
+                ),
+            )
+        })
+}
+
+/// Rejects a class constant that redeclares a final constant of an implemented interface. PHP
+/// checks interfaces after the parent inheritance and the abstract trait binding, so this runs
+/// after `validate_final_constant_constraints` and the recorded binding failure.
+fn validate_interface_final_constants(
+    class: &FlattenedClass,
+    state: &ClassBuildState,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for constant in &class.constants {
+        if let Some(error) = interface_final_constant_error(class, constant, &state.interfaces, checker)
+        {
+            return Err(error);
         }
     }
     Ok(())

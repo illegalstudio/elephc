@@ -303,6 +303,9 @@ pub(crate) struct Checker {
     /// Abstract methods each trait-using class owes to its traits, by class name
     /// ([`schema::collect_trait_method_requirements`]).
     pub trait_method_requirements: HashMap<String, schema::TraitMethodRequirements>,
+    /// The first abstract trait binding failure of each class beside an abstract `as final`
+    /// import ([`crate::types::traits::final_abstract_import_overrides`]).
+    pub final_abstract_binding_failures: crate::types::traits::FinalAbstractBindingFailures,
     /// Own property order and trait-collision defaults of classes that use traits.
     pub trait_property_origins: schema::TraitPropertyOrigins,
     /// Name of the class currently being type-checked (used for `$this` resolution).

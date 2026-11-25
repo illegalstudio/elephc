@@ -228,7 +228,8 @@ class C { use A; use B; }
 }
 
 /// A concrete trait method satisfies another trait's abstract one only when both are static or
-/// both are instance methods, in one `use A, B` as in separate `use` statements.
+/// both are instance methods, in one `use A, B` as in separate `use` statements, also when the
+/// abstract method is a later `as final` copy.
 #[test]
 fn test_error_trait_requirement_static_kind_mismatch() {
     expect_error(
@@ -247,6 +248,39 @@ final class C { use A, B; }
 "#,
         "Cannot change method kind when overriding C::foo",
     );
+    // A later `as final` copy of a kept trait method is not overridden by a method of the
+    // other kind: PHP reports the static/instance conflict (#2352).
+    let message = check_source(
+        r#"<?php
+trait T { abstract public function foo(); }
+trait A { use T; }
+trait B { use T { foo as final; } }
+trait S { public static function foo() { return 1; } }
+abstract class C { use A, B, S; }
+"#,
+    )
+    .expect_err("static/instance conflict should fail");
+    assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
+    assert!(!message.contains("Cannot override final method"), "{message}");
+    // Two abstract requirements of different kinds conflict on kind before an earlier
+    // `as final` one counts as overridden, in either order of kinds.
+    for (first, second) in [("", "static "), ("static ", "")] {
+        let message = check_source(&format!(
+            "<?php\ntrait A {{ abstract public {first}function foo(); }}\ntrait B {{ abstract public {second}function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; }} }}\n"
+        ))
+        .expect_err("static/instance conflict should fail");
+        assert!(message.contains("Cannot change method kind when overriding C::foo"), "{message}");
+        assert!(!message.contains("Cannot override final method"), "{message}");
+    }
+    // Concrete methods of both kinds still meet a final parent method first.
+    for source in [
+        "<?php\nclass P { final public function foo() {} }\ntrait S { public static function foo() { return 1; } }\nclass C extends P { use S; public function foo() {} }\n",
+        "<?php\nclass P { final public static function foo() {} }\ntrait S { public function foo() { return 1; } }\nclass C extends P { use S; public static function foo() { return 2; } }\n",
+    ] {
+        let message = check_source(source).expect_err("final parent override should fail");
+        assert!(message.contains("Cannot override final method P::foo"), "{message}");
+        assert!(!message.contains("Cannot change method kind"), "{message}");
+    }
 }
 
 /// A trait that uses one trait requiring a method and another implementing it has a concrete
@@ -436,8 +470,10 @@ class C { use A, B; }
 }
 
 /// A trait's own method, or another used trait's, that satisfies a nested requirement must be
-/// compatible with it, as php 8.5.12 reports `Declaration of A::foo(): string must be compatible
-/// with N::foo(): int`, even though the requirement no longer reaches the class.
+/// compatible with it, even though the requirement no longer reaches the class. PHP checks it
+/// when it declares the trait and names that trait, as php 8.5.12 reports `Declaration of
+/// A::foo(): string must be compatible with N::foo(): int` and `Declaration of W::foo(): string
+/// must be compatible with N::foo(): int`.
 #[test]
 fn test_error_requirement_satisfied_inside_a_trait_must_be_compatible() {
     expect_error(
@@ -446,7 +482,7 @@ trait N { abstract public function foo(): int; }
 trait A { use N; public function foo(): string { return "a"; } }
 class C { use A; }
 "#,
-        "Cannot change return type when implementing trait method: C::foo",
+        "Cannot change return type when implementing trait method: A::foo",
     );
     expect_error(
         r#"<?php
@@ -455,7 +491,7 @@ trait G { public function foo(): string { return "g"; } }
 trait W { use N, G; }
 class C { use W; }
 "#,
-        "Cannot change return type when implementing trait method: C::foo",
+        "Cannot change return type when implementing trait method: W::foo",
     );
 }
 
@@ -472,7 +508,7 @@ trait Q { public function foo(): string { return "q"; } }
 trait W { use N, P, Q { P::foo insteadof Q; Q::foo as bar; } }
 class C { use W; }
 "#,
-        "Cannot change return type when implementing trait method: C::bar",
+        "Cannot change return type when implementing trait method: W::bar",
     );
 }
 
@@ -634,18 +670,25 @@ fn test_error_trait_final_property_cannot_be_overridden_by_subclass() {
     );
 }
 
-/// Verifies that a member modifier right after `as` is read as a visibility change, never as an
-/// alias: `foo as static;` is rejected (PHP: "Cannot use 'static' as method modifier"), while
-/// `foo as protected static;` (modifier after a visibility) is a valid alias.
+/// Verifies that a member modifier right after `as` is read as the alias modifier, never as an
+/// alias name: `foo as static;` and `foo as abstract;` get PHP's trait alias errors and
+/// `foo as readonly;` its method modifier error, while `foo as protected static;` (a word after
+/// the modifier) is a valid alias.
 #[test]
 fn test_error_trait_alias_modifier_without_visibility_is_not_an_alias() {
-    expect_error(
-        r#"<?php
-trait T { public function foo() { return 1; } }
-class C { use T { foo as static; } }
-"#,
-        "Trait alias adaptation requires a visibility and/or alias name",
-    );
+    for (modifier, message) in [
+        ("static", "Cannot use \"static\" as method modifier in trait alias"),
+        ("static bar", "Cannot use \"static\" as method modifier in trait alias"),
+        ("abstract", "Cannot use \"abstract\" as method modifier in trait alias"),
+        ("readonly", "Cannot use the readonly modifier on a method"),
+    ] {
+        expect_error(
+            &format!(
+                "<?php\ntrait T {{ public function foo() {{ return 1; }} }}\nclass C {{ use T {{ foo as {modifier}; }} }}\n"
+            ),
+            message,
+        );
+    }
 }
 
 /// Verifies that a `Trait::` method reference needs a word after `::`: a variable
@@ -1494,4 +1537,700 @@ fn test_error_cannot_override_final_error_methods() {
         "<?php class AppTypeError extends TypeError { public function getPrevious(): ?Throwable { return null; } }",
         "Cannot override final method Error::getPrevious",
     );
+}
+
+/// A trait method imported with `as final` cannot be overridden by a subclass, as in PHP 8.3+
+/// (`Cannot override final method C::foo()`); an `as final` alias leaves the original
+/// overridable (#2352).
+#[test]
+fn test_error_trait_alias_as_final_method_cannot_be_overridden() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final; } }
+class D extends C { public function foo() { return 2; } }
+"#,
+        "Cannot override final method C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final bar; } }
+class D extends C { public function bar() { return 2; } }
+"#,
+        "Cannot override final method C::bar",
+    );
+    expect_no_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as final bar; } }
+class D extends C { public function foo() { return 2; } }
+"#,
+    );
+}
+
+/// An abstract trait method made `as final` stays an abstract final method of an abstract class,
+/// as in PHP 8.3+, so only a subclass implementing it fails. A body on the importing class, enum
+/// or trait overrides the final import and fails with the trait's name, while a concrete trait
+/// method made final stays replaceable there (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method() {
+    let abstract_trait = "trait T { abstract public function foo(); }\n";
+    expect_no_error(&format!(
+        "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final; }} }}\n"
+    ));
+    expect_no_error(&format!(
+        "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final bar; }} public function foo() {{ return 1; }} }}\n"
+    ));
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}abstract class C {{ use T {{ foo as final; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    for (adaptation, body, message) in [
+        ("foo as final;", "foo", "Cannot override final method T::foo"),
+        ("foo as final bar;", "bar", "Cannot override final method T::bar"),
+    ] {
+        expect_error(
+            &format!(
+                "<?php\n{abstract_trait}class C {{ use T {{ {adaptation} }} public function {body}() {{ return 1; }} }}\n"
+            ),
+            message,
+        );
+    }
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}enum E {{ use T {{ foo as final; }} public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method T::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{abstract_trait}trait O {{ use T {{ foo as final; }} public function foo() {{ return 1; }} }}\nclass C {{ use O; }}\n"
+        ),
+        "Cannot override final method T::foo",
+    );
+    expect_no_error(
+        "<?php\ntrait T { public function foo() { return 't'; } }\nclass C { use T { foo as final; } public function foo() { return 'c'; } }\necho (new C)->foo();\n",
+    );
+}
+
+/// An abstract trait method made `as final` is overridden by a concrete method from another trait
+/// or by a body of the other kind (static or instance), and the fatal names the trait in the
+/// `use` that imported it, which differs from the declaring trait once it is re-exported (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_override_sources() {
+    for (source, message) in [
+        (
+            "trait A { abstract public function foo(); }\ntrait B { public function foo() { return 1; } }\nclass C { use A, B { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait A { abstract public function foo(); }\ntrait B { public static function foo() { return 1; } }\nclass C { use A, B { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait A { use T { foo as final; } }\ntrait B { public function foo() { return 1; } }\nclass C { use A, B; }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait O { use T { foo as final; } }\nclass C { use O; public function foo() { return 1; } }",
+            "Cannot override final method O::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait M { use T { foo as final; } }\ntrait O { use M; public function foo() { return 1; } }\nclass C { use O; }",
+            "Cannot override final method M::foo",
+        ),
+        (
+            "trait T { abstract public function foo(); }\ntrait O { use T { foo as final bar; } }\nclass C { use O; public function bar() { return 1; } }",
+            "Cannot override final method O::bar",
+        ),
+        (
+            "trait T { abstract public function foo(); }\nabstract class C { use T { foo as final; } public static function foo() { return 1; } }",
+            "Cannot override final method T::foo",
+        ),
+        (
+            "trait T { abstract public static function foo(); }\nabstract class C { use T { foo as final; } public function foo() { return 1; } }",
+            "Cannot override final method T::foo",
+        ),
+    ] {
+        expect_error(&format!("<?php\n{source}\n"), message);
+    }
+}
+
+/// Two imports of one name follow Zend's binding order: a later abstract `as final` import
+/// overrides any earlier one, an earlier one is overridden by a later concrete method (an `as
+/// final` alias included), and a parent method of any visibility or kind overrides it too.
+/// A later plain abstract redeclaration of an earlier final one stays valid (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_binding_order() {
+    let a = "trait A { abstract public function foo(); }\n";
+    for (source, message) in [
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use B, A { A::foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use A, B { B::foo as final; } }",
+            "Cannot override final method B::foo",
+        ),
+        (
+            "trait B { abstract public function foo(); }\nabstract class C { use A, B { A::foo as final; B::foo as final; } }",
+            "Cannot override final method B::foo",
+        ),
+        (
+            "trait B { public function bar() { return 1; } }\nabstract class C { use A, B { A::foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "trait B { public function bar() { return 1; } }\nabstract class C { use A { foo as final bar; } use B; }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "trait B { public static function bar() { return 1; } }\nabstract class C { use A, B { A::foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+        (
+            "class P { public function foo() { return 1; } }\nclass C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { private function foo() { return 1; } }\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { public static function foo() { return 1; } }\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class G { public function foo() { return 1; } }\nclass P extends G {}\nabstract class C extends P { use A { foo as final; } }",
+            "Cannot override final method A::foo",
+        ),
+        (
+            "class P { public function bar() { return 1; } }\nabstract class C extends P { use A { foo as final bar; } }",
+            "Cannot override final method A::bar",
+        ),
+    ] {
+        expect_error(&format!("<?php\n{a}{source}\n"), message);
+    }
+    expect_no_error(&format!(
+        "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; }} }}\n"
+    ));
+}
+
+/// A class body method that overrides both an abstract `as final` import and a final, non
+/// private ancestor method is reported against the ancestor, as PHP binds the parent first;
+/// without such an ancestor it is reported against the import. Each program reports exactly one
+/// error, so a remaining method of the name adds no kind or final diagnostic (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_with_final_ancestor() {
+    let a = "trait A { abstract public function foo(); }\n";
+    for (source, message) in [
+        (
+            format!("class P {{ final public function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class P {{ final public static function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public static function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class G {{ final public function foo() {{}} }}\nclass P extends G {{}}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method G::foo",
+        ),
+        (
+            format!("{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}\nclass P {{ final public function foo() {{}} }}"),
+            "Cannot override final method P::foo",
+        ),
+        (
+            format!("class P {{ final public function bar() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final bar; }} public function bar() {{}} }}"),
+            "Cannot override final method P::bar",
+        ),
+        (
+            format!("class P {{ public function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ final private function foo() {{}} }}\n{a}abstract class C extends P {{ use A {{ foo as final; }} public function foo() {{}} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ final public function foo() {{}} }}\n{a}trait B {{ abstract public static function foo(); }}\nabstract class C extends P {{ use A, B {{ A::foo as final; }} }}"),
+            "Cannot override final method A::foo",
+        ),
+        (
+            format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ abstract public static function foo(); }}\nabstract class C extends P {{ use A, B {{ A::foo as final; }} }}"),
+            "Cannot override final method A::foo",
+        ),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+}
+
+/// Abstract `as final` imports bind after the class's own and concrete imported methods and after
+/// the parent is inherited, as in php-src's `zend_do_link_class`: with any other method of the
+/// name the earliest final import in `use` order is reported, with only the imports the first
+/// one that a later final import overrides; a concrete import or class body is checked as an
+/// override of a visible ancestor first, also before a plain abstract import of the other kind
+/// fails, and every binding failure waits for the class's other inheritance checks (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_binding_model() {
+    let ab = "trait A { abstract public function foo(); }\ntrait B { abstract public function foo(); }\n";
+    let a = "trait A { abstract public function foo(); }\n";
+    let both = "A::foo as final; B::foo as final;";
+    let single_error = |source: &str| -> String {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        messages.into_iter().next().unwrap()
+    };
+    for (source, message) in [
+        (format!("{ab}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ {both} }} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}abstract class C {{ use A, B {{ {both} }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use B, A {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}abstract class C {{ use A, B {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}enum E {{ use A, B {{ {both} }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{ab}enum E {{ use A, B {{ {both} }} }}"), "Cannot override final method B::foo"),
+        (format!("{ab}trait O {{ use A, B {{ {both} }} public function foo() {{}} }}\nclass Z {{ use O; }}"), "Cannot override final method A::foo"),
+        (format!("{ab}trait O {{ use A, B {{ {both} }} }}\nabstract class Z {{ use O; }}"), "Cannot override final method B::foo"),
+        ("trait A { abstract public function getMessage(); }\ntrait B { abstract public function getMessage(); }\nclass C extends Exception { use A, B { A::getMessage as final; B::getMessage as final; } }".to_string(), "Cannot override final method A::getMessage"),
+        (format!("class P {{ final public function foo() {{}} }}\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method P::foo"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ public static function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot change method kind"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ protected function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot reduce visibility"),
+        (format!("class P {{ public function foo() {{}} }}\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method A::foo"),
+        (format!("class P {{ private function foo() {{}} }}\n{a}trait B {{ public static function foo() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"), "Cannot override final method A::foo"),
+        (format!("class P {{ public function bar() {{}} }}\n{a}trait B {{ public static function bar() {{ return 1; }} }}\nclass C extends P {{ use A, B {{ A::foo as final bar; }} }}"), "Cannot change method kind"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    // A plain abstract import of the other kind fails while binding too, but only after the class
+    // body passes its checks against a visible ancestor.
+    let kinds = "trait A { abstract public static function foo(); }\ntrait B { abstract public function foo(); }\n";
+    for (source, message) in [
+        (format!("{kinds}class P {{ final public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot override final method P::foo"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function foo() {{ return 1; }} }}"), "Cannot reduce visibility"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot make concrete method abstract"),
+        (format!("{kinds}class P {{ public function foo() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} }}"), "Cannot change method kind when overriding C::foo"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    // The binding failure waits for the whole parent inheritance of the class: other methods
+    // and final constants first, then the first failure in trait binding order.
+    for (source, message) in [
+        (format!("{a}class P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A {{ foo as final; }} public function foo() {{}} protected function bar() {{}} }}"), "Cannot reduce visibility when overriding method: C::bar"),
+        (format!("{kinds}class P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} protected function bar() {{}} }}"), "Cannot reduce visibility when overriding method: C::bar"),
+        (format!("{a}trait B {{ abstract public function bar(); }}\nclass P {{ public function foo() {{}} public function bar() {{}} }}\nclass C extends P {{ use A, B {{ A::foo as final; B::bar as final; }} public function bar() {{}} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{kinds}class P {{ public function foo() {{}} final public const X = 1; }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo() {{}} public const X = 2; }}"), "final constant"),
+        // Interface final constants are checked after the abstract trait binding.
+        (format!("interface I {{ final public const X = 1; }}\n{a}class C implements I {{ use A {{ foo as final; }} public function foo() {{}} public const X = 2; }}"), "Cannot override final method A::foo"),
+        // PHP stops binding at the failure, so a requirement bound later is never checked.
+        (format!("class P {{ public function foo() {{}} public static function bar() {{}} }}\n{a}trait T {{ abstract public function bar(); }}\nclass C extends P {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "Cannot override final method A::foo"),
+        (format!("{kinds}enum E {{ use A, B {{ B::foo as final; }} public function foo() {{}} case X; }}"), "Cannot change method kind when overriding E::foo"),
+        // The parent's own final constant is checked before an inherited interface one.
+        (format!("interface I {{ final public const Y = 1; }}\nclass P implements I {{ final public const X = 1; }}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const Y = 2; public const X = 2; }}"), "X cannot override final constant"),
+        // A compatible abstract redeclaration of an earlier requirement stays on the final error.
+        (format!("{ab}abstract class C {{ use A, B {{ B::foo as final; }} abstract public function foo(); }}"), "Cannot override final method B::foo"),
+        // Interface final constants follow the parent's interface and constant order.
+        ("interface I { final public const Y = 1; }\ninterface J { final public const Z = 1; }\nclass P implements I, J {}\nclass C extends P { public const Z = 2; public const Y = 2; }".to_string(), "Y cannot override final"),
+        // A final constant of an interface the parent implements is inherited with the parent.
+        (format!("interface I {{ final public const X = 1; }}\nclass P implements I {{}}\n{a}class C extends P {{ use A {{ foo as final; }} public function foo() {{}} public const X = 2; }}"), "final interface constant"),
+        (format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nabstract class C extends P {{ use B, A {{ B::foo as final; }} }}"), "Cannot override final method B::foo"),
+        (format!("{a}trait T {{ abstract public function bar(): string; }}\nclass C {{ use A, T {{ A::foo as final; }} public function foo() {{}} public function bar(): int {{ return 1; }} }}"), "Cannot override final method A::foo"),
+        ("trait A { abstract public function foo(); public $x; }\ntrait B { abstract public function foo(); }\nenum E { use A, B { A::foo as final; B::foo as final; } public function foo() {} case X; }".to_string(), "Cannot override final method A::foo"),
+    ] {
+        let reported = single_error(&source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    // A parent that failed to build keeps its own error: the child's used traits do not replace it.
+    let parent_failed = check_source_full(
+        "<?php\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nfinal class GP {}\nclass P extends GP {}\nclass C extends P { use A, T { A::foo as final; } public function foo() {} }\n",
+    )
+    .err()
+    .expect("program should fail");
+    let messages: Vec<String> = parent_failed.flatten().into_iter().map(|error| error.message).collect();
+    assert!(messages[0].contains("cannot extend final class"), "{messages:?}");
+    assert!(messages.iter().all(|message| !message.contains("bar")), "{messages:?}");
+    // A parent that is unknown, not a class, or part of a cycle through the class is the class's
+    // own error, which the used trait's incompatibility still replaces.
+    let trait_pair = "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\n";
+    for parent in [
+        "",
+        "interface Missing {}\n",
+        "trait Missing {}\n",
+        "class Missing extends C {}\n",
+        // A parent that fails for a reason PHP reports after the trait's incompatibility.
+        "interface I { public function foo(); }\nclass Missing implements I {}\n",
+        "class Missing extends Unknown {}\n",
+        "class D extends E {}\nclass E extends D {}\nclass Missing extends D {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Missing {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+    }
+    // A private final constant is a compile error of the class, before any trait is linked.
+    let error = check_source_full(&format!(
+        "<?php\n{trait_pair}class C {{ private final const X = 1; use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+    ))
+    .err()
+    .expect("program should fail");
+    let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+    assert!(messages[0].contains("Private constant C::X cannot be final"), "{messages:?}");
+    // An earlier class's early-bound parent error is compiled before a later private final
+    // constant, and each is reported once.
+    for (parent, message) in [
+        ("final class GP {}\nclass A extends GP {}", "Class A cannot extend final class GP"),
+        ("readonly class GP {}\nclass A extends GP {}", "non-readonly class cannot extend readonly parent"),
+        ("interface GP {}\nclass A extends GP {}", "Class A cannot extend interface GP"),
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{parent}\nclass B {{ private final const X = 1; }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{parent}: {messages:?}");
+        assert_eq!(messages.len(), 2, "{parent}: {messages:?}");
+    }
+    // A failing parent that sorts before the child keeps one copy of its error, which the
+    // child's used trait incompatibility replaces.
+    for parent in [
+        "interface I { public function foo(); }\nclass Base implements I {}\n",
+        "class Base extends Unknown {}\n",
+        "class Ba extends Bb {}\nclass Bb extends Ba {}\nclass Base extends Ba {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+        // An unknown grandparent stays unknown when a second class reaches it.
+        assert!(messages.iter().all(|message| !message.contains("involving class Unknown")), "{parent}: {messages:?}");
+    }
+    // Two children sharing that parent's error keep the trait incompatibility the first one
+    // put in its place.
+    for parent in [
+        "interface I { public function foo(); }\nclass Base implements I {}\n",
+        "class Base extends Unknown {}\n",
+        "class Ba extends Bb {}\nclass Bb extends Ba {}\nclass Base extends Ba {}\n",
+    ] {
+        let error = check_source_full(&format!(
+            "<?php\n{trait_pair}{parent}class C extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\nclass E extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("bar"), "{parent}: {messages:?}");
+    }
+    // PHP checks a requirement a trait satisfied itself when it declares that trait: in trait
+    // declaration order, whatever the `use` order or the class sharing an error slot, and also
+    // for a trait no class uses.
+    let two_traits = "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\n";
+    for (source, message) in [
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\necho 1;".to_string(), "bar"),
+        (format!("{two_traits}class C {{ use U, T; }}"), "bar"),
+        (format!("{two_traits}enum E {{ use U, T; case X; }}"), "bar"),
+        (format!("{two_traits}trait A {{ abstract public function foo(); }}\ninterface I {{ public function foo(); }}\nclass Base implements I {{}}\nclass C extends Base {{ use A, U {{ A::foo as final; }} public function foo() {{}} }}\nclass E extends Base {{ use A, T {{ A::foo as final; }} public function foo() {{}} }}"), "bar"),
+        ("trait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C { use T; }".to_string(), "baz"),
+        // A class or enum PHP declares at run time fails in source order with the traits, and a
+        // backed case value is only checked when the enum is first used, after every trait.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I { public function foo(); }\nclass Base implements I {}".to_string(), "bar"),
+        ("interface I { public function foo(); }\nclass Base implements I {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "I::foo"),
+        ("enum F: int { case A = 1; case C = 1; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "bar"),
+        ("enum F: int { case A = \"x\"; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "bar"),
+        ("trait M { abstract public function baz(): string; }\ntrait U { use M; public function baz(): int { return 1; } }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nenum Apple { use T; case Y; }\nenum Zebra { use U; case X; }".to_string(), "baz"),
+        // A trait whose only user is an enum that failed to build is still checked.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nenum F: int { use T; case A = 1; case C = 1; }".to_string(), "bar"),
+        // A method of the other kind cannot satisfy a requirement, used or not.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public static function bar(): string { return \"a\"; } }\necho 1;".to_string(), "Cannot make non static method N::bar() static in class T"),
+        ("trait N { abstract public static function bar(): string; }\ntrait T { use N; public function bar(): string { return \"a\"; } }\necho 1;".to_string(), "Cannot make static method N::bar() non static in class T"),
+        ("trait N { abstract public function bar(): int; }\ntrait S { public static function bar(): int { return 1; } }\ntrait T { use N, S; }".to_string(), "Cannot make non static method N::bar() static in class T"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public static function bar(): string { return \"a\"; } }\nenum E { use T; case X; }".to_string(), "Cannot make non static method N::bar() static in class T"),
+        // PHP names the trait, whichever class or enum uses it.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C { use T; }".to_string(), "implementing trait method: T::bar"),
+        // Interfaces with parents and redeclarations fail when PHP declares them, in source
+        // order with the traits.
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface Z extends Nope {}\ninterface A extends Missing {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass P {}\ninterface I extends P {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass C {}\nclass C {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I {}\ninterface I {}".to_string(), "bar"),
+        ("trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait Q {}\ntrait Q {}".to_string(), "bar"),
+        ("class C {}\nclass C {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate class declaration: C"),
+        ("trait Q {}\ntrait Q {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }".to_string(), "Duplicate trait declaration: Q"),
+        // A redeclaration is ordered at its own statement, and the first declaration is the one
+        // PHP checks.
+        ("class A {}\nclass B { private final const Y = 1; }\nclass A { private final const Z = 1; }".to_string(), "Private constant B::Y cannot be final"),
+        ("namespace N { class A {} class B { private final const Y = 1; } class A { private final const Z = 1; } }".to_string(), "B::Y cannot be final"),
+        ("interface I { public function foo(): int; }\nenum E implements I { public function foo(): string { return \"a\"; } case B; }\nenum E { case A; }".to_string(), "E::foo"),
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I { public function foo(): int; }\nenum E implements I { public function foo(): string { return \"a\"; } case B; }".to_string(), "bar"),
+        // An enum whose backed case values fail is still declared.
+        ("enum E: int { case A = \"x\"; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("enum E: int { case A = 1; case C = 1; }\nenum E { case B; }".to_string(), "Duplicate class or enum declaration: E"),
+        // A redeclared name belongs to the first declaration PHP binds while compiling (a trait
+        // without `use`, an interface without parents, a class without traits or interfaces whose
+        // parent is bound), else to the first one; every other declaration is the redeclaration,
+        // at its own statement. An enum never binds while compiling.
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait E {}".to_string(), "Duplicate class or enum declaration: E"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nenum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\nclass E implements I {}".to_string(), "bar"),
+        ("interface I { public function foo(); }\nenum E { case A; }\nclass E implements I {}".to_string(), "Duplicate class declaration: E"),
+        ("enum E { case A; }\nclass E extends Missing {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nclass E implements I {}\nenum E { case A; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I { private final const Y = 1; }".to_string(), "Private constant E::Y cannot be final"),
+        ("interface E {}\nclass E {}".to_string(), "Duplicate class declaration: E"),
+        ("interface I {}\nclass E implements I {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface E {}".to_string(), "Duplicate class declaration: E"),
+        ("interface J {}\ninterface E extends J {}\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface I {}\nclass E implements I {}".to_string(), "bar"),
+        ("interface J {}\ninterface E extends J {}\nclass E {}".to_string(), "Duplicate interface declaration: E"),
+        // A redeclaration never binds its traits, but its body is still compiled.
+        ("enum E { case A; }\ntrait A { public function foo() {} }\ntrait B { public function foo() {} }\nclass E { use A, B; }".to_string(), "Duplicate class declaration: E"),
+        ("enum E { case A; }\nclass E { use Missing; }".to_string(), "Duplicate class declaration: E"),
+        ("trait E {}\ntrait A { public function foo() {} }\ntrait B { public function foo() {} }\nenum E { use A, B; case X; }".to_string(), "Duplicate class or enum declaration: E"),
+        ("class B { private final const X = 1; }\ninterface I {}\nenum E { case A; }\ntrait A { public function foo() {} }\ntrait C { public function foo() {} }\nclass E implements I { use A, C; }".to_string(), "Private constant B::X cannot be final"),
+        ("interface I {}\nenum E { case A; }\nclass E implements I { public function foo() {} public function foo() {} }".to_string(), "Duplicate method declaration in E: foo"),
+        ("enum E { case A; }\ntrait Q {}\ntrait E { use Q; }".to_string(), "Duplicate trait declaration: E"),
+        ("enum E { case A; }\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ninterface J {}\ninterface E extends J {}".to_string(), "bar"),
+        ("enum E { case A; }\ninterface E extends Missing {}".to_string(), "Duplicate interface declaration: E"),
+        // A rejected alias is named by its method, then by the alias it would take.
+        ("trait A { public function foo() {} }\ntrait B { public function bar() {} }\nclass C { use A, B { A::foo as baz; B::bar as final baz; } }".to_string(), "Trait method B::bar has not been applied as C::baz, because of collision with A::baz"),
+        ("trait A { public function foo() {} }\ntrait B { public function bar() {} }\nclass C { use A, B { A::foo as baz; B::bar as baz; } }".to_string(), "Trait method B::bar has not been applied as C::baz, because of collision with A::baz"),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+    // A failed interface is not left being built: walking it again reports its unknown parent,
+    // not a cycle.
+    for between in ["", "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\n"] {
+        let error = check_source_full(&format!("<?php\ninterface B extends Missing {{}}\n{between}interface A extends B {{}}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("Missing"), "{between}: {messages:?}");
+        assert!(messages.iter().all(|message| !message.contains("Circular")), "{between}: {messages:?}");
+    }
+    // A trait's own pair is reported once, named after the trait, not after its users.
+    for users in ["class Zebra { use U; }\nclass Apple { use U; }", "enum Zebra { use U; case X; }\nenum Apple { use U; case Y; }"] {
+        let error = check_source_full(&format!(
+            "<?php\ntrait M {{ abstract public function baz(): string; }}\ntrait U {{ use M; public function baz(): int {{ return 1; }} }}\n{users}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("implementing trait method: U::baz"), "{users}: {messages:?}");
+        assert!(messages.iter().all(|message| !message.contains("Apple") && !message.contains("Zebra")), "{users}: {messages:?}");
+    }
+    // A private or protected method satisfies an abstract public trait method in an enum too.
+    for visibility in ["private", "protected"] {
+        for source in [
+            format!("trait N {{ abstract public function bar(): string; }}\ntrait T {{ use N; {visibility} function bar(): string {{ return 'a'; }} }}\nenum E {{ use T; case X; }}"),
+            format!("trait N {{ abstract public function bar(): string; }}\nenum E {{ use N; {visibility} function bar(): string {{ return 'a'; }} case X; }}"),
+        ] {
+            assert!(check_source_full(&format!("<?php\n{source}\n")).is_ok(), "{source}");
+        }
+    }
+    // An unused trait whose own requirement is satisfied compatibly is valid.
+    assert!(
+        check_source_full("<?php\ntrait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): string { return 'x'; } }\necho 1;\n").is_ok(),
+        "compatible unused trait should be accepted"
+    );
+    // PHP compiles a class body before it early-binds the parent, binds only a parent declared
+    // earlier, and rejects an earlier trait or an internal final class as a parent while
+    // compiling.
+    for (source, message) in [
+        ("final class GP {}\nclass X extends GP { private final const Y = 1; private final const Z = 1; }", "Private constant X::Y cannot be final"),
+        ("readonly class GP {}\nclass X extends GP { private final const Y = 1; }", "Private constant X::Y cannot be final"),
+        ("interface GP {}\nclass X extends GP { private final const Y = 1; }", "Private constant X::Y cannot be final"),
+        ("class X extends GP {}\nfinal class GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends GP {}\ninterface GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends GP {}\nreadonly class GP {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("class X extends Q {}\ntrait Q {}\nclass B { private final const Y = 1; }", "Private constant B::Y cannot be final"),
+        ("trait Q {}\nclass X extends Q {}\nclass B { private final const Y = 1; }", "Class X cannot extend trait Q"),
+        ("class X extends Closure {}\nclass B { private final const Y = 1; }", "Class X cannot extend final class Closure"),
+        ("class X extends WeakMap {}", "Class X cannot extend final class WeakMap"),
+    ] {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains(message), "{source}: {messages:?}");
+    }
+    // A class that implements an interface or uses a trait is not early-bound: its parent is
+    // rejected while linking, after every class declaration has been compiled.
+    for child in ["interface I {}\nclass A extends GP implements I {}", "trait Q {}\nclass A extends GP { use Q; }"] {
+        let error = check_source_full(&format!(
+            "<?php\nfinal class GP {{}}\n{child}\nclass B {{ private final const X = 1; }}\n"
+        ))
+        .err()
+        .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert!(messages[0].contains("Private constant B::X cannot be final"), "{child}: {messages:?}");
+    }
+    for source in [
+        // Abstract imports bound before the failure are checked first, against the parent or
+        // the method that satisfies them.
+        format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nabstract class C extends P {{ use A, B {{ B::foo as final; }} }}"),
+        format!("class P {{ public function foo(): int {{ return 1; }} }}\ntrait A {{ abstract public function foo(): string; }}\ntrait B {{ abstract public function foo(): string; }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): int {{ return 1; }} }}"),
+        format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} public function bar(): int {{ return 1; }} }}"),
+        // An abstract redeclaration is checked against an earlier requirement too.
+        "trait A { abstract public function foo(): string; }\ntrait B { abstract public function foo(): string; }\nabstract class C { use A, B { B::foo as final; } abstract public function foo(): int; }".to_string(),
+        "abstract class P { abstract public function bar(): int; }\ntrait T { abstract public function bar(): string; }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use T, A { A::foo as final; } abstract public function bar(): int; public function foo() {} }".to_string(),
+        // A used trait's own satisfied requirement is checked while compiling that trait.
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass C { use A, T { A::foo as final; } public function foo() {} }".to_string(),
+        // A used trait's own satisfied requirement is still the error when the class failed an
+        // inheritance check first, and is reported once for two classes.
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass P { final public const X = 1; }\nclass C extends P { use A, T { A::foo as final; } public function foo() {} public const X = 2; }".to_string(),
+        "trait N { abstract public function bar(): string; }\ntrait T { use N; public function bar(): int { return 1; } }\ntrait A { abstract public function foo(); }\nclass C { use A, T { A::foo as final; } public function foo() {} }\nclass E { use A, T { A::foo as final; } public function foo() {} }".to_string(),
+        // A requirement bound before the failure is checked first.
+        format!("class P {{ public function foo() {{}} public function bar(): int {{ return 1; }} }}\n{a}trait T {{ abstract public function bar(): string; }}\nclass C extends P {{ use T, A {{ A::foo as final; }} public function foo() {{}} }}"),
+        format!("{kinds}class P {{ public function foo(): int {{ return 1; }} }}\nclass C extends P {{ use A, B {{ B::foo as final; }} public function foo(): string {{ return 'x'; }} }}"),
+        format!("{ab}class P {{ public function foo(): int {{ return 1; }} }}\nabstract class C extends P {{ use A, B {{ {both} }} public function foo(): string {{ return 'x'; }} }}"),
+        format!("class P {{ public function foo(): int {{ return 1; }} }}\n{a}trait B {{ public function foo(): string {{ return 'x'; }} }}\nclass C extends P {{ use A, B {{ A::foo as final; }} }}"),
+    ] {
+        let reported = single_error(&source);
+        assert!(!reported.contains("Cannot override final method"), "{source}: {reported}");
+    }
+}
+
+/// Builtin ancestors count like user ones for an abstract `as final` import: a kept import is
+/// overridden by `Exception::getMessage`, and a class body replacing it meets the final builtin
+/// method first. A class body that overrides a visible, non-final ancestor illegally reports
+/// that override (kind, visibility, abstract, signature) before the import, and the other
+/// methods of the name add nothing (#2352).
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_override_precedence() {
+    let single_error = |source: &str| -> String {
+        let error = check_source_full(&format!("<?php\n{source}\n"))
+            .err()
+            .expect("program should fail");
+        let messages: Vec<String> = error.flatten().into_iter().map(|error| error.message).collect();
+        assert_eq!(messages.len(), 1, "{source}: {messages:?}");
+        messages.into_iter().next().unwrap()
+    };
+    for (source, message) in [
+        (
+            "trait A { abstract public function getMessage(); }\nclass C extends Exception { use A { getMessage as final; } }",
+            "Cannot override final method A::getMessage",
+        ),
+        (
+            "trait A { abstract public function getPrevious(): ?Throwable; }\nabstract class C extends TypeError { use A { getPrevious as final; } }",
+            "Cannot override final method A::getPrevious",
+        ),
+        (
+            "trait A { abstract public function getMessage(); }\nclass C extends Exception { use A { getMessage as final; } public function getMessage() { return 'x'; } }",
+            "Cannot override final method Exception::getMessage",
+        ),
+        (
+            "class P { public static function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo() {} }",
+            "Cannot change method kind",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } protected function foo() {} }",
+            "Cannot reduce visibility",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } abstract public function foo(); }",
+            "Cannot make concrete method abstract",
+        ),
+        (
+            "class P { final public function foo() {} }\ntrait A { abstract public function foo(); }\ntrait B { abstract public static function foo(); }\nabstract class C extends P { use A, B { A::foo as final; } abstract public function foo(); }",
+            "Cannot override final method P::foo",
+        ),
+        (
+            "class P { public function foo() {} }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo() {} }",
+            "Cannot override final method A::foo",
+        ),
+    ] {
+        let reported = single_error(source);
+        assert!(reported.contains(message), "{source}: {reported}");
+    }
+    let reported = single_error(
+        "class P { public function foo(): int { return 1; } }\ntrait A { abstract public function foo(); }\nabstract class C extends P { use A { foo as final; } public function foo(): string { return 'x'; } }",
+    );
+    assert!(!reported.contains("Cannot override final method"), "{reported}");
+}
+
+/// The same abstract trait method reached through two traits is one method, final only when its
+/// first copy is; `insteadof` keeps an abstract `as final` import as a requirement; two
+/// concrete methods collide before any final requirement is compared; `foo as final foo` makes
+/// the method itself final; and a parent override is reported once (#2352). An `as final`
+/// made inside the used trait survives `insteadof` the same way.
+#[test]
+fn test_error_trait_alias_as_final_abstract_method_edge_cases() {
+    let t = "trait T { abstract public function foo(); }\n";
+    expect_no_error(&format!(
+        "<?php\n{t}trait A {{ use T; }}\ntrait B {{ use T {{ foo as final; }} }}\nabstract class C {{ use A, B; }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+    ));
+    expect_error(
+        &format!(
+            "<?php\n{t}trait A {{ use T; }}\ntrait B {{ use T {{ foo as final; }} }}\nabstract class C {{ use B, A; }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let a = "trait A { abstract public function foo(); }\n";
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ public function foo() {{ return 1; }} }}\nclass C {{ use A, B {{ B::foo insteadof A; A::foo as final; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ A::foo as final; B::foo insteadof A; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ abstract public function foo(); }}\nabstract class C {{ use B, A {{ A::foo as final; B::foo insteadof A; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{a}trait B {{ public function foo() {{ return 1; }} }}\ntrait C {{ public function foo() {{ return 2; }} }}\nclass D {{ use A, B, C {{ A::foo as final; }} }}\n"
+        ),
+        "Trait method C::foo has not been applied as D::foo, because of collision with B::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{t}abstract class C {{ use T {{ foo as final foo; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let inner_final = "trait T { abstract public function foo(); }\ntrait A { use T { foo as final; } }\n";
+    expect_error(
+        &format!(
+            "<?php\n{inner_final}trait B {{ public function foo() {{ return 1; }} }}\nclass C {{ use A, B {{ B::foo insteadof A; }} }}\n"
+        ),
+        "Cannot override final method A::foo",
+    );
+    expect_error(
+        &format!(
+            "<?php\n{inner_final}trait B {{ abstract public function foo(); }}\nabstract class C {{ use A, B {{ B::foo insteadof A; }} }}\nclass D extends C {{ public function foo() {{ return 1; }} }}\n"
+        ),
+        "Cannot override final method C::foo",
+    );
+    let static_parent = format!(
+        "<?php\n{a}class P {{ public static function foo() {{ return 1; }} }}\nabstract class C extends P {{ use A {{ foo as final; }} }}\n"
+    );
+    let message = check_source(&static_parent).expect_err("parent override should fail");
+    assert!(message.contains("Cannot override final method A::foo"), "{message}");
+    assert!(!message.contains("Cannot change method kind"), "{message}");
 }

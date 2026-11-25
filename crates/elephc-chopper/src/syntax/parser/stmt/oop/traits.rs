@@ -58,47 +58,39 @@ pub(in crate::syntax::parser::stmt) fn parse_trait_use(
             match &tokens[*pos].0 {
                 Token::As => {
                     *pos += 1;
-                    let visibility = match tokens.get(*pos).map(|(t, _)| t) {
-                        Some(Token::Public) => {
-                            *pos += 1;
-                            Some(Visibility::Public)
-                        }
-                        Some(Token::Protected) => {
-                            *pos += 1;
-                            Some(Visibility::Protected)
-                        }
-                        Some(Token::Private) => {
-                            *pos += 1;
-                            Some(Visibility::Private)
-                        }
-                        _ => None,
-                    };
-                    // Right after `as`, a member modifier is the visibility change, so a bare alias
-                    // is any other semi-reserved word (`as list`). After a visibility, the alias is
-                    // any word, modifiers included (`as protected match`, `as protected static`).
-                    let alias = match tokens.get(*pos).map(|(t, _)| t) {
-                        Some(
-                            Token::Public
+                    // PHP's grammar takes at most one member modifier right after `as`, so a bare
+                    // alias is any other semi-reserved word (`as list`). After a modifier, the
+                    // alias is any word, modifiers included (`as protected match`, `as final final`).
+                    let modifier = match tokens.get(*pos) {
+                        Some((
+                            token @ (Token::Public
                             | Token::Protected
                             | Token::Private
                             | Token::Static
                             | Token::Abstract
                             | Token::Final
-                            | Token::ReadOnly,
-                        ) if visibility.is_none() => None,
-                        _ => adaptation_bareword(tokens, *pos).inspect(|_| *pos += 1),
+                            | Token::ReadOnly),
+                            metadata,
+                        )) => {
+                            *pos += 1;
+                            Some((token, metadata.span))
+                        }
+                        _ => None,
                     };
-                    if visibility.is_none() && alias.is_none() {
+                    let alias = adaptation_bareword(tokens, *pos).inspect(|_| *pos += 1);
+                    if modifier.is_none() && alias.is_none() {
                         return Err(CompileError::new(
                             span,
                             "Trait alias adaptation requires a visibility and/or alias name",
                         ));
                     }
+                    let (visibility, is_final) = trait_alias_modifier(modifier)?;
                     adaptations.push(TraitAdaptation::Alias {
                         trait_name,
                         method,
                         alias,
                         visibility,
+                        is_final,
                     });
                 }
                 Token::InsteadOf => {
@@ -223,6 +215,42 @@ fn parse_trait_adaptation_target(
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, "Expected method name in adaptation"))?;
         Ok((None, method))
+    }
+}
+
+/// Maps the member modifier written after a trait alias's `as` to its visibility change and
+/// `final` flag. `readonly` is refused by PHP's parser (`zend_modifier_token_to_flag` for a
+/// method), so TOKEN_PARSE refuses it too. `static` and `abstract` parse, and PHP rejects them
+/// while compiling the class (`zend_check_trait_alias_modifiers`), so only compilation does.
+/// `final` is accepted since PHP 8.3. An eval fragment reports these errors as an unsupported
+/// runtime construct, like the member modifier errors of `MemberModifiers::validate_for`.
+fn trait_alias_modifier(
+    modifier: Option<(&Token, Span)>,
+) -> Result<(Option<Visibility>, bool), CompileError> {
+    let Some((token, span)) = modifier else {
+        return Ok((None, false));
+    };
+    let error = |message: &str| {
+        if crate::syntax::parser::runtime_fragment() {
+            CompileError::runtime_unsupported(span, message)
+        } else {
+            CompileError::new(span, message)
+        }
+    };
+    match token {
+        Token::Public => Ok((Some(Visibility::Public), false)),
+        Token::Protected => Ok((Some(Visibility::Protected), false)),
+        Token::Private => Ok((Some(Visibility::Private), false)),
+        Token::Final => Ok((None, true)),
+        Token::ReadOnly => Err(error("Cannot use the readonly modifier on a method")),
+        Token::Static | Token::Abstract if !crate::syntax::parser::validation_only() => {
+            let name = if matches!(token, Token::Static) { "static" } else { "abstract" };
+            Err(error(&format!(
+                "Cannot use \"{}\" as method modifier in trait alias",
+                name
+            )))
+        }
+        _ => Ok((None, false)),
     }
 }
 

@@ -101,6 +101,7 @@ fn parse_fragment_accepts_enum_trait_use() {
             method: "label".to_string(),
             alias: Some("hiddenLabel".to_string()),
             visibility: Some(EvalVisibility::Private),
+            is_final: false,
         }]
     );
 }

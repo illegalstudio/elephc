@@ -936,7 +936,7 @@ fn test_error_final_abstract_method() {
     // an abstract method cannot also be final.
     expect_error(
         "<?php abstract class Base { final abstract public function run(); }",
-        "Cannot use the final modifier on an abstract method: Base::run",
+        "Cannot use the final modifier on an abstract method",
     );
 }
 
@@ -1549,5 +1549,65 @@ fn test_error_dynamic_constructor_rejects_array_element_reference_argument() {
     expect_error(
         "<?php class DynamicRefCtor { public function __construct(mixed &$value) {} } $class = $argc > 1 ? 'DynamicRefCtor' : 'DynamicRefCtor'; $items = ['k' => 1]; new $class($items['k']);",
         "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
+    );
+}
+
+/// A repeated member modifier is refused with php 8.5's message, on properties, methods and
+/// constants alike (#2502). A second read or write visibility is an access type repeat.
+#[test]
+fn test_error_repeated_member_modifiers_use_php_messages() {
+    for (member, message) in [
+        ("public public $p;", "Multiple access type modifiers are not allowed"),
+        ("protected private $p;", "Multiple access type modifiers are not allowed"),
+        ("public public function m() {}", "Multiple access type modifiers are not allowed"),
+        ("public public const C = 1;", "Multiple access type modifiers are not allowed"),
+        ("public private(set) protected(set) int $p;", "Multiple access type modifiers are not allowed"),
+        ("static static $p;", "Multiple static modifiers are not allowed"),
+        ("static static function m() {}", "Multiple static modifiers are not allowed"),
+        ("public static static function m() {}", "Multiple static modifiers are not allowed"),
+        ("public readonly readonly int $p;", "Multiple readonly modifiers are not allowed"),
+        ("final final public function m() {}", "Multiple final modifiers are not allowed"),
+        ("final final const C = 1;", "Multiple final modifiers are not allowed"),
+        ("abstract abstract function m();", "Multiple abstract modifiers are not allowed"),
+        ("public public static static $p;", "Multiple access type modifiers are not allowed"),
+        ("final static final function m() {}", "Multiple final modifiers are not allowed"),
+    ] {
+        expect_error(&format!("<?php\nabstract class A {{ {member} }}\necho \"ok\\n\";\n"), message);
+    }
+    expect_error(
+        "<?php\ninterface I { public public function m(); }\n",
+        "Multiple access type modifiers are not allowed",
+    );
+}
+
+/// A modifier a member kind cannot take is named in php 8.5's message, checked in source order
+/// before repeats: `static static const` reports the misplaced `static` (#2501).
+#[test]
+fn test_error_misplaced_member_modifiers_use_php_messages() {
+    for (member, message) in [
+        ("static const X = 1;", "Cannot use the static modifier on a class constant"),
+        ("readonly const X = 1;", "Cannot use the readonly modifier on a class constant"),
+        ("abstract const X = 1;", "Cannot use the abstract modifier on a class constant"),
+        ("static static const X = 1;", "Cannot use the static modifier on a class constant"),
+        ("public static private const X = 1;", "Cannot use the static modifier on a class constant"),
+        ("private(set) const X = 1;", "Cannot use the private(set) modifier on a class constant"),
+        ("readonly function m() {}", "Cannot use the readonly modifier on a method"),
+        ("readonly readonly function m() {}", "Cannot use the readonly modifier on a method"),
+        ("private(set) function m() {}", "Cannot use the private(set) modifier on a method"),
+    ] {
+        expect_error(&format!("<?php\nclass A {{ {member} }}\n"), message);
+    }
+    expect_error(
+        "<?php\ninterface I { static const X = 1; }\n",
+        "Cannot use the static modifier on a class constant",
+    );
+}
+
+/// Members whose modifiers php 8.5 accepts still compile: one visibility with a write
+/// visibility, and `final` on a constant.
+#[test]
+fn test_valid_member_modifier_combinations_still_compile() {
+    expect_no_error(
+        "<?php\nclass A { public private(set) int $p = 1; final public const C = 1; public static function m() {} }\n",
     );
 }

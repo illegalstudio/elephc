@@ -1043,7 +1043,7 @@ fn test_error_enum_case_value_must_fold_to_the_backing_type() {
 final class Codes { public const NAME = 'n'; }
 enum Level: int { case Low = Codes::NAME; }
 "#,
-        "Enum int backing values must be integer literals",
+        "Enum case type string does not match enum backing type int",
     );
     expect_error(
         r#"<?php
@@ -1065,16 +1065,16 @@ fn test_error_enum_case_value_keeps_arrays_with_invalid_keys_undecided() {
     ] {
         expect_error(
             &format!("<?php\nenum E: int {{ case A = [{key} => 1] ? 7 : 8; }}\n"),
-            "Enum int backing values must be integer literals",
+            "Enum case value E::A cannot be evaluated at compile time",
         );
     }
     expect_error(
         "<?php\nenum E: int { case A = ['k' => [[] => 1]] ? 7 : 8; }\n",
-        "Enum int backing values must be integer literals",
+        "Enum case value E::A cannot be evaluated at compile time",
     );
     expect_error(
         "<?php\nenum E: int { case A = [1, 'a' => 2, 1.5 => 3] ? 7 : 8; }\n",
-        "Enum int backing values must be integer literals",
+        "Enum case value E::A cannot be evaluated at compile time",
     );
 }
 
@@ -1092,7 +1092,7 @@ fn test_error_enum_case_value_keeps_arrays_overflowing_the_next_key_undecided() 
     ] {
         expect_error(
             &format!("<?php\nenum E: int {{ case A = {array} ? 7 : 8; }}\n"),
-            "Enum int backing values must be integer literals",
+            "Enum case value E::A cannot be evaluated at compile time",
         );
     }
 }
@@ -3906,4 +3906,49 @@ class FollowupBadStrictCounter implements FollowupStrictCounter {
     #[\ReturnTypeWillChange] public function count(): string { return "5"; }
 }
 "#, "incompatible return type string (interface returns int)");
+}
+
+/// A backed case whose value folds to a literal of another type reports php 8.5's type mismatch
+/// message, naming the value's type and the backing type (#2525).
+#[test]
+fn test_error_enum_case_type_mismatch_uses_php_message() {
+    for (backing, value, actual) in [
+        ("int", "'x'", "string"),
+        ("int", "'1'", "string"),
+        ("int", "1.5", "float"),
+        ("int", "true", "bool"),
+        ("int", "null", "null"),
+        ("int", "[1]", "array"),
+        ("int", "[]", "array"),
+        ("int", "['a' => 1]", "array"),
+        ("int", "[[1]]", "array"),
+        ("int", "[1 => 2, 3]", "array"),
+        ("int", "[1 => 2, 3 + 4]", "array"),
+        ("int", "[1 + 1 => 2, 3]", "array"),
+        ("string", "1", "int"),
+        ("string", "1.5", "float"),
+    ] {
+        expect_error(
+            &format!("<?php\nenum E: {backing} {{ case A = {value}; }}\n"),
+            &format!("Enum case type {actual} does not match enum backing type {backing}"),
+        );
+    }
+}
+
+/// Two cases with one backing value report php 8.5's message naming the first case that holds
+/// it and the repeating case, for int and string enums and for folded values (#2525).
+#[test]
+fn test_error_enum_duplicate_value_names_both_cases() {
+    expect_error(
+        "<?php\nenum F: string { case A = 'a'; case B = 'a'; }\n",
+        "Duplicate value in enum F for cases A and B",
+    );
+    expect_error(
+        "<?php\nenum F: int { case A = 1; case B = 2; case C = 1; }\n",
+        "Duplicate value in enum F for cases A and C",
+    );
+    expect_error(
+        "<?php\nenum F: int { case A = 1; case B = 0 + 1; }\n",
+        "Duplicate value in enum F for cases A and B",
+    );
 }

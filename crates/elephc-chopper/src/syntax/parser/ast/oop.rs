@@ -150,6 +150,8 @@ pub enum TraitAdaptation {
         method: String,
         alias: Option<String>,
         visibility: Option<Visibility>,
+        /// `as final` (PHP 8.3+): the imported method, or its alias, is declared final.
+        is_final: bool,
     },
     InsteadOf {
         trait_name: Option<Name>,

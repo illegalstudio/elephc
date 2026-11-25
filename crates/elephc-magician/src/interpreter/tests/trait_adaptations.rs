@@ -474,3 +474,179 @@ class EvalTraitPropConflictBox {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies `as final` (PHP 8.3+) makes the imported eval trait method final, so a subclass
+/// override is a fatal, while an `as final` alias leaves the original overridable (#2352).
+#[test]
+fn execute_program_applies_eval_trait_final_adaptation() {
+    let program = parse_fragment(
+        br#"trait EvalAdaptFinal {
+    public function foo() { return "foo"; }
+}
+class EvalAdaptFinalBox {
+    use EvalAdaptFinal { foo as final bar; }
+}
+class EvalAdaptFinalChild extends EvalAdaptFinalBox {
+    public function foo() { return "child"; }
+}
+$box = new EvalAdaptFinalChild();
+return $box->foo() . $box->bar();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::String("childfoo".to_string()));
+
+    let program = parse_fragment(
+        br#"trait EvalAdaptFinalOwn {
+    public function foo() { return "foo"; }
+}
+class EvalAdaptFinalOwnBox {
+    use EvalAdaptFinalOwn { foo as final; }
+}
+class EvalAdaptFinalOwnChild extends EvalAdaptFinalOwnBox {
+    public function foo() { return "child"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding an `as final` trait method should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies an abstract eval trait method made `as final` stays abstract and final in an
+/// abstract class, while a body on the importing class, enum or trait (static or not), a concrete
+/// method of another used trait (also one `insteadof` keeps), a parent method (even a private
+/// eval or AOT one) or a subclass overrides the final method and fails, as in PHP 8.3+, and
+/// `foo as final foo` makes the method itself final, and a later compatible plain abstract
+/// method keeps the final requirement while an incompatible or other-kind one fails (#2352).
+#[test]
+fn execute_program_applies_eval_trait_final_adaptation_to_abstract_methods() {
+    let accepted = parse_fragment(
+        br#"trait EvalAdaptFinalAbstract {
+    abstract public function foo();
+}
+abstract class EvalAdaptFinalAbstractBox {
+    use EvalAdaptFinalAbstract { foo as final; }
+}
+abstract class EvalAdaptFinalAbstractAlias {
+    use EvalAdaptFinalAbstract { foo as final bar; }
+    public function foo() { return "foo"; }
+}
+return "ok";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&accepted, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::String("ok".to_string()));
+
+    let kept_final = parse_fragment(
+        br#"trait EvalAdaptFinalAbstractFirst { abstract public function foo(); }
+trait EvalAdaptFinalAbstractSecond { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractFirstBox {
+    use EvalAdaptFinalAbstractFirst, EvalAdaptFinalAbstractSecond {
+        EvalAdaptFinalAbstractFirst::foo as final;
+        EvalAdaptFinalAbstractSecond::foo insteadof EvalAdaptFinalAbstractFirst;
+    }
+}
+return "kept";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&kept_final, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::String("kept".to_string()));
+
+    for source in [
+        br#"trait EvalAdaptFinalAbstractSub { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractSubBox { use EvalAdaptFinalAbstractSub { foo as final; } }
+class EvalAdaptFinalAbstractSubChild extends EvalAdaptFinalAbstractSubBox {
+    public function foo() { return 1; }
+}"# as &[u8],
+        br#"trait EvalAdaptFinalAbstractOwn { abstract public function foo(); }
+class EvalAdaptFinalAbstractOwnBox {
+    use EvalAdaptFinalAbstractOwn { foo as final; }
+    public function foo() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractOwnAlias { abstract public function foo(); }
+class EvalAdaptFinalAbstractOwnAliasBox {
+    use EvalAdaptFinalAbstractOwnAlias { foo as final bar; }
+    public function bar() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractEnumT { abstract public function foo(); }
+enum EvalAdaptFinalAbstractEnum {
+    use EvalAdaptFinalAbstractEnumT { foo as final; }
+    public function foo() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractInner { abstract public function foo(); }
+trait EvalAdaptFinalAbstractOuter {
+    use EvalAdaptFinalAbstractInner { foo as final; }
+    public function foo() { return 1; }
+}
+class EvalAdaptFinalAbstractOuterBox { use EvalAdaptFinalAbstractOuter; }"#,
+        br#"trait EvalAdaptFinalAbstractReq { abstract public function foo(); }
+trait EvalAdaptFinalAbstractImpl { public function foo() { return 1; } }
+class EvalAdaptFinalAbstractReqBox {
+    use EvalAdaptFinalAbstractReq, EvalAdaptFinalAbstractImpl { EvalAdaptFinalAbstractReq::foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractParentT { abstract public function foo(); }
+class EvalAdaptFinalAbstractParent { private function foo() { return 1; } }
+abstract class EvalAdaptFinalAbstractParentBox extends EvalAdaptFinalAbstractParent {
+    use EvalAdaptFinalAbstractParentT { foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractFirstT { abstract public function foo(); }
+trait EvalAdaptFinalAbstractSecondT { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractFirstTBox {
+    use EvalAdaptFinalAbstractFirstT, EvalAdaptFinalAbstractSecondT {
+        EvalAdaptFinalAbstractFirstT::foo as final;
+        EvalAdaptFinalAbstractSecondT::foo insteadof EvalAdaptFinalAbstractFirstT;
+    }
+}
+class EvalAdaptFinalAbstractFirstTChild extends EvalAdaptFinalAbstractFirstTBox {
+    public function foo() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractNarrow { abstract public function foo(); }
+trait EvalAdaptFinalAbstractWide { abstract public function foo(int $x); }
+abstract class EvalAdaptFinalAbstractIncompatible {
+    use EvalAdaptFinalAbstractNarrow, EvalAdaptFinalAbstractWide { EvalAdaptFinalAbstractNarrow::foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractInstance { abstract public function foo(); }
+trait EvalAdaptFinalAbstractStatic { abstract public static function foo(); }
+abstract class EvalAdaptFinalAbstractKindPair {
+    use EvalAdaptFinalAbstractInstance, EvalAdaptFinalAbstractStatic { EvalAdaptFinalAbstractInstance::foo as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractAotT { abstract public function hidden(); }
+abstract class EvalAdaptFinalAbstractAotBox extends KnownClass {
+    use EvalAdaptFinalAbstractAotT { hidden as final; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractSkipped { abstract public function foo(); }
+trait EvalAdaptFinalAbstractKept { public function foo() { return 1; } }
+class EvalAdaptFinalAbstractSkippedBox {
+    use EvalAdaptFinalAbstractSkipped, EvalAdaptFinalAbstractKept {
+        EvalAdaptFinalAbstractKept::foo insteadof EvalAdaptFinalAbstractSkipped;
+        EvalAdaptFinalAbstractSkipped::foo as final;
+    }
+}"#,
+        br#"trait EvalAdaptFinalAbstractSelf { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractSelfBox { use EvalAdaptFinalAbstractSelf { foo as final foo; } }
+class EvalAdaptFinalAbstractSelfChild extends EvalAdaptFinalAbstractSelfBox {
+    public function foo() { return 1; }
+}"#,
+        br#"trait EvalAdaptFinalAbstractKind { abstract public function foo(); }
+abstract class EvalAdaptFinalAbstractKindBox {
+    use EvalAdaptFinalAbstractKind { foo as final; }
+    public static function foo() { return 1; }
+}"#,
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let err = execute_program(&program, &mut scope, &mut values)
+            .expect_err("overriding an abstract `as final` trait method should fail");
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+}
