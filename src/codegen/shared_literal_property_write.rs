@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Scope, opcode, exact spelling and the original value type identify one body.
-//! - Borrowed operands retain their original representation and caller ownership.
+//! - Only borrowed (or persistent) refcounted values are shared; an owned value stays inline.
+//! - The inner write carries a compiler-generated span, so the caller's published site survives.
 //! - Each call passes its source line for dynamic-property diagnostics.
 
 use std::collections::HashMap;
@@ -55,6 +56,13 @@ fn literal_site(function: &Function, inst: &Instruction) -> Option<(DataId, Valu
         _ => return None,
     };
     let operand = function.value(value)?;
+    // An owned value may be consumed by the inline store, which takes its reference. The helper
+    // only borrows its operand and retains its own copy, so the caller's owner would leak.
+    if Ownership::php_type_needs_lifetime_tracking(&operand.php_type)
+        && !matches!(operand.ownership, Ownership::Borrowed | Ownership::Persistent)
+    {
+        return None;
+    }
     if !matches!(operand.ir_type, IrType::I64 | IrType::Str | IrType::Heap(_))
         || !matches!(operand.php_type.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::False
             | PhpType::Str | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
@@ -161,13 +169,16 @@ fn helper_function(key: &WriteKey, data: DataId, label: &str) -> Function {
     builder.set_value_ownership(object, Ownership::Borrowed);
     builder.set_value_ownership(value, if Ownership::php_type_needs_lifetime_tracking(&key.value_type) { Ownership::Borrowed } else { Ownership::NonHeap });
     let _ = builder.emit_load_local(LocalSlotId::from_raw(2), IrType::I64, PhpType::Int);
+    // The caller's own instruction already published its source line and backtrace site. A
+    // compiler-generated span keeps this inner write from republishing line 0 over them.
+    let span = Some(crate::span::Span::dummy());
     if key.dynamic {
         let name = builder.emit_const_str(data);
-        let _ = builder.emit(Op::DynamicPropSet, vec![object, name, value], None,
-            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let _ = builder.emit_with_effects(Op::DynamicPropSet, vec![object, name, value], None,
+            IrType::Void, PhpType::Void, Ownership::NonHeap, Op::DynamicPropSet.default_effects(), span);
     } else {
-        let _ = builder.emit(Op::PropSet, vec![object, value], Some(Immediate::Data(data)),
-            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let _ = builder.emit_with_effects(Op::PropSet, vec![object, value], Some(Immediate::Data(data)),
+            IrType::Void, PhpType::Void, Ownership::NonHeap, Op::PropSet.default_effects(), span);
     }
     builder.terminate(Terminator::Return { value: None });
     function
@@ -258,6 +269,29 @@ mod tests {
         let plan = second_state.literal_property_write_helpers.as_ref().unwrap();
         assert_eq!(plan.helpers.len(), 1);
         assert_eq!(plan.helpers[0].0.property, "different");
+    }
+
+    /// An owned refcounted value stays on the inline store, which may consume it; borrowed
+    /// values share the helper, and its inner store never republishes a source location.
+    #[test]
+    fn owned_values_stay_inline_and_inner_stores_keep_the_caller_site() {
+        let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
+        let data = module.data.intern_string("value");
+        for dynamic in [false, true] {
+            let key = WriteKey { scope: None, property: "value".into(), dynamic,
+                value_type: PhpType::Mixed, value_ir: IrType::Heap(IrHeapKind::Mixed) };
+            let mut function = helper_function(&key, data, &format!("write_site_{dynamic}"));
+            let opcode = if dynamic { Op::DynamicPropSet } else { Op::PropSet };
+            let index = function.instructions.iter().position(|inst| inst.op == opcode).unwrap();
+            let inst = function.instructions[index].clone();
+            assert!(inst.span.is_some_and(|span| !span.is_from_source()), "{inst:?}");
+            assert!(literal_site(&function, &inst).is_some(), "a borrowed value is shared");
+            let value = *inst.operands.last().unwrap();
+            for ownership in [Ownership::Owned, Ownership::MaybeOwned, Ownership::Moved] {
+                function.values[value.as_raw() as usize].ownership = ownership;
+                assert!(literal_site(&function, &inst).is_none(), "{ownership:?} stays inline");
+            }
+        }
     }
 
     /// Shared literal write helpers keep their keys and emit on Linux x86_64.

@@ -8,6 +8,7 @@
 //! - Scope, exact property spelling and fetch mode identify one dispatch body.
 //! - A borrowed receiver produces the original owned Mixed result through normal EIR cleanup.
 //! - Single sites, hook bodies, quiet reads and non-Mixed representations stay inline.
+//! - The inner read carries a compiler-generated span, so the caller's published site survives.
 
 use std::collections::HashMap;
 
@@ -227,6 +228,8 @@ mod tests {
         assert_eq!(read.immediate, Some(Immediate::PropertyFetchMode(PropertyFetchMode::Isset)));
         assert_eq!(read.result_ownership, Ownership::Owned);
         assert_eq!(function.value(read.operands[0]).unwrap().ownership, Ownership::Borrowed);
+        // A source-less span would republish line 0 over the caller's call site.
+        assert!(read.span.is_some_and(|span| !span.is_from_source()), "{read:?}");
     }
 
     /// No helper label or property data leaks from one independently emitted module to another.
@@ -265,8 +268,11 @@ fn helper_function(key: &ReadKey, data: DataId, label: &str) -> Function {
     let object = builder.emit_load_local(slot, mixed, PhpType::Mixed);
     builder.set_value_ownership(object, Ownership::Borrowed);
     let name = builder.emit_const_str(data);
-    let result = builder.emit(Op::DynamicPropGet, vec![object, name],
-        Some(Immediate::PropertyFetchMode(key.mode)), mixed, PhpType::Mixed, Ownership::Owned)
+    // The caller's own instruction already published its source line and backtrace site. A
+    // compiler-generated span keeps this inner read from republishing line 0 over them.
+    let result = builder.emit_with_effects(Op::DynamicPropGet, vec![object, name],
+        Some(Immediate::PropertyFetchMode(key.mode)), mixed, PhpType::Mixed, Ownership::Owned,
+        Op::DynamicPropGet.default_effects(), Some(crate::span::Span::dummy()))
         .expect("property read produces a value");
     builder.terminate(Terminator::Return { value: Some(result) });
     function
