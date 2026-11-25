@@ -39,6 +39,18 @@ Wrapper construction extends their literal pools while preserving the source
 functions and class metadata. An active snapshot stays outside the reusable pool
 until its wrapper has finished emitting, so nested wrappers have independent data
 IDs. This avoids cloning all source EIR bodies for every builtin wrapper.
+The same module-scoped state caches source-body PCNTL signal flags and backtrace
+requirements. Function contexts and frame setup reuse those immutable facts instead
+of rescanning every source instruction for each emitted function. Literal-only
+wrapper snapshots preserve the cached body graph; generated runtime requirements
+remain tracked separately during emission.
+
+Callable declaration lookup shares a per-emission index for functions, closures,
+externs and public include groups. Emitted class-method membership uses the same
+immutable source inventory, keyed by exact class spelling, normalized PHP method
+name and static or instance kind. The lookup retains the previous scanner's
+answers without rescanning all method bodies. Literal-only wrapper snapshots
+reuse these tables; a separate module emission starts with an empty index.
 
 Runtime-selected native methods that need distinct argument plans select their
 concrete class in EIR before evaluating the arguments. This includes variadic
