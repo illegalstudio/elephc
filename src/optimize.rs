@@ -48,6 +48,7 @@ use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
 pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
+pub use binding_decisions::install_scalar_guard_arg_sites;
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
 pub use output::with_hosted_output;
 
@@ -339,22 +340,35 @@ pub struct PostTypecheckOptimizer {
     callable_effects: CallableEffectAnalysis,
     by_ref_signatures: ByRefSignatures,
     exception_flow: Rc<ExceptionFlowAnalysis>,
+    /// `CheckResult::scalar_guard_arg_sites`, installed around the analyses and every phase so a
+    /// call that can reject a `mixed` argument stays `may_throw`. `None` (the AST-only
+    /// constructor) keeps whatever set the caller installed.
+    scalar_guard_arg_sites: Option<HashSet<Span>>,
 }
 
 impl PostTypecheckOptimizer {
     /// Builds the reusable analysis from the program entering post-typecheck optimization.
     pub fn new(program: &Program) -> Self {
-        Self::new_with_optional_type_metadata(program, None)
+        Self::new_with_optional_type_metadata(program, None, None)
     }
 
     /// Builds reusable analyses with checker function signatures and canonical type hierarchy.
+    ///
+    /// `scalar_guard_arg_sites` is `CheckResult::scalar_guard_arg_sites`. It is REQUIRED, like the
+    /// phases' span sets: a caller that left it out would let a pure callee's guarded call (and a
+    /// `catch (TypeError)` around it) be removed.
     pub fn new_with_type_metadata(
         program: &Program,
         functions: &HashMap<String, crate::types::FunctionSig>,
         classes: &HashMap<String, crate::types::ClassInfo>,
         interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+        scalar_guard_arg_sites: &HashSet<Span>,
     ) -> Self {
-        Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
+        Self::new_with_optional_type_metadata(
+            program,
+            Some((functions, classes, interfaces)),
+            Some(scalar_guard_arg_sites.clone()),
+        )
     }
 
     /// Builds callable and exception analyses, optionally using authoritative checker metadata.
@@ -370,18 +384,27 @@ impl PostTypecheckOptimizer {
             &HashMap<String, crate::types::ClassInfo>,
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
+        scalar_guard_arg_sites: Option<HashSet<Span>>,
     ) -> Self {
         crate::compiler_stack::with_compiler_stack(|| {
-            let callable_effects = CallableEffectAnalysis::from_program(program);
-            let exception_flow = with_callable_effect_analysis(&callable_effects, || {
-                Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
-            });
-            Self {
-                callable_effects,
-                by_ref_signatures: collect_by_ref_signatures(program),
-                exception_flow,
-            }
+            binding_decisions::with_scalar_guard_arg_sites(scalar_guard_arg_sites.as_ref(), || {
+                let callable_effects = CallableEffectAnalysis::from_program(program);
+                let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+                    Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+                });
+                Self {
+                    callable_effects,
+                    by_ref_signatures: collect_by_ref_signatures(program),
+                    exception_flow,
+                    scalar_guard_arg_sites: scalar_guard_arg_sites.clone(),
+                }
+            })
         })
+    }
+
+    /// Runs one phase with this optimizer's scalar-guard argument sites installed.
+    fn with_guard_sites<R>(&self, f: impl FnOnce() -> R) -> R {
+        binding_decisions::with_scalar_guard_arg_sites(self.scalar_guard_arg_sites.as_ref(), f)
     }
 
     /// Propagates constants while using the shared callable-effect summary.
@@ -404,7 +427,9 @@ impl PostTypecheckOptimizer {
         buffer_read_sites: HashSet<Span>,
     ) -> Program {
         crate::compiler_stack::with_compiler_stack(|| {
-            self.propagate_on_compiler_stack(program, mixed_storage_locals, buffer_read_sites)
+            self.with_guard_sites(|| {
+                self.propagate_on_compiler_stack(program, mixed_storage_locals, buffer_read_sites)
+            })
         })
     }
 
@@ -444,13 +469,13 @@ impl PostTypecheckOptimizer {
     /// with its original spans. The spans let that rewrite veto itself; see
     /// `control::switch::single_case_rewrite_would_clone_a_decision`.
     pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        crate::compiler_stack::with_compiler_stack(|| {
+        crate::compiler_stack::with_compiler_stack(|| self.with_guard_sites(|| {
             with_local_binding_decision_spans(binding_decision_spans, || {
                 with_callable_effect_analysis(&self.callable_effects, || {
                     with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
                 })
             })
-        })
+        }))
     }
 
     /// Prunes constant branches using the shared callable-effect and exception-flow summaries.
@@ -458,13 +483,13 @@ impl PostTypecheckOptimizer {
     /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
     /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
     pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        crate::compiler_stack::with_compiler_stack(|| {
+        crate::compiler_stack::with_compiler_stack(|| self.with_guard_sites(|| {
             with_local_binding_decision_spans(binding_decision_spans, || {
                 with_callable_effect_analysis(&self.callable_effects, || {
                     with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
                 })
             })
-        })
+        }))
     }
 
     /// Eliminates dead code using the shared callable-effect summary.
@@ -481,7 +506,7 @@ impl PostTypecheckOptimizer {
         program: Program,
         binding_decision_spans: HashSet<Span>,
     ) -> Program {
-        crate::compiler_stack::with_compiler_stack(|| {
+        crate::compiler_stack::with_compiler_stack(|| self.with_guard_sites(|| {
             with_local_binding_decision_spans(binding_decision_spans, || {
                 with_callable_effect_analysis(&self.callable_effects, || {
                     with_exception_flow_analysis(&self.exception_flow, || {
@@ -491,7 +516,7 @@ impl PostTypecheckOptimizer {
                     })
                 })
             })
-        })
+        }))
     }
 }
 

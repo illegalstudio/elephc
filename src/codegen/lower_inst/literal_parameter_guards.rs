@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::codegen::runtime_callable_invoker::owned_value_args::coerce()`.
+//! - The invoker's scalar-parameter guard, which shares the descriptor-named refusal.
 //!
 //! Key details:
 //! - The argument is borrowed; its invoker owns any temporary box and exception cleanup.
@@ -95,6 +96,70 @@ fn branch_tag(emitter: &mut Emitter, register: &str, tag: i64, label: &str) {
             emitter.instruction(&format!("je {label}"));                        // select the matching value category
         }
     }
+}
+
+/// Throws a descriptor-named argument `TypeError` for a statically known PHP type name.
+///
+/// Shared with the invoker's scalar-parameter guard: `prefix` is the message after the callee
+/// name (`"(): Argument #1 ($s) must be of type string, "`).
+pub(in crate::codegen) fn refuse_invoker_argument_static(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    descriptor_offset: Option<usize>,
+    prefix: &str,
+    type_name: &str,
+) {
+    let (label, len) = data.add_string(type_name.as_bytes());
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(emitter, len_reg, len as i64);
+    refuse_invoker_argument_loaded(emitter, data, descriptor_offset, prefix);
+}
+
+/// Throws a descriptor-named argument `TypeError` for the type name in the string result
+/// registers (see [`refuse_invoker_argument_static`]).
+///
+/// Without a descriptor offset, `prefix` already starts with the callee name.
+pub(in crate::codegen) fn refuse_invoker_argument_loaded(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    descriptor_offset: Option<usize>,
+    prefix: &str,
+) {
+    match descriptor_offset {
+        Some(offset) => refuse_loaded_type(emitter, data, offset, prefix),
+        None => {
+            let (ptr, len) = abi::string_result_regs(emitter);
+            let (right_ptr, right_len) = super::runtime_class_messages::concat_right_operand_regs(emitter);
+            let (given, given_len) = data.add_string(b" given");
+            // -- message: prefix . type name . " given", persisted, then thrown --
+            abi::emit_symbol_address(emitter, right_ptr, &given);
+            abi::emit_load_int_immediate(emitter, right_len, given_len as i64);
+            abi::emit_call_label(emitter, "__rt_concat");
+            let (prefix_label, prefix_len) = data.add_string(prefix.as_bytes());
+            abi::emit_reg_move(emitter, right_ptr, ptr);
+            abi::emit_reg_move(emitter, right_len, len);
+            abi::emit_symbol_address(emitter, ptr, &prefix_label);
+            abi::emit_load_int_immediate(emitter, len, prefix_len as i64);
+            abi::emit_call_label(emitter, "__rt_concat");
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            throw_type_error(emitter);
+        }
+    }
+}
+
+/// Loads an object's runtime class name into the string result registers (`fallback` for an
+/// id outside the class table) without a `FunctionContext`.
+pub(in crate::codegen) fn emit_invoker_class_name_lookup(
+    emitter: &mut Emitter,
+    object_reg: &str,
+    fallback: &(String, usize),
+    fallback_label: &str,
+    done_label: &str,
+) {
+    super::runtime_class_messages::emit_class_name_lookup(
+        emitter, object_reg, fallback, fallback_label, done_label,
+    );
 }
 
 /// Starts an argument error with a statically known PHP type name.

@@ -1131,6 +1131,10 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &check_result.functions,
         &check_result.classes,
         &check_result.interfaces,
+        // A call that binds a `mixed`/union argument to a declared scalar parameter can throw
+        // `TypeError` at run time even when its callee is pure; the optimizer installs these
+        // around its analyses and every phase.
+        &check_result.scalar_guard_arg_sites,
     );
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which

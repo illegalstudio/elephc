@@ -18,6 +18,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     builtin_name: Option<&str>,
     capture_values: bool,
     capture_output: Option<&(usize, PhpType)>,
+    unrecorded_sources: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
     // Keep generic source planning intact. Only by-value indexed tails can be
     // materialized into one array without losing references or named keys.
@@ -44,6 +45,17 @@ pub(super) fn lower_positional_spread_args_with_signature(
         return None;
     }
 
+    // PHP checks parameter types at the callee, after every argument (the spread source
+    // included) was evaluated: the prefix stays boxed and is checked once the spread is read.
+    // A call through a callable alias (`$f = 'take'; $f($v, ...$rows)`) has no checker record
+    // for its prefix, so the prefix is then checked from its values.
+    let previous_deferral = ctx.scalar_guard_deferral;
+    if !capture_values {
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, unrecorded_sources));
+    }
+    // The prefix's class checks wait with its scalar checks, so the prefix is checked in
+    // parameter order once the spread was read.
+    super::call_arg_coercion::begin_deferred_object_param_checks(ctx);
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
         let previous = capture_output.filter(|(output, _)| *output == index && !capture_values)
@@ -57,6 +69,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
             operands.push(root_evaluated_call_argument(ctx, lowered, arg.span).value);
         }
     }
+    ctx.scalar_guard_deferral = previous_deferral;
+    let prefix_object_checks = super::call_arg_coercion::finish_deferred_object_param_checks(ctx);
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
@@ -65,6 +79,31 @@ pub(super) fn lower_positional_spread_args_with_signature(
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let spread_value = lower_expr(ctx, &spread_expr);
+    // The prefix parameters come before the unpacked ones, so their checks run before the
+    // unpacked count is checked, as PHP's parameter-order binding does.
+    if (!capture_values || !prefix_object_checks.is_empty()) && spread_idx > 0 {
+        let sources = args[..spread_idx]
+            .iter()
+            .map(|arg| if unrecorded_sources {
+                super::scalar_param_guards::GuardSource::Unrecorded
+            } else {
+                super::scalar_param_guards::GuardSource::Recorded(arg.span)
+            })
+            .collect::<Vec<_>>();
+        let sources = (!capture_values).then_some(sources.as_slice());
+        operands = super::call_arg_coercion::coerce_operands_to_params_with_checks(
+            ctx, sig, operands, sources, true, &prefix_object_checks,
+        );
+        // A deferred check converts without rooting its result (a `Stringable`'s string), but
+        // the spread elements and defaults lowered next can still throw: root what it made.
+        for (index, arg) in args[..spread_idx].iter().enumerate() {
+            if capture_values || sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let lowered = lowered_value_from_id(ctx, operands[index]);
+            operands[index] = root_evaluated_call_argument(ctx, lowered, arg.span).value;
+        }
+    }
     if let Some(name) = builtin_name {
         emit_builtin_spread_arity_guard(
             ctx, spread_value.value, required_len,
@@ -77,9 +116,23 @@ pub(super) fn lower_positional_spread_args_with_signature(
         );
     }
 
+    // Spread elements have no checker record of their own: leave a boxed element for the
+    // scalar-parameter check, which runs from its value after every element was read.
+    if !capture_values {
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, true));
+    }
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
         let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        // PHP binds the supplied parameters before it evaluates an omitted default, so the
+        // values read so far (the prefix and the unpacked elements) are checked, and rooted,
+        // before a default that can throw (`int $n = 1 % 0`) may run.
+        if !capture_values
+            && element_idx >= required_len
+            && default.is_some_and(|default| !super::call_arg_coercion::default_is_inert(default))
+        {
+            check_bound_operands_before_default(ctx, sig, &mut operands, args[spread_idx].span);
+        }
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(
@@ -110,6 +163,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
         };
         operands.push(lower_arg_with_signature_options(ctx, sig, param_idx, &expr, capture_values));
     }
+    ctx.scalar_guard_deferral = previous_deferral;
 
     if sig.variadic.is_some() {
         let tail_offset = regular_param_count.saturating_sub(spread_idx);
@@ -148,7 +202,34 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(tail.value);
     }
 
-    Some(coerce_operands_to_params(ctx, sig, operands))
+    Some({
+        let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true)
+    })
+}
+
+/// Checks the operands a positional spread call has bound so far, then roots them, before an
+/// omitted default that can throw is evaluated.
+///
+/// The deferral left the unpacked elements boxed and unchecked; their checks run here from the
+/// values (the elements have no checker record), so a refused element throws its `TypeError`
+/// before the default. A converted string is rooted with the rest while the default runs.
+fn check_bound_operands_before_default(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    operands: &mut Vec<ValueId>,
+    span: Span,
+) {
+    let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+    let checked = coerce_operands_to_params_guarded(ctx, sig, std::mem::take(operands), Some(&sources), true);
+    *operands = checked;
+    for index in 0..operands.len() {
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let lowered = lowered_value_from_id(ctx, operands[index]);
+        operands[index] = root_evaluated_call_argument(ctx, lowered, span).value;
+    }
 }
 
 /// Counts a staged unpack using its actual storage representation, not its PHP array hint.

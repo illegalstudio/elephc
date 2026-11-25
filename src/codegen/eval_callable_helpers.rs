@@ -826,6 +826,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         owns_string_return,
         php_return_status: true,
         defaults: &defaults,
+        scalar_guards: None,
     };
     // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
     // Allocate their real label before detaching so body renaming cannot invalidate the cache.

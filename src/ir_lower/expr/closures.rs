@@ -347,6 +347,9 @@ pub(super) fn lower_closure_with_context(
         .collect::<Vec<_>>();
     let name = ctx.next_closure_name();
     ctx.register_closure_display_name(&name, expr.span.line);
+    if let Some(display) = ctx.peek_closure_display_name(&name) {
+        super::scalar_param_guards::register_closure_param_lines(&display, expr.span);
+    }
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });

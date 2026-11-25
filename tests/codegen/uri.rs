@@ -2016,6 +2016,111 @@ withHost "%78n--a-.com" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
     );
 }
 
+/// A runtime `null` bound to a URI method's `string` parameter is coerced as for any internal
+/// method (PHP only deprecates it), not refused by the user-function scalar parameter guard.
+#[test]
+fn test_uri_methods_coerce_a_runtime_null_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+function box(mixed $v): mixed { return $v; }
+$n = box(null);
+$u = Uri\Rfc3986\Uri::parse($n);
+echo $u === null ? "null" : "[" . $u->toString() . "]", "\n";
+$v = Uri\Rfc3986\Uri::parse(uri: $n);
+echo $v === null ? "null" : "[" . $v->toString() . "]", "\n";
+$w = Uri\Rfc3986\Uri::parse("https://example.com/x");
+echo $w->withPath($n)->toString(), "|", $w->withPath(box("/p"))->toString(), "\n";
+echo (new Uri\WhatWg\Url("https://example.com/"))->withQuery($n)->toAsciiString(), "\n";
+"#,
+    );
+    assert_eq!(out, "[]\n[]\nhttps://example.com|https://example.com/p\nhttps://example.com/\n");
+}
+
+/// Verifies `is_a()` and `is_subclass_of()` answer for the injected URI classes and exception
+/// hierarchy when the target class name is only known at run time, for object and class-name
+/// subjects alike.
+#[test]
+fn test_uri_classes_with_runtime_is_a_target() {
+    let out = compile_and_run(
+        r#"<?php
+$u = new Uri\Rfc3986\Uri("https://example.com/a");
+$w = Uri\WhatWg\Url::parse("https://example.com/");
+$names = [$argv[1] ?? "Uri\\Rfc3986\\Uri", "uri\\whatwg\\url", "Uri\\UriException",
+          "Uri\\WhatWg\\InvalidUrlException", "Uri\\InvalidUriException", "Uri\\UriError", "Throwable", "Nope"];
+foreach ($names as $n) {
+    echo json_encode([is_a($u, $n), is_a($w, $n), is_subclass_of("Uri\\WhatWg\\InvalidUrlException", $n),
+        is_a("Uri\\WhatWg\\InvalidUrlException", $n, true), is_subclass_of($w, $n), is_a($n, "Uri\\UriException", true)]), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "[true,false,false,false,false,false]\n\
+         [false,true,false,false,false,false]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,true,false,true]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,false,false,false]\n\
+         [false,false,true,true,false,false]\n\
+         [false,false,false,false,false,false]\n"
+    );
+}
+
+/// The URI methods keep coercing a runtime `null` when they are called through a callable
+/// value (the descriptor invoker), as their direct calls do; a user method with the same
+/// parameter is still refused.
+#[test]
+fn test_uri_methods_called_through_a_callable_coerce_a_runtime_null() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+function box(mixed $v): mixed { return $v; }
+class P { public function withPath(string $p): string { return "[" . $p . "]"; } }
+$n = box(null);
+$u = new Uri\Rfc3986\Uri("https://example.com/x");
+echo call_user_func_array($u->withPath(...), [$n])->toString(), "\n";
+echo call_user_func([$u, "withPath"], $n)->toString(), "\n";
+$f = $u->withPath(...);
+echo $f($n)->toString(), "\n";
+echo call_user_func([new Uri\WhatWg\Url("https://example.com/"), "withQuery"], $n)->toAsciiString(), "\n";
+try { echo call_user_func([new P, "withPath"], $n), "\n"; } catch (TypeError $e) { echo get_class($e), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com\nhttps://example.com\nhttps://example.com\nhttps://example.com/\nTypeError\n"
+    );
+}
+
+/// Under `strict_types=1` the URI methods refuse a runtime `null` or `int` bound to their
+/// `string` parameters, called directly or through a callable value, with PHP's internal-method
+/// message (no "called in" suffix); a string still binds.
+#[test]
+fn test_uri_methods_check_runtime_scalar_arguments_under_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function box(mixed $v): mixed { return $v; }
+function show(TypeError $e): void { echo $e->getMessage(), "\n"; }
+$u = new Uri\Rfc3986\Uri("https://example.com/x");
+foreach ([null, 5, "/p"] as $raw) {
+    $v = box($raw);
+    try { echo $u->withPath($v)->toString(), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo call_user_func_array($u->withPath(...), [$v])->toString(), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo call_user_func([$u, "withPath"], $v)->toString(), "\n"; } catch (TypeError $e) { show($e); }
+    try { $f = $u->withPath(...); echo $f($v)->toString(), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo call_user_func_array([$u, "withPath"], [$v])->toString(), "\n"; } catch (TypeError $e) { show($e); }
+    try { $p = Uri\Rfc3986\Uri::parse($v); echo $p === null ? "null" : $p->toString(), "\n"; } catch (TypeError $e) { show($e); }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Uri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, null given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, null given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, null given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, null given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, null given\nUri\\Rfc3986\\Uri::parse(): Argument #1 ($uri) must be of type string, null given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, int given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, int given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, int given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, int given\nUri\\Rfc3986\\Uri::withPath(): Argument #1 ($path) must be of type string, int given\nUri\\Rfc3986\\Uri::parse(): Argument #1 ($uri) must be of type string, int given\nhttps://example.com/p\nhttps://example.com/p\nhttps://example.com/p\nhttps://example.com/p\nhttps://example.com/p\n/p\n"
+    );
+}
+
 /// Verifies a `mixed` value reaches URI class parameters (positional and named) and a nullable
 /// URI class return through PHP's run-time class check, with PHP's `TypeError` for the wrong
 /// URI class, null, or a string.
@@ -2051,35 +2156,5 @@ foreach ([0, 1, 2, 3] as $i) {
          take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, string given\n\
          takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, string given\n\
          pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, string returned\n"
-    );
-}
-
-/// Verifies `is_a()` and `is_subclass_of()` answer for the injected URI classes and exception
-/// hierarchy when the target class name is only known at run time, for object and class-name
-/// subjects alike.
-#[test]
-fn test_uri_classes_with_runtime_is_a_target() {
-    let out = compile_and_run(
-        r#"<?php
-$u = new Uri\Rfc3986\Uri("https://example.com/a");
-$w = Uri\WhatWg\Url::parse("https://example.com/");
-$names = [$argv[1] ?? "Uri\\Rfc3986\\Uri", "uri\\whatwg\\url", "Uri\\UriException",
-          "Uri\\WhatWg\\InvalidUrlException", "Uri\\InvalidUriException", "Uri\\UriError", "Throwable", "Nope"];
-foreach ($names as $n) {
-    echo json_encode([is_a($u, $n), is_a($w, $n), is_subclass_of("Uri\\WhatWg\\InvalidUrlException", $n),
-        is_a("Uri\\WhatWg\\InvalidUrlException", $n, true), is_subclass_of($w, $n), is_a($n, "Uri\\UriException", true)]), "\n";
-}
-"#,
-    );
-    assert_eq!(
-        out,
-        "[true,false,false,false,false,false]\n\
-         [false,true,false,false,false,false]\n\
-         [false,false,true,true,false,true]\n\
-         [false,false,false,true,false,true]\n\
-         [false,false,true,true,false,true]\n\
-         [false,false,false,false,false,false]\n\
-         [false,false,true,true,false,false]\n\
-         [false,false,false,false,false,false]\n"
     );
 }

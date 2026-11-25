@@ -317,6 +317,7 @@ try { Consumer::$valid = 'value'; } catch (Error $e) { echo 'write'; }
     let check = crate::types::check(&parsed).unwrap();
     let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
         &parsed, &check.functions, &check.classes, &check.interfaces,
+        &check.scalar_guard_arg_sites,
     );
     let optimized = optimizer.eliminate_dead_code(parsed, check.local_binding_decision_spans());
     assert_eq!(optimized.iter().filter(|statement| {
@@ -345,6 +346,7 @@ try { Consumer::staticValue(value: 9); } catch (Error $error) { echo 'bad'; }
     let check = crate::types::check(&parsed).unwrap();
     let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
         &parsed, &check.functions, &check.classes, &check.interfaces,
+        &check.scalar_guard_arg_sites,
     );
     let optimized = optimizer.eliminate_dead_code(parsed, check.local_binding_decision_spans());
     assert_eq!(optimized.iter().filter(|statement| {
@@ -368,6 +370,7 @@ catch (Error $error) {{ echo 'default'; }}
         let check = crate::types::check(&parsed).unwrap();
         let optimizer = crate::optimize::PostTypecheckOptimizer::new_with_type_metadata(
             &parsed, &check.functions, &check.classes, &check.interfaces,
+        &check.scalar_guard_arg_sites,
         );
         let optimized = optimizer.eliminate_dead_code(parsed, check.local_binding_decision_spans());
         assert!(optimized.iter().any(|statement| matches!(&statement.kind,

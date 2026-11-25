@@ -334,3 +334,22 @@ fn test_program_function_effects_track_callable_alias_locals() {
         Some(&Effect::PURE.with_side_effects())
     );
 }
+
+/// A call through a runtime-selected callable binds a scalar literal through the callable
+/// invoker, which checks it: `1.5` bound to `int` raises the precision deprecation, whose error
+/// handler can write globals. The call keeps the binding effect even though both closure bodies
+/// are pure and the argument is a literal.
+#[test]
+fn test_callable_alias_call_with_a_literal_keeps_the_binding_effect() {
+    let tokens = crate::lexer::tokenize(
+        "<?php function relay($flag) { $f = $flag ? fn(int $n) => 0 : fn(int $m) => 1; return $f(1.5); }",
+    )
+    .expect("tokenize literal binding fixture");
+    let program = crate::parser::parse(&tokens).expect("parse literal binding fixture");
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    let relay = function_effects.get("relay").expect("relay effect");
+    assert!(relay.writes_globals, "the invoker's check can run a handler that writes globals: {relay:?}");
+    assert!(relay.may_throw, "the invoker's check can throw: {relay:?}");
+}

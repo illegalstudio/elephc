@@ -1733,6 +1733,21 @@ pub(super) fn emit_invokable_object_descriptor_value(
     )
 }
 
+/// Returns a method's name as its declaration spells it (`withPath`), for descriptor names that
+/// PHP messages show; `method_name` (possibly the lower-cased key) when no source declaration
+/// exists, as for a compiler-injected class.
+pub(super) fn declared_method_name(
+    ctx: &FunctionContext<'_>,
+    impl_class: &str,
+    class_name: &str,
+    method_key: &str,
+    method_name: &str,
+) -> String {
+    let declared =
+        super::objects::reflection_declared_method_name(ctx, &[impl_class, class_name], method_key);
+    if declared == method_key { method_name.to_string() } else { declared }
+}
+
 /// Returns one module-wide static descriptor template for a public instance method.
 /// Receiver objects are captured into runtime copies, so the wrapper, invoker, and
 /// immutable descriptor header can be shared by every dynamic call site.
@@ -1762,7 +1777,9 @@ fn runtime_instance_method_descriptor_template(
     let invoker_label = emit_runtime_callable_invoker_in_class(
         ctx, sig, &captures, owns_string_return, true, Some(impl_class),
     );
-    let php_name = format!("{}::{}", impl_class, method_name);
+    // The descriptor name is PHP's `Class::method` in the declared spelling: a scalar-parameter
+    // `TypeError` raised by the invoker reads it, and `method_name` can be the lower-cased key.
+    let php_name = format!("{}::{}", impl_class, declared_method_name(ctx, impl_class, class_name, method_key, method_name));
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
@@ -2297,7 +2314,11 @@ fn runtime_static_method_descriptor_cases_with_scope(
         let invoker_label = emit_runtime_callable_invoker_in_class(
             ctx, &wrapper_sig, &[], owns_string_return, true, Some(&impl_class),
         );
-        let declared_name = format!("{}::{}", impl_class, method_name);
+        let declared_name = format!(
+            "{}::{}",
+            impl_class,
+            declared_method_name(ctx, &impl_class, &class_name, &method_key, &method_name),
+        );
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,

@@ -97,6 +97,59 @@ pub(crate) fn property_ref_type_code(ty: &PhpType) -> Option<u8> {
     })
 }
 
+/// Returns the declared scalar that a runtime-typed argument bound to parameter `index` is
+/// checked against before the call, or `None` when PHP accepts any value there.
+///
+/// Only a by-value, non-variadic parameter declared exactly `int`, `float`, `string` or `bool`
+/// qualifies: `?T`, unions and `mixed` accept `null`, and so does a parameter whose default is
+/// `null` (PHP makes it implicitly nullable). EIR lowering emits the check only for such a
+/// parameter and only for an argument the checker recorded through
+/// [`runtime_scalar_guard_needed`].
+pub(crate) fn runtime_scalar_guard_param(
+    sig: &crate::types::FunctionSig,
+    index: usize,
+) -> Option<&PhpType> {
+    if index >= crate::types::call_args::regular_param_count(sig)
+        || !sig.declared_params.get(index).copied().unwrap_or(false)
+        || sig.ref_params.get(index).copied().unwrap_or(false)
+    {
+        return None;
+    }
+    let (_, declared) = sig.params.get(index)?;
+    if !matches!(declared, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) {
+        return None;
+    }
+    if matches!(sig.defaults.get(index), Some(Some(default)) if matches!(default.kind, ExprKind::Null)) {
+        return None;
+    }
+    Some(declared)
+}
+
+/// Returns whether an argument of static type `actual` can hold a value PHP rejects for a
+/// declared scalar parameter, so the runtime check must run.
+///
+/// Coercive mode accepts every scalar; `strict_types=1` accepts the exact type, plus `int` for
+/// `float`. Only `mixed` and unions reach a runtime decision: a concrete scalar is converted (or
+/// rejected) at compile time, and a concrete non-scalar is already a checker error.
+pub(crate) fn runtime_scalar_guard_needed(declared: &PhpType, actual: &PhpType, strict: bool) -> bool {
+    match actual {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => !members.iter().all(|member| {
+            if strict {
+                member == declared
+                    || (*declared == PhpType::Float && *member == PhpType::Int)
+                    || (*declared == PhpType::Bool && *member == PhpType::False)
+            } else {
+                matches!(
+                    member,
+                    PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False
+                )
+            }
+        }),
+        _ => false,
+    }
+}
+
 /// Returns whether a property type can be written back from a boxed by-reference result.
 ///
 /// Shared by the checker that authorizes a property place and the EIR rewrite that narrows

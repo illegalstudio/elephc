@@ -917,7 +917,25 @@ impl ExceptionFlowAnalysis {
     }
 
     /// Queries an operation separately from operand evaluation for source-order checker edges.
+    ///
+    /// A call the checker recorded as binding a `mixed`/union argument to a declared scalar
+    /// parameter can throw anything: the runtime check raises `TypeError`, but binding to
+    /// `int` can raise a deprecation a user error handler turns into any exception, and
+    /// binding to `string` can call a `__toString()` that throws.
     fn expr_throws_at_boundary(
+        &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
+        class_context: Option<&ExceptionClassContext>, include_operands: bool,
+    ) -> ThrownTypes {
+        let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
+        if super::binding_decisions::call_has_scalar_guard_arg(call_args(expr)) {
+            thrown.combined(ThrownTypes::unknown())
+        } else {
+            thrown
+        }
+    }
+
+    /// Computes one operation's throws, plus its operands' when `include_operands` is set.
+    fn operation_throws_at_boundary(
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
@@ -1113,7 +1131,12 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(callable))
                 .combined(self.temporary_destruction_throws(value, class_context))
                 .combined(self.callable_value_retirement_throws(callable, class_context))
-                .combined(self.callable_expr_throws(callable, bindings, class_context)),
+                .combined(self.callable_expr_throws(callable, bindings, class_context))
+                // Binding the piped value runs the scalar-parameter check: a `TypeError`, or
+                // whatever an error handler or `__toString()` it reaches throws.
+                .combined(if callable_value_binding_effect(callable, std::slice::from_ref(value.as_ref())).may_throw {
+                    ThrownTypes::unknown()
+                } else { ThrownTypes::default() }),
             ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ThrownTypes::default(),
             ExprKind::ArrayLiteral(items) => operands(items),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(
@@ -1648,4 +1671,19 @@ fn reads_reporting_constant(expr: &Expr) -> bool {
             };
     });
     found
+}
+
+/// The argument list of a call expression, empty for any other expression.
+pub(super) fn call_args(expr: &Expr) -> &[Expr] {
+    match &expr.kind {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => args.as_slice(),
+        _ => &[],
+    }
 }

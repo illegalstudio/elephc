@@ -1167,6 +1167,7 @@ impl Checker {
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
+                self.record_spread_scalar_guard_arg_site(sig, param_idx, regular_param_count, arg.span);
                 continue;
             }
             if param_idx < regular_param_count {

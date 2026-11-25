@@ -112,20 +112,58 @@ pub(super) fn lower_named_args_with_signature_options(
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
     }
 
+    if plan.regular_args.iter()
+        .any(|arg| matches!(arg, crate::types::call_args::PlannedRegularArg::SpreadElement { .. }))
+    {
+        return lower_args(ctx, args);
+    }
+    // PHP fills an omitted parameter that precedes a supplied one before the callee checks any
+    // parameter, and evaluates the trailing omitted ones after the checks. A refused argument
+    // therefore throws its `TypeError` before a throwing trailing default (`int $n = 1 % 0`)
+    // runs, but after a throwing default declared before the last supplied parameter.
+    let throwing_default = !capture_values && plan.regular_args.iter().any(|arg| matches!(arg,
+        crate::types::call_args::PlannedRegularArg::Default(default)
+            if !super::call_arg_coercion::default_is_inert(default)));
+    let mut leading_defaults = vec![None; plan.regular_args.len()];
+    let mut object_guarded = vec![false; plan.regular_args.len()];
+    if throwing_default {
+        check_supplied_scalar_params_before_defaults(
+            ctx, sig, &plan, &mut source_values, &mut leading_defaults, &mut object_guarded,
+        );
+    } else if plan.regular_args.iter().enumerate().any(|(param_index, arg)| matches!(arg,
+        crate::types::call_args::PlannedRegularArg::Source { source_index, .. }
+            if super::scalar_param_guards::guarded_scalar_param(
+                ctx, sig, param_index, source_values[*source_index],
+                super::scalar_param_guards::GuardSource::Unrecorded,
+            ).is_some()))
+    {
+        // The scalar checks run in the call's ordered parameter pass: a `Class|false` /
+        // `Class|null` guard below joins them there instead of running first.
+        super::call_arg_coercion::mark_scalar_param_check_deferred(ctx);
+    }
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
     for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values[*source_index]);
             }
+            crate::types::call_args::PlannedRegularArg::Default(_) if leading_defaults[param_index].is_some() => {
+                operands.push(match leading_defaults[param_index].as_ref().expect("leading default lowered") {
+                    LeadingDefault::Rooted(value) => *value,
+                    // Pass the default as the ordinary pass would have, owned by the call as
+                    // before; its pin is retired once the trailing defaults ran.
+                    LeadingDefault::Pinned { value, .. } => *value,
+                });
+            }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
                 operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
-            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => {
-                return lower_args(ctx, args);
-            }
+            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => unreachable!(),
         }
     }
+    // A pinned by-reference default stays protected while the trailing defaults run (one can
+    // throw), and is the call's own operand from here on.
+    unpin_leading_reference_defaults(ctx, &leading_defaults);
     if sig.variadic.is_some() {
         if crate::func_args::sig_has_hidden_argc_param(sig) {
             let actual_count = named_plan_actual_arg_count(&plan.source_values);
@@ -140,6 +178,9 @@ pub(super) fn lower_named_args_with_signature_options(
         let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg else {
             continue;
         };
+        if object_guarded[param_index] {
+            continue;
+        }
         let source = &plan.source_args[*source_index];
         let value = lowered_value_from_id(ctx, operands[param_index]);
         if let Some(guarded) =
@@ -149,6 +190,209 @@ pub(super) fn lower_named_args_with_signature_options(
         }
     }
     operands
+}
+
+/// An omitted parameter's default lowered ahead of the supplied arguments' checks.
+#[derive(Clone)]
+enum LeadingDefault {
+    /// A by-value default, rooted across the checks and passed as is.
+    Rooted(crate::ir::ValueId),
+    /// A by-reference default that can throw, kept as the call's operand and pinned (without a
+    /// retain) in the unwind chain while the checks run.
+    Pinned {
+        value: crate::ir::ValueId,
+        pins: Vec<super::call_operand_owners::PinnedInFlightOwner>,
+        /// How many owners the call's evaluation ledger held when the pin was published.
+        ledger_mark: usize,
+    },
+}
+
+/// Returns the owner slots of the current call's argument-evaluation ledger, in publication order.
+fn current_ledger_owner_slots(ctx: &LoweringContext<'_, '_>) -> Vec<(crate::ir::LocalSlotId, Span)> {
+    ctx.call_argument_evaluation_scopes.last()
+        .filter(|scope| scope.expression_depth == ctx.expression_depth)
+        .map(|scope| scope.owners.iter().map(|owner| (owner.slot, owner.span)).collect())
+        .unwrap_or_default()
+}
+
+/// Retires the pins of the leading by-reference defaults once the checks and the trailing
+/// defaults ran.
+///
+/// Owner records form a stack, and the checks published more of them after a pin (a converted
+/// `Stringable`'s string, a later default's root), which the call's ledger retires only after
+/// the call. Popping a pin alone would remove the newest record instead, leaving that string
+/// unprotected if a trailing default throws. So every record published since the first pin is
+/// popped in stack order, the pins are cleared without release, and the ledger's records are
+/// published again in their original order.
+fn unpin_leading_reference_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    leading_defaults: &[Option<LeadingDefault>],
+) {
+    let pinned = leading_defaults.iter().flatten().filter_map(|default| match default {
+        LeadingDefault::Pinned { pins, ledger_mark, .. } => Some((pins.clone(), *ledger_mark)),
+        LeadingDefault::Rooted(_) => None,
+    }).collect::<Vec<_>>();
+    let Some(first_mark) = pinned.first().map(|(_, mark)| *mark) else { return };
+    let span = ctx.call_site_span.unwrap_or_else(Span::dummy);
+    let owners = current_ledger_owner_slots(ctx);
+    // Rebuild the publication order since the first pin: each pin, then the ledger owners
+    // published after it and before the next pin.
+    enum Record { Pin(super::call_operand_owners::PinnedInFlightOwner), Ledger(crate::ir::LocalSlotId, Span) }
+    let mut records = Vec::new();
+    for (index, (pins, mark)) in pinned.iter().enumerate() {
+        records.extend(pins.iter().cloned().map(Record::Pin));
+        let end = pinned.get(index + 1).map_or(owners.len(), |(_, next)| *next);
+        records.extend(owners[*mark..end].iter().map(|(slot, span)| Record::Ledger(*slot, *span)));
+    }
+    for record in records.into_iter().rev() {
+        match record {
+            Record::Pin(pin) => super::call_operand_owners::unpin_in_flight_owners(ctx, vec![pin], span),
+            Record::Ledger(slot, owner_span) => {
+                super::call_operand_owners::unregister_owned_call_operand(ctx, slot, owner_span);
+            }
+        }
+    }
+    for (slot, owner_span) in &owners[first_mark..] {
+        super::call_operand_owners::register_owned_call_operand(ctx, *slot, *owner_span);
+    }
+}
+
+/// Runs the runtime scalar-parameter checks of the supplied named arguments in parameter order,
+/// before an omitted trailing default that can throw is evaluated.
+///
+/// Every check of a supplied parameter runs here in parameter order: the scalar checks, the
+/// class-like checks the sources deferred (`DeferredObjectParamChecks`, taken out of the frame
+/// so the ordered pass does not repeat them) and the `Class|false` / `Class|null` guards
+/// (`f(a: $int, s: $null)` for `f(C $a, string $s)` refuses `$a` and does not convert a later
+/// `Stringable`). `object_guarded` records the parameters checked here so the final loop does
+/// not guard them again. An object argument is matched by its value
+/// expression, not the `name: value` wrapper the final pass sees.
+///
+/// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
+/// releases them through the unwind chain. PHP fills the omitted parameters declared before the
+/// last supplied one before it checks any parameter (`f(b: $null)` for
+/// `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`), so those defaults are lowered
+/// (and rooted) into `leading_defaults` ahead of the checks. An `int`/`float` check leaves the
+/// converted scalar in place and a `string` is converted right after its check, in parameter
+/// order as PHP binds them; a `bool` operand stays boxed and the call's ordinary coercion
+/// converts it.
+fn check_supplied_scalar_params_before_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_values: &mut [crate::ir::ValueId],
+    leading_defaults: &mut [Option<LeadingDefault>],
+    object_guarded: &mut [bool],
+) {
+    use super::scalar_param_guards::GuardSource;
+    let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
+        crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => Some((param_index, *source_index)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    let value_expr = |source_index: usize| plan.source_values.iter()
+        .find(|source| source.source_index() == source_index)
+        .map(|source| source.expr().clone());
+    let object_checked = |ctx: &LoweringContext<'_, '_>, param_index: usize, source_index: usize, value| {
+        value_expr(source_index).is_some_and(|expr| super::call_arg_coercion::object_param_guard(
+            ctx, sig, param_index, value, &expr,
+        ).is_some())
+    };
+    let any_scalar = supplied.iter().any(|(param_index, source_index)| {
+        super::scalar_param_guards::guarded_scalar_param(
+            ctx, sig, *param_index, source_values[*source_index], GuardSource::Unrecorded,
+        ).is_some()
+    });
+    if !any_scalar {
+        return;
+    }
+    // Every owned source is rooted before the first check can throw: the regular parameters'
+    // values and the extra named arguments a variadic collects alike (`extra: make()` would
+    // otherwise leak its fresh array when the check for `$s` refuses).
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    for source in &plan.source_values {
+        let param = source.param_idx().unwrap_or(regular_param_count);
+        if sig.ref_params.get(param).copied().unwrap_or(false) {
+            continue;
+        }
+        let source_index = source.source_index();
+        let lowered = lowered_value_from_id(ctx, source_values[source_index]);
+        source_values[source_index] =
+            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+    }
+    let last_supplied = supplied.last().map_or(0, |(param_index, _)| *param_index);
+    for (param_index, arg) in plan.regular_args.iter().enumerate().take(last_supplied) {
+        let crate::types::call_args::PlannedRegularArg::Default(default) = arg else { continue };
+        if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+            // A by-reference parameter's default that cannot throw stays in the ordinary
+            // operand pass: its evaluation order is unobservable. One that can throw
+            // (`int &$a = 1 % 0`) runs now, as PHP fills it before any check. It stays the
+            // call's own operand and is only pinned over the checks, so a refusal releases it
+            // and the call then binds and releases it as before. Rooting it in a temporary
+            // instead made the call bind that temporary, whose root did not survive into the
+            // call (a throwing callee leaked it).
+            if super::call_arg_coercion::default_is_inert(default) {
+                continue;
+            }
+            let value = lower_arg_with_signature(ctx, sig, param_index, default);
+            let ledger_mark = current_ledger_owner_slots(ctx).len();
+            let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[value], Span::dummy());
+            leading_defaults[param_index] = Some(LeadingDefault::Pinned { value, pins, ledger_mark });
+            continue;
+        }
+        let value = lower_arg_with_signature(ctx, sig, param_index, default);
+        let lowered = lowered_value_from_id(ctx, value);
+        leading_defaults[param_index] = Some(LeadingDefault::Rooted(
+            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value,
+        ));
+    }
+    let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
+    for (param_index, source_index) in supplied {
+        // PHP checks each parameter in order: an earlier class-like (or `callable`, or
+        // by-reference) parameter refuses its argument before a later scalar is checked or
+        // converted. The check its source deferred runs here instead of in the ordered pass.
+        if let Some(check) = super::call_arg_coercion::take_deferred_param_check(ctx, param_index) {
+            source_values[source_index] = super::call_arg_coercion::run_deferred_param_check(
+                ctx, sig, &check, source_values[source_index],
+            );
+            object_guarded[param_index] = !check.callable;
+            continue;
+        }
+        if object_checked(ctx, param_index, source_index, source_values[source_index]) {
+            super::call_arg_coercion::emit_property_type_guards_before(ctx, param_index);
+            let expr = value_expr(source_index).expect("object-checked source has an expression");
+            let lowered = lowered_value_from_id(ctx, source_values[source_index]);
+            if let Some(object) = super::call_arg_coercion::guard_object_param_argument_at_once(
+                ctx, sig, param_index, lowered, &expr,
+            ) {
+                source_values[source_index] =
+                    super::call_operand_owners::root_evaluated_call_argument(ctx, object, Span::dummy()).value;
+                object_guarded[param_index] = true;
+            }
+            continue;
+        }
+        let value = source_values[source_index];
+        if super::scalar_param_guards::guarded_scalar_param(ctx, sig, param_index, value, GuardSource::Unrecorded).is_none() {
+            continue;
+        }
+        // An earlier by-reference property argument's check comes first, as in the final
+        // operand pass (`f(a: $o->s, s: $bad)` for `f(int &$a, string $s)` refuses `$a`
+        // without converting `$s`).
+        super::call_arg_coercion::emit_property_type_guards_before(ctx, param_index);
+        let lowered = lowered_value_from_id(ctx, value);
+        if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
+            ctx, sig, param_index, lowered, GuardSource::Unrecorded, guard_span, false, &[],
+        ) {
+            source_values[source_index] = converted.value;
+        } else if sig.params[param_index].1.codegen_repr() == PhpType::Str {
+            // PHP binds (converts) each parameter before it checks the next: an accepted
+            // `Stringable` runs `__toString()` now, so its side effects and its own exception
+            // come before a later parameter's `TypeError`. The string stays rooted while the
+            // defaults run.
+            let string = coerce_to_string_at_span(ctx, lowered, Some(guard_span));
+            source_values[source_index] =
+                super::call_operand_owners::root_evaluated_call_argument(ctx, string, Span::dummy()).value;
+        }
+    }
 }
 
 /// Lowers a plan's normalized arguments, giving each regular parameter's literal its declared type.

@@ -174,6 +174,10 @@ pub(crate) struct DeferredObjectParamChecks {
     pub expression_depth: usize,
     /// Regular parameters that need the runtime class check, in recording order.
     pub checks: Vec<DeferredObjectParamCheck>,
+    /// Whether an earlier parameter's scalar check was deferred to the same ordered pass
+    /// (`scalar_param_guards`): a later class check then waits too, so the first invalid
+    /// parameter in declaration order is the one reported.
+    pub scalar_deferred: bool,
 }
 
 /// One class-like parameter check a call runs once all of its arguments were evaluated.
@@ -234,6 +238,9 @@ pub(crate) struct PendingPropertyTypeGuard {
     pub span: Span,
     /// Static diagnostic for the unconditional refusal.
     pub unconditional_message: Option<String>,
+    /// Declared parameter this argument binds: a runtime scalar check on a later parameter
+    /// must not raise before this one (PHP checks parameters in order).
+    pub param_index: usize,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.
@@ -418,6 +425,20 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// ordinary constructor calls nested in the forwarded arguments on the calling file's
     /// own `strict_types` mode.
     pub(crate) reflected_invoke_call_span: Option<Span>,
+    /// Source span of the call whose arguments are being lowered, beside `call_description`.
+    /// A runtime parameter `TypeError` reports this call's line, as PHP's "called in".
+    pub(crate) call_site_span: Option<Span>,
+    /// `(expression depth, unrecorded)` while positional arguments of a guarded call are
+    /// lowered: scalar-parameter checks wait for parameter-order normalization.
+    pub(crate) scalar_guard_deferral: Option<(usize, bool)>,
+    /// Set just before the arguments of a call through a statically resolved callable value
+    /// (`$f = 'f'; $f($v)`) are lowered: the checker records no argument sites for such a
+    /// call, so its scalar-parameter checks decide from the value types. Consumed by the next
+    /// argument lowering, so nested calls inside the arguments keep their own records.
+    pub(crate) scalar_guards_unrecorded: bool,
+    /// The span of the synthetic argument a pipe passes to a first-class callable target
+    /// (`$v |> f(...)`): the checker records no site for it, so its scalar check always runs.
+    pub(crate) pipe_guard_arg_span: Option<Span>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -491,6 +512,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
     pub closure_generator_spans: &'m HashSet<Span>,
+    /// Argument spans bound to a declared scalar parameter that need the runtime
+    /// `TypeError` check (`CheckResult::scalar_guard_arg_sites`).
+    pub scalar_guard_arg_sites: &'m HashSet<Span>,
     /// Checked property classes and write refusals before opaque calls erase flow facts.
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
@@ -717,6 +741,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         closure_generator_spans: &'m HashSet<Span>,
+        scalar_guard_arg_sites: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
@@ -792,6 +817,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             closure_generator_spans,
+            scalar_guard_arg_sites,
             array_push_property_plans,
             member_receiver_types,
             array_append_element_types,
@@ -887,6 +913,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pointer_reference_bindings: Vec::new(),
             call_description: None,
             reflected_invoke_call_span: None,
+            call_site_span: None,
+            scalar_guard_deferral: None,
+            scalar_guards_unrecorded: false,
+            pipe_guard_arg_span: None,
             source_path,
             closure_display_names: HashMap::new(),
         }
@@ -1106,6 +1136,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         self.closure_display_names
             .insert(closure_name.to_string(), format!("{{closure:{context}:{line}}}"));
+    }
+
+    /// Returns the label recorded by [`Self::register_closure_display_name`], leaving it in place.
+    pub(crate) fn peek_closure_display_name(&self, closure_name: &str) -> Option<String> {
+        self.closure_display_names.get(closure_name).cloned()
     }
 
     /// Takes the label recorded by [`Self::register_closure_display_name`] for `closure_name`.
@@ -2454,6 +2489,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// runtime error messages spell it.
     pub(crate) fn owner_name(&self) -> &str {
         &self.owner_name
+    }
+
+    /// PHP's name for `class` in messages: an anonymous class reads `class@anonymous`
+    /// (`Parent@anonymous`, `Interface@anonymous` for the first declared interface) rather
+    /// than its generated `class@anonymous#N` symbol; any other class keeps its name.
+    pub(crate) fn php_class_label(&self, class: &str) -> String {
+        let class = class.trim_start_matches('\\');
+        if !crate::parser::is_anonymous_class_name(class) {
+            return class.to_string();
+        }
+        let base = self.classes.get(class).and_then(|info| info.parent.clone()
+            .or_else(|| info.declared_interfaces.first().cloned()))
+            .unwrap_or_else(|| "class".to_string());
+        format!("{}@anonymous", base.trim_start_matches('\\'))
     }
 
     /// Returns a deterministic EIR function name for the next closure literal in this body.

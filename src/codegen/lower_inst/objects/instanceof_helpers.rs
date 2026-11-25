@@ -184,7 +184,7 @@ pub(super) fn emit_invalid_dynamic_target_error(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the metadata matcher call with object-or-mixed input already in argument 0.
-pub(super) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64, helper: &str) {
+pub(in crate::codegen::lower_inst) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64, helper: &str) {
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -199,7 +199,7 @@ pub(super) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, tar
 }
 
 /// Classifies a named target as a class `(kind 0)` or interface `(kind 1)`.
-pub(super) fn classify_named_target(ctx: &FunctionContext<'_>, class_name: &str) -> Option<(u64, i64)> {
+pub(in crate::codegen::lower_inst) fn classify_named_target(ctx: &FunctionContext<'_>, class_name: &str) -> Option<(u64, i64)> {
     let normalized = class_name.trim_start_matches('\\');
     if let Some(class_info) = ctx.module.class_infos.get(normalized) {
         return Some((class_info.class_id, 0));

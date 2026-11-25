@@ -257,6 +257,36 @@ impl Checker {
                 .is_some_and(|info| !info.visible_property_is_declared(property)))
     }
 
+    /// Records an argument whose binding EIR lowering checks at run time, and whether a callee
+    /// exception summary can contain it (it sits in a function, method, closure or class body).
+    pub(crate) fn record_scalar_guard_arg_site(&mut self, span: Span) {
+        self.scalar_guard_arg_sites.insert(span);
+        if self.current_function.is_some()
+            || self.current_method.is_some()
+            || self.current_class.is_some()
+            || self.closure_depth > 0
+        {
+            self.summary_scalar_guard_arg_sites.insert(span);
+        }
+    }
+
+    /// Records a spread whose elements bind to a declared scalar parameter at or after
+    /// `param_idx`: they are checked at run time from their values, so the call stays
+    /// observable.
+    pub(crate) fn record_spread_scalar_guard_arg_site(
+        &mut self,
+        sig: &crate::types::FunctionSig,
+        param_idx: usize,
+        regular_param_count: usize,
+        span: Span,
+    ) {
+        if (param_idx..regular_param_count).any(|index| {
+            crate::types::param_binding::runtime_scalar_guard_param(sig, index).is_some()
+        }) {
+            self.record_scalar_guard_arg_site(span);
+        }
+    }
+
     /// Rejects a declared-parameter argument that `declare(strict_types=1)` forbids at this
     /// call site.
     ///
@@ -271,12 +301,22 @@ impl Checker {
     /// Returns the standard `<context> expects <expected>, got <actual>` mismatch extended with
     /// the `TypeError` PHP would throw at run time.
     pub(crate) fn require_strict_types_param_binding(
-        &self,
+        &mut self,
         expected: &PhpType,
         actual: &PhpType,
         span: Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        // Every declared parameter binding passes through here, in both modes. EIR lowering
+        // checks a `mixed`/union argument bound to a declared scalar at run time; record the
+        // argument so the AST optimizer neither drops the call as pure nor prunes a
+        // `catch (TypeError)` around it. Nullable and by-reference parameters are filtered
+        // by lowering; recording them too only keeps a call observable.
+        if matches!(expected, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool)
+            && crate::types::param_binding::runtime_scalar_guard_needed(expected, actual, self.strict_types)
+        {
+            self.record_scalar_guard_arg_site(span);
+        }
         if !self.strict_types {
             return Ok(());
         }
