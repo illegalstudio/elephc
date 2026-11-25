@@ -278,6 +278,12 @@ fn reject_opaque_callback(emitter: &mut Emitter) {
     let kind = scratch_reg(emitter);
     abi::load_at_offset(emitter, result, CALLBACK);
     load_indirect(emitter, kind, result);
+    // An implicit callable records its PHP origin above the 8-bit kind.
+    ins(
+        emitter,
+        &format!("and {kind}, {kind}, #{}", callable_descriptor::CALLABLE_DESC_KIND_MASK),
+        &format!("and {kind}, {}", callable_descriptor::CALLABLE_DESC_KIND_MASK),
+    );
     for accepted in [
         callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
         callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,

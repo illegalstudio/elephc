@@ -2,7 +2,7 @@
 //! Verifies HZ shift transitions, all shifted byte pairs, encoder mappings, and streaming cuts.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test hz`.
+//! - `cargo test -p elephc-mbstring --test engine hz::`.
 //!
 //! Key details:
 //! - Independent PHP fixtures protect the two mapping differences from EUC-CN.

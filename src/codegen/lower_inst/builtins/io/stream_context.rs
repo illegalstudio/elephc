@@ -247,7 +247,7 @@ pub(super) fn is_capturable_notification_callable(
     let Some(inst) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew | Op::CallableValueNew))
+    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew | Op::CallableValueNew | Op::CallableArrayNew))
 }
 
 #[cfg(test)]

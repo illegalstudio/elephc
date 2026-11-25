@@ -74,3 +74,5 @@ pub mod __elephc_object_prop_count;
 pub mod __elephc_object_prop_name;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_value;
+#[allow(non_snake_case)]
+pub mod __elephc_unserialize_store_property;

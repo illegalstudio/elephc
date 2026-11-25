@@ -193,8 +193,16 @@ fn emit_reuse_box_aarch64(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, "x2", 64);
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::store_at_offset(emitter, "x0", 72);
+    // The old-value copy protects the property until the replacement is published.
+    // Inside a decoder it joins the deferred list; a direct hook call keeps it in
+    // slot 72 and releases it at the return label after the store is complete.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);
+    emitter.instruction("cbnz x9, __rt_unser_reuse_defer_old");                 // an active decoder owns the deferred copy
+    emitter.instruction("b __rt_unser_reuse_old_ready");                        // direct calls defer the release until after the store
+    emitter.label("__rt_unser_reuse_defer_old");
     abi::load_at_offset(emitter, "x0", 72);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
+    emitter.label("__rt_unser_reuse_old_ready");
     abi::load_at_offset(emitter, "x0", 48);
     abi::load_at_offset(emitter, "x1", 56);
     abi::emit_call_label(emitter, "__rt_unser_release_payload");
@@ -259,6 +267,16 @@ fn emit_reuse_box_aarch64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
     emitter.label("__rt_unser_reuse_return");
+    // The replacement is published now. A direct call still owns the old-value copy
+    // in slot 72; release it here so a throwing destructor cannot run before the
+    // property points at the replacement.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);
+    abi::emit_branch_if_zero_wide(emitter, "x9", "__rt_unser_reuse_release_direct");
+    abi::emit_jump(emitter, "__rt_unser_reuse_return_box");
+    emitter.label("__rt_unser_reuse_release_direct");
+    abi::load_at_offset(emitter, "x0", 72);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_reuse_return_box");
     abi::load_at_offset(emitter, "x0", 40);
     abi::emit_frame_restore(emitter, 96);
     abi::emit_return(emitter);
@@ -286,8 +304,17 @@ fn emit_reuse_box_x86_64(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, "rsi", 64);
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::store_at_offset(emitter, "rax", 72);
+    // The old-value copy protects the property until the replacement is published.
+    // Inside a decoder it joins the deferred list; a direct hook call keeps it in
+    // slot 72 and releases it at the return label after the store is complete.
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_unser_active", 0);
+    emitter.instruction("test r9, r9");                                         // is a decoder context active?
+    emitter.instruction("jnz __rt_unser_reuse_defer_old_x");                    // an active decoder owns the deferred copy
+    emitter.instruction("jmp __rt_unser_reuse_old_ready_x");                    // direct calls defer the release until after the store
+    emitter.label("__rt_unser_reuse_defer_old_x");
     abi::load_at_offset(emitter, "rax", 72);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
+    emitter.label("__rt_unser_reuse_old_ready_x");
     abi::load_at_offset(emitter, "rdi", 48);
     abi::load_at_offset(emitter, "rsi", 56);
     abi::emit_call_label(emitter, "__rt_unser_release_payload");
@@ -349,6 +376,17 @@ fn emit_reuse_box_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
     emitter.label("__rt_unser_reuse_return_x");
+    // The replacement is published now. A direct call still owns the old-value copy
+    // in slot 72; release it here so a throwing destructor cannot run before the
+    // property points at the replacement.
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_unser_active", 0);
+    emitter.instruction("test r9, r9");                                         // is a decoder context active?
+    emitter.instruction("jz __rt_unser_reuse_release_direct_x");                // direct calls still own the old-value copy
+    emitter.instruction("jmp __rt_unser_reuse_return_box_x");                   // a decoder context owns the old-value copy
+    emitter.label("__rt_unser_reuse_release_direct_x");
+    abi::load_at_offset(emitter, "rax", 72);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_reuse_return_box_x");
     abi::load_at_offset(emitter, "rax", 40);
     abi::emit_frame_restore(emitter, 96);
     abi::emit_return(emitter);

@@ -6,12 +6,14 @@
 //! - Magician adapters and bridge unit tests through the crate's rlib form.
 //!
 //! Key details:
-//! - Failures record one extension-local errno value without clearing it on success.
+//! - Failures record one extension-local errno value without clearing it on success; ext/posix
+//!   operations keep their own value in `posix`, as PHP's two extensions do.
 //! - Process status decoding is delegated to libc so Darwin and Linux layouts stay correct.
 //! - PHP values, callable descriptors, signal dispatch, and output arrays remain runtime-owned.
 
 mod constants;
 mod exec;
+mod posix;
 mod process;
 mod signals;
 
@@ -20,6 +22,7 @@ pub use constants::{
     MACOS_PCNTL_INT_CONSTANTS,
 };
 pub use exec::*;
+pub use posix::*;
 pub use process::*;
 pub use signals::*;
 

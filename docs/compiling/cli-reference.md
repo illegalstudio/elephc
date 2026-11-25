@@ -166,7 +166,7 @@ because a degraded profile that looks like the real one is worse than none.
 | service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
 | launched `--live` | sampled CPU from the shared ring | none | none | none | request route tags for `--web`; otherwise untagged |
 | `--attach` | sampled CPU from outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
-| `--apm` | exact request wall time as a latency histogram; no OS CPU | requests per route, not calls | none | none | every request per route shape, with status classes |
+| `--apm` | exact request wall time as a latency histogram; no OS CPU | requests per route, not calls | none | DB statements and curl operations per route; DB and network wait; no file-I/O metrics | every request per route shape, with status classes |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -979,7 +979,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 | `--with-monitoring=<names>` | comma list, or `@file` | — | Embed the capability for **only** the named functions; a trailing `*` matches by prefix (`PDOStatement::*`) and `{main}` explicitly selects the top-level root. `@file` reads one name per line, `#` comments allowed. Everything else runs at full speed, which is what makes exact profiling affordable on a service under load. The trade is reported rather than hidden — without `{main}`, or when callees are omitted, self values no longer partition one root and an uninstrumented callee's time lands in its instrumented caller's **self**. The run prints `note: selective instrumentation` saying so. |
 | `--with-apm` | — | off | Embed transaction monitoring alone (`elephc-probe`'s counters and transports, and a build key): no instrumentation and no sampling signal. A `--web` service counts with `--apm`; a library counts every export call from `elephc_init` (`CALL <export>`); Symfony Messenger's `Worker::handleMessage` counts each message (`MSG <class>`). Allowed for `--emit cdylib` and `staticlib`, refused for `phpext`. See [Transaction monitoring](../beyond-php/apm.md#beyond-http-messages-library-calls-named-boundaries). |
 | `--apm-collector` | `<host:port>` | — | Send the transaction counters to `elephc monitor --apm --listen <host:port>` every five seconds and at exit, after a mutual build-key proof; counting starts with the program. Implies `--with-apm` unless `--with-monitoring` is given. |
-| `--apm-transaction` | `<Class::method>` or `<function>` | — | Count each call of the method or function as a transaction of its own, `TXN <name>`, failed when an exception leaves it. Repeatable; implies `--with-apm`. |
+| `--apm-transaction` | `<Class::method>` or `<function>` | — | Count each call of the method or function as a transaction of its own, `TXN <name>`, failed when an exception leaves it. An inherited method is named by its declaring class or trait; a generator is refused. Repeatable; implies `--with-apm`. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
@@ -1031,12 +1031,20 @@ overrides. Native-package variables select the cache and target C toolchain:
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
 | `ELEPHC_NATIVE_CACHE` | absolute or invocation-relative directory | Native artifact/source cache root |
 | `ELEPHC_RUNTIME_CACHE_DIR` | absolute or invocation-relative directory | Prepared runtime objects only (default `$XDG_CACHE_HOME/elephc`); REPL hosts and `elephc test` outputs stay under the cache root |
+| `ELEPHC_TOKEN_VIEW` | `text`, `off`, `0` | No flag; forces the legacy text parser view for `TOKEN_PARSE` validation. Supported sources otherwise use the source-spanned token view, with automatic fallback for unsupported shapes. The embedded tokenizer also reads it at runtime in compiled programs. |
 | `ELEPHC_NATIVE_CC` | executable | Host or explicit cross C compiler fallback |
 | `ELEPHC_NATIVE_AR` | executable | Host or explicit cross archiver fallback |
 | `ELEPHC_NATIVE_RANLIB` | executable | Host or explicit cross archive indexer fallback |
 | `ELEPHC_NATIVE_CC_<TARGET_ENV>` | executable | Target-specific C compiler; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_AR_<TARGET_ENV>` | executable | Target-specific archiver; takes precedence over the unsuffixed value |
 | `ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` | executable | Target-specific archive indexer; takes precedence over the unsuffixed value |
+| `ELEPHC_WARN_UNREBUILDABLE_BRIDGE` | any non-empty value | None; opts into a diagnostic |
+
+A bridge archive found outside the build's own output directory cannot be
+refreshed there, which is normal for a compiler unpacked from a CI archive but
+also what a custom `build.target-dir` looks like. Setting
+`ELEPHC_WARN_UNREBUILDABLE_BRIDGE` reports each such archive once, and only when
+its sources are newer than it.
 
 `TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
 as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.

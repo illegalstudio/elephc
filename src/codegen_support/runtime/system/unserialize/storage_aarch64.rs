@@ -13,7 +13,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
     SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT,
-    TAGGED_SCALAR_TAG_NULL,
+    TAGGED_SCALAR_TAG_NULL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 
 /// Emits AArch64 object-property storage and parsed-hash conversion helpers.
@@ -90,6 +90,9 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "x8", "x9", "x12", "__rt_obj_store_prop_inline_slot",
     );
+    emitter.instruction("and x9, x7, #255");                                    // storage flags never participate in value dispatch
+    emitter.instruction("cmp x9, #6");                                          // is this a typed object property?
+    emitter.instruction("b.eq __rt_obj_store_prop_object");                     // publish the replacement before releasing the old owner
     emitter.instruction("stp x3, x7, [sp, #-32]!");                             // preserve box and tag across the previous-value release
     emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
     emitter.instruction("mov x0, x8");                                          // pass the property slot to the previous-value release
@@ -111,6 +114,25 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
     emitter.instruction("mov x0, x3");                                          // hand the parsed box to the post-store finisher
     emitter.instruction("b __rt_unser_finish_stored_prop");                     // tail-call the finisher so the decoder return address stays intact
+    emitter.label("__rt_obj_store_prop_object");
+    emitter.instruction("ldr x9, [x3, #8]");                                    // replacement object payload
+    emitter.instruction("ldr x10, [x8]");                                       // previous object payload
+    emitter.instruction("ldr x11, [x8, #8]");                                   // previous slot metadata word
+    emitter.instruction("str x9, [x8]");                                        // publish the replacement first
+    emitter.instruction("str xzr, [x8, #8]");                                   // mark the typed property initialized
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x11, x12");                                        // was the typed slot uninitialized?
+    emitter.instruction("b.eq __rt_obj_store_prop_object_done");                // no old owner to release
+    emitter.instruction("cmp x10, x12");                                        // is the payload the uninitialized marker?
+    emitter.instruction("b.eq __rt_obj_store_prop_object_done");                // nothing to release
+    emitter.instruction("cbz x10, __rt_obj_store_prop_object_done");            // a null payload owns no object
+    emitter.instruction("stp x30, x3, [sp, #-16]!");                            // preserve the return address and parsed box across a throwing destructor
+    emitter.instruction("mov x0, x10");                                         // pass the previous object to the release helper
+    emitter.instruction("bl __rt_decref_any");                                  // release the old owner after the slot points at the replacement
+    emitter.instruction("ldp x30, x3, [sp], #16");                              // recover the return address and parsed box
+    emitter.label("__rt_obj_store_prop_object_done");
+    emitter.instruction("mov x0, x3");                                          // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                     // retain/defer the replacement container
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int or null reaches this arm: the declared-type check above already raised the
     // TypeError for a string, float, bool or array, so a non-int tag here is the canonical null.

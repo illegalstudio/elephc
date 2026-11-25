@@ -9,6 +9,7 @@
 //! - Inline HTML, tags, casts and interpolation are rewritten without changing line numbers.
 
 use super::*;
+use super::reference_scan::{is_reference_marker, reference_target_starts_at};
 
 /// Builds the PHP-only parser view, its source map and any error in a normalized reference.
 pub(super) fn parser_view<T: SourceToken>(
@@ -35,7 +36,8 @@ pub(super) fn parser_view<T: SourceToken>(
     let mut reference_error: Option<ReferenceError> = None;
     while index < tokens.len() {
         let token = &tokens[index];
-        match token.id() {
+        let token_id = token.id();
+        match token_id {
             id if id == i64::from(b'(') => {
                 parens.push(index);
                 control_parens.push(is_control_header_keyword(previous_significant));
@@ -76,10 +78,10 @@ pub(super) fn parser_view<T: SourceToken>(
             }
             _ => {}
         }
-        let text = &source[token.pos()..token.pos() + token.len()];
         if is_reference_ampersand(
             tokens,
             index,
+            token_id,
             previous_significant,
             brackets.last().copied(),
             parens.last().copied(),
@@ -125,10 +127,11 @@ pub(super) fn parser_view<T: SourceToken>(
             index += 1;
             continue;
         }
+        let text = &source[token.pos()..token.pos() + token.len()];
         // Zend emits T_GOTO for the keyword, but PHP also allows `goto` as a member,
         // constant, enum-case and named-argument name. A real goto statement is the
         // shape `goto <label> ;` (a close tag also terminates it).
-        if token.id() == tok::T_GOTO {
+        if token_id == tok::T_GOTO {
             let terminator = next_significant_index(tokens, index)
                 .filter(|&label| tokens[label].id() == tok::T_STRING)
                 .and_then(|label| next_significant_index(tokens, label))
@@ -163,12 +166,16 @@ pub(super) fn parser_view<T: SourceToken>(
                 continue;
             }
         }
-        let previous_closes_control_header = previous_significant == i64::from(b')')
+        // Only a T_STRING can start a label. Avoid walking back over a comment run after a
+        // control header for every trivia token; the label check rejects them immediately.
+        let previous_closes_control_header = token_id == tok::T_STRING
+            && previous_significant == i64::from(b')')
             && previous_significant_index(tokens, index)
                 .is_some_and(|previous| control_close.get(previous).copied().unwrap_or(false));
         if is_label_declaration(
             tokens,
             index,
+            token_id,
             previous_significant,
             previous_closes_control_header,
         ) {
@@ -193,7 +200,7 @@ pub(super) fn parser_view<T: SourceToken>(
         let declaration_default_started = declaration_default_index
             .and_then(|declaration| paren_defaults.get(declaration))
             .is_some_and(|state| matches!(state, Some((true, _))));
-        if token.id() == i64::from(b'$')
+        if token_id == i64::from(b'$')
             && next_significant_index(tokens, index).is_some_and(|next| {
                 let id = tokens[next].id();
                 id == i64::from(b'$')
@@ -212,7 +219,7 @@ pub(super) fn parser_view<T: SourceToken>(
             index += 1;
             continue;
         }
-        if token.id() == i64::from(b'$')
+        if token_id == i64::from(b'$')
             && next_significant_index(tokens, index).is_some_and(|next| tokens[next].id() == i64::from(b'{'))
             && (declaration_default_started
                 || !dollar_starts_declaration(
@@ -252,7 +259,7 @@ pub(super) fn parser_view<T: SourceToken>(
             index = end.saturating_add(1);
             continue;
         }
-        if token.id() == tok::T_DOLLAR_OPEN_CURLY_BRACES {
+        if token_id == tok::T_DOLLAR_OPEN_CURLY_BRACES {
             append_mapped(&mut view, &mut map, b"$x", token.pos());
             let mut end = index + 1;
             let mut depth = 1usize;
@@ -284,14 +291,14 @@ pub(super) fn parser_view<T: SourceToken>(
         // A first-class callable is `name(...)`: the ellipsis sits directly inside an argument
         // list. `f($a...)`, `f([]...)` and a declaration's `function f(...)` are ParseErrors, so
         // every other shape keeps its marker.
-        if token.id() == tok::T_ELLIPSIS
+        if token_id == tok::T_ELLIPSIS
             && ellipsis_is_first_class_callable(source, tokens, index)
         {
             append_blank(&mut view, &mut map, b"...", token.pos());
             index += 1;
             continue;
         }
-        if token.id() == i64::from(b'{')
+        if token_id == i64::from(b'{')
             && previous_significant == tok::T_DOUBLE_COLON
         {
             // `C::{expr}` computes a member name. The body was validated before the view was
@@ -310,86 +317,123 @@ pub(super) fn parser_view<T: SourceToken>(
             index = end.saturating_add(1);
             continue;
         }
-        if token.id() == i64::from(b'`') {
+        if token_id == i64::from(b'`') {
             index = append_backtick_string(&mut view, &mut map, source, tokens, index);
-            previous_significant = token.id();
+            previous_significant = token_id;
             index += 1;
             continue;
         }
-        if token.id() == tok::T_OPEN_TAG || token.id() == tok::T_INLINE_HTML {
-            append_blank(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_OPEN_TAG_WITH_ECHO {
-            append_mapped(&mut view, &mut map, b"echo ", token.pos());
-        } else if token.id() == tok::T_CLOSE_TAG {
-            append_mapped(&mut view, &mut map, b";", token.pos());
-            append_blank(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_HALT_COMPILER
-            && !halt_compiler_is_name(tokens, index)
-        {
-            index = skip_halt_compiler(&mut view, &mut map, source, tokens, index);
-        } else if matches!(token.id(), tok::T_UNSET_CAST | tok::T_STRING_CAST)
-            || (token.id() == tok::T_VOID_CAST
-                && void_cast_starts_statement(tokens, index, previous_significant))
-        {
-            append_safe_cast(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_CONSTANT_ENCAPSED_STRING {
-            append_string(&mut view, &mut map, text, token.pos());
-        } else if token.id() == tok::T_DNUMBER && text.ends_with(b".") {
-            let mut normalized = text.to_vec();
-            if let Some(last) = normalized.last_mut() {
-                *last = b' ';
+        match token_id {
+            tok::T_OPEN_TAG | tok::T_INLINE_HTML => {
+                append_blank(&mut view, &mut map, text, token.pos());
             }
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_START_HEREDOC
-            && text.len() >= 4
-            && matches!(text[0], b'b' | b'B')
-            && &text[1..4] == b"<<<"
-        {
-            let mut normalized = text.to_vec();
-            normalized[0] = b' ';
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_NUM_STRING && !text.iter().all(u8::is_ascii_digit) {
-            let normalized = vec![b'0'; text.len()];
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if token.id() == tok::T_STRING && text.eq_ignore_ascii_case(b"enum") {
-            append_mapped(&mut view, &mut map, b"zenum", token.pos());
-        } else if token.id() == tok::T_STRING
-            && [
-                b"packed".as_slice(),
-                b"extern",
-                b"ifdef",
-                b"self",
-                b"parent",
-                b"true",
-                b"false",
-                b"null",
-            ]
-            .iter()
-            .any(|word| text.eq_ignore_ascii_case(word))
-        {
-            // PHP lexes elephc's `packed`/`extern`/`ifdef` and the PHP names `self`, `parent`,
-            // `true`, `false`, `null` as plain T_STRING names. The view must not let the
-            // compiler lexer reserve them, or `packed()`, `self;` and `true()` would fail while
-            // the compiler-only declarations below still must be rejected.
-            let mut normalized = b"z".to_vec();
-            normalized.extend_from_slice(text);
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else if text.len() >= 2
-            && matches!(text[0], b'b' | b'B')
-            && matches!(text[1], b'\'' | b'"')
-        {
-            let mut normalized = text.to_vec();
-            normalized[0] = b' ';
-            append_mapped(&mut view, &mut map, &normalized, token.pos());
-        } else {
-            append_mapped(&mut view, &mut map, text, token.pos());
+            tok::T_OPEN_TAG_WITH_ECHO => {
+                append_mapped(&mut view, &mut map, b"echo ", token.pos());
+            }
+            tok::T_CLOSE_TAG => {
+                append_mapped(&mut view, &mut map, b";", token.pos());
+                append_blank(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_HALT_COMPILER => {
+                if halt_compiler_is_name(tokens, index) {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                } else {
+                    index = skip_halt_compiler(&mut view, &mut map, source, tokens, index);
+                }
+            }
+            tok::T_UNSET_CAST | tok::T_STRING_CAST => {
+                append_safe_cast(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_VOID_CAST => {
+                if void_cast_starts_statement(tokens, index, previous_significant) {
+                    append_safe_cast(&mut view, &mut map, text, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_CONSTANT_ENCAPSED_STRING => {
+                append_string(&mut view, &mut map, text, token.pos());
+            }
+            tok::T_DNUMBER => {
+                if text.ends_with(b".") {
+                    let mut normalized = text.to_vec();
+                    if let Some(last) = normalized.last_mut() {
+                        *last = b' ';
+                    }
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_START_HEREDOC => {
+                if text.len() >= 4
+                    && matches!(text[0], b'b' | b'B')
+                    && &text[1..4] == b"<<<"
+                {
+                    let mut normalized = text.to_vec();
+                    normalized[0] = b' ';
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            tok::T_NUM_STRING => {
+                if text.iter().all(u8::is_ascii_digit) {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                } else {
+                    let normalized = vec![b'0'; text.len()];
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                }
+            }
+            tok::T_STRING => {
+                if text.eq_ignore_ascii_case(b"enum") {
+                    append_mapped(&mut view, &mut map, b"zenum", token.pos());
+                } else if [
+                    b"packed".as_slice(),
+                    b"extern",
+                    b"ifdef",
+                    b"self",
+                    b"parent",
+                    b"true",
+                    b"false",
+                    b"null",
+                ]
+                .iter()
+                .any(|word| text.eq_ignore_ascii_case(word))
+                {
+                    // PHP lexes elephc's `packed`/`extern`/`ifdef` and the PHP names `self`,
+                    // `parent`, `true`, `false`, `null` as plain T_STRING names. The view must
+                    // not let the compiler lexer reserve them, or `packed()`, `self;` and
+                    // `true()` would fail while the compiler-only declarations below still must
+                    // be rejected.
+                    let mut normalized = b"z".to_vec();
+                    normalized.extend_from_slice(text);
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
+            _ => {
+                if text.len() >= 2
+                    && matches!(text[0], b'b' | b'B')
+                    && matches!(text[1], b'\'' | b'"')
+                {
+                    let mut normalized = text.to_vec();
+                    normalized[0] = b' ';
+                    append_mapped(&mut view, &mut map, &normalized, token.pos());
+                } else {
+                    append_mapped(&mut view, &mut map, text, token.pos());
+                }
+            }
         }
-        if !is_trivia_token(token.id()) {
-            previous_significant = token.id();
+        if !is_trivia_token(token_id) {
+            previous_significant = token_id;
         }
         index += 1;
     }
-    normalize_parse_newlines(&mut view);
+    if source.contains(&b'\r') {
+        normalize_parse_newlines(&mut view);
+    }
     (sanitize_view(view), map, reference_error)
 }
 
@@ -429,56 +473,17 @@ pub(crate) fn sanitize_invalid_utf8(view: Vec<u8>) -> String {
     out
 }
 
-/// Returns whether an ordinary reference target can start at `next`.
-///
-/// PHP allows `$a = &$b`, `$a = &$b[0]`, and `$a = &foo()`, but not `$a = &1` or
-/// `$a = &new C`. Keeping the ampersand in the view for the latter lets the parser reject it.
-pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], next: usize) -> bool {
-    match tokens[next].id() {
-        id if id == tok::T_VARIABLE => true,
-        // `$$name` / `${$name}`: the variable variable's name is computed at run time.
-        id if id == i64::from(b'$') => true,
-        id if id == tok::T_STATIC => next_significant_index(tokens, next)
-            .is_some_and(|after| tokens[after].id() == tok::T_DOUBLE_COLON),
-        id if id == tok::T_STRING || id == tok::T_IDENTIFIER => {
-            next_significant_index(tokens, next).is_some_and(|after| {
-                matches!(
-                    tokens[after].id(),
-                    id if id == i64::from(b'(')
-                        || id == i64::from(b'[')
-                        || id == i64::from(b'\\')
-                        || id == tok::T_DOUBLE_COLON
-                        || id == tok::T_OBJECT_OPERATOR
-                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                )
-            })
-        }
-        // The native lexer folds `\foo`, `Ns\foo` and `namespace\foo` into one name token.
-        id if id == tok::T_NAME_FULLY_QUALIFIED
-            || id == tok::T_NAME_QUALIFIED
-            || id == tok::T_NAME_RELATIVE =>
-        {
-            next_significant_index(tokens, next).is_some_and(|after| {
-                matches!(
-                    tokens[after].id(),
-                    id if id == i64::from(b'(') || id == tok::T_DOUBLE_COLON
-                )
-            })
-        }
-        _ => false,
-    }
-}
-
 /// Returns whether the token at `index` is a statement label (`name:`).
 pub(crate) fn is_label_declaration<T: SourceToken>(
     tokens: &[T],
     index: usize,
+    token_id: i64,
     previous_significant: i64,
     previous_closes_control_header: bool,
 ) -> bool {
     // Check the current token first: a comment or operator run must not trigger the lookahead
     // scan merely to discover it can never be a label.
-    if tokens[index].id() != tok::T_STRING {
+    if token_id != tok::T_STRING {
         return false;
     }
     let Some(next) = next_significant_index(tokens, index) else {
@@ -624,13 +629,14 @@ pub(crate) fn normalize_parse_newlines(view: &mut [u8]) {
 pub(crate) fn is_reference_ampersand<T: SourceToken>(
     tokens: &[T],
     index: usize,
+    token_id: i64,
     previous_significant: i64,
     enclosing_bracket: Option<usize>,
     enclosing_paren: Option<usize>,
     enclosing_brace: Option<usize>,
     reference_value: impl FnOnce(Option<usize>) -> bool,
 ) -> bool {
-    if !is_reference_marker(tokens[index].id()) {
+    if !is_reference_marker(token_id) {
         return false;
     }
     if previous_significant == i64::from(b'=') {
@@ -708,16 +714,11 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     false
 }
 
-/// Identifies either Zend token form of an ampersand.
-fn is_reference_marker(id: i64) -> bool {
-    matches!(id, tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG)
-}
-
 /// Distinguishes a `fn(...) =>` inside an array from the array's key/value separator.
 ///
 /// Only the adjacent header is inspected. A parenthesized return type is skipped through
 /// the delimiter map, so nested groups do not make repeated arrow checks rescan the body.
-fn arrow_starts_function_body<T: SourceToken>(
+pub(crate) fn arrow_starts_function_body<T: SourceToken>(
     tokens: &[T],
     arrow: usize,
     pairs: &[Option<usize>],
@@ -1014,9 +1015,10 @@ pub(crate) fn paren_is_declaration_parameters<T: SourceToken>(tokens: &[T], open
 /// Returns whether a `$` opens a declaration name slot instead of a variable variable.
 ///
 /// PHP only allows variable variables in expressions: `static $$a;`, `function f($$a)`,
-/// `public $$a;`, `catch (E $$e)` and `use ($$a)` are syntax errors, so their `$` must stay in
-/// the view and let the parser reject it. A parameter DEFAULT (`function f($x = $$a)`) is an
-/// expression again.
+/// `public $$a;`, `final $$a`, `private(set) $$a`, `catch (E $$e)` and `use ($$a)` are syntax
+/// errors, so their `$` must stay in the view and let the parser reject it. A parameter
+/// DEFAULT (`function f($x = $$a)`) is an expression again. `abstract` and `var` stay off this
+/// fast path: PHP reports the modifier itself, not the `$`.
 pub(crate) fn dollar_starts_declaration<T: SourceToken>(
     tokens: &[T],
     index: usize,
@@ -1030,6 +1032,10 @@ pub(crate) fn dollar_starts_declaration<T: SourceToken>(
             || id == tok::T_PROTECTED
             || id == tok::T_PRIVATE
             || id == tok::T_READONLY
+            || id == tok::T_FINAL
+            || id == tok::T_PUBLIC_SET
+            || id == tok::T_PROTECTED_SET
+            || id == tok::T_PRIVATE_SET
     ) {
         return true;
     }
@@ -1091,6 +1097,12 @@ fn declaration_name_predecessor(id: i64) -> bool {
                 || id == tok::T_PRIVATE
                 || id == tok::T_READONLY
                 || id == tok::T_STATIC
+                || id == tok::T_FINAL
+                || id == tok::T_ABSTRACT
+                || id == tok::T_VAR
+                || id == tok::T_PUBLIC_SET
+                || id == tok::T_PROTECTED_SET
+                || id == tok::T_PRIVATE_SET
                 || id == i64::from(b'?')
                 || id == i64::from(b'|')
                 || id == i64::from(b'&')
@@ -1103,39 +1115,85 @@ fn declaration_name_predecessor(id: i64) -> bool {
         )
 }
 
-/// Returns whether a declaration modifier precedes `index` before any statement boundary.
+/// Returns whether a token can appear between a property modifier and its variable.
+fn is_property_type_token(id: i64) -> bool {
+    (is_declaration_type_token(id) && id != tok::T_STATIC)
+        || id == i64::from(b'?')
+        || id == i64::from(b'|')
+        || id == i64::from(b'&')
+        || id == i64::from(b'(')
+        || id == i64::from(b')')
+        || id == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
+        || id == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG
+}
+
+/// Returns whether a token is a property modifier that can introduce `$$name`.
+///
+/// Asymmetric visibility, `final`, `abstract` and `var` are modifiers too. They do not appear
+/// in an expression before `$$name`, so `static::$$a` and `instanceof static ? $$a` stay
+/// expressions.
+fn is_property_modifier(id: i64) -> bool {
+    id == tok::T_PUBLIC
+        || id == tok::T_PROTECTED
+        || id == tok::T_PRIVATE
+        || id == tok::T_STATIC
+        || id == tok::T_READONLY
+        || id == tok::T_FINAL
+        || id == tok::T_ABSTRACT
+        || id == tok::T_VAR
+        || id == tok::T_PUBLIC_SET
+        || id == tok::T_PROTECTED_SET
+        || id == tok::T_PRIVATE_SET
+}
+
+/// Returns whether the token before a property modifier starts a declaration.
+///
+/// `instanceof static` is an expression. `public static`, `{ static` and `#[Attr] public`
+/// are declarations. Another modifier, including `final`, `var` and `private(set)`, also
+/// starts the declaration.
+fn property_declaration_boundary(id: Option<i64>) -> bool {
+    let Some(id) = id else {
+        return true;
+    };
+    id == i64::from(b';')
+        || id == i64::from(b'{')
+        || id == i64::from(b'}')
+        || id == i64::from(b']')
+        || id == tok::T_OPEN_TAG
+        || is_property_modifier(id)
+}
+
+/// Returns whether a declaration modifier precedes `index` across a property type only.
+///
+/// `static::$$a` stops at `::`. A modifier counts only when every token between it and `$`
+/// is a property type and the token before the modifier is a declaration boundary, so
+/// `$o instanceof static ? $$a` stays an expression. `static $$a`, `public static ?int $$a`
+/// and `public private(set) int $$a` still count as declarations.
 pub(crate) fn property_modifier_before<T: SourceToken>(tokens: &[T], index: usize) -> bool {
-    // A declaration name follows a type or modifier token. An operator, literal, variable or
-    // keyword before the `$` proves this is an expression, and rejecting it in O(1) keeps
-    // repeated `$$a` terms from walking the same statement prefix once per variable.
+    // An operator, literal, variable or keyword immediately before the `$` proves this is an
+    // expression. Rejecting it in O(1) keeps repeated `$$a` terms from walking the statement.
     let Some(immediate) = previous_significant_index(tokens, index) else {
         return false;
     };
-    if !declaration_name_predecessor(tokens[immediate].id()) {
+    let immediate_id = tokens[immediate].id();
+    if immediate_id == tok::T_DOUBLE_COLON || !declaration_name_predecessor(immediate_id) {
         return false;
     }
     let mut cursor = index;
     while let Some(previous) = previous_significant_index(tokens, cursor) {
-        match tokens[previous].id() {
-            id if id == tok::T_PUBLIC
-                || id == tok::T_PROTECTED
-                || id == tok::T_PRIVATE
-                || id == tok::T_STATIC
-                || id == tok::T_READONLY =>
-            {
-                return true;
-            }
-            id if id == i64::from(b';')
-                || id == i64::from(b'{')
-                || id == i64::from(b'}')
-                || id == i64::from(b'=')
-                || id == i64::from(b',')
-                || id == i64::from(b'(') =>
-            {
-                return false;
-            }
-            _ => cursor = previous,
+        let id = tokens[previous].id();
+        if id == tok::T_DOUBLE_COLON {
+            return false;
         }
+        if is_property_modifier(id) {
+            let before = previous_significant_index(tokens, previous).map(|index| tokens[index].id());
+            return property_declaration_boundary(before);
+        }
+        if is_property_type_token(id) {
+            cursor = previous;
+            continue;
+        }
+        return false;
     }
     false
 }

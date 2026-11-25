@@ -27,6 +27,11 @@ fn emit_defer_data(emitter: &mut Emitter) {
     emitter.label_global("__rt_unserialize_defer_data");
     abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, result, 8);
+    // A direct hydration-hook call (for example `DateTime::__unserialize()` outside
+    // `unserialize()`) has no decoder boundary to drain this list. Release the value
+    // immediately instead of publishing a node nobody will ever detach.
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_unser_active", 0);
+    abi::emit_branch_if_zero_wide(emitter, scratch, "__rt_unserialize_defer_data_direct");
     abi::emit_load_int_immediate(emitter, result, 24);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::emit_load_symbol_to_reg(emitter, scratch, "_unser_temporaries", 0);
@@ -36,6 +41,11 @@ fn emit_defer_data(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, scratch, "_unser_active", 0);
     abi::emit_store_to_address(emitter, scratch, result, 16);
     abi::emit_store_reg_to_symbol(emitter, result, "_unser_temporaries", 0);
+    abi::emit_jump(emitter, "__rt_unserialize_defer_data_return");
+    emitter.label("__rt_unserialize_defer_data_direct");
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.label("__rt_unserialize_defer_data_return");
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }

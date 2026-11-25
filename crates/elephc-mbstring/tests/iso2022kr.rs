@@ -2,7 +2,7 @@
 //! Verifies ISO-2022-KR shift transitions, all shifted byte pairs, encoder mappings, and streaming cuts.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test iso2022kr`.
+//! - `cargo test -p elephc-mbstring --test engine iso2022kr::`.
 //!
 //! Key details:
 //! - Independent PHP fixtures cover the UHC subset and PHP's raw-code encoder fallback.

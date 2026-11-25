@@ -20,7 +20,10 @@
 //!   failed.
 //! - `--apm-transaction Class::method` (or `function`) names any other
 //!   boundary: each call is a transaction named `TXN Class::method`, failed
-//!   when an exception leaves it.
+//!   when an exception leaves it. A generator is refused: a call only creates
+//!   it, and its body runs while the caller iterates it. A method a class
+//!   inherits is named by the class or trait that declares it, which the
+//!   warning for an undeclared target names.
 //! - The wrap is `begin; try { body } catch (\Throwable) { fail; rethrow }
 //!   finally { end }`: the probe counts nothing unless the service was asked
 //!   to count, and a transaction opened inside another counts nothing of its
@@ -99,15 +102,15 @@ fn inject_on_compiler_stack(mut program: Program, targets: &[String]) -> Result<
             return Err(CompileError::new(crate::span::Span::dummy(), &format!("--apm-transaction {target}: {error}")));
         }
     }
-    let mut found = vec![false; targets.len()];
-    let mut wrapped = rewrite(&mut program, targets, &mut found);
+    let mut search = Search { targets, found: vec![false; targets.len()], refused: None, owners: Default::default() };
+    let mut wrapped = rewrite(&mut program, &mut search);
+    if let Some(refusal) = search.refused {
+        return Err(CompileError::new(crate::span::Span::dummy(), &refusal));
+    }
     wrapped |= note_web_catches(&mut program);
-    for (target, found) in targets.iter().zip(&found) {
+    for (target, found) in targets.iter().zip(&search.found) {
         if !found {
-            eprintln!(
-                "warning: --apm-transaction {target}: no such method or function is declared in this program \
-                 (a method a class takes from a trait is named by its trait: Trait::method)"
-            );
+            eprintln!("warning: --apm-transaction {target}: {}", search.not_found(target));
         }
     }
     if !wrapped {
@@ -139,14 +142,193 @@ fn declarations() -> Program {
     })
 }
 
+/// A method an owner declares, as far as finding the body a call runs needs.
+struct OwnMethod {
+    /// The declared name.
+    name: String,
+    /// Whether it has a body: an abstract declaration runs none.
+    has_body: bool,
+    /// Whether it is private, which a subclass does not inherit.
+    private: bool,
+}
+
+/// What declares a method: a class, an enum or a trait, with what it inherits
+/// from (`Search::resolve`).
+struct Owner {
+    /// The declared name, without a leading `\`.
+    name: String,
+    /// The class it extends, lowercased.
+    parent: Option<String>,
+    /// The traits it uses, lowercased, in the order written.
+    traits: Vec<String>,
+    /// The `insteadof` and `as` adaptations of those uses.
+    adaptations: Vec<crate::parser::ast::TraitAdaptation>,
+    /// The methods it declares.
+    methods: Vec<OwnMethod>,
+}
+
+/// The body a call of a method runs: the class or trait declaring it, the
+/// name it is declared under there, and whether the caller's class sees it
+/// as private (a subclass of that class does not inherit it).
+struct Resolved {
+    owner: String,
+    method: String,
+    private: bool,
+}
+
+/// The `--apm-transaction` targets looked for in one program, and what the
+/// walk found of them.
+struct Search<'a> {
+    /// The targets, `Class::method` or a function name.
+    targets: &'a [String],
+    /// Per target, whether a declaration it names was found.
+    found: Vec<bool>,
+    /// The first target refused, with why: a generator.
+    refused: Option<String>,
+    /// Every class, enum and trait seen, by lowercased name, for the warning
+    /// naming where an inherited method is declared.
+    owners: std::collections::HashMap<String, Owner>,
+}
+
+/// A class, trait or method name as `Search` keys it: lowercased, without a
+/// leading `\`.
+fn owner_key(name: &str) -> String {
+    name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+impl Search<'_> {
+    /// Records `name` (a class, enum or trait) with what it inherits from, the
+    /// adaptations of its trait uses and the methods it declares.
+    fn note_owner(&mut self, name: &str, parent: Option<&crate::names::Name>, uses: &[crate::parser::ast::TraitUse], methods: &[crate::parser::ast::ClassMethod]) {
+        let name = name.trim_start_matches('\\').to_string();
+        let owner = Owner {
+            parent: parent.map(|parent| owner_key(parent.as_str())),
+            traits: uses.iter().flat_map(|used| &used.trait_names).map(|used| owner_key(used.as_str())).collect(),
+            adaptations: uses.iter().flat_map(|used| used.adaptations.iter().cloned()).collect(),
+            methods: methods
+                .iter()
+                .map(|method| OwnMethod {
+                    name: method.name.clone(),
+                    has_body: method.has_body,
+                    private: matches!(method.visibility, crate::parser::ast::Visibility::Private),
+                })
+                .collect(),
+            name,
+        };
+        self.owners.insert(owner_key(&owner.name), owner);
+    }
+
+    /// The body a call of `method` on `class` runs, as PHP resolves it: the
+    /// class's own declaration, then its traits (`insteadof` excluding one,
+    /// `as` renaming one), then its parent's, whose private methods a subclass
+    /// does not inherit. `None` when nothing known declares it with a body.
+    fn resolve(&self, class: &str, method: &str) -> Option<Resolved> {
+        self.resolve_in(&owner_key(class), method, &mut std::collections::HashSet::new())
+    }
+
+    /// [`Search::resolve`] from the owner keyed `key`, never visiting one
+    /// twice (`seen`), so a cyclic hierarchy ends.
+    fn resolve_in(&self, key: &str, method: &str, seen: &mut std::collections::HashSet<String>) -> Option<Resolved> {
+        use crate::parser::ast::TraitAdaptation;
+        if !seen.insert(key.to_string()) {
+            return None;
+        }
+        let owner = self.owners.get(key)?;
+        if let Some(own) = owner.methods.iter().find(|own| same_name(&own.name, method)) {
+            // Declared here: its own body, or none when it is abstract.
+            return own.has_body.then(|| Resolved { owner: owner.name.clone(), method: own.name.clone(), private: own.private });
+        }
+        // An alias: `T::run as again`, or `run as again` naming no trait.
+        for adaptation in &owner.adaptations {
+            if let TraitAdaptation::Alias { trait_name, method: original, alias: Some(alias), visibility } = adaptation {
+                if !same_name(alias, method) {
+                    continue;
+                }
+                let traits: Vec<String> = match trait_name {
+                    Some(name) => vec![owner_key(name.as_str())],
+                    None => owner.traits.clone(),
+                };
+                for used in traits {
+                    if let Some(mut found) = self.resolve_in(&used, original, &mut seen.clone()) {
+                        if let Some(visibility) = visibility {
+                            found.private = matches!(visibility, crate::parser::ast::Visibility::Private);
+                        }
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        // The traits it uses, but not one an `insteadof` excludes for this method.
+        let excluded = |used: &str| {
+            owner.adaptations.iter().any(|adaptation| {
+                matches!(adaptation, TraitAdaptation::InsteadOf { method: chosen, instead_of, .. }
+                    if same_name(chosen, method) && instead_of.iter().any(|other| owner_key(other.as_str()) == used))
+            })
+        };
+        for used in owner.traits.iter().filter(|used| !excluded(used)) {
+            if let Some(mut found) = self.resolve_in(used, method, &mut seen.clone()) {
+                // `run as private` (or `T::run as protected`) changes the imported
+                // method's visibility on this class without renaming it. The last one
+                // written wins, as in trait flattening.
+                if let Some(visibility) = owner.adaptations.iter().rev().find_map(|adaptation| match adaptation {
+                    TraitAdaptation::Alias { trait_name, method: changed, alias: None, visibility: Some(visibility) }
+                        if same_name(changed, method)
+                            && trait_name.as_ref().is_none_or(|name| owner_key(name.as_str()) == *used) =>
+                    {
+                        Some(visibility)
+                    }
+                    _ => None,
+                }) {
+                    found.private = matches!(visibility, crate::parser::ast::Visibility::Private);
+                }
+                return Some(found);
+            }
+        }
+        // The parent's, unless private to it: a subclass does not inherit that.
+        let parent = owner.parent.as_deref()?;
+        self.resolve_in(parent, method, seen).filter(|found| !found.private)
+    }
+
+    /// Why `target` matched nothing: a method its class inherits, or takes
+    /// from a trait under another name, names the class or trait to give
+    /// instead; anything else is not declared.
+    fn not_found(&self, target: &str) -> String {
+        if let Some((class, method)) = target.split_once("::") {
+            if let Some(found) = self.resolve(class, method).filter(|found| owner_key(&found.owner) != owner_key(class)) {
+                let (owner, declared) = (&found.owner, &found.method);
+                return format!(
+                    "{class}::{method} runs the body of {owner}::{declared}: name {owner}::{declared} \
+                     (it then counts the calls on every class that inherits or uses it)"
+                );
+            }
+        }
+        "no such method or function is declared in this program \
+         (a method a class takes from a trait is named by its trait: Trait::method)"
+            .to_string()
+    }
+
+    /// Refuses `target` (the first refusal is reported) for naming `name`, a
+    /// generator: a call only creates it, so there is no call to time.
+    fn refuse_generator(&mut self, target: &str, name: &str) {
+        self.refused.get_or_insert_with(|| {
+            format!(
+                "--apm-transaction {target}: {name} is a generator. A call only creates the generator, and its body \
+                 runs while the caller iterates it, so the call has no duration of its own to count. Name the method \
+                 or function that iterates it instead"
+            )
+        });
+    }
+}
+
 /// Wraps every boundary in `statements`, namespace blocks included; true
 /// when anything was wrapped.
-fn rewrite(statements: &mut [Stmt], targets: &[String], found: &mut [bool]) -> bool {
+fn rewrite(statements: &mut [Stmt], search: &mut Search) -> bool {
     let mut wrapped = false;
     for stmt in statements.iter_mut() {
         match &mut stmt.kind {
-            StmtKind::NamespaceBlock { body, .. } => wrapped |= rewrite(body, targets, found),
-            StmtKind::ClassDecl { name, methods, .. } => {
+            StmtKind::NamespaceBlock { body, .. } => wrapped |= rewrite(body, search),
+            StmtKind::ClassDecl { name, extends, trait_uses, methods, .. } => {
+                search.note_owner(name, extends.as_ref(), trait_uses, methods);
                 let class = name.trim_start_matches('\\').to_string();
                 for method in methods.iter_mut().filter(|method| method.has_body) {
                     // Once per method: a target naming Messenger's own boundary, or
@@ -180,25 +362,29 @@ fn rewrite(statements: &mut [Stmt], targets: &[String], found: &mut [bool]) -> b
                             wrapped = true;
                         }
                     }
-                    wrapped |= wrap_named_method(&class, method, targets, found, boundary_wrapped);
+                    wrapped |= wrap_named_method(&class, method, search, boundary_wrapped);
                 }
             }
             // An enum's methods are named boundaries too, and so are a trait's,
             // under the trait's name: its body is what every class using it
             // runs (review).
-            StmtKind::EnumDecl { name, methods, .. } | StmtKind::TraitDecl { name, methods, .. } => {
+            StmtKind::EnumDecl { name, trait_uses, methods, .. } | StmtKind::TraitDecl { name, trait_uses, methods, .. } => {
+                search.note_owner(name, None, trait_uses, methods);
                 let owner = name.trim_start_matches('\\').to_string();
                 for method in methods.iter_mut().filter(|method| method.has_body) {
-                    wrapped |= wrap_named_method(&owner, method, targets, found, false);
+                    wrapped |= wrap_named_method(&owner, method, search, false);
                 }
             }
             StmtKind::FunctionDecl { name, body, .. } => {
                 let function = name.trim_start_matches('\\').to_string();
                 let mut boundary_wrapped = false;
+                let targets = search.targets;
                 for (index, target) in targets.iter().enumerate() {
                     if !target.contains("::") && same_name(&function, target.trim_start_matches('\\')) {
-                        found[index] = true;
-                        if !boundary_wrapped {
+                        search.found[index] = true;
+                        if crate::types::checker::yield_validation::body_contains_yield(body) {
+                            search.refuse_generator(target, &function);
+                        } else if !boundary_wrapped {
                             let label = format!("{BOUNDARY_PREFIX}{function}");
                             *body = wrap(std::mem::take(body), e_str(&label));
                             boundary_wrapped = true;
@@ -213,7 +399,7 @@ fn rewrite(statements: &mut [Stmt], targets: &[String], found: &mut [bool]) -> b
             // were reported missing and never counted).
             kind => {
                 for body in nested_bodies(kind) {
-                    wrapped |= rewrite(body, targets, found);
+                    wrapped |= rewrite(body, search);
                 }
             }
         }
@@ -257,24 +443,27 @@ fn nested_bodies(kind: &mut StmtKind) -> Vec<&mut Vec<Stmt>> {
     }
 }
 
-/// Wraps `method` of `owner` (a class or an enum) when a `--apm-transaction`
-/// target names it, once however many do: not when it is already a boundary
-/// (`already`). True when it was wrapped.
+/// Wraps `method` of `owner` (a class, an enum or a trait) when a
+/// `--apm-transaction` target names it, once however many do: not when it is
+/// already a boundary (`already`), nor when it is a generator, which refuses
+/// the target. True when it was wrapped.
 fn wrap_named_method(
     owner: &str,
     method: &mut crate::parser::ast::ClassMethod,
-    targets: &[String],
-    found: &mut [bool],
+    search: &mut Search,
     already: bool,
 ) -> bool {
     let mut wrapped = already;
+    let targets = search.targets;
     for (index, target) in targets.iter().enumerate() {
         let Some((target_owner, target_method)) = target.split_once("::") else {
             continue;
         };
         if same_name(owner, target_owner.trim_start_matches('\\')) && same_name(&method.name, target_method) {
-            found[index] = true;
-            if !wrapped {
+            search.found[index] = true;
+            if crate::types::checker::yield_validation::body_contains_yield(&method.body) {
+                search.refuse_generator(target, &format!("{owner}::{}", method.name));
+            } else if !wrapped {
                 let name = format!("{BOUNDARY_PREFIX}{owner}::{}", method.name);
                 method.body = wrap(std::mem::take(&mut method.body), e_str(&name));
                 wrapped = true;
@@ -491,6 +680,108 @@ mod tests {
         let after = calls(&inject(resolved(source), &targets, true).expect("no error"));
         assert!(after.contains("TXN App\\\\Jobs\\\\Import::run"), "{after}");
         assert!(after.contains("TXN App\\\\Jobs\\\\process_batch"), "{after}");
+    }
+
+    /// A generator function or method named as a transaction is refused with
+    /// why: a call only creates the generator, so the wrap would time the
+    /// iteration, not the call (#2400).
+    #[test]
+    fn a_generator_target_is_refused() {
+        let source = "<?php namespace App; function rows() { yield 1; } class Feed { public function items() { yield from [1, 2]; } public function count(): int { return 2; } }";
+        for (target, name) in [("App\\rows", "App\\rows"), ("App\\Feed::items", "App\\Feed::items")] {
+            let error = inject(resolved(source), &[target.to_string()], true).expect_err(target);
+            assert!(error.message.contains(&format!("{name} is a generator")), "{}", error.message);
+        }
+        // A generator's sibling stays a boundary; a closure's yield is its own generator.
+        let closure = "<?php function make() { return function () { yield 1; }; }";
+        let after = calls(&inject(resolved(closure), &["make".to_string()], true).expect("make is no generator"));
+        assert!(after.contains("TXN make"), "{after}");
+        let after = calls(&inject(resolved(source), &["App\\Feed::count".to_string()], true).expect("no error"));
+        assert!(after.contains("TXN App\\\\Feed::count"), "{after}");
+    }
+
+    /// The warnings for `targets` on `source`, by target: what `not_found`
+    /// says of each, after a walk that must find and wrap none of them.
+    fn not_found_warnings(source: &str, targets: &[&str]) -> Vec<String> {
+        let targets: Vec<String> = targets.iter().map(|target| target.to_string()).collect();
+        let mut program = resolved(source);
+        let mut search = Search { targets: &targets, found: vec![false; targets.len()], refused: None, owners: Default::default() };
+        assert!(!rewrite(&mut program, &mut search), "nothing is wrapped");
+        assert_eq!(search.found, vec![false; targets.len()]);
+        targets.iter().map(|target| search.not_found(target)).collect()
+    }
+
+    /// A target naming a method through a class that inherits it, from a
+    /// parent or a trait, is reported with the class or trait that declares
+    /// it, which is the name to give (#2398). A method nobody declares with a
+    /// body keeps the plain warning.
+    #[test]
+    fn an_inherited_target_names_where_its_method_is_declared() {
+        let source = "<?php namespace App;
+            trait Retries { public function retry(): int { return 1; } }
+            abstract class Base { use Retries; public function run(): int { return 1; } abstract public function name(): string; }
+            class Child extends Base { public function name(): string { return 'c'; } }";
+        let warnings =
+            not_found_warnings(source, &["App\\Child::run", "App\\Child::retry", "App\\Child::missing", "App\\Base::name"]);
+        assert!(warnings[0].contains("runs the body of App\\Base::run: name App\\Base::run"), "{}", warnings[0]);
+        assert!(warnings[1].contains("name App\\Retries::retry"), "{}", warnings[1]);
+        for plain in &warnings[2..] {
+            assert!(plain.starts_with("no such method or function"), "{plain}");
+        }
+    }
+
+    /// The body named is the one PHP runs: a parent's private method, its own
+    /// or taken from a trait, is not inherited; `insteadof` picks the other
+    /// trait, at the class or at its parent; an alias names the trait's
+    /// method by its declared name; a private trait method used by the class
+    /// itself is still its own; a visibility-only `as` narrows or widens what a
+    /// subclass inherits, the last one written winning (review of #2534).
+    #[test]
+    fn an_inherited_target_follows_visibility_and_trait_adaptations() {
+        let source = "<?php
+            trait Hidden { private function hidden(): int { return 1; } }
+            trait A { public function run(): int { return 1; } }
+            trait B { public function run(): int { return 2; } }
+            class PrivateBase { use Hidden; private function secret(): int { return 1; } }
+            class PrivateChild extends PrivateBase {}
+            class Chooser { use A, B { B::run insteadof A; } }
+            class ChosenBase { use A, B { B::run insteadof A; } }
+            class ChosenChild extends ChosenBase {}
+            class Aliased { use A { run as again; } }
+            class UsesHidden { use Hidden; }
+            class NarrowBase { use A { run as private; } }
+            class NarrowChild extends NarrowBase {}
+            class WideBase { use Hidden { hidden as protected; } }
+            class WideChild extends WideBase {}
+            class LastWideBase { use A { run as private; run as protected; } }
+            class LastWideChild extends LastWideBase {}
+            class LastNarrowBase { use A { run as protected; run as private; } }
+            class LastNarrowChild extends LastNarrowBase {}";
+        let warnings = not_found_warnings(
+            source,
+            &[
+                "PrivateChild::secret",
+                "PrivateChild::hidden",
+                "Chooser::run",
+                "ChosenChild::run",
+                "Aliased::again",
+                "UsesHidden::hidden",
+                "NarrowChild::run",
+                "WideChild::hidden",
+                "LastWideChild::run",
+                "LastNarrowChild::run",
+            ],
+        );
+        assert!(warnings[0].starts_with("no such method"), "a private parent method: {}", warnings[0]);
+        assert!(warnings[1].starts_with("no such method"), "a parent's private trait method: {}", warnings[1]);
+        assert!(warnings[2].contains("name B::run"), "insteadof: {}", warnings[2]);
+        assert!(warnings[3].contains("name B::run"), "insteadof on the parent: {}", warnings[3]);
+        assert!(warnings[4].contains("runs the body of A::run: name A::run"), "an alias: {}", warnings[4]);
+        assert!(warnings[5].contains("name Hidden::hidden"), "a private trait method of the class: {}", warnings[5]);
+        assert!(warnings[6].starts_with("no such method"), "`as private` on the parent: {}", warnings[6]);
+        assert!(warnings[7].contains("name Hidden::hidden"), "`as protected` on the parent: {}", warnings[7]);
+        assert!(warnings[8].contains("name A::run"), "the last visibility wins, protected: {}", warnings[8]);
+        assert!(warnings[9].starts_with("no such method"), "the last visibility wins, private: {}", warnings[9]);
     }
 
     /// The wrap's locals are compiler-generated, so `get_defined_vars()`,

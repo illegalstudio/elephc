@@ -413,6 +413,26 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A raw NUL inside a Q encoded-word must not stop iconv's decoder at the NUL.
+#[test]
+fn test_iconv_q_encoded_word_preserves_bytes_after_nul() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$word = "=?UTF-8?Q?abc\0def?=";
+echo bin2hex((string)iconv_mime_decode($word, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, "UTF-8")), "|";
+$headers = iconv_mime_decode_headers("Subject: " . $word, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, "UTF-8");
+echo bin2hex($headers["Subject"]), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "61626300646566|61626300646566\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Interior base64 padding keeps iconv's lenient decoder instead of a shorter literal length.
 #[test]
 fn test_iconv_mime_length_preserves_interior_padding() {

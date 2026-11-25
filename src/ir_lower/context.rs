@@ -162,6 +162,36 @@ pub(crate) struct CallArgumentEvaluationOwner {
     pub pins_borrowed_source: bool,
 }
 
+/// Class-like parameter checks one call defers until all of its arguments were evaluated.
+///
+/// PHP evaluates every argument before it checks any declared parameter type, so a `mixed`
+/// argument bound to `?T` must not throw before a later argument's side effects run. The
+/// decision is taken from the source's type when it is evaluated; the check itself runs in
+/// parameter order once the call's operands are complete.
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredObjectParamChecks {
+    /// Expression depth of the call whose arguments record into this frame.
+    pub expression_depth: usize,
+    /// Regular parameters that need the runtime class check, in recording order.
+    pub checks: Vec<DeferredObjectParamCheck>,
+}
+
+/// One class-like parameter check a call runs once all of its arguments were evaluated.
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredObjectParamCheck {
+    /// Regular parameter index.
+    pub index: usize,
+    /// Source span of the argument, for the `called in ... on line N` suffix.
+    pub span: Span,
+    /// For a by-reference parameter, the caller local whose CURRENT value is checked: PHP
+    /// binds the reference first and reads it at the boundary, after later arguments ran.
+    pub reference_local: Option<String>,
+    /// A non-reference declared `callable` parameter, whose binding check otherwise runs on
+    /// callee entry: the caller runs it here when another parameter of the same call is
+    /// checked at the call site, so the first invalid parameter is the one reported.
+    pub callable: bool,
+}
+
 /// Keeps one call's evaluation owners distinct from nested expression lowering.
 #[derive(Debug, Clone)]
 pub(crate) struct CallArgumentEvaluationScope {
@@ -290,6 +320,7 @@ pub(crate) struct LoweringSnapshot {
     scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
     taken_owned_temp_values: HashSet<ValueId>,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    deferred_object_param_checks: Vec<DeferredObjectParamChecks>,
     borrowed_string_call_operands: HashSet<ValueId>,
     live_native_mutation_locals: HashMap<String, PhpType>,
     /// Provisional offset receiver reads belonging to this speculative function state.
@@ -408,6 +439,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// (a builtin, whose by-reference place lowering already owns the write) stay in the list
     /// unread, which can only skip a check, never reject a compatible value.
     pub(crate) reference_property_guards: Vec<ReferencePropertyGuard>,
+    /// Nested frames of class-like parameter checks deferred past argument evaluation.
+    pub(crate) deferred_object_param_checks: Vec<DeferredObjectParamChecks>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     /// Native reference places whose raw and canonical mutation arms have already been selected.
@@ -821,6 +854,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
             reference_property_guards: Vec::new(),
+            deferred_object_param_checks: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             live_native_mutation_locals: HashMap::new(),
             string_offset_receivers: Vec::new(),
@@ -902,6 +936,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             scoped_write_scopes: self.scoped_write_scopes.clone(),
             taken_owned_temp_values: self.taken_owned_temp_values.clone(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
+            deferred_object_param_checks: self.deferred_object_param_checks.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
             live_native_mutation_locals: self.live_native_mutation_locals.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
@@ -1017,6 +1052,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.scoped_write_scopes = snapshot.scoped_write_scopes;
         self.taken_owned_temp_values = snapshot.taken_owned_temp_values;
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
+        self.deferred_object_param_checks = snapshot.deferred_object_param_checks;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.live_native_mutation_locals = snapshot.live_native_mutation_locals;
         self.string_offset_receivers = snapshot.string_offset_receivers;

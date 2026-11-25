@@ -449,6 +449,8 @@ pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `is_object()`: true for objects and Closures, including boxed runtime tags 6 and 10.
+/// A callable descriptor without an object handle (an implicit string or array callable) is no
+/// object.
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -460,7 +462,14 @@ pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Object(_) => {
             predicates::emit_object_truthiness(ctx, value)?;
         }
-        PhpType::Callable => emit_static_bool(ctx, true),
+        // A callable descriptor is an object only when it is a Closure; an implicit string or
+        // array callable (`'strlen'` passed as a `callable`) has no object handle.
+        ty @ PhpType::Callable => predicates::emit_closure_identity(ctx, value, &ty, true)?,
+        ty @ (PhpType::Mixed | PhpType::Union(_))
+            if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            predicates::emit_closure_identity(ctx, value, &ty, true)?;
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }

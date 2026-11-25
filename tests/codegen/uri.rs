@@ -1615,6 +1615,27 @@ catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
     );
 }
 
+/// Verifies overlong and malformed UTF-8 in a percent-encoded host is rejected rather than
+/// IDNA-mapped to a different ASCII host.
+#[test]
+fn test_uri_whatwg_rejects_overlong_host_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+// Overlong encodings of "evil.com" and "127.0.0.1", plus an invalid continuation byte.
+foreach ([
+    "http://%C1%A5%C1%B6%C1%A9%C1%AC.com/",
+    "http://%C0%B1%C0%B2%C0%B7%C0%AE%C0%B0%C0%AE%C0%B0%C0%AE%C0%B1/",
+    "http://%C0%65%C0%76%C0%69%C0%6C.com/",
+] as $input) {
+    echo Uri\WhatWg\Url::parse($input) === null ? "null|" : "accepted|";
+    try { new Uri\WhatWg\Url($input); echo "constructed\n"; }
+    catch (Uri\WhatWg\InvalidUrlException $error) { echo "rejected\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "null|rejected\nnull|rejected\nnull|rejected\n");
+}
+
 /// Verifies `withHost()` keeps percent escapes on a non-special host while still rejecting a
 /// literal forbidden byte, and still rejects a decoded slash on a special host.
 #[test]
@@ -1992,5 +2013,73 @@ resolve "\/\/%78n--a-.com\/" => https://xn--a-.com/ host="xn--a-.com" uni="a.com
 withHost "xn--a-.c%6Fm" => https://a.com/ host="a.com" uni="a.com"
 withHost "%78n--a-.com" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
 "#
+    );
+}
+
+/// Verifies a `mixed` value reaches URI class parameters (positional and named) and a nullable
+/// URI class return through PHP's run-time class check, with PHP's `TypeError` for the wrong
+/// URI class, null, or a string.
+#[test]
+fn test_uri_classes_at_mixed_class_typed_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+use Uri\Rfc3986\Uri;
+use Uri\WhatWg\Url;
+function take(?Uri $u): string { return $u?->toString() ?? "null"; }
+function takeUrl(Url $u): string { return $u->toAsciiString(); }
+function pick(array $a, int $i): ?Uri { return $a[$i] ?? null; }
+function getMixed(mixed $v): mixed { return $v; }
+$vals = [new Uri("https://example.com/a"), Url::parse("https://example.com/"), null, "x"];
+foreach ([0, 1, 2, 3] as $i) {
+    try { echo take(getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { echo takeUrl(u: getMixed($vals[$i])), "\n"; } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+    try { $r = pick($vals, $i); echo $r?->toString() ?? "null", "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com/a\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, Uri\\Rfc3986\\Uri given\n\
+         https://example.com/a\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url given\n\
+         https://example.com/\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, Uri\\WhatWg\\Url returned\n\
+         null\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, null given\n\
+         null\n\
+         take(): Argument #1 ($u) must be of type ?Uri\\Rfc3986\\Uri, string given\n\
+         takeUrl(): Argument #1 ($u) must be of type Uri\\WhatWg\\Url, string given\n\
+         pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, string returned\n"
+    );
+}
+
+/// Verifies `is_a()` and `is_subclass_of()` answer for the injected URI classes and exception
+/// hierarchy when the target class name is only known at run time, for object and class-name
+/// subjects alike.
+#[test]
+fn test_uri_classes_with_runtime_is_a_target() {
+    let out = compile_and_run(
+        r#"<?php
+$u = new Uri\Rfc3986\Uri("https://example.com/a");
+$w = Uri\WhatWg\Url::parse("https://example.com/");
+$names = [$argv[1] ?? "Uri\\Rfc3986\\Uri", "uri\\whatwg\\url", "Uri\\UriException",
+          "Uri\\WhatWg\\InvalidUrlException", "Uri\\InvalidUriException", "Uri\\UriError", "Throwable", "Nope"];
+foreach ($names as $n) {
+    echo json_encode([is_a($u, $n), is_a($w, $n), is_subclass_of("Uri\\WhatWg\\InvalidUrlException", $n),
+        is_a("Uri\\WhatWg\\InvalidUrlException", $n, true), is_subclass_of($w, $n), is_a($n, "Uri\\UriException", true)]), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "[true,false,false,false,false,false]\n\
+         [false,true,false,false,false,false]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,true,false,true]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,false,false,false]\n\
+         [false,false,true,true,false,false]\n\
+         [false,false,false,false,false,false]\n"
     );
 }

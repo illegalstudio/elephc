@@ -426,6 +426,32 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
 - **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
 
+### Class-typed boundaries
+
+A `mixed` value, or an `object|null` value, can reach a return, parameter or typed property declared as a class, an interface, `object`, or a nullable or union of those (`?Timer`, `A|B|null`). Array element reads, `WeakMap` lookups and other untyped containers produce such values. PHP checks the value's class at run time, and elephc emits the same check:
+
+```php
+final class TimerQueue {
+    /** @var array<int, Timer> */
+    private array $timers = [];
+    public function extract(): ?Timer {
+        return $this->timers[0] ?? null;   // mixed, checked against ?Timer
+    }
+}
+```
+
+A value of the wrong class or type throws `TypeError` with PHP's message for that boundary:
+
+- return: `TimerQueue::extract(): Return value must be of type ?Timer, string returned`
+- parameter: `take(): Argument #1 ($t) must be of type Timer, int given, called in … on line N`
+- property: `Cannot assign int to property Holder::$timer of type Timer`
+
+A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. As in PHP, the parameter checks of a call run in declaration order after every argument was evaluated, by-reference parameters included, so the first invalid parameter is the one reported. After the boundary, the value has the declared type.
+
+**Differences from PHP.** A `Closure` is rejected at a bare `object` return or parameter, and at an `object` or `?object` property, because elephc stores closures apart from class instances. A `?object` return or parameter keeps it.
+
+**Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A call through a dynamic method name (`$obj->$name($m)`) does not check its arguments. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
+
 ### Strict types
 
 A file whose leading `declare` sequence enables `strict_types=1` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
@@ -481,7 +507,7 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
 - **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative. A `mixed` or `object|null` value at a class-typed parameter is checked the same way; see [Class-typed boundaries](#class-typed-boundaries).
 
 ### Callable strings
 
@@ -587,11 +613,19 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   unless told otherwise, `is_a` only when told to). The flag itself may be computed at runtime and
   need not be a `bool`: coercive mode admits any scalar there, and an `int`, `string` or `float`
   is converted with PHP's own truthiness, so `"0"` is false while `"0.0"` and `" "` are true.
-  The name must be a compile-time **literal**: a
-  name only known at runtime still answers `false` rather than walking the hierarchy, because the
-  emitted program has no name-keyed class table to consult. The same restriction is louder in
-  `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
-  compile time instead of answering. One gap of its own: an enum declared in the compiled
+  Either name may be known only at runtime (`is_a($name, $name, true)`): the subject (a class
+  name, an object's runtime class, or a `mixed` value holding either) selects the ancestor list
+  of one compiled class or interface, and the target is compared with it. A `mixed` subject
+  is dispatched the same way against a literal target, so a `mixed` value holding a class name
+  matches by name there too. `Closure` is a class name like any other there
+  (`is_a('Closure', 'Closure', true)` is `true`). A closure's only
+  ancestor is `Closure`, whether the target is a literal or a runtime name and whether the
+  closure was compiled or created inside `eval()` (a function name or method array passed as
+  a `callable` is no closure, so it matches no class), and a target holding a NUL byte,
+  literal or runtime, names no class. A class
+  that only an autoloader could load and that the program never names is not compiled, so a
+  runtime name cannot reach it. `class_parents()`, `class_implements()` and `class_exists()` still reject a
+  non-literal name at compile time. One gap of its own: an enum declared in the compiled
   program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
   `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation also
   affects compiled `is_a()` and `is_subclass_of()` calls with a class-name string for an enum

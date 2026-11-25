@@ -1408,10 +1408,15 @@ static QUERY_CALLERS: Mutex<Vec<(String, Vec<(u32, u64)>)>> = Mutex::new(Vec::ne
 /// Whether a function is the database driver's rather than the application's:
 /// the PDO and mysqli classes elephc implements, and their functions. A query
 /// is reported against the code that called into them.
+///
+/// mysqli is matched as PHP names it, case-insensitively: its classes
+/// (`mysqli::`, `mysqli_stmt::`, `mysqli_result::`, ...) and its `mysqli_*`
+/// functions. A bare `mysqli` prefix also took the application's own
+/// `mysqliHelper`, and the query was charged to the frame above it (#2499).
 fn is_driver_frame(name: &str) -> bool {
-    const DRIVER_PREFIXES: [&str; 6] =
-        ["PDO::", "PDOStatement::", "PDO\\", "Pdo\\", "mysqli", "Mysqli"];
-    DRIVER_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    const PDO_PREFIXES: [&str; 4] = ["PDO::", "PDOStatement::", "PDO\\", "Pdo\\"];
+    let mysqli = |prefix: &[u8]| name.as_bytes().get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix));
+    PDO_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) || mysqli(b"mysqli::") || mysqli(b"mysqli_")
 }
 
 /// The function a query running now is charged to: the innermost frame on this
@@ -5933,6 +5938,29 @@ mod tests {
         let out = render_queries();
         assert!(out.contains("elephc-instr-query: 3 INSERT INTO t VALUES (?)"), "{out}");
         ENABLED.store(was_enabled, Ordering::Relaxed);
+    }
+
+    /// The driver's frames are the PDO and mysqli classes and the `mysqli_*`
+    /// functions, not an application function whose name merely starts with
+    /// `mysqli` (#2499).
+    #[test]
+    fn driver_frames_are_bounded_like_pdo() {
+        for driver in [
+            "PDO::query",
+            "PDOStatement::execute",
+            "Pdo\\Mysql::connect",
+            "mysqli::query",
+            "Mysqli::prepare",
+            "mysqli_stmt::execute",
+            "mysqli_result::fetch_assoc",
+            "mysqli_query",
+            "MYSQLI_real_query",
+        ] {
+            assert!(is_driver_frame(driver), "{driver}");
+        }
+        for application in ["mysqliHelper", "MysqliRepository::find", "mysqlix", "App\\mysqli_query", "load_price", "mysqli"] {
+            assert!(!is_driver_frame(application), "{application}");
+        }
     }
 
     #[test]

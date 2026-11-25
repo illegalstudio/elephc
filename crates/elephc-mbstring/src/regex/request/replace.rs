@@ -64,8 +64,12 @@ fn substitute(output: &mut Vec<u8>, subject: &[u8], replacement: &[u8], length: 
         let start = position;
         let width = encoding.replacement_width(replacement[position]);
         if width != 1 || replacement[position] != b'\\' {
-            position += width;
-            output.extend_from_slice(&replacement[start..position]);
+            // A truncated multibyte sequence at the end of the replacement still reports its
+            // expected width. Copy only the bytes that belong to the replacement: PHP 8.5's
+            // mb_regex_substitute() reads source length + width and exposes the terminator.
+            let end = position.saturating_add(width).min(length);
+            output.extend_from_slice(&replacement[start..end]);
+            position = end;
             continue;
         }
         position += 1;
@@ -80,8 +84,9 @@ fn substitute(output: &mut Vec<u8>, subject: &[u8], replacement: &[u8], length: 
                 position += 1;
                 let width = encoding.replacement_width(replacement[position]);
                 if width != 1 || position == length || !matches!(replacement[position], b'<' | b'\'') {
-                    position += width;
-                    output.extend_from_slice(&replacement[start..position]);
+                    let end = position.saturating_add(width).min(length);
+                    output.extend_from_slice(&replacement[start..end]);
+                    position = end;
                     continue;
                 }
                 let delimiter = if replacement[position] == b'<' { b'>' } else { b'\'' };
@@ -95,7 +100,9 @@ fn substitute(output: &mut Vec<u8>, subject: &[u8], replacement: &[u8], length: 
                     numeric &= replacement[end].is_ascii_digit();
                     end += 1;
                 }
-                position = end + 1;
+                // An unterminated group name may run past `length` by one multibyte width;
+                // clamp the emitted fallback to the real replacement instead of its padding.
+                position = end.saturating_add(1).min(length);
                 if end == name || end >= length { None }
                 else if numeric { numbered.then(|| numbered_group(&replacement[name..end])).flatten() }
                 else { captures.names.iter().find(|(key, _)| key == &replacement[name..end]).map(|(_, group)| *group) }
@@ -110,9 +117,11 @@ fn substitute(output: &mut Vec<u8>, subject: &[u8], replacement: &[u8], length: 
     }
 }
 
-/// Applies PHP's leading-zero rejection and supported 64-bit strtoul-to-int group conversion.
+/// Applies PHP's leading-zero rejection and rejects group numbers above its signed-int range.
 fn numbered_group(bytes: &[u8]) -> Option<usize> {
     if bytes.len() > 1 && bytes[0] == b'0' { return None; }
     let number = bytes.iter().fold(0u64, |value, byte| value.saturating_mul(10).saturating_add(u64::from(byte - b'0')));
-    usize::try_from(number as u32 as i32).ok()
+    // PHP's `(int) strtoul(...)` wraps 2^32+1 back to group 1. Keep the escape literal
+    // instead of silently addressing an unrelated group.
+    usize::try_from(number).ok().filter(|value| *value <= i32::MAX as usize)
 }

@@ -351,7 +351,12 @@ pub(super) fn datetime_shared_methods() -> Vec<ClassMethod> {
         datetime_get_microsecond(),
         datetime_immutable_get_timezone(),
         datetime_immutable_format(),
+        datetime_display_timezone(),
+        datetime_abbr_offset(),
+        datetime_offset_zone(),
+        datetime_zone_label(),
         datetime_get_offset(),
         datetime_diff_method(),
+        datetime_unserialize(),
     ]
 }

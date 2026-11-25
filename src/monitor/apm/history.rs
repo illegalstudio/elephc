@@ -260,12 +260,12 @@ impl RangePlan {
     /// A stored service window that began before memory does is read whole,
     /// even when it ends after: its earlier requests have left memory. Stored
     /// windows are coarser than memory's one-second ones, so the oldest memory
-    /// window usually starts inside one, and cutting at the end time dropped it
-    /// (review G4). Memory then joins only after the last stored SERVICE window.
+    /// window usually starts inside one, and cutting at the end time dropped it.
+    /// Memory then joins only after the last stored SERVICE window.
     ///
     /// Script runs never set that cut: memory holds only the collector's own
     /// windows, so a long run ending inside it would have hidden every memory
-    /// window before its end (review G10). They come from the store over the
+    /// window before its end. They come from the store over the
     /// whole range instead, which also shows a run that ended in the last hour.
     pub(crate) fn load(self) -> Vec<Window> {
         let mut out = Vec::new();

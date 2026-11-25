@@ -159,6 +159,49 @@ stream_wrapper_unregister('ownerresult');
     }
 }
 
+/// A brigade filter that removes itself mid-callback returns safely without a dangling receiver.
+#[test]
+fn test_user_filter_self_removal_during_callback_is_safe() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class SelfRemovingFilter extends php_user_filter {
+    public static mixed $handle = null;
+    public static mixed $stream = null;
+    public static array $spray = [];
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        if (!$closing && self::$handle !== null) {
+            $filter = self::$handle;
+            self::$handle = null;
+            echo stream_filter_remove($filter) ? 'removed|' : 'failed|';
+            // Reclaim the freed instance while this callback is still running.
+            for ($i = 0; $i < 128; $i++) {
+                self::$spray[] = stream_bucket_new(self::$stream, str_repeat('x', 96));
+            }
+        }
+        return PSFS_PASS_ON;
+    }
+    public function onClose(): void { echo 'closed|'; }
+    public function __destruct(): void { echo 'dropped|'; }
+}
+stream_filter_register('self.removing', 'SelfRemovingFilter');
+$stream = fopen('php://temp', 'w+b');
+fwrite($stream, 'payload');
+rewind($stream);
+SelfRemovingFilter::$stream = $stream;
+SelfRemovingFilter::$handle = stream_filter_append($stream, 'self.removing', STREAM_FILTER_READ);
+echo stream_get_contents($stream), '|done|';
+fclose($stream);
+SelfRemovingFilter::$spray = [];
+SelfRemovingFilter::$stream = null;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "closed|dropped|removed|payload|done|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Fresh count results never keep a narrowed union string argument alive after a write.
 #[test]
 fn test_fwrite_releases_owned_and_narrowed_string_arguments() {

@@ -5,6 +5,12 @@ edition = "2021"
 license = "MIT AND Unicode-3.0 AND PHP-3.01"
 description = "Shared PHP mbstring engine for elephc AOT and Magician"
 publish = false
+# Test targets are declared below instead of one binary per tests/*.rs file: a binary per file
+# rebuilt and linked 50 executables on a cold build. tests/engine.rs mounts every suite that
+# leaves the process-wide state alone; the suites that install the regex or MIME provider or
+# configure the engine (each set once per process) keep a binary each, as does ini_identity,
+# which serializes its tests against process-wide string identities.
+autotests = false
 
 [lib]
 crate-type = ["staticlib", "rlib"]
@@ -16,3 +22,47 @@ elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 flate2 = "1"
 sha2 = "0.10"
 serde_json = "1"
+
+[[test]]
+name = "engine"
+path = "tests/engine.rs"
+
+[[test]]
+name = "core_ini"
+path = "tests/core_ini.rs"
+
+[[test]]
+name = "ini_abi"
+path = "tests/ini_abi.rs"
+
+[[test]]
+name = "ini_identity"
+path = "tests/ini_identity.rs"
+
+[[test]]
+name = "ini_pcre2"
+path = "tests/ini_pcre2.rs"
+
+[[test]]
+name = "invoke"
+path = "tests/invoke.rs"
+
+[[test]]
+name = "output_abi"
+path = "tests/output_abi.rs"
+
+[[test]]
+name = "regex"
+path = "tests/regex.rs"
+
+[[test]]
+name = "regex_ini_abi"
+path = "tests/regex_ini_abi.rs"
+
+[[test]]
+name = "regex_request"
+path = "tests/regex_request.rs"
+
+[[test]]
+name = "response"
+path = "tests/response.rs"

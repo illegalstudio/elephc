@@ -20,3 +20,15 @@ fn test_example_functions_compiles_and_runs() {
         "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\nadd_ten() = 20\nprofile(age: 30, name: \"Ada\") = Ada:30\nprofile(..., name: \"Lin\") = Lin:31\nstr_repeat(times: 3, string: \"ha\") = hahaha\nstr_repeat(..., times: 3) = hahaha\n",
     );
 }
+
+/// Compiles and runs `examples/class-typed-boundaries/main.php`: `mixed` and `object|null`
+/// values reaching class-typed returns, parameters and properties, accepted or rejected with
+/// PHP's runtime `TypeError`.
+#[test]
+fn test_example_class_typed_boundaries_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../../examples/class-typed-boundaries/main.php"));
+    assert_eq!(
+        out,
+        "a\nTimerQueue::extractRaw(): Return value must be of type ?Timer, string returned\nb\nCannot assign ArrayObject to property Scheduler::$next of type ?Timer\ntimer c\ndescribe(): Argument #1 ($timer) must be of type Timer, int given\n",
+    );
+}

@@ -15,6 +15,10 @@
 //!   non-null object and the method a string before the scan, exactly as each case checked.
 //! - A matched receiver row binds through one shared sequence: a fresh runtime descriptor
 //!   copied from the row's template, owning one retained receiver capture.
+//! - A Closure factory's binding also draws an object handle. Otherwise the caller marks the
+//!   copy (array origin, or the ObjectInvoke kind for an invokable object) after the bind.
+//! - An owned string conversion's rows point at static descriptor variants that already record
+//!   the string origin, so selecting one costs no allocation.
 //! - The scan keeps its cursor and remaining-row count in a 16-byte temporary slot, because
 //!   `__rt_strcasecmp` clobbers every caller-saved register. Both exits leave the caller's
 //!   temporary stack exactly as they found it.
@@ -34,16 +38,32 @@ const SCAN_STATE_BYTES: usize = 16;
 ///
 /// On a match the integer result register holds the case descriptor and control reaches
 /// `matched_label`; otherwise `miss_label`. The name stays pushed on both exits.
+///
+/// With an `origin` (`CALLABLE_DESC_ORIGIN_*`), a row holds the static descriptor variant that
+/// records the PHP string the callable stands for; a descriptor without such a variant gets a
+/// private runtime copy after the match.
 pub(super) fn emit_string_case_table_lookup(
     ctx: &mut FunctionContext<'_>,
     cases: &[callable_dispatch::RuntimeCallableCase],
+    origin: Option<u64>,
     matched_label: &str,
     miss_label: &str,
 ) {
     let mut words = Vec::new();
     let mut rows = 0usize;
+    let mut runtime_origin_copy = false;
     for case in cases {
         let Some(php_name) = case.php_name.as_ref() else { continue; };
+        let descriptor = match origin {
+            Some(origin) => callable_descriptor::static_descriptor_with_origin(
+                ctx.data, &case.descriptor_label, origin,
+            )
+            .unwrap_or_else(|| {
+                runtime_origin_copy = true;
+                case.descriptor_label.clone()
+            }),
+            None => case.descriptor_label.clone(),
+        };
         // The per-case compare accepted the bare name and its `\`-prefixed spelling.
         let mut spellings = vec![php_name.clone()];
         if !php_name.starts_with('\\') {
@@ -54,7 +74,7 @@ pub(super) fn emit_string_case_table_lookup(
             words.extend([
                 DataWord::Symbol(label),
                 DataWord::U64(len as u64),
-                DataWord::Symbol(case.descriptor_label.clone()),
+                DataWord::Symbol(descriptor.clone()),
             ]);
             rows += 1;
         }
@@ -101,8 +121,28 @@ pub(super) fn emit_string_case_table_lookup(
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, SCAN_STATE_BYTES);
+    if let (Some(origin), true) = (origin, runtime_origin_copy) {
+        emit_runtime_origin_copy_unless_marked(ctx, origin, matched_label);
+    }
     abi::emit_jump(ctx.emitter, matched_label);
     emit_scan_advance(ctx, &scan, STRING_ROW_BYTES, miss_label);
+}
+
+/// Replaces a matched descriptor that does not record `origin` yet (a row without a static
+/// origin variant) with a private runtime copy that does; a marked variant reaches `done_label`.
+fn emit_runtime_origin_copy_unless_marked(ctx: &mut FunctionContext<'_>, origin: u64, done_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the selected descriptor kind word
+            ctx.emitter.instruction(&format!("tst x9, #{}", origin));           // is it a static variant that records the origin?
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a marked variant needs no runtime copy
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test QWORD PTR [rax], {}", origin)); // is it a static variant that records the origin?
+            ctx.emitter.instruction(&format!("jnz {}", done_label));            // a marked variant needs no runtime copy
+        }
+    }
+    callable_descriptor::emit_runtime_copy_with_origin(ctx.emitter, origin);
 }
 
 /// Where the receiver (and, for callable arrays, the method name) of a scan sits on the
@@ -129,15 +169,17 @@ impl ReceiverSelector {
 ///
 /// On a match the integer result register holds a fresh runtime descriptor owning one retained
 /// receiver and control reaches `selected_label`; otherwise `miss_label`. The selector block
-/// stays on the temporary stack on both exits.
+/// stays on the temporary stack on both exits. A `closure` descriptor is a Closure object with
+/// its own handle, as `Closure::fromCallable()` and `$callable(...)` create.
 pub(super) fn emit_instance_target_table_lookup(
     ctx: &mut FunctionContext<'_>,
     targets: &[RuntimeArrayInstanceMethodTarget],
     selector: ReceiverSelector,
+    closure: bool,
     selected_label: &str,
     miss_label: &str,
 ) -> Result<()> {
-    emit_instance_target_table_scan(ctx, targets, selector, selected_label, miss_label, true)
+    emit_instance_target_table_scan(ctx, targets, selector, selected_label, miss_label, true, closure)
 }
 
 /// Reports whether a row of `targets` matches the saved selector block, without binding it.
@@ -151,10 +193,11 @@ pub(super) fn emit_instance_target_table_match(
     matched_label: &str,
     miss_label: &str,
 ) -> Result<()> {
-    emit_instance_target_table_scan(ctx, targets, selector, matched_label, miss_label, false)
+    emit_instance_target_table_scan(ctx, targets, selector, matched_label, miss_label, false, false)
 }
 
-/// Scans the receiver rows; a match binds the row's template only when `bind` is set.
+/// Scans the receiver rows; a match binds the row's template only when `bind` is set, into a
+/// Closure object with its own handle when `closure` is also set.
 fn emit_instance_target_table_scan(
     ctx: &mut FunctionContext<'_>,
     targets: &[RuntimeArrayInstanceMethodTarget],
@@ -162,6 +205,7 @@ fn emit_instance_target_table_scan(
     selected_label: &str,
     miss_label: &str,
     bind: bool,
+    closure: bool,
 ) -> Result<()> {
     if targets.is_empty() {
         abi::emit_jump(ctx.emitter, miss_label);
@@ -288,6 +332,9 @@ fn emit_instance_target_table_scan(
         (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16) as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    if closure {
+        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
+    }
     abi::emit_reg_move(ctx.emitter, descriptor_reg, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, template_reg, 16);
     callable_descriptor::emit_copy_descriptor_header_to_runtime(ctx.emitter, descriptor_reg, template_reg);

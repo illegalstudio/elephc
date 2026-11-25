@@ -785,8 +785,15 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`php_sapi_name()`](./builtins/misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
+| [`posix_errno()`](./builtins/misc/posix_errno.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_get_last_error()`](./builtins/misc/posix_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_geteuid()`](./builtins/misc/posix_geteuid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_getpgrp()`](./builtins/misc/posix_getpgrp.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_isatty()`](./builtins/misc/posix_isatty.md) | `(mixed $file_descriptor): bool` | `bool` | ✓ | ✓ |
+| [`posix_kill()`](./builtins/misc/posix_kill.md) | `(int $process_id, int $signal): bool` | `bool` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_strerror()`](./builtins/misc/posix_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./builtins/misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./builtins/misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
@@ -872,8 +879,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`preg_grep()`](./builtins/regex/preg_grep.md) | `(string $pattern, array $array, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 | [`preg_last_error()`](./builtins/regex/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
 | [`preg_last_error_msg()`](./builtins/regex/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |

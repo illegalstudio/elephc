@@ -23,6 +23,24 @@ pub(crate) fn lower_elephc_phar_get_file_metadata(
     )
 }
 
+/// Lowers `__elephc_phar_archive_valid(path, is_data)` into the archive-validity bridge.
+///
+/// The bridge takes `(path_ptr, path_len, is_data)` and returns 1 when the archive can
+/// be opened, so it reuses the same `(string, int) -> bool` shape as the compression
+/// setters.
+pub(crate) fn lower_elephc_phar_archive_valid(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_archive_valid_function_pointer(ctx);
+    emit_phar_path_int_to_bool_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_archive_valid",
+        "_elephc_phar_archive_valid_fn",
+    )
+}
+
 /// Lowers `__elephc_phar_set_file_metadata()` into the per-file metadata-write bridge.
 /// The single `phar://archive/entry` URL argument is split by the bridge, so this
 /// reuses the same `(url, data) -> bool` shape as the archive-level metadata writer.
@@ -89,6 +107,10 @@ pub(crate) fn lower_elephc_phar_sign_openssl(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if inst.operands.len() == 3 {
+        publish_phar_sign_openssl_algo_function_pointer(ctx);
+        return emit_phar_sign_openssl_algo_bridge(ctx, inst);
+    }
     publish_phar_sign_openssl_function_pointer(ctx);
     emit_phar_set_string_bridge(
         ctx,

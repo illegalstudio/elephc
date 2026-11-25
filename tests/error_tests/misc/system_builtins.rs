@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of misc system builtin diagnostics, including undefined constant, define wrong args, and define non string name.
+//! Integration or regression tests for diagnostic coverage of misc system builtin diagnostics, including undefined constant, define wrong args, define non string name, and PCNTL/POSIX arity and operand types.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -58,6 +58,48 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_posix_kill_wrong_args,
+    "<?php posix_kill(1);",
+    "posix_kill() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_isatty_wrong_args,
+    "<?php posix_isatty();",
+    "posix_isatty() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_geteuid_wrong_args,
+    "<?php posix_geteuid(1);",
+    "posix_geteuid() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_getpgrp_wrong_args,
+    "<?php posix_getpgrp(1);",
+    "posix_getpgrp() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_get_last_error_wrong_args,
+    "<?php posix_get_last_error(1);",
+    "posix_get_last_error() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_errno_wrong_args,
+    "<?php posix_errno(1);",
+    "posix_errno() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_strerror_wrong_args,
+    "<?php posix_strerror();",
+    "posix_strerror() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_pcntl_getpriority_wrong_args,
     "<?php pcntl_getpriority(1, 2, 3);",
     "pcntl_getpriority() takes at most 2 arguments"
@@ -99,6 +141,24 @@ fn test_error_pcntl_status_requires_int() {
     expect_error(
         "<?php pcntl_wifexited([]);",
         "pcntl_wifexited() argument 1 must be int-compatible",
+    );
+}
+
+/// Verifies `posix_kill()` rejects non-integer operands through the shared PCNTL validator.
+#[test]
+fn test_error_posix_kill_requires_int() {
+    expect_error(
+        "<?php posix_kill([], 0);",
+        "posix_kill() argument 1 must be int-compatible",
+    );
+}
+
+/// Verifies `posix_isatty()` admits only `int|resource`-compatible operands.
+#[test]
+fn test_error_posix_isatty_rejects_array() {
+    expect_error(
+        "<?php posix_isatty([]);",
+        "posix_isatty() expects parameter 1 to be of type int|resource",
     );
 }
 
@@ -639,7 +699,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -648,7 +708,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -661,12 +721,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+/// Verifies that `preg_match()` rejects arguments beyond the `$offset` parameter.
 #[test]
-fn test_error_preg_match_four_args() {
+fn test_error_preg_match_six_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
-        "preg_match() takes 2 or 3 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -675,7 +735,16 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes 2 to 4 arguments",
+        "preg_match_all() takes 2 to 5 arguments",
+    );
+}
+
+/// Verifies that `preg_match_all()` rejects arguments beyond the `$offset` parameter.
+#[test]
+fn test_error_preg_match_all_six_args() {
+    expect_error(
+        r#"<?php preg_match_all("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match_all() takes 2 to 5 arguments",
     );
 }
 

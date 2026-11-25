@@ -37,12 +37,12 @@ description: "Compiler internals for __elephc_phar_sign_openssl(): lowering path
 ## Signature summary
 
 ```php
-function __elephc_phar_sign_openssl(string $path, string $key): bool
+function __elephc_phar_sign_openssl(string $path, string $key, int $algo = 16): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

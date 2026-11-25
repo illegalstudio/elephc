@@ -15,6 +15,8 @@ use elephc_builtin_contract::mbstring_abi::{array::{ArrayGraph, Key, Value as Ce
 
 #[path = "regex_capture.rs"]
 mod capture;
+#[path = "../support/regex_oracle.rs"]
+mod regex_oracle;
 
 /// Retains the ordinary fixture host at offset zero for its unchanged value/ownership callbacks.
 #[repr(C)]
@@ -164,36 +166,47 @@ fn run(step: &Value) -> Value {
 #[test]
 #[ignore = "requires a managed Oniguruma test prefix or pinned 6.9.10 native development files"]
 fn mbstring_invoke_regex_progressive_php_corpus() {
-    replay_corpus(include_bytes!("../fixtures/regex_request.jsonl.gz"), 578);
+    replay_corpus(include_bytes!("../fixtures/regex_request.jsonl.gz"), 578, false);
 }
 
 /// Replays all split results and warning callbacks through the same public invocation used by AOT and eval.
 #[test]
 #[ignore = "requires a managed Oniguruma test prefix or pinned 6.9.10 native development files"]
 fn mbstring_invoke_regex_split_php_corpus() {
-    replay_corpus(include_bytes!("../fixtures/regex_split.jsonl.gz"), 1871);
+    replay_corpus(include_bytes!("../fixtures/regex_split.jsonl.gz"), 1871, false);
 }
 
 /// Replays replacements, null/false distinctions, and diagnostic callbacks through protected public invocation.
 #[test]
 #[ignore = "requires a managed Oniguruma test prefix or pinned 6.9.10 native development files"]
 fn mbstring_invoke_regex_replace_php_corpus() {
-    replay_corpus(include_bytes!("../fixtures/regex_replace.jsonl.gz"), 1431);
+    replay_corpus(include_bytes!("../fixtures/regex_replace.jsonl.gz"), 1431, true);
 }
 
 /// Resets exported request state between independently captured PHP traces and validates every result owner.
-fn replay_corpus(fixture: &[u8], expected: usize) {
+fn replay_corpus(fixture: &[u8], expected: usize, skip_security_divergences: bool) {
     assert_eq!(unsafe { elephc_mbstring_regex_provider_v1(&regex_provider::provider()) }, 0);
     let reader = flate2::read::GzDecoder::new(fixture);
     let mut count = 0;
+    let mut skipped = 0;
     for line in BufReader::new(reader).lines() {
         elephc_mbstring_reset_v1();
         call(RuntimeBuiltinId::MbRegexSetOptions, &[MbArgV1::string(b"pr")]);
         let case: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        // PHP 8.5.13 wraps these group numbers through (int)strtoul; elephc keeps the
+        // escape literal (PHP-PrettyHorriblePatches #34). The dedicated regression
+        // covers the fixed output; the fixture keeps the PHP capture.
+        if skip_security_divergences && regex_oracle::has_security_divergence(&case) {
+            skipped += 1;
+            continue;
+        }
         for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
             assert_eq!(run(step), case["trace"][index], "case {count}, step {index}: {case}");
         }
         count += 1;
     }
-    assert_eq!(count, expected);
+    assert_eq!(count + skipped, expected);
+    if skip_security_divergences {
+        assert_eq!(skipped, 50);
+    }
 }

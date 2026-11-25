@@ -193,7 +193,7 @@ pub(crate) fn series_json(shared: &Shared, query: &str) -> serde_json::Value {
     let mut windows = plan.load();
     // A page over a store several services write to keeps their routes apart,
     // as the terminal and the exported page do: `GET /` of two services is two
-    // rows, not one row adding both (review G2). A collector's page reads only
+    // rows, not one row adding both. A collector's page reads only
     // its own service, which this leaves as it is.
     super::label_sources(&mut windows);
     // A script the Scripts section lists once, whichever instance ran it: picked, its
@@ -311,7 +311,7 @@ pub(crate) fn build_series(
             let t = from + (index as u64 + 1) * step_ms;
             // The time the point's service windows cover, counted once: two
             // services watched over the same second watched one second, as the
-            // table counts it, so their requests add up to their rate (G3).
+            // table counts it, so their requests add up to their rate.
             let resources = entry.as_ref().and_then(|(_, services)| point_resources(services));
             let entry = entry.as_ref().map(|(row, services)| (row, if services.is_empty() { 0 } else { super::measured_ms(services) }));
             match entry {

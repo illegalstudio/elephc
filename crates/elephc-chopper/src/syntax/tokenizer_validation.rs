@@ -11,13 +11,17 @@
 //!   stay stable, so parser diagnostics keep PHP's source lines.
 //! - Accepted keyword identifiers are mapped back to byte offsets for token reclassification.
 
+use crate::scanner::HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE;
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
 use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 mod diagnostics;
 mod parser_view;
 mod prechecks;
+mod reference_scan;
+mod token_view;
 
 use diagnostics::*;
 use parser_view::*;
@@ -77,6 +81,11 @@ mod tok {
     pub const T_ENCAPSED_AND_WHITESPACE: i64 = id("T_ENCAPSED_AND_WHITESPACE");
     pub const T_END_HEREDOC: i64 = id("T_END_HEREDOC");
     pub const T_EXTENDS: i64 = id("T_EXTENDS");
+    pub const T_FINAL: i64 = id("T_FINAL");
+    pub const T_VAR: i64 = id("T_VAR");
+    pub const T_PUBLIC_SET: i64 = id("T_PUBLIC_SET");
+    pub const T_PROTECTED_SET: i64 = id("T_PROTECTED_SET");
+    pub const T_PRIVATE_SET: i64 = id("T_PRIVATE_SET");
     pub const T_FN: i64 = id("T_FN");
     pub const T_FUNCTION: i64 = id("T_FUNCTION");
     pub const T_GOTO: i64 = id("T_GOTO");
@@ -105,6 +114,11 @@ mod tok {
     pub const T_STATIC: i64 = id("T_STATIC");
     pub const T_NAMESPACE: i64 = id("T_NAMESPACE");
     pub const T_STRING: i64 = id("T_STRING");
+    pub const T_INT_CAST: i64 = id("T_INT_CAST");
+    pub const T_DOUBLE_CAST: i64 = id("T_DOUBLE_CAST");
+    pub const T_BOOL_CAST: i64 = id("T_BOOL_CAST");
+    pub const T_ARRAY_CAST: i64 = id("T_ARRAY_CAST");
+    pub const T_OBJECT_CAST: i64 = id("T_OBJECT_CAST");
     pub const T_STRING_CAST: i64 = id("T_STRING_CAST");
     pub const T_STRING_VARNAME: i64 = id("T_STRING_VARNAME");
     pub const T_TRAIT: i64 = id("T_TRAIT");
@@ -143,6 +157,11 @@ const _: () = {
     assert!(tok::T_ATTRIBUTE != -1, "T_ATTRIBUTE missing from the tokenizer catalog");
     assert!(tok::T_DECLARE != -1, "T_DECLARE missing from the tokenizer catalog");
     assert!(tok::T_EXTENDS != -1, "T_EXTENDS missing from the tokenizer catalog");
+    assert!(tok::T_FINAL != -1, "T_FINAL missing from the tokenizer catalog");
+    assert!(tok::T_VAR != -1, "T_VAR missing from the tokenizer catalog");
+    assert!(tok::T_PUBLIC_SET != -1, "T_PUBLIC_SET missing from the tokenizer catalog");
+    assert!(tok::T_PROTECTED_SET != -1, "T_PROTECTED_SET missing from the tokenizer catalog");
+    assert!(tok::T_PRIVATE_SET != -1, "T_PRIVATE_SET missing from the tokenizer catalog");
     assert!(tok::T_END_HEREDOC != -1, "T_END_HEREDOC missing from the tokenizer catalog");
     assert!(tok::T_ENDDECLARE != -1, "T_ENDDECLARE missing from the tokenizer catalog");
     assert!(tok::T_ENDFOR != -1, "T_ENDFOR missing from the tokenizer catalog");
@@ -187,6 +206,11 @@ const _: () = {
     assert!(tok::T_START_HEREDOC != -1, "T_START_HEREDOC missing from the tokenizer catalog");
     assert!(tok::T_STATIC != -1, "T_STATIC missing from the tokenizer catalog");
     assert!(tok::T_STRING != -1, "T_STRING missing from the tokenizer catalog");
+    assert!(tok::T_INT_CAST != -1, "T_INT_CAST missing from the tokenizer catalog");
+    assert!(tok::T_DOUBLE_CAST != -1, "T_DOUBLE_CAST missing from the tokenizer catalog");
+    assert!(tok::T_BOOL_CAST != -1, "T_BOOL_CAST missing from the tokenizer catalog");
+    assert!(tok::T_ARRAY_CAST != -1, "T_ARRAY_CAST missing from the tokenizer catalog");
+    assert!(tok::T_OBJECT_CAST != -1, "T_OBJECT_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_CAST != -1, "T_STRING_CAST missing from the tokenizer catalog");
     assert!(tok::T_STRING_VARNAME != -1, "T_STRING_VARNAME missing from the tokenizer catalog");
     assert!(tok::T_TRAIT != -1, "T_TRAIT missing from the tokenizer catalog");
@@ -208,6 +232,10 @@ pub trait SourceToken {
     fn pos(&self) -> usize;
     /// Returns the byte length in the original source.
     fn len(&self) -> usize;
+    /// Returns the one-based source line when the embedder retains it.
+    fn line(&self) -> usize {
+        0
+    }
 }
 
 /// One tokenizer token reduced to the metadata this validator needs.
@@ -231,7 +259,7 @@ impl SourceToken for SyntaxToken {
 }
 
 /// One TOKEN_PARSE failure with PHP-compatible text and a source byte offset.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationError {
     /// PHP-style parser message without a filename suffix.
     pub message: String,
@@ -250,6 +278,8 @@ pub struct TokenView {
     pub pos: usize,
     /// Byte length in the original source.
     pub len: usize,
+    /// One-based source line.
+    pub line: usize,
 }
 
 impl SourceToken for TokenView {
@@ -259,6 +289,8 @@ impl SourceToken for TokenView {
     fn pos(&self) -> usize { self.pos }
     /// Returns the byte length in the original source.
     fn len(&self) -> usize { self.len }
+    /// Returns the one-based source line.
+    fn line(&self) -> usize { self.line }
 }
 
 /// Validates a token view without monomorphizing the parser in the engine's opt-level crate.
@@ -279,7 +311,7 @@ pub struct ValidationWarning {
 }
 
 /// The result of validating one source for TOKEN_PARSE.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ValidationFeedback {
     /// Byte offsets of keyword tokens Zend must rewrite to T_STRING.
     pub names: Vec<usize>,
@@ -312,30 +344,49 @@ pub fn validate<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedba
 
 /// Runs the prechecks and validates the normalized view under the tokenizer grammar.
 fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedback {
+    validate_in_scope_with(source, tokens, token_view_enabled())
+}
+
+/// Runs validation with an explicit token-view selection for differential tests.
+fn validate_in_scope_with<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    use_token_view: bool,
+) -> ValidationFeedback {
+    let presence = TokenPresence::scan(tokens);
     // `declare(encoding=...)` is emitted while that statement is compiled, so it survives a
     // later parse failure. The caller drops the warnings that follow the failure position.
-    let encoding_warnings = declare_encoding_warnings(source, tokens);
+    let encoding_warnings = if presence.declare {
+        declare_encoding_warnings(source, tokens)
+    } else {
+        Vec::new()
+    };
     // These pre-checks parse regions the parser view blanks, so the identifier feedback they
     // record has to be merged with the main parse's feedback below.
     let mut precheck_names = Vec::new();
     let reference_delimiters = OnceCell::new();
-    let precheck = close_tag_else_error(source, tokens)
-        .or_else(|| halt_compiler_scope_error(source, tokens))
-        .or_else(|| new_dynamic_static_error(source, tokens))
-        .or_else(|| invalid_array_reference_error(source, tokens, &reference_delimiters))
-        .or_else(|| goto_statement_error(source, tokens))
-        .or_else(|| unterminated_backtick_error(source, tokens));
-    let precheck = precheck
-        .or_else(|| void_cast_expression_error(tokens))
-        .or_else(|| switch_case_html_error(source, tokens))
-        .or_else(|| dollar_brace_expression_error(source, tokens, &mut precheck_names));
-    let precheck = precheck
-        .or_else(|| computed_member_expression_error(source, tokens, &mut precheck_names))
-        .or_else(|| declaration_variable_variable_error(source, tokens))
-        .or_else(|| complex_interpolation_error(source, tokens))
-        .or_else(|| simple_interpolation_offset_error(source, tokens));
+    let precheck = run_prechecks(
+        source,
+        tokens,
+        &presence,
+        &reference_delimiters,
+        &mut precheck_names,
+    );
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
+    if use_token_view {
+        if let Some(view) = token_view::build(source, tokens, &reference_delimiters) {
+            return validate_token_view(
+                source,
+                tokens,
+                view,
+                presence.list,
+                precheck,
+                precheck_names,
+                encoding_warnings,
+            );
+        }
+    }
     let (view, map, reference_error) =
         parser_view(source, tokens, source.len(), &reference_delimiters);
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
@@ -352,6 +403,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     view_error,
                     reference_error,
@@ -370,7 +422,11 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                     warnings: encoding_warnings,
                 };
             }
-            let error = reserved_list_error(source, tokens);
+            let error = if presence.list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
             let mut names = if error.is_some() || names.is_empty() {
                 Vec::new()
             } else {
@@ -396,6 +452,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 names: Vec::new(),
                 error: Some(earlier_error(
                     source,
+                    tokens,
                     precheck,
                     error,
                     reference_error,
@@ -404,6 +461,114 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
             }
         },
     }
+}
+
+/// Returns whether the source-spanned token view is enabled.
+///
+/// The token view is the default for supported sources; `ELEPHC_TOKEN_VIEW=text`
+/// keeps the legacy text view as an escape hatch during rollout.
+fn token_view_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !std::env::var_os("ELEPHC_TOKEN_VIEW")
+            .and_then(|value| value.to_str().map(str::to_owned))
+            .is_some_and(|value| matches!(value.as_str(), "0" | "off" | "text"))
+    })
+}
+
+/// Validates one source through the source-spanned token view.
+fn validate_token_view<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    view: token_view::TokenProjection,
+    has_list: bool,
+    precheck: Option<ValidationError>,
+    precheck_names: Vec<usize>,
+    encoding_warnings: Vec<ValidationWarning>,
+) -> ValidationFeedback {
+    let token_view::TokenProjection { tokens: view_tokens } = view;
+    let reference_error: Option<ReferenceError> = None;
+    let (result, names) = crate::syntax::parser::parse_with_tokenizer_feedback(&view_tokens);
+    match result {
+        Ok(_) => {
+            if let Some(precheck) = prefer_reference_error(precheck, reference_error) {
+                return ValidationFeedback {
+                    names: Vec::new(),
+                    error: Some(precheck),
+                    warnings: encoding_warnings,
+                };
+            }
+            let error = if has_list {
+                reserved_list_error(source, tokens)
+            } else {
+                None
+            };
+            let mut names = if error.is_some() || names.is_empty() {
+                Vec::new()
+            } else {
+                mapped_names_source(source, names)
+            };
+            if error.is_none() {
+                names.extend(precheck_names);
+                names.sort_unstable();
+                names.dedup();
+            }
+            ValidationFeedback {
+                names,
+                error,
+                warnings: encoding_warnings,
+            }
+        }
+        Err(error) => {
+            let mapped = parser_error_source(source, tokens, &error);
+            let error = unclosed_delimiter_error(source, tokens, mapped.pos, &error.message)
+                .or_else(|| diagnostic_override(source, tokens, &mapped, &error.message))
+                .unwrap_or(mapped);
+            ValidationFeedback {
+                names: Vec::new(),
+                error: Some(earlier_error(source, tokens, precheck, error, reference_error)),
+                warnings: encoding_warnings,
+            }
+        }
+    }
+}
+
+/// Maps parser feedback spans from source coordinates to byte offsets.
+fn mapped_names_source(source: &[u8], names: Vec<(Span, String)>) -> Vec<usize> {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Vec::new();
+    };
+    let lines = line_starts(text);
+    let positions: Vec<(u32, u32)> = names.iter().map(|(span, _)| (span.line, span.col)).collect();
+    let offsets = view_offsets(text, &lines, &positions);
+    let mut result: Vec<usize> = names
+        .into_iter()
+        .zip(offsets)
+        .filter_map(|((_, spelling), source_pos)| {
+            let source_pos = source_pos.min(source.len());
+            let text = source.get(source_pos..)?;
+            text.get(..spelling.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(spelling.as_bytes()))
+                .then_some(source_pos)
+        })
+        .collect();
+    result.sort_unstable();
+    result.dedup();
+    result
+}
+
+/// Maps one parser error span from source coordinates to a source-token diagnostic.
+fn parser_error_source<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    error: &CompileError,
+) -> ValidationError {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return token_error_at(source, tokens, source.len());
+    };
+    let lines = line_starts(text);
+    let source_pos = view_offset(text, &lines, error.span.line, error.span.col);
+    token_error_at(source, tokens, source_pos)
 }
 
 /// Preserves parser errors inside a reference base while refining a rejected `readonly` name.
@@ -423,12 +588,16 @@ fn prefer_reference_error(
 ///
 /// A parser failure on an earlier token can be a same-statement refinement (the precheck
 /// reports the real member after `::`), so only a separator between the two positions proves
-/// the parser reached an earlier statement. Unterminated backticks report at EOF and stay
-/// authoritative. A reference diagnostic may displace a later precheck only after comparing it
-/// with the original parser position. Later prechecks also yield to earlier parser errors inside
-/// the reference.
-fn earlier_error(
+/// the parser reached an earlier statement. That separator does not apply when the parser's
+/// `Unclosed '{'` is the block `__halt_compiler()` already ended: the scanner stops there, the
+/// closing brace becomes inline HTML, and the halt diagnostic stays authoritative. The same
+/// applies to `Unclosed '('` when the halt diagnostic is a `for` header clause.
+/// Unterminated backticks report at EOF and stay authoritative. A reference diagnostic may
+/// displace a later precheck only after comparing it with the original parser position. Later
+/// prechecks also yield to earlier parser errors inside the reference.
+fn earlier_error<T: SourceToken>(
     source: &[u8],
+    tokens: &[T],
     precheck: Option<ValidationError>,
     main: ValidationError,
     reference: Option<ReferenceError>,
@@ -437,6 +606,8 @@ fn earlier_error(
         precheck.pos <= main.pos
             || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
             || !statement_boundary_between(source, main.pos, precheck.pos)
+            || halt_diagnostic_inside_unclosed_brace(tokens, precheck, &main)
+            || halt_for_header_inside_unclosed_paren(tokens, precheck, &main)
     });
     if let Some(reference) = reference {
         let preferred = precheck.as_ref().unwrap_or(&main);
@@ -452,6 +623,187 @@ fn earlier_error(
         }
     }
     precheck.unwrap_or(main)
+}
+
+/// Returns whether a halt diagnostic sits inside the brace the parser reported as unclosed.
+///
+/// `__halt_compiler();` ends tokenization, so a `}` after it is not a brace token. A real `}`
+/// token before the halt means this opener already closed and the parser error is an earlier
+/// block. A `}` inside a string is not a token, so it does not close the block. An argument
+/// inside `__halt_compiler(…)`, and a cast token written where `(` should be, stay
+/// authoritative across a newline in that same block.
+fn halt_diagnostic_inside_unclosed_brace<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '{'"
+        || precheck.pos <= main.pos
+        || !(halt_scope_diagnostic(precheck) || halt_argument_diagnostic(tokens, precheck))
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && is_halt_brace_open(token.id())
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if is_halt_brace_open(id) {
+            depth += 1;
+        } else if id == i64::from(b'}') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether `error` belongs to a malformed `__halt_compiler` call.
+///
+/// The parser can report the enclosing `Unclosed '{'` first, including across a newline.
+/// An argument after `(` expects `)`. A cast such as `(array)` is one token, so that
+/// diagnostic expects `(` and has no parenthesis to look behind. A heredoc argument is
+/// reported on its body line. When the header newline ends the start token, that byte is
+/// the next token, so a miss there still checks the heredoc span.
+fn halt_argument_diagnostic<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if let Some(index) = tokens.iter().position(|token| token.pos() == error.pos) {
+        if error.message.ends_with("expecting \")\"") && halt_parenthesized_argument(tokens, index)
+        {
+            return true;
+        }
+        if error.message.ends_with("expecting \"(\"")
+            && previous_significant_index(tokens, index).is_some_and(|halt| {
+                tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+            })
+        {
+            return true;
+        }
+    }
+    heredoc_halt_argument(tokens, error)
+}
+
+/// Returns whether `index` is the first significant token inside `__halt_compiler(`.
+fn halt_parenthesized_argument<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    let Some(open) = previous_significant_index(tokens, index) else {
+        return false;
+    };
+    if tokens[open].id() != i64::from(b'(') {
+        return false;
+    }
+    previous_significant_index(tokens, open).is_some_and(|halt| {
+        tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+    })
+}
+
+/// Returns whether `error` is the body-line diagnostic of a halt heredoc argument.
+///
+/// The reported offset is the byte after the header newline, so it can sit on the following
+/// token. Inside `__halt_compiler(` the expectation is `)`. A heredoc written where `(` should
+/// be expects `(`, and the previous significant token is the halt itself.
+fn heredoc_halt_argument<T: SourceToken>(tokens: &[T], error: &ValidationError) -> bool {
+    if !error.message.starts_with("syntax error, unexpected heredoc start ") {
+        return false;
+    }
+    let inside = error.message.ends_with("expecting \")\"");
+    let opens = error.message.ends_with("expecting \"(\"");
+    if !inside && !opens {
+        return false;
+    }
+    tokens.iter().enumerate().any(|(index, token)| {
+        if token.id() != tok::T_START_HEREDOC
+            || token.pos() >= error.pos
+            || error.pos > token.pos() + token.len()
+        {
+            return false;
+        }
+        if inside {
+            return halt_parenthesized_argument(tokens, index);
+        }
+        previous_significant_index(tokens, index).is_some_and(|halt| {
+            tokens[halt].id() == tok::T_HALT_COMPILER && !halt_used_as_name_token(tokens, halt)
+        })
+    })
+}
+
+/// Returns whether the halt at `index` is a member or namespace name.
+fn halt_used_as_name_token<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+    previous_significant_index(tokens, index).is_some_and(|previous| {
+        let id = tokens[previous].id();
+        id == tok::T_OBJECT_OPERATOR
+            || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+            || id == i64::from(b'\\')
+            || id == tok::T_NS_SEPARATOR
+    })
+}
+
+/// Returns whether the diagnostic is one of the halt-scope messages.
+///
+/// A parse error that names `__halt_compiler` counts too. The scanner has already stopped,
+/// so an enclosing `Unclosed '{'` is the missing closer after that halt, not an earlier fault.
+fn halt_scope_diagnostic(error: &ValidationError) -> bool {
+    error.message == HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE
+        || error.message == "Unclosed '{'"
+        || error.message.starts_with("Unclosed '{' on line ")
+        || error.message.starts_with("syntax error, unexpected token \"__halt_compiler\"")
+}
+
+/// Returns whether a `for`-header halt diagnostic sits inside the `(` the parser left open.
+///
+/// `__halt_compiler();` ends tokenization, so the header's closing `)` becomes inline HTML.
+/// A semicolon that separates `for` clauses is inside that header, not an earlier statement.
+fn halt_for_header_inside_unclosed_paren<T: SourceToken>(
+    tokens: &[T],
+    precheck: &ValidationError,
+    main: &ValidationError,
+) -> bool {
+    if main.message != "Unclosed '('"
+        || precheck.pos <= main.pos
+        || !for_header_halt_message(precheck)
+    {
+        return false;
+    }
+    let Some(open) = tokens.iter().position(|token| {
+        token.pos() == main.pos && token.id() == i64::from(b'(')
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    for token in &tokens[open..] {
+        let id = token.id();
+        if id == i64::from(b'(') {
+            depth += 1;
+        } else if id == i64::from(b')') {
+            depth -= 1;
+            if depth <= 0 {
+                return false;
+            }
+        }
+        if token.pos() >= precheck.pos {
+            return depth > 0;
+        }
+    }
+    depth > 0
+}
+
+/// Returns whether `error` is the halt diagnostic for a `for` init, condition or update clause.
+fn for_header_halt_message(error: &ValidationError) -> bool {
+    error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \";\""
+        || error.message == "syntax error, unexpected token \"__halt_compiler\", expecting \")\""
+}
+
+/// Returns whether `id` opens a brace the halt-scope walk treats as a real block.
+fn is_halt_brace_open(id: i64) -> bool {
+    id == i64::from(b'{')
+        || id == tok::T_CURLY_OPEN
+        || id == tok::T_DOLLAR_OPEN_CURLY_BRACES
 }
 
 /// Returns whether a statement boundary separates two source positions.
@@ -666,7 +1018,7 @@ fn view_offsets(view: &str, lines: &[usize], positions: &[(u32, u32)]) -> Vec<us
 }
 
 /// Precomputes the byte offset of every one-based parser-view line.
-fn line_starts(view: &str) -> Vec<usize> {
+pub(super) fn line_starts(view: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(view.bytes().enumerate().filter_map(|(index, byte)| {
         (byte == b'\n').then_some(index + 1)
@@ -678,3 +1030,6 @@ fn line_starts(view: &str) -> Vec<usize> {
 fn is_trivia(id: i64) -> bool {
     id == tok::T_WHITESPACE || id == tok::T_COMMENT || id == tok::T_DOC_COMMENT
 }
+
+#[cfg(test)]
+mod tests;

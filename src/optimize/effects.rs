@@ -528,9 +528,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
         }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
-        // A nullable or `mixed` receiver raises PHP's `Cannot use "::class" on null`
-        // TypeError at run time, so this expression can throw even though the operand
-        // itself is only read.
+        // `$value::class` throws a TypeError for a non-object: `Cannot use "::class" on null`
+        // for a nullable or `mixed` receiver, and an implicit string or array callable held in
+        // a `callable` slot.
         ExprKind::ObjectClassName { object } => expr_effect(object).with_may_throw(),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()

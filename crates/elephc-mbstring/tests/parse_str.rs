@@ -2,7 +2,7 @@
 //! Replays PHP's HTTP query decoding, conversion, registration, and parser diagnostics.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test parse_str`.
+//! - `cargo test -p elephc-mbstring --test engine parse_str::`.
 //!
 //! Key details:
 //! - Independent PHP workers supply startup-only parser limits and display-error settings.

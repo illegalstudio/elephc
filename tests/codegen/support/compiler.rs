@@ -915,6 +915,39 @@ pub(crate) fn compile_and_run_capture_with_heap_size(
     compile_and_run_capture_with_optional_regex(source, heap_size, false)
 }
 
+/// Compiles and runs a fixture with extra environment variables for the program.
+///
+/// The compiler process keeps its own environment: only the produced binary sees
+/// these overrides, so runtime policy switches do not leak between parallel tests.
+pub(crate) fn compile_and_run_capture_with_env(
+    source: &str,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        env,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
 /// Compiles and runs a fixture with stderr merged onto stdout, preserving write order.
 ///
 /// PHPT `--EXPECT--` records PHP's displayed diagnostics interleaved with program

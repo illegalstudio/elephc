@@ -164,6 +164,19 @@ try { bcround('1', 0, 9); } catch (\ValueError $e) { echo get_class($e), '|', $e
     );
 }
 
+/// Embedded NUL bytes must reject the whole operand instead of accepting a numeric prefix.
+#[test]
+fn test_bcmath_rejects_embedded_nul_operands() {
+    let out = compile_and_run(
+        r#"<?php
+try { bcadd("1\0garbage", '0'); echo 'accepted|'; } catch (ValueError $error) { echo 'add|'; }
+try { bccomp("1\0999", '2'); echo 'accepted|'; } catch (ValueError $error) { echo 'cmp|'; }
+try { bcadd("1.2\03", '0', 4); echo 'accepted'; } catch (ValueError $error) { echo 'frac'; }
+"#,
+    );
+    assert_eq!(out, "add|cmp|frac");
+}
+
 /// Verifies the BCMath procedural surface participates in builtin discovery.
 #[test]
 fn test_function_exists_bcadd() {

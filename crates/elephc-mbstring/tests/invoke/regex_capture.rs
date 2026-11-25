@@ -263,7 +263,7 @@ fn mbstring_invoke_regex_capture_validates_before_host_access() {
 #[test]
 #[ignore = "requires a managed Oniguruma test prefix or pinned 6.9.10 native development files"]
 fn mbstring_invoke_regex_capture_php_corpus() {
-    replay_corpus(include_bytes!("../fixtures/regex_capture.jsonl.gz"), 718);
+    replay_corpus(include_bytes!("../fixtures/regex_capture.jsonl.gz"), 718, false);
 }
 
 /// Checks pending exceptions, typed constraints, destructor reentry, and by-value construction aliases.
