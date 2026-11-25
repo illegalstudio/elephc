@@ -1682,7 +1682,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .unwrap_or(LocalKind::PhpLocal);
                 (kind == LocalKind::PhpLocal
                     && self.initialized_slots.contains(slot)
-                    && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
+                    && !matches!(self.local_types.get(name), Some(PhpType::Never)))
                 .then(|| {
                     let position = first_slots.get(name.as_str()).copied();
                     (position.unwrap_or(slot.as_raw()), name.clone())
