@@ -146,3 +146,57 @@ run();
 fn test_magic_coalesce_accessor_order_on_known_receivers_no_ir_opt() {
     without_ir_opt(test_magic_coalesce_accessor_order_on_known_receivers);
 }
+
+/// An `__isset` without a declared return type keeps php's truthiness on literal `??` probes,
+/// with and without a dynamic-property hash and on boxed receivers: a truthy int reads `__get`,
+/// a falsy one answers the default without calling it, and a stored entry still wins.
+#[test]
+fn test_magic_coalesce_untyped_isset_truthiness() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class UntypedHashOne {
+    public function __isset($name) { echo "isset:$name\n"; return 1; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+#[AllowDynamicProperties]
+class UntypedHashZero {
+    public function __isset($name) { echo "isset:$name\n"; return 0; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+class UntypedPlainOne {
+    public function __isset($name) { echo "isset:$name\n"; return 1; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+class UntypedPlainZero {
+    public function __isset($name) { echo "isset:$name\n"; return 0; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+function run(): void {
+    echo (new UntypedHashOne)->{'missing'} ?? "default", "\n";
+    echo (new UntypedHashZero)->{'missing'} ?? "default", "\n";
+    echo (new UntypedPlainOne)->{'missing'} ?? "default", "\n";
+    echo (new UntypedPlainZero)->{'missing'} ?? "default", "\n";
+    $h = new UntypedHashZero(); $h->missing = 'stored';
+    echo $h->{'missing'} ?? "default", "\n";
+    var_dump(isset((new UntypedPlainOne)->{'x'}), empty((new UntypedPlainZero)->{'y'}));
+    $boxed = [new UntypedPlainOne, new UntypedPlainZero];
+    foreach ($boxed as $object) { echo $object->{'boxed'} ?? "default", "\n"; }
+    unset($h, $boxed, $object);
+}
+run();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "isset:missing\nget:missing\nfrom-get\nisset:missing\ndefault\n",
+        "isset:missing\nget:missing\nfrom-get\nisset:missing\ndefault\nstored\n",
+        "isset:x\nisset:y\nbool(true)\nbool(true)\n",
+        "isset:boxed\nget:boxed\nfrom-get\nisset:boxed\ndefault\n",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Untyped `__isset` truthiness on probes is independent of EIR optimization.
+#[test]
+fn test_magic_coalesce_untyped_isset_truthiness_no_ir_opt() {
+    without_ir_opt(test_magic_coalesce_untyped_isset_truthiness);
+}

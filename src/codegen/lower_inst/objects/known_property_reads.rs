@@ -863,7 +863,7 @@ fn emit_scope_dynamic_property_hash_lookup(
 /// PHP coerces the accessor's return value to bool; an unannotated `__isset()` may return an
 /// int, float, string, array, or object. Boxing routes every representation through the shared
 /// Mixed truthiness helper, and the temporary owns the boxed cell so it is released afterwards.
-fn emit_magic_isset_result_bool(
+pub(super) fn emit_magic_isset_result_bool(
     ctx: &mut FunctionContext<'_>,
     target: &super::super::MethodCallTarget,
 ) {
@@ -1246,7 +1246,7 @@ pub(super) fn emit_dynamic_plan_read(
 /// Answers a literal `??` probe from the hash, then `__isset` and `__get` in php's order.
 ///
 /// The boxed receiver's accessor arm already implements that order and leaves an owned Mixed
-/// cell. A class whose accessors that arm cannot call keeps the direct getter lowering.
+/// cell. A class whose accessors that arm cannot call keeps the hash-then-getter lowering.
 fn emit_hash_or_magic_probe_read(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1256,6 +1256,11 @@ fn emit_hash_or_magic_probe_read(
     hash_offset: Option<usize>,
 ) -> Result<()> {
     let mode = PropertyFetchMode::Probe;
+    // Without a callable accessor arm (a getter whose result cannot be boxed, or a by-reference
+    // name), keep the previous hash-then-getter lowering rather than answering null.
+    let Some(magic) = magic_property_arm(ctx, class_name, mode)? else {
+        return emit_hash_or_magic_get_read(ctx, inst, object, class_name, property, hash_offset);
+    };
     let done = ctx.next_label("hash_magic_probe_done");
     match hash_offset {
         Some(hash_offset) => {
@@ -1264,9 +1269,6 @@ fn emit_hash_or_magic_probe_read(
             emit_hash_property_read(ctx, class_name, property, base_reg, hash_offset, mode, &done)?;
         }
         None => {
-            let Some(magic) = magic_property_arm(ctx, class_name, mode)? else {
-                return lower_magic_get_prop(ctx, inst, object, class_name, property);
-            };
             ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
             emit_magic_property_arm(ctx, &magic, property, &done)?;
         }

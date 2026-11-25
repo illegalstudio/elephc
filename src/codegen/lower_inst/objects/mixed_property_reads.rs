@@ -339,6 +339,18 @@ pub(super) fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCal
     }
 }
 
+/// Leaves `__isset`'s answer as a 0/1 bool in the integer result register.
+///
+/// A `bool` return (or a by-reference bool cell, already unwrapped by the caller) is used as is;
+/// any other boxable return, which an `__isset` without a declared return type may produce, is
+/// boxed and converted with php's truthiness so a `1`, `"x"` or non-empty array still counts.
+pub(super) fn emit_magic_isset_answer(ctx: &mut FunctionContext<'_>, isset: &MethodCallTarget) {
+    if isset.by_ref_return || isset.return_ty.codegen_repr() == PhpType::Bool {
+        return;
+    }
+    super::known_property_reads::emit_magic_isset_result_bool(ctx, isset);
+}
+
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
 /// none this ladder can call.
 pub(super) fn magic_property_arm(
@@ -361,9 +373,15 @@ pub(super) fn magic_property_arm(
     };
     let isset = if has_isset && !mode.uses_magic_get() {
         let target = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
-        // A probe php answers from `__isset` must never call `__get` in its place: a class whose
-        // `__isset` result this arm cannot read (not a `bool`) gets no arm at all.
-        if target.return_ty.codegen_repr() != PhpType::Bool {
+        // A probe php answers from `__isset` must never call `__get` in its place. An undeclared
+        // return type keeps php's truthiness: `emit_magic_isset_answer` coerces any boxable answer
+        // to bool. A by-reference answer is only read as a bool cell, so anything else gets no arm.
+        let readable = if target.by_ref_return {
+            target.return_ty.codegen_repr() == PhpType::Bool
+        } else {
+            magic_result_boxes_cleanly(&target.return_ty)
+        };
+        if !readable {
             return Ok(None);
         }
         Some(target)
@@ -467,6 +485,7 @@ pub(super) fn emit_magic_property_arm(
             abi::emit_pop_reg(ctx.emitter, result);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
         }
+        emit_magic_isset_answer(ctx, isset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("cmp x0, #0");                          // did __isset() report the name as set?
