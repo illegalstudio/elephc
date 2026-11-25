@@ -11,6 +11,10 @@
 //!   reproduce exactly (constants, floats rendered as strings, numeric-string arithmetic,
 //!   loose comparisons across types, operations PHP leaves to run time such as a division by
 //!   zero). `None` keeps both branches checked, which can only be stricter than PHP.
+//! - Of the magic constants only `__LINE__` is folded. PHP folds `__CLASS__`, `__FUNCTION__`,
+//!   `__METHOD__` and `__TRAIT__` to `""` in a `const` initializer, but a nested `eval()` run
+//!   from an eval-declared function or method still reads its caller's names at run time, so
+//!   folding them here could validate a branch the statement then does not take.
 
 use crate::eval_ir::{EvalBinOp, EvalCastType, EvalConst, EvalExpr, EvalMagicConst, EvalUnaryOp};
 

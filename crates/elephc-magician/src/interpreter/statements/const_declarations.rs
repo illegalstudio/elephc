@@ -36,8 +36,15 @@ pub(super) fn eval_const_decl_stmt(
 }
 
 /// Formats PHP's warning for a constant declared twice under the active profile.
+///
+/// PHP names the constant by its lookup key: namespace segments lowercased, the constant's own
+/// name kept as written.
 fn const_redefinition_warning(name: &str) -> String {
     let name = name.trim_start_matches('\\');
+    let name = match name.rsplit_once('\\') {
+        Some((namespace, constant)) => format!("{}\\{constant}", namespace.to_ascii_lowercase()),
+        None => name.to_owned(),
+    };
     if crate::eval_php_profile::eval_php_version_id() >= PHP_9_ERROR_SUFFIX_VERSION_ID {
         format!("Warning: Constant {name} already defined, this will be an error in PHP 9\n")
     } else {

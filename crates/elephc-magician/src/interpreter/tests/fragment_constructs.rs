@@ -112,6 +112,14 @@ fn const_statement_redefinition_warns_and_keeps_the_first_value() {
         warnings,
         ["Warning: Constant EVAL_CONST_TWICE already defined, this will be an error in PHP 9\n"],
     );
+
+    let (output, warnings) = run("namespace EvalConst\\Mixed;\nconst Twice = 1;\nconst Twice = 2;\necho Twice;");
+
+    assert_eq!(output, "1");
+    assert_eq!(
+        warnings,
+        ["Warning: Constant evalconst\\mixed\\Twice already defined, this will be an error in PHP 9\n"],
+    );
 }
 
 /// Verifies profiles before PHP 8.5 omit the PHP 9 notice from the redefinition warning.
