@@ -24,6 +24,7 @@ pub(crate) mod attributes;
 mod classes;
 mod class_like;
 mod constant_expressions;
+mod constant_folding;
 mod members;
 mod signatures;
 mod closures;

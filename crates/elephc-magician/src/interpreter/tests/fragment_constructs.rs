@@ -183,7 +183,20 @@ fn const_statement_rejects_non_constant_initializers() {
         "const CE_BAD = print 1;",
         "$i = 0; const CE_BAD = [1, 2][$i];",
         "const CE_BAD = null ?? throw new Exception('x');",
+        "echo 'A'; const CE_BAD = new stdClass(a: 1, 2);",
+        "const CE_BAD = (1 + 0) ? $bad : 1;",
     ] {
         assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
     }
+}
+
+/// Verifies branches decided by folded literal operands are discarded before validation, as PHP does.
+#[test]
+fn const_statement_folds_literal_operands_that_decide_a_branch() {
+    let (output, warnings) = run(r#"const CF_A = (1 + 1) ? 1 : $bad, CF_B = (0 + 0) && $bad, CF_C = [] ? $bad : 7, CF_D = (int) "0" ? $bad : 3;
+const CF_E = -1 ? 1 : $bad, CF_F = (1 + 0) ?? $bad, CF_G = __LINE__ ? 1 : $bad;
+echo CF_A, CF_B ? "t" : "f", CF_C, CF_D, CF_E, CF_F, CF_G;"#);
+
+    assert_eq!(output, "1f73111");
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
