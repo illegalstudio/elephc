@@ -8,6 +8,8 @@
 //! - Static defaults, raw-value arguments, and synthetic get/set hook methods converge here.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Binds `getStaticPropertyValue()` arguments while preserving whether a default was supplied.
 pub(super) fn eval_reflection_static_property_value_args(
@@ -228,12 +230,18 @@ pub(super) fn eval_reflection_property_hook_type(
     if !context.dynamic_object_is_class(identity, "PropertyHookType") {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let hook_value = values.property_get(value, "value")?;
-    match eval_reflection_string_arg(hook_value, values)?.as_str() {
-        "get" => Ok(EvalReflectionPropertyHook::Get),
-        "set" => Ok(EvalReflectionPropertyHook::Set),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let hook_value = owners.stage(values.property_get(value, "value")?);
+            match eval_reflection_string_arg(hook_value.borrowed(), values)?.as_str() {
+                "get" => Ok(EvalReflectionPropertyHook::Get),
+                "set" => Ok(EvalReflectionPropertyHook::Set),
+                _ => Err(EvalStatus::RuntimeFatal),
+            }
+        })();
+        owners.complete(result, |cell| values.release(cell))
+    })
 }
 
 /// Returns concrete hook kinds declared on one eval property.
@@ -269,19 +277,19 @@ pub(super) fn eval_reflection_property_hook_method_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let hooks = eval_reflection_property_hook_kinds(property);
-    let mut result = values.assoc_new(hooks.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, hooks.len())?;
     for hook in hooks {
-        let key = values.string(hook.key())?;
-        let method = eval_reflection_property_hook_method_object(
-            declaring_class,
-            property,
-            hook,
-            context,
-            values,
-        )?;
-        result = values.array_set(result, key, method)?;
+        result.string(hook.key(), |values| {
+            eval_reflection_property_hook_method_object(
+                declaring_class,
+                property,
+                hook,
+                context,
+                values,
+            )
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Materializes a ReflectionMethod object for one concrete property hook.

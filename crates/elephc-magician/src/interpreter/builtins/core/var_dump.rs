@@ -263,31 +263,34 @@ fn eval_var_dump_append_object(
     objects_seen.push(object_key);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
     let properties = eval_debug_object_properties(value, identity, &class_name, context, values)?;
-    eval_var_dump_append_prefix(depth, is_reference, output);
-    output.extend_from_slice(b"object(");
-    output.extend_from_slice(class_name.as_bytes());
-    output.extend_from_slice(b")#");
-    output.extend_from_slice(object_key.to_string().as_bytes());
-    output.extend_from_slice(b" (");
-    output.extend_from_slice(properties.len().to_string().as_bytes());
-    output.extend_from_slice(b") {\n");
-    for property in &properties {
-        eval_var_dump_append_object_key(property, depth + 1, output);
-        eval_var_dump_append_value(
-            property.value,
-            context,
-            values,
-            depth + 1,
-            property.is_reference,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-    }
-    eval_var_dump_append_indent(depth, output);
-    output.extend_from_slice(b"}\n");
+    let result = properties.consume(context, values, |properties, context, values| {
+        eval_var_dump_append_prefix(depth, is_reference, output);
+        output.extend_from_slice(b"object(");
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b")#");
+        output.extend_from_slice(object_key.to_string().as_bytes());
+        output.extend_from_slice(b" (");
+        output.extend_from_slice(properties.len().to_string().as_bytes());
+        output.extend_from_slice(b") {\n");
+        for property in properties {
+            eval_var_dump_append_object_key(property, depth + 1, output);
+            eval_var_dump_append_value(
+                property.value,
+                context,
+                values,
+                depth + 1,
+                property.is_reference,
+                arrays_seen,
+                objects_seen,
+                output,
+            )?;
+        }
+        eval_var_dump_append_indent(depth, output);
+        output.extend_from_slice(b"}\n");
+        Ok(())
+    });
     objects_seen.pop();
-    Ok(())
+    result
 }
 
 /// Renders native debug properties while sharing recursion and streaming with AOT hooks.

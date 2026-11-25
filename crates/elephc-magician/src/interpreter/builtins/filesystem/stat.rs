@@ -67,7 +67,9 @@ pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     if let Some(stat) =
         eval_user_wrapper_url_stat_result(&path, EVAL_URL_STAT_FLAGS_NOCACHE, context, values)?
     {
-        return eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values);
+        return eval_with_user_wrapper_stat_lease(stat, context, values, |stat, values| {
+            eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values)
+        });
     }
     // Every name this function serves returns `false` on failure, `filemtime` included. It used
     // to be singled out here to answer `int(0)` on both the unsupported-scheme and the

@@ -796,55 +796,59 @@ fn release_borrowed_cstr_temps(
     cleanup_bytes: usize,
     return_ty: &PhpType,
 ) {
-    if string_arg_count == 0 {
-        return;
-    }
-    let saved_return_bytes = push_ffi_return_value(ctx, return_ty);
-    for idx in 0..string_arg_count {
-        abi::emit_load_temporary_stack_slot(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            saved_return_bytes + idx * 16,
-        );
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    }
-    pop_ffi_return_value(ctx, return_ty);
-    abi::emit_release_temporary_stack(ctx.emitter, cleanup_bytes);
+    use elephc_memoir::interop::c_strings::ForeignReturnShape;
+
+    let return_shape = match return_ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => ForeignReturnShape::Void,
+        PhpType::Float => ForeignReturnShape::Float,
+        PhpType::Str => ForeignReturnShape::String,
+        _ => ForeignReturnShape::Scalar,
+    };
+    elephc_memoir::interop::c_strings::emit_release_call_scoped_c_strings(
+        ctx.emitter,
+        string_arg_count,
+        cleanup_bytes,
+        return_shape,
+    );
 }
 
-/// Pushes the current extern return value while borrowed C-string args are freed.
-fn push_ffi_return_value(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) -> usize {
-    match return_ty.codegen_repr() {
-        PhpType::Void | PhpType::Never => 0,
-        PhpType::Float => {
-            abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
-            16
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-            16
-        }
-        _ => {
-            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-            16
-        }
-    }
-}
+#[cfg(test)]
+mod c_string_owner_tests {
+    use crate::codegen_support::{emit::Emitter, platform::Target};
+    use elephc_memoir::interop::c_strings::{
+        ForeignReturnShape, emit_release_call_scoped_c_strings,
+    };
 
-/// Restores a return value preserved by `push_ffi_return_value`.
-fn pop_ffi_return_value(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
-    match return_ty.codegen_repr() {
-        PhpType::Void | PhpType::Never => {}
-        PhpType::Float => {
-            abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-        }
-        _ => {
-            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    /// Every foreign return register shape survives retirement of all C-string copies.
+    #[test]
+    fn memoir_transfer_call_scoped_c_string_cleanup_preserves_typed_returns_on_every_target() {
+        for target_name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            for shape in [
+                ForeignReturnShape::Void,
+                ForeignReturnShape::Scalar,
+                ForeignReturnShape::Float,
+                ForeignReturnShape::String,
+            ] {
+                let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+                emit_release_call_scoped_c_strings(&mut emitter, 2, 32, shape);
+                let asm = emitter.output();
+                assert_eq!(asm.matches("__rt_heap_free").count(), 2, "{target_name} {shape:?}");
+                assert!(
+                    asm.contains("add sp, sp, #32") || asm.contains("add rsp, 32"),
+                    "{target_name} {shape:?}: {asm}",
+                );
+                if shape != ForeignReturnShape::Void {
+                    let first_cleanup = asm.find("__rt_heap_free").unwrap();
+                    let final_release = asm.rfind("32").unwrap();
+                    assert!(first_cleanup < final_release, "{target_name} {shape:?}: {asm}");
+                }
+            }
         }
     }
 }

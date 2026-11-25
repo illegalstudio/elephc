@@ -120,11 +120,7 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                         return Err(status);
                     }
                 };
-                pending.extend(
-                    properties
-                        .into_iter()
-                        .map(|property| (property.value, true)),
-                );
+                pending.extend(properties.into_values().into_iter().map(|value| (value, true)));
             }
             _ => {}
         }

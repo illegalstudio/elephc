@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit Memoir's Cargo features, Rust source and optional Magician archive."""
+"""Audit Memoir's isolation, migrated owners and optional Magician archive."""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +16,18 @@ MAGICIAN = "elephc-magician"
 BANNED_TYPES = {"PhpType", "BuiltinId", "RuntimeFnId"}
 BANNED_MODULES = {"codegen", "codegen_support", "types", "ir", "ir_lower", "pipeline"}
 BANNED_ATTRIBUTES = {"link", "no_mangle", "export_name", "crate_type", "proc_macro"}
+MIGRATED_OWNER_FIELDS = {
+    "enum_cases": "RuntimeOwnerMap",
+    "enum_case_values": "RuntimeOwnerMap",
+    "constants": "RuntimeOwnerMap",
+    "static_locals": "RuntimeOwnerMap",
+    "static_properties": "RuntimeOwnerMap",
+    "class_constants": "RuntimeOwnerMap",
+    "instance_defaults": "RuntimeOwnerMap",
+    "error_handlers": "RuntimeOwnerHistory",
+    "exception_handlers": "RuntimeOwnerHistory",
+    "pcntl_foreign_callables": "RuntimeOwnerRecordMap",
+}
 
 
 @dataclass(frozen=True)
@@ -245,6 +257,29 @@ def audit_source(location: str, source: str) -> list[Finding]:
     return findings
 
 
+def audit_migrated_owner_fields(location: str, source: str) -> list[Finding]:
+    """Keep persistent Magician cell inventories on their Memoir owner protocols."""
+    try:
+        tokens = rust_tokens(source)
+    except ValueError as error:
+        return [Finding("rust-source", location, str(error))]
+    findings = []
+    for field, expected in MIGRATED_OWNER_FIELDS.items():
+        declarations = [index for index, token in enumerate(tokens[:-2])
+                        if token.text == field and tokens[index + 1].text == ":"]
+        if not declarations:
+            findings.append(Finding("owner-field", location,
+                                    f"migrated owner field {field} is missing"))
+            continue
+        actual = tokens[declarations[0] + 2]
+        if actual.text != expected:
+            findings.append(Finding(
+                "owner-container", f"{location}:{actual.line}",
+                f"{field} must use Memoir {expected}, not {actual.text}",
+            ))
+    return findings
+
+
 def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
     """Require the eval registry and reject compiler emitter definitions in Magician."""
     memoir_symbols = [line for line in symbols.splitlines() if "elephc_memoir" in line]
@@ -293,6 +328,9 @@ def main() -> int:
         findings = audit_metadata(metadata, root)
         for path in sorted((root / "crates/elephc-memoir/src").rglob("*.rs")):
             findings.extend(audit_source(path.relative_to(root).as_posix(), path.read_text()))
+        owner_context = root / "crates/elephc-magician/src/context/core.rs"
+        findings.extend(audit_migrated_owner_fields(
+            owner_context.relative_to(root).as_posix(), owner_context.read_text()))
         for archive in args.magician_archive:
             findings.extend(audit_magician_archive(archive))
     except subprocess.CalledProcessError as error:

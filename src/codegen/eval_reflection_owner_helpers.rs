@@ -478,6 +478,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x8, [sp, #56]");                                   // save boxed ReflectionClassConstant value
     emitter.instruction("ldr x8, [sp, #216]");                                  // load boxed ReflectionEnumBackedCase backing value from the eighth stack argument
     emitter.instruction("str x8, [sp, #64]");                                   // save boxed ReflectionEnumBackedCase backing value
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 112);
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -627,9 +628,14 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
-    retire_reflection_owner_allocation_after_boxing(emitter, 112);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 112);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        112,
+        "__elephc_eval_reflection_owner_new_rollback_done",
+    );
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore the Rust caller frame
@@ -684,6 +690,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
     emitter.instruction("mov rax, QWORD PTR [rbp + 88]");                       // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 40);
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -833,24 +840,19 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
-    retire_reflection_owner_allocation_after_boxing(emitter, 40);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 40);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        40,
+        "__elephc_eval_reflection_owner_new_rollback_done_x",
+    );
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
-}
-
-/// Transfers the factory's raw allocation owner into the retaining Mixed result cell.
-/// The boxed return stays stable while the original object reference is retired.
-pub(super) fn retire_reflection_owner_allocation_after_boxing(emitter: &mut Emitter, object_offset: usize) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result);
-    abi::load_at_offset(emitter, result, object_offset);
-    abi::emit_call_label(emitter, "__rt_decref_object");
-    abi::emit_pop_reg(emitter, result);
 }
 
 /// Emits one ARM64 owner-kind allocation and slot-population body.
@@ -865,7 +867,7 @@ fn emit_aarch64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_aarch64(emitter, layout);
-    emitter.instruction("str x0, [sp, #32]");                                   // save the unboxed Reflection owner object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 112);
     if set_name {
         emit_set_owner_name_property_aarch64(emitter, layout);
     }
@@ -901,7 +903,7 @@ fn emit_x86_64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_x86_64(emitter, layout);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the unboxed Reflection owner object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 40);
     if set_name {
         emit_set_owner_name_property_x86_64(emitter, layout);
     }

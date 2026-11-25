@@ -9,6 +9,8 @@
 //! - pthread failures become catchable PHP `Error` objects like php-src and AOT code.
 
 use super::*;
+#[cfg(target_os = "macos")]
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Evaluates a macOS QoS PCNTL function when the current target supports it.
 #[cfg(target_os = "macos")]
@@ -44,11 +46,17 @@ pub(super) fn eval_pcntl_qos_result(
                 return Err(EvalStatus::RuntimeFatal);
             }
             let qos = eval_pcntl_required_arg(args, 0)?;
-            let name = values.property_get(qos.value, "name")?;
-            let name = values.string_bytes(name)?;
-            let success = unsafe {
-                elephc_pcntl::elephc_pcntl_setqos_class(name.as_ptr(), name.len())
-            };
+            let owners = StagedRuntimeOwners::default();
+            let success = with_runtime_owners(&owners, || {
+                let result = (|| {
+                    let name = owners.stage(values.property_get(qos.value, "name")?);
+                    let name = values.string_bytes(name.borrowed())?;
+                    Ok(unsafe {
+                        elephc_pcntl::elephc_pcntl_setqos_class(name.as_ptr(), name.len())
+                    })
+                })();
+                owners.complete(result, |cell| values.release(cell))
+            })?;
             if success == 0 {
                 return eval_throw_error("pcntl_setqos_class failed", context, values);
             }

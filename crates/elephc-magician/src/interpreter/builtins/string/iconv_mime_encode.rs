@@ -18,6 +18,7 @@ eval_builtin! {
 
 use super::super::super::*;
 use super::iconv::{eval_iconv_bytes};
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 use elephc_iconv::{MimeEncodeOptions, Scheme};
 
@@ -60,8 +61,10 @@ fn eval_iconv_mime_options(
     if let Some(charset) = eval_iconv_option_string(options, "output-charset", values)? {
         resolved.output_charset = charset;
     }
-    if let Some(length) = eval_iconv_option_value(options, "line-length", values)? {
-        resolved.line_length = eval_int_value(length, values)?;
+    if let Some(length) = eval_iconv_option(options, "line-length", values, |value, values| {
+        eval_int_value(value, values).map(Some)
+    })? {
+        resolved.line_length = length;
     }
     if let Some(breaks) = eval_iconv_option_string(options, "line-break-chars", values)? {
         resolved.line_break = breaks;
@@ -75,29 +78,33 @@ fn eval_iconv_option_string(
     key: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<Vec<u8>>, EvalStatus> {
-    let Some(value) = eval_iconv_option_value(options, key, values)? else {
-        return Ok(None);
-    };
-    if values.type_tag(value)? != EVAL_TAG_STRING {
-        return Ok(None);
-    }
-    let bytes = values.string_bytes(value)?;
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(bytes))
+    eval_iconv_option(options, key, values, |value, values| {
+        if values.type_tag(value)? != EVAL_TAG_STRING {
+            return Ok(None);
+        }
+        let bytes = values.string_bytes(value)?;
+        Ok((!bytes.is_empty()).then_some(bytes))
+    })
 }
 
-/// Reads one raw option cell, returning `None` when the key is absent.
-fn eval_iconv_option_value(
+/// Reads one option under a temporary owner frame and retires every boxed lookup cell.
+fn eval_iconv_option<R, V: RuntimeValueOps>(
     options: RuntimeCellHandle,
     key: &str,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let key = values.string(key)?;
-    let exists = values.array_key_exists(key, options)?;
-    if !values.truthy(exists)? {
-        return Ok(None);
-    }
-    Ok(Some(values.array_get(options, key)?))
+    values: &mut V,
+    read: impl FnOnce(RuntimeCellHandle, &mut V) -> Result<Option<R>, EvalStatus>,
+) -> Result<Option<R>, EvalStatus> {
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let key = owners.stage(values.string(key)?);
+            let exists = owners.stage(values.array_key_exists(key.borrowed(), options)?);
+            if !values.truthy(exists.borrowed())? {
+                return Ok(None);
+            }
+            let value = owners.stage(values.array_get(options, key.borrowed())?);
+            read(value.borrowed(), values)
+        })();
+        owners.complete(result, |cell| values.release(cell))
+    })
 }

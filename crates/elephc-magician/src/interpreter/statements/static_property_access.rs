@@ -11,6 +11,9 @@
 //!   evaluates its initializer again, as php-src evaluates those initializers lazily.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::with_collection_cells;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use elephc_memoir::runtime_owners::release_staged_cells;
 
 /// Raises native initialization failures after access checks, without invoking a throwing getter.
 /// A static-property access initializes the class, so its deprecation notices come first.
@@ -858,20 +861,36 @@ pub(super) fn eval_builtin_property_hook_type_case(
     if let Some(case) = context.enum_case("PropertyHookType", case_name) {
         return Ok(Some(case));
     }
-    let object = values.new_object("stdClass")?;
-    let identity = values.object_identity(object)?;
-    context.register_dynamic_object(identity, "PropertyHookType");
-    let name = values.string(case_name)?;
-    values.property_set(object, "name", name)?;
-    let value = values.string(case_value)?;
-    values.property_set(object, "value", value)?;
-    if let Some(replaced) = context.set_enum_case_value("PropertyHookType", case_name, value) {
-        values.release(replaced)?;
-    }
-    if let Some(replaced) = context.set_enum_case("PropertyHookType", case_name, object) {
-        values.release(replaced)?;
-    }
-    Ok(Some(object.borrowed()))
+    let object = RuntimeOwnerSlot::new(values.new_object("stdClass")?);
+    let value = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&object, &value), || {
+        let initialized = (|| {
+            let identity = values.object_identity(object.borrowed())?;
+            context.register_dynamic_object(identity, "PropertyHookType");
+            with_collection_cells(values, |values, owners| {
+                let name = owners.stage(values.string(case_name)?);
+                values.property_set(object.borrowed(), "name", name.borrowed())
+            })?;
+            value.replace(Some(values.string(case_value)?));
+            values.property_set(object.borrowed(), "value", value.borrowed())?;
+            if let Some(replaced) =
+                context.set_enum_case_value("PropertyHookType", case_name, value.take())
+            {
+                values.release(replaced)?;
+            }
+            if let Some(replaced) =
+                context.set_enum_case("PropertyHookType", case_name, object.take())
+            {
+                values.release(replaced)?;
+            }
+            Ok(())
+        })();
+        let remaining = [&object, &value].into_iter().map(RuntimeOwnerSlot::take);
+        release_staged_cells(initialized, remaining, |cell| values.release(cell))?;
+        Ok(context
+            .enum_case("PropertyHookType", case_name)
+            .map(RuntimeCellHandle::borrowed))
+    })
 }
 
 /// Returns the PHP case name and backed value for a builtin property-hook case.

@@ -216,12 +216,12 @@ fn eval_file_get_contents_negative_length_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception(
+        "ValueError",
+        FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE,
+        context,
+        values,
+    )
 }
 
 /// Reads bytes from supported direct path or stream-wrapper URLs.

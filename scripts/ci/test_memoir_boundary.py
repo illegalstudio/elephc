@@ -2,7 +2,14 @@
 from pathlib import Path
 import unittest
 
-from scripts.audit_memoir_boundary import audit_archive_symbols, audit_metadata, audit_source, rust_tokens
+from scripts.audit_memoir_boundary import (
+    MIGRATED_OWNER_FIELDS,
+    audit_archive_symbols,
+    audit_metadata,
+    audit_migrated_owner_fields,
+    audit_source,
+    rust_tokens,
+)
 
 ROOT = Path("/workspace")
 MEMOIR = ROOT / "crates/elephc-memoir"
@@ -225,6 +232,33 @@ let e = cr##"crate::ir::RuntimeFnId"##;
     def test_diagnostics_retain_source_line(self):
         findings = audit_source("helper.rs", "// note\n\nuse crate::types::PhpType;")
         self.assertTrue(all(f.location == "helper.rs:3" for f in findings))
+
+
+class MigratedOwnerBoundaryTests(unittest.TestCase):
+    """Prevent persistent Magician cells from returning to raw consumer containers."""
+
+    def source(self, replacement=None):
+        """Build one minimal context field declaration for every migrated inventory."""
+        replacement = replacement or {}
+        return "\n".join(
+            f"pub(super) {field}: {replacement.get(field, expected)}<usize>,"
+            for field, expected in MIGRATED_OWNER_FIELDS.items()
+        )
+
+    def test_all_migrated_owner_fields_use_memoir_protocols(self):
+        findings = audit_migrated_owner_fields("context/core.rs", self.source())
+        self.assertEqual(findings, [])
+
+    def test_raw_owner_container_is_rejected(self):
+        findings = audit_migrated_owner_fields(
+            "context/core.rs", self.source({"constants": "HashMap"}))
+        self.assertEqual({finding.code for finding in findings}, {"owner-container"})
+
+    def test_missing_migrated_inventory_is_rejected(self):
+        source = self.source().replace(
+            "pub(super) error_handlers: RuntimeOwnerHistory<usize>,", "")
+        findings = audit_migrated_owner_fields("context/core.rs", source)
+        self.assertEqual({finding.code for finding in findings}, {"owner-field"})
 
 
 class ArchiveBoundaryTests(unittest.TestCase):

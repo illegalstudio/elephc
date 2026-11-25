@@ -83,13 +83,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.label("__rt_mixed_bit_not_bytes_done");
     e.instruction("ldr x1, [sp, #16]");                                         // return the reserved destination pointer
     e.instruction("ldr x2, [sp, #8]");                                          // return the unchanged byte length
-    abi::emit_call_label(e, "__rt_concat_publish");
-    e.instruction("mov x0, #1");                                                // runtime tag one identifies a byte string
-    abi::emit_call_label(e, "__rt_mixed_from_value");
-    e.instruction("str x0, [sp, #24]");                                         // preserve the independent boxed result
-    e.instruction("ldr x0, [sp, #16]");                                         // retire only the reservation's producer reference
-    abi::emit_call_label(e, "__rt_heap_free");
-    e.instruction("ldr x0, [sp, #24]");                                         // restore the fresh boxed string owner
+    elephc_memoir::strings::concat_scratch::emit_box_string_and_retire(e, 16, 24);
     e.instruction("b __rt_mixed_bit_not_done");                                 // leave through the common epilogue
     e.label("__rt_mixed_bit_not_bool");
     e.instruction("cmp x1, #0");                                                // inspect the boolean payload
@@ -197,15 +191,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.label("__rt_mixed_bit_not_bytes_done");
     e.instruction("mov rax, QWORD PTR [rbp - 24]");                             // publish the reserved destination pointer
     e.instruction("mov rdx, QWORD PTR [rbp - 16]");                             // publish the original byte length
-    abi::emit_call_label(e, "__rt_concat_publish");
-    e.instruction("mov rdi, rax");                                              // pass the new string as the low payload word
-    e.instruction("mov rsi, rdx");                                              // pass the new string length as the high payload word
-    e.instruction("mov eax, 1");                                                // runtime tag one identifies a byte string
-    abi::emit_call_label(e, "__rt_mixed_from_value");
-    e.instruction("mov QWORD PTR [rbp - 32], rax");                             // preserve the independent boxed result
-    e.instruction("mov rax, QWORD PTR [rbp - 24]");                             // retire only the reservation's producer reference
-    abi::emit_call_label(e, "__rt_heap_free");
-    e.instruction("mov rax, QWORD PTR [rbp - 32]");                             // restore the fresh boxed string owner
+    elephc_memoir::strings::concat_scratch::emit_box_string_and_retire(e, 24, 32);
     e.instruction("jmp __rt_mixed_bit_not_done");                               // leave through the common epilogue
     e.label("__rt_mixed_bit_not_bool");
     e.instruction("xor r10d, r10d");                                            // true uses row zero
@@ -252,4 +238,31 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov rsp, rbp");                                              // release the helper frame
     e.instruction("pop rbp");                                                   // restore the caller frame
     e.instruction("ret");                                                       // return the fresh Mixed owner
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// String complement boxes before retiring its scratch-or-heap reservation.
+    #[test]
+    fn memoir_transfer_mixed_bit_not_string_retires_reservation_on_every_target() {
+        for target_name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+            emit_mixed_bit_not(&mut emitter);
+            let asm = emitter.output();
+            let string_path = asm.find("__rt_mixed_bit_not_string:").unwrap();
+            let boxed = asm[string_path..].find("__rt_mixed_from_value").unwrap() + string_path;
+            let retired = asm[string_path..].find("__rt_heap_free_safe").unwrap() + string_path;
+            let done = asm[string_path..].find("__rt_mixed_bit_not_done").unwrap() + string_path;
+            assert!(boxed < retired && retired < done, "{target_name}: {asm}");
+        }
+    }
 }

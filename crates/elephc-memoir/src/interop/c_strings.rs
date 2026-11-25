@@ -10,6 +10,82 @@
 
 use crate::{abi, Arch, Emitter};
 
+/// Describes the native register shape that must survive C-string cleanup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForeignReturnShape {
+    /// The foreign call has no live return value.
+    Void,
+    /// The return occupies the integer result register.
+    Scalar,
+    /// The return occupies the floating-point result register.
+    Float,
+    /// The return occupies the native string pointer and length registers.
+    String,
+}
+
+/// Releases call-scoped C-string copies while preserving the foreign call result.
+///
+/// The owner copies already occupy `cleanup_bytes` below the current stack top.
+/// This protocol saves the typed return above them, retires every owner in caller
+/// order, restores the return and finally releases the owner record.
+pub fn emit_release_call_scoped_c_strings(
+    emitter: &mut impl Emitter,
+    owner_count: usize,
+    cleanup_bytes: usize,
+    return_shape: ForeignReturnShape,
+) {
+    if owner_count == 0 {
+        return;
+    }
+
+    let saved_return_bytes = match return_shape {
+        ForeignReturnShape::Void => 0,
+        ForeignReturnShape::Scalar => {
+            let result = emitter.int_result_reg();
+            emitter.emit_push_reg(result);
+            16
+        }
+        ForeignReturnShape::Float => {
+            let result = emitter.float_result_reg();
+            emitter.emit_push_float_reg(result);
+            16
+        }
+        ForeignReturnShape::String => {
+            let (pointer, length) = emitter.string_result_regs();
+            emitter.emit_push_reg_pair(pointer, length);
+            16
+        }
+    };
+
+    for index in 0..owner_count {
+        let result = emitter.int_result_reg();
+        emitter.emit_load_temporary_stack_slot(
+            result,
+            saved_return_bytes + index * 16,
+        );
+        emitter.emit_call_label("__rt_heap_free");
+    }
+
+    match return_shape {
+        ForeignReturnShape::Void => {}
+        ForeignReturnShape::Scalar => {
+            let result = emitter.int_result_reg();
+            emitter.emit_pop_reg(result);
+        }
+        ForeignReturnShape::Float => {
+            let result = emitter.float_result_reg();
+            emitter.emit_pop_float_reg(result);
+        }
+        ForeignReturnShape::String => {
+            let (pointer, length) = emitter.string_result_regs();
+            emitter.emit_load_temporary_stack_slot(pointer, 0);
+            emitter.emit_load_temporary_stack_slot(length, 8);
+            emitter.emit_release_temporary_stack(16);
+        }
+    }
+    emitter.emit_release_temporary_stack(cleanup_bytes);
+}
+
 /// __rt_str_to_cstr: copy an elephc string into a freshly allocated C string.
 /// Input:  x1 = pointer to string bytes, x2 = length
 /// Output: x0 = pointer to heap-allocated null-terminated string
@@ -437,11 +513,34 @@ pub fn emit_stage_length_bounded_input(emitter: &mut impl Emitter, source: usize
     emitter.bl_c("memcpy");                                                     // copy exactly the PHP byte range into privately owned scratch
 }
 
-/// Reserves the fixed native path buffer, preserving each target's result ownership ABI.
-pub fn emit_allocate_path_buffer(emitter: &mut impl Emitter) {
-    emitter.emit_load_int_immediate(emitter.int_result_reg(), 1024);
+/// Reserves an owned native path buffer with a uniform string header on every target.
+pub fn emit_allocate_path_buffer(emitter: &mut impl Emitter, capacity: usize) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_int_immediate(result, capacity as i64);
+    crate::strings::str_new_owned::emit_allocate_owned_string(emitter);
+}
+
+/// Releases a failed path buffer and returns the empty string sentinel.
+///
+/// `aarch64_spill` is SP-relative while `x86_frame_spill` is the positive
+/// distance below RBP used by the surrounding runtime helper.
+pub fn emit_release_failed_path_buffer(
+    emitter: &mut impl Emitter,
+    aarch64_spill: usize,
+    x86_frame_spill: usize,
+) {
     match emitter.arch() {
-        Arch::AArch64 => emitter.emit_call_label("__rt_heap_alloc"),
-        Arch::X86_64 => crate::strings::str_new_owned::emit_allocate_owned_string(emitter),
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{aarch64_spill}]"));     // detach the unused owned path buffer
+            emitter.emit_call_label("__rt_heap_free_safe");
+            emitter.instruction("mov x1, #0");                                 // return the empty path pointer sentinel
+            emitter.instruction("mov x2, #0");                                 // return zero path bytes
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {x86_frame_spill}]")); // detach the unused owned path buffer
+            emitter.emit_call_label("__rt_heap_free_safe");
+            emitter.instruction("xor eax, eax");                               // return the empty path pointer sentinel
+            emitter.instruction("xor edx, edx");                               // return zero path bytes
+        }
     }
 }

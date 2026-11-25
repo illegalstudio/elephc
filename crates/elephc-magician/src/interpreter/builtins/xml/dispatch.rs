@@ -34,6 +34,7 @@
 //!   argument checks (`xml_set_element_handler(null, ...)` is PHP's `TypeError` either way).
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// The registry setters: PHP name, the `XMLParser` method eval forwards to, parameter names.
 const HANDLER_SETTERS: &[(&str, &str, &[&str])] = &[
@@ -277,18 +278,27 @@ fn eval_xml_callable_declared_in_eval(
             if values.array_len(value)? != 2 {
                 return Ok(false);
             }
-            let zero = values.int(0)?;
-            let receiver = values.array_get(value, zero);
-            values.release(zero)?;
-            let receiver = receiver?;
-            match values.type_tag(receiver)? {
-                EVAL_TAG_OBJECT => eval_xml_object_declared_in_eval(receiver, context, values),
-                EVAL_TAG_STRING => {
-                    let class = String::from_utf8_lossy(&values.string_bytes(receiver)?).into_owned();
-                    Ok(context.has_class(&class))
-                }
-                _ => Ok(false),
-            }
+            let owners = StagedRuntimeOwners::default();
+            with_runtime_owners(&owners, || {
+                let result = (|| {
+                    let zero = owners.stage(values.int(0)?);
+                    let receiver = owners.stage(values.array_get(value, zero.borrowed())?);
+                    match values.type_tag(receiver.borrowed())? {
+                        EVAL_TAG_OBJECT => {
+                            eval_xml_object_declared_in_eval(receiver.borrowed(), context, values)
+                        }
+                        EVAL_TAG_STRING => {
+                            let class = String::from_utf8_lossy(
+                                &values.string_bytes(receiver.borrowed())?,
+                            )
+                            .into_owned();
+                            Ok(context.has_class(&class))
+                        }
+                        _ => Ok(false),
+                    }
+                })();
+                owners.complete(result, |cell| values.release(cell))
+            })
         }
         _ => Ok(false),
     }

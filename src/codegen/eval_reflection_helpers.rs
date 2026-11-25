@@ -141,8 +141,9 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.instruction("str x2, [sp, #16]");                                   // save the boxed eval argument array
     emitter.instruction("str x3, [sp, #40]");                                   // save the PHP attribute target bitmask
     emitter.instruction("str x4, [sp, #48]");                                   // save whether this attribute is repeated
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 40);
     emit_alloc_reflection_attribute_object_aarch64(emitter, layout);
-    emitter.instruction("str x0, [sp, #24]");                                   // save the unboxed ReflectionAttribute object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 40);
     emit_set_name_property_aarch64(emitter, layout);
     emit_set_args_property_aarch64(emitter, layout, fail_label);
     emit_set_factory_property_aarch64(emitter, layout);
@@ -152,9 +153,14 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.instruction("ldr x1, [sp, #24]");                                   // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the ReflectionAttribute object for eval
-    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 40);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 40);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        40,
+        "__elephc_eval_reflection_attribute_new_rollback_done",
+    );
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
@@ -174,8 +180,9 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the PHP attribute target bitmask
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save whether this attribute is repeated
+    elephc_memoir::values::object_storage::emit_begin_object_construction(emitter, 48);
     emit_alloc_reflection_attribute_object_x86_64(emitter, layout);
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the unboxed ReflectionAttribute object pointer
+    elephc_memoir::values::object_storage::emit_record_object_construction(emitter, 48);
     emit_set_name_property_x86_64(emitter, layout);
     emit_set_args_property_x86_64(emitter, layout, fail_label);
     emit_set_factory_property_x86_64(emitter, layout);
@@ -185,9 +192,14 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the ReflectionAttribute object for eval
-    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 48);
+    elephc_memoir::values::object_storage::emit_commit_object_construction(emitter, 48);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
+    elephc_memoir::values::object_storage::emit_rollback_object_construction(
+        emitter,
+        48,
+        "__elephc_eval_reflection_attribute_new_rollback_done_x",
+    );
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
@@ -362,4 +374,52 @@ fn emit_set_repeated_property_x86_64(emitter: &mut Emitter, layout: &ReflectionA
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod construction_owner_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Raw Reflection objects have one Memoir rollback slot on every supported target.
+    #[test]
+    fn memoir_transfer_reflection_object_construction_covers_commit_and_rollback() {
+        for target_name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+            elephc_memoir::values::object_storage::emit_begin_object_construction(
+                &mut emitter,
+                48,
+            );
+            elephc_memoir::values::object_storage::emit_record_object_construction(
+                &mut emitter,
+                48,
+            );
+            elephc_memoir::values::object_storage::emit_commit_object_construction(
+                &mut emitter,
+                48,
+            );
+            elephc_memoir::values::object_storage::emit_rollback_object_construction(
+                &mut emitter,
+                48,
+                "construction_done",
+            );
+            let asm = emitter.output();
+            assert_eq!(
+                asm.matches("__rt_decref_object").count(),
+                2,
+                "{target_name}: {asm}",
+            );
+            assert!(asm.contains("construction_done:"), "{target_name}: {asm}");
+            assert!(
+                asm.contains("xzr") || asm.contains(", 0"),
+                "{target_name}: rollback slot was not cleared: {asm}",
+            );
+        }
+    }
 }

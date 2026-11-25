@@ -8,10 +8,24 @@
 //! - Handles carry Rust-only result provenance; native ABI slots contain raw pointers only.
 //! - Copying a handle does not retain its cell. Borrowed reads must acquire a lease before cleanup.
 
-use std::{cell::{Cell, RefCell}, ffi::c_void};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    ffi::c_void,
+    hash::Hash,
+};
 
 /// Opaque pointer to an elephc runtime cell.
 pub type RuntimeCell = c_void;
+
+/// Whether a persistent record must retire its runtime cell or merely observes another owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeCellOwnership {
+    /// Another stable record owns the runtime reference.
+    Borrowed,
+    /// This record carries one cleanup obligation.
+    Owned,
+}
 
 /// Wraps a runtime pointer and records whether an expression borrows an existing owner's cell.
 #[derive(Clone, Copy, Debug)]
@@ -199,6 +213,244 @@ impl RuntimeOwners for RuntimeOwnerSlot {
     }
 }
 
+/// Persistent keyed owners with centralized distinct replacement and teardown transfer.
+#[derive(Default)]
+pub struct RuntimeOwnerMap<K> {
+    entries: HashMap<K, RuntimeCellHandle>,
+}
+
+impl<K: Eq + Hash> RuntimeOwnerMap<K> {
+    /// Returns whether the persistent inventory owns no cells.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns whether an owner is stored under the exact key.
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    /// Borrows the stored owner record without acquiring another runtime reference.
+    pub fn get(&self, key: &K) -> Option<&RuntimeCellHandle> {
+        self.entries.get(key)
+    }
+
+    /// Iterates stable key and owner references while the map remains immutable.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &RuntimeCellHandle)> {
+        self.entries.iter()
+    }
+
+    /// Inserts a new owner when the caller has already proven the key is vacant.
+    pub fn insert(&mut self, key: K, value: RuntimeCellHandle) {
+        assert!(
+            !self.entries.contains_key(&key),
+            "RuntimeOwnerMap::insert requires a vacant key"
+        );
+        self.entries.insert(key, value);
+    }
+
+    /// Publishes a replacement and returns only a displaced distinct cleanup obligation.
+    pub fn replace_distinct(
+        &mut self,
+        key: K,
+        value: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        self.entries
+            .insert(key, value)
+            .filter(|previous| *previous != value)
+    }
+
+    /// Detaches every persistent owner before release callbacks can reenter its consumer.
+    pub fn take_all(&mut self) -> Vec<RuntimeCellHandle> {
+        self.entries.drain().map(|(_, cell)| cell).collect()
+    }
+}
+
+impl<K> RuntimeOwners for RuntimeOwnerMap<K> {
+    /// Visits the actual map value slots while the inventory stays immutable.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        for cell in self.entries.values() {
+            cell.visit_owned_slots(visit);
+        }
+    }
+}
+
+/// Persistent keyed owners paired with consumer-defined lifetime metadata.
+pub struct RuntimeOwnerRecordMap<K, M> {
+    entries: HashMap<K, (RuntimeCellHandle, M)>,
+}
+
+impl<K: Eq + Hash, M> RuntimeOwnerRecordMap<K, M> {
+    /// Returns whether no owner records remain published.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns whether an owner record exists under the exact key.
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    /// Borrows the consumer metadata while the map retains its paired cell owner.
+    pub fn metadata(&self, key: &K) -> Option<&M> {
+        self.entries.get(key).map(|(_, metadata)| metadata)
+    }
+
+    /// Publishes one owner and its inseparable consumer metadata under a vacant key.
+    pub fn insert(&mut self, key: K, owner: RuntimeCellHandle, metadata: M) {
+        assert!(
+            !self.entries.contains_key(&key),
+            "RuntimeOwnerRecordMap::insert requires a vacant key"
+        );
+        self.entries.insert(key, (owner, metadata));
+    }
+
+    /// Detaches every owner and metadata record before callback-sensitive teardown.
+    pub fn take_all(&mut self) -> Vec<(RuntimeCellHandle, M)> {
+        self.entries.drain().map(|(_, record)| record).collect()
+    }
+}
+
+impl<K, M> Default for RuntimeOwnerRecordMap<K, M> {
+    /// Starts with no published owner records.
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+}
+
+impl<K, M> RuntimeOwners for RuntimeOwnerRecordMap<K, M> {
+    /// Visits only the owned cell half of each record, never opaque metadata.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        for (cell, _) in self.entries.values() {
+            cell.visit_owned_slots(visit);
+        }
+    }
+}
+
+/// Activation-owned cells whose clones are read-only snapshots, never duplicate owners.
+#[derive(Debug)]
+pub struct RuntimeOwnerList {
+    cells: Vec<RuntimeCellHandle>,
+    owns_cells: bool,
+}
+
+impl RuntimeOwnerList {
+    /// Creates the one activation record responsible for retiring these cells.
+    pub fn new(cells: Vec<RuntimeCellHandle>) -> Self {
+        Self {
+            cells,
+            owns_cells: true,
+        }
+    }
+
+    /// Borrows one cell without transferring the activation's cleanup obligation.
+    pub fn get(&self, index: usize) -> Option<RuntimeCellHandle> {
+        self.cells.get(index).copied().map(RuntimeCellHandle::borrowed)
+    }
+
+    /// Transfers owned cells to activation cleanup and leaves snapshots empty-handed.
+    pub fn into_owned(mut self) -> Vec<RuntimeCellHandle> {
+        if self.owns_cells {
+            self.owns_cells = false;
+            std::mem::take(&mut self.cells)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl Clone for RuntimeOwnerList {
+    /// Copies lookup metadata while keeping the cleanup obligation on the original record.
+    fn clone(&self) -> Self {
+        Self {
+            cells: self.cells.clone(),
+            owns_cells: false,
+        }
+    }
+}
+
+impl PartialEq for RuntimeOwnerList {
+    /// Compares PHP-visible argument cells independently of snapshot ownership provenance.
+    fn eq(&self, other: &Self) -> bool {
+        self.cells == other.cells
+    }
+}
+
+impl Eq for RuntimeOwnerList {}
+
+impl RuntimeOwners for RuntimeOwnerList {
+    /// Snapshot lists expose no owners; the original activation exposes every live cell slot.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        if self.owns_cells {
+            self.cells.visit_owned_slots(visit);
+        }
+    }
+}
+
+/// Active persistent owner metadata plus the exact restoration history beneath it.
+pub struct RuntimeOwnerHistory<T> {
+    active: Option<T>,
+    stack: Vec<Option<T>>,
+}
+
+impl<T: Copy> RuntimeOwnerHistory<T> {
+    /// Installs a replacement and saves the prior active record for restoration.
+    pub fn push(&mut self, replacement: Option<T>) -> Option<T> {
+        let previous = self.active;
+        self.stack.push(previous);
+        self.active = replacement;
+        previous
+    }
+
+    /// Restores the preceding record and returns the discarded active record.
+    pub fn restore(&mut self) -> Option<T> {
+        let discarded = self.active.take();
+        self.active = self.stack.pop().flatten();
+        discarded
+    }
+
+    /// Returns the active record without transferring its cleanup obligation.
+    pub const fn current(&self) -> Option<T> {
+        self.active
+    }
+
+    /// Temporarily detaches the active record without altering restoration history.
+    pub fn suspend(&mut self) -> Option<T> {
+        self.active.take()
+    }
+
+    /// Restores a suspended record unless a nested callback already installed another.
+    pub fn resume(&mut self, suspended: T) -> Option<T> {
+        if self.active.is_none() {
+            self.active = Some(suspended);
+            None
+        } else {
+            Some(suspended)
+        }
+    }
+
+    /// Detaches the active record and every saved predecessor before cleanup can reenter.
+    pub fn take_all(&mut self) -> Vec<T> {
+        self.active
+            .take()
+            .into_iter()
+            .chain(self.stack.drain(..).flatten())
+            .collect()
+    }
+}
+
+impl<T> Default for RuntimeOwnerHistory<T> {
+    /// Starts with neither an active owner record nor saved predecessors.
+    fn default() -> Self {
+        Self {
+            active: None,
+            stack: Vec::new(),
+        }
+    }
+}
+
 /// Releases every argument in caller order while preserving an invocation's rooted result.
 ///
 /// The caller keeps the result and argument slots visible to any collector invoked by
@@ -255,6 +507,14 @@ impl StagedRuntimeOwners {
             self.0.borrow_mut().push(RuntimeOwnerSlot::new(cell));
         }
         cell
+    }
+
+    /// Transfers every outstanding lease in acquisition order without releasing it.
+    pub fn take_all(&self) -> Vec<RuntimeCellHandle> {
+        let count = self.0.borrow().len();
+        (0..count)
+            .filter_map(|index| self.0.borrow()[index].take_optional())
+            .collect()
     }
 
     /// Consumes every staged lease in acquisition order, retaining the first cleanup failure.
@@ -411,6 +671,58 @@ pub fn release_in_order<T, E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Persistent maps detach only distinct displaced owners and drain exactly once.
+    #[test]
+    fn memoir_transfer_owner_map_centralizes_replacement_and_teardown() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let mut owners = RuntimeOwnerMap::default();
+        owners.insert("key", first);
+        assert_eq!(owners.replace_distinct("key", first), None);
+        assert_eq!(owners.replace_distinct("key", second), Some(first));
+        assert_eq!(owners.get(&"key"), Some(&second));
+        assert_eq!(owners.take_all(), vec![second]);
+        assert!(owners.take_all().is_empty());
+    }
+
+    /// Record maps keep metadata paired with its cell through teardown transfer.
+    #[test]
+    fn memoir_transfer_owner_record_map_keeps_metadata_paired() {
+        let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let mut owners = RuntimeOwnerRecordMap::default();
+        owners.insert("callback", cell, 41);
+        assert!(owners.contains_key(&"callback"));
+        assert_eq!(owners.metadata(&"callback"), Some(&41));
+        assert_eq!(owners.take_all(), vec![(cell, 41)]);
+        assert!(owners.is_empty());
+    }
+
+    /// Activation snapshots borrow cells while only the original transfers teardown owners.
+    #[test]
+    fn memoir_transfer_owner_list_clones_do_not_duplicate_cleanup() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let owners = RuntimeOwnerList::new(vec![first, second]);
+        let snapshot = owners.clone();
+        assert_eq!(snapshot.get(0), Some(first.borrowed()));
+        assert!(snapshot.into_owned().is_empty());
+        assert_eq!(owners.into_owned(), vec![first, second]);
+    }
+
+    /// Handler history restores predecessors and transfers all remaining owners once.
+    #[test]
+    fn memoir_transfer_owner_history_preserves_restore_and_suspend() {
+        let mut history = RuntimeOwnerHistory::default();
+        assert_eq!(history.push(Some(1)), None);
+        assert_eq!(history.push(Some(2)), Some(1));
+        assert_eq!(history.restore(), Some(2));
+        assert_eq!(history.current(), Some(1));
+        assert_eq!(history.suspend(), Some(1));
+        assert_eq!(history.resume(1), None);
+        assert_eq!(history.take_all(), vec![1]);
+        assert!(history.take_all().is_empty());
+    }
 
     /// Keeps a result rooted through every release and preserves the first failure.
     #[test]

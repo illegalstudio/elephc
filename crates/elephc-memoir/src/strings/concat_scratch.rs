@@ -188,6 +188,39 @@ pub fn emit_finish_owned(emitter: &mut impl Emitter, reservation: usize, result:
     }
 }
 
+/// Boxes the current byte-string result and retires its original concat reservation.
+///
+/// `reservation` and `boxed_result` are SP-relative byte offsets on AArch64 and
+/// positive RBP-relative distances on x86_64. The boxed owner survives cleanup
+/// in the native integer result register.
+pub fn emit_box_string_and_retire(
+    emitter: &mut impl Emitter,
+    reservation: usize,
+    boxed_result: usize,
+) {
+    abi::emit_call_label(emitter, "__rt_concat_publish");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #1");                                 // runtime tag one identifies a byte string
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.instruction(&format!("str x0, [sp, #{boxed_result}]"));     // preserve the independent boxed result
+            emitter.instruction(&format!("ldr x0, [sp, #{reservation}]"));     // detach the original concat reservation
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+            emitter.instruction(&format!("ldr x0, [sp, #{boxed_result}]"));     // restore the fresh boxed string owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, rax");                               // pass the new string as the low payload word
+            emitter.instruction("mov rsi, rdx");                               // pass the new string length as the high payload word
+            emitter.instruction("mov eax, 1");                                // runtime tag one identifies a byte string
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {boxed_result}], rax")); // preserve the independent boxed result
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {reservation}]")); // detach the original concat reservation
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {boxed_result}]")); // restore the fresh boxed string owner
+        }
+    }
+}
+
 /// Emits the AArch64 `__rt_concat_publish` helper.
 ///
 /// Classifies the result by address instead of by a caller-supplied flag: only a pointer

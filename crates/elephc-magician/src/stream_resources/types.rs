@@ -180,7 +180,7 @@ impl EvalFileStream {
 
 /// Userspace wrapper stream stored behind one eval resource id.
 pub(super) struct EvalUserWrapperStream {
-    pub(super) object: RuntimeCellHandle,
+    pub(super) object: RuntimeOwnerSlot,
     pub(super) class_name: String,
     pub(super) uri: String,
     pub(super) mode: String,
@@ -191,8 +191,17 @@ impl EvalUserWrapperStream {
     /// Copies the dispatch-relevant wrapper fields out of the resource table.
     pub(super) fn info(&self) -> EvalUserWrapperStreamInfo {
         EvalUserWrapperStreamInfo {
-            object: self.object,
+            object: self.object.borrowed(),
             class_name: self.class_name.clone(),
+            eof: self.eof,
+        }
+    }
+
+    /// Transfers the wrapper object when its resource record is removed.
+    pub(super) fn into_info(self) -> EvalUserWrapperStreamInfo {
+        EvalUserWrapperStreamInfo {
+            object: self.object.take(),
+            class_name: self.class_name,
             eof: self.eof,
         }
     }
@@ -207,7 +216,7 @@ pub(crate) struct EvalUserWrapperStreamInfo {
 
 /// Userspace-wrapper directory stored behind one eval resource id.
 pub(super) struct EvalUserWrapperDirectory {
-    pub(super) object: RuntimeCellHandle,
+    pub(super) object: RuntimeOwnerSlot,
     pub(super) class_name: String,
 }
 
@@ -215,8 +224,16 @@ impl EvalUserWrapperDirectory {
     /// Copies the dispatch fields needed while invoking wrapper directory methods.
     pub(super) fn info(&self) -> EvalUserWrapperDirectoryInfo {
         EvalUserWrapperDirectoryInfo {
-            object: self.object,
+            object: self.object.borrowed(),
             class_name: self.class_name.clone(),
+        }
+    }
+
+    /// Transfers the wrapper object when its directory resource record is removed.
+    pub(super) fn into_info(self) -> EvalUserWrapperDirectoryInfo {
+        EvalUserWrapperDirectoryInfo {
+            object: self.object.take(),
+            class_name: self.class_name,
         }
     }
 }

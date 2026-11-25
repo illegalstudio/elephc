@@ -17,8 +17,16 @@ impl EvalStreamResources {
         let mut owners = self.stream_contexts.drain()
             .filter_map(|(_, context)| context.options.take_optional())
             .collect::<Vec<_>>();
-        owners.extend(self.user_wrapper_streams.drain().map(|(_, stream)| stream.object));
-        owners.extend(self.user_wrapper_directories.drain().map(|(_, directory)| directory.object));
+        owners.extend(
+            self.user_wrapper_streams
+                .drain()
+                .filter_map(|(_, stream)| stream.object.take_optional()),
+        );
+        owners.extend(
+            self.user_wrapper_directories
+                .drain()
+                .filter_map(|(_, directory)| directory.object.take_optional()),
+        );
         #[cfg(feature = "curl")]
         owners.extend(self.take_curl_easy_php_owners());
         owners

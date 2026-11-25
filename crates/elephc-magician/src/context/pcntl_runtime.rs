@@ -130,7 +130,9 @@ mod lease_tests {
         assert!(caller.take_pending_throw().is_none());
         let mut callback_cell = 0_u64;
         let callback = RuntimeCellHandle::from_raw(std::ptr::from_mut(&mut callback_cell).cast());
-        caller.pcntl_foreign_callables.insert(callback.as_ptr() as usize, (callback, lease));
+        caller
+            .pcntl_foreign_callables
+            .insert(callback.as_ptr() as usize, callback, lease);
         let retired = caller.release_pcntl_foreign_callables(None, |released, pending| {
             assert_eq!(released, callback);
             assert!(pending.is_none());

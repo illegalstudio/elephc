@@ -8,7 +8,6 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -43,8 +42,7 @@ pub fn emit_realpath(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // preserve the C path pointer across the heap_alloc() call
 
     // -- allocate a 4096-byte owned buffer for the canonical path --
-    emitter.instruction("mov x0, #4096");                                       // PATH_MAX-style buffer for the canonical result
-    emit_allocate_owned_string(emitter);
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter, 4096);
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the owned buffer pointer across the libc call
 
     // -- call libc realpath(c_path, buf) --
@@ -70,10 +68,7 @@ pub fn emit_realpath(emitter: &mut Emitter) {
 
     emitter.label("__rt_realpath_fail");
     // libc returned NULL: free the unused owned buffer and return the empty string sentinel
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the owned buffer pointer for cleanup
-    emitter.instruction("bl __rt_heap_free");                                   // release the unused buffer back to the heap
-    emitter.instruction("mov x1, #0");                                          // return empty pointer (string|false sentinel)
-    emitter.instruction("mov x2, #0");                                          // return zero length (string|false sentinel)
+    elephc_memoir::interop::c_strings::emit_release_failed_path_buffer(emitter, 0, 16);
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address on the failure path
     emitter.instruction("add sp, sp, #32");                                     // deallocate the realpath() frame on the failure path
     emitter.instruction("ret");                                                 // return the empty-string result
@@ -100,8 +95,7 @@ fn emit_realpath_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_cstr");                                      // convert path in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C path pointer across the heap_alloc() call
 
-    emitter.instruction("mov rax, 4096");                                       // request a 4096-byte owned buffer for the canonical path
-    emit_allocate_owned_string(emitter);
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter, 4096);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the owned buffer pointer across the libc realpath() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first argument: C path pointer
@@ -126,10 +120,7 @@ fn emit_realpath_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return canonical path in rax/rdx
 
     emitter.label("__rt_realpath_fail_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the owned buffer for cleanup
-    emitter.instruction("call __rt_heap_free");                                 // release the unused buffer back to the heap
-    emitter.instruction("xor eax, eax");                                        // return empty-string pointer (string|false sentinel)
-    emitter.instruction("xor edx, edx");                                        // return empty-string length (string|false sentinel)
+    elephc_memoir::interop::c_strings::emit_release_failed_path_buffer(emitter, 0, 16);
     emitter.instruction("add rsp, 32");                                         // release the spill slots on the failure path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer on the failure path
     emitter.instruction("ret");                                                 // return the empty-string result

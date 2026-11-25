@@ -77,8 +77,12 @@ impl elephc_memoir::TargetAbi for Emitter {
     fn emit_local_symbol_address(&mut self, dest: &str, symbol: &str) { abi::emit_local_symbol_address(self, dest, symbol) }
     /// Uses the existing target ABI for emit pop reg.
     fn emit_pop_reg(&mut self, reg: &str) { abi::emit_pop_reg(self, reg) }
+    /// Uses the existing target ABI for emit pop float reg.
+    fn emit_pop_float_reg(&mut self, reg: &str) { abi::emit_pop_float_reg(self, reg) }
     /// Uses the existing target ABI for emit push reg.
     fn emit_push_reg(&mut self, reg: &str) { abi::emit_push_reg(self, reg) }
+    /// Uses the existing target ABI for emit push float reg.
+    fn emit_push_float_reg(&mut self, reg: &str) { abi::emit_push_float_reg(self, reg) }
     /// Uses the existing target ABI for emit reg move.
     fn emit_reg_move(&mut self, dst: &str, src: &str) { abi::emit_reg_move(self, dst, src) }
     /// Uses the existing target ABI for emit return.
@@ -97,6 +101,8 @@ impl elephc_memoir::TargetAbi for Emitter {
     fn int_arg_reg_name(&self, idx: usize) -> &'static str { abi::int_arg_reg_name(self.target, idx) }
     /// Uses the existing target ABI for int result reg.
     fn int_result_reg(&self) -> &'static str { abi::int_result_reg(self) }
+    /// Uses the existing target ABI for float result reg.
+    fn float_result_reg(&self) -> &'static str { abi::float_result_reg(self) }
     /// Uses the existing target ABI for load at offset.
     fn load_at_offset(&mut self, reg: &str, offset: usize) { abi::load_at_offset(self, reg, offset) }
     /// Uses the existing target ABI for secondary scratch reg.

@@ -15,6 +15,9 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Evaluates `stream_bucket_new($stream, $buffer)`.
 pub(in crate::interpreter) fn eval_stream_bucket_new_declared_call(
@@ -55,12 +58,19 @@ pub(in crate::interpreter) fn eval_stream_bucket_new_result(
         return values.null();
     }
     let bytes = values.string_bytes(buffer)?;
-    let bucket = values.new_object("stdClass")?;
-    let data = values.string_bytes_value(&bytes)?;
-    let datalen = values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    values.property_set(bucket, "data", data)?;
-    values.property_set(bucket, "datalen", datalen)?;
-    Ok(bucket)
+    let bucket = RuntimeOwnerSlot::new(values.new_object("stdClass")?);
+    let temporaries = StagedRuntimeOwners::default();
+    with_runtime_owners(&(&bucket, &temporaries), || {
+        let operation = (|| {
+            let data = temporaries.stage(values.string_bytes_value(&bytes)?);
+            values.property_set(bucket.borrowed(), "data", data.borrowed())?;
+            let datalen = temporaries.stage(
+                values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?,
+            );
+            values.property_set(bucket.borrowed(), "datalen", datalen.borrowed())
+        })();
+        temporaries.finish(operation, &bucket, |cell| values.release(cell))
+    })
 }
 
 /// Converts a runtime resource cell into eval's zero-based stream-extension id.

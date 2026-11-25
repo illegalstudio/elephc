@@ -374,12 +374,12 @@ fn eval_timezone_identifiers_country_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(EVAL_DATETIMEZONE_PER_COUNTRY_ERROR)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception(
+        "ValueError",
+        EVAL_DATETIMEZONE_PER_COUNTRY_ERROR,
+        context,
+        values,
+    )
 }
 
 /// Calls one object-method alias with selected argument indices.

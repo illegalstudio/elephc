@@ -53,8 +53,12 @@ pub trait TargetAbi {
     fn emit_local_symbol_address(&mut self, dest: &str, symbol: &str);
     /// Delegates emit pop reg to the authoritative target ABI.
     fn emit_pop_reg(&mut self, reg: &str);
+    /// Delegates emit pop float reg to the authoritative target ABI.
+    fn emit_pop_float_reg(&mut self, reg: &str);
     /// Delegates emit push reg to the authoritative target ABI.
     fn emit_push_reg(&mut self, reg: &str);
+    /// Delegates emit push float reg to the authoritative target ABI.
+    fn emit_push_float_reg(&mut self, reg: &str);
     /// Delegates emit reg move to the authoritative target ABI.
     fn emit_reg_move(&mut self, dst: &str, src: &str);
     /// Delegates emit return to the authoritative target ABI.
@@ -73,6 +77,8 @@ pub trait TargetAbi {
     fn int_arg_reg_name(&self, idx: usize) -> &'static str;
     /// Delegates int result reg to the authoritative target ABI.
     fn int_result_reg(&self) -> &'static str;
+    /// Delegates float result reg to the authoritative target ABI.
+    fn float_result_reg(&self) -> &'static str;
     /// Delegates load at offset to the authoritative target ABI.
     fn load_at_offset(&mut self, reg: &str, offset: usize);
     /// Delegates secondary scratch reg to the authoritative target ABI.

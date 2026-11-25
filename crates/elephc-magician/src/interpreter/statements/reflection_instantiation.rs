@@ -8,6 +8,8 @@
 //! - Constructor visibility, without-constructor allocation, and attribute argument materialization align with PHP.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Returns the runtime-visible class name for a non-eval object receiver.
 pub(in crate::interpreter) fn runtime_object_class_name(
@@ -104,16 +106,20 @@ fn eval_reflection_class_instantiate(
         let by_ref_mode = EvalByRefBindingMode::WarnByValue {
             callable_name: &constructor_name,
         };
-        let instance = values.new_object(&class_name)?;
-        eval_native_constructor_with_evaluated_args_and_ref_mode(
-            &class_name,
-            instance,
-            constructor_args,
-            by_ref_mode,
-            context,
-            values,
-        )?;
-        Ok(Some(instance))
+        let instance = RuntimeOwnerSlot::new(values.new_object(&class_name)?);
+        with_runtime_owners(&instance, || {
+            let operation = eval_native_constructor_with_evaluated_args_and_ref_mode(
+                &class_name,
+                instance.borrowed(),
+                constructor_args,
+                by_ref_mode,
+                context,
+                values,
+            );
+            instance
+                .finish(operation, |cell| eval_release_value(context, values, cell))
+                .map(Some)
+        })
     })
 }
 
@@ -304,19 +310,20 @@ pub(super) fn eval_reflection_attribute_array_arg_value(
         .iter()
         .any(|element| element.name().is_some() || element.int_key().is_some())
     {
-        values.assoc_new(elements.len())?
+        EvalArrayBuilder::assoc(values, elements.len())?
     } else {
-        values.array_new(elements.len())?
+        EvalArrayBuilder::indexed(values, elements.len())?
     };
     for (index, element) in elements.iter().enumerate() {
-        let key = match element.name() {
-            Some(name) => values.string(name)?,
-            None => values.int(element.int_key().unwrap_or(index as i64))?,
-        };
-        let value = eval_reflection_attribute_arg_value(element.value(), values)?;
-        result = values.array_set(result, key, value)?;
+        result.entry_key_first(
+            |values| match element.name() {
+                Some(name) => values.string(name),
+                None => values.int(element.int_key().unwrap_or(index as i64)),
+            },
+            |values| eval_reflection_attribute_arg_value(element.value(), values),
+        )?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Resolves the method metadata visible from the current class scope.

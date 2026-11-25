@@ -12,12 +12,33 @@
 //!   string keys used by file probes, scalar stat builtins, and `filetype()`.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// The `url_stat()` flags PHP hands a wrapper for its integer stat getters (`filesize()`,
 /// `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()` and
 /// `fileinode()`): its internal no-cache bit, which userland never sees named. The compiled
 /// runtime passes the same value (`URL_STAT_FLAGS_NOCACHE` in the AOT lowering).
 pub(in crate::interpreter) const EVAL_URL_STAT_FLAGS_NOCACHE: i64 = 4;
+
+/// Consumes an owned wrapper stat result while rooting both it and the returned PHP value.
+pub(in crate::interpreter) fn eval_with_user_wrapper_stat_lease<V: RuntimeValueOps>(
+    stat: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    consume: impl FnOnce(RuntimeCellHandle, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let stat = RuntimeOwnerSlot::new(stat);
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&stat, &output), || {
+        let operation = consume(stat.borrowed(), values).map(|result| {
+            output.replace(Some(result));
+        });
+        let operation = operation.and(eval_release_value(context, values, stat.take()));
+        output.finish(operation, |cell| eval_release_value(context, values, cell))
+    })
+}
 
 /// Dispatches `fstat()` to a wrapper object's `stream_stat()`.
 pub(in crate::interpreter) fn eval_user_wrapper_fstat_result(
@@ -103,9 +124,15 @@ pub(in crate::interpreter) fn eval_user_wrapper_stat_int_field(
     if !values.truthy(stat)? {
         return Ok(None);
     }
-    let key = values.string(field)?;
-    let value = values.array_get(stat, key)?;
-    Ok(Some(eval_int_value(value, values)?))
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let key = owners.stage(values.string(field)?);
+            let value = owners.stage(values.array_get(stat, key.borrowed())?);
+            Ok(Some(eval_int_value(value.borrowed(), values)?))
+        })();
+        owners.complete(result, |cell| values.release(cell))
+    })
 }
 
 /// Maps one POSIX mode value to PHP's `filetype()` label.

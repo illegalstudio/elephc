@@ -43,7 +43,7 @@ impl ElephcEvalContext {
         }
         let retained = values.retain(callback)?;
         self.pcntl_foreign_callables
-            .insert(identity, (retained, owner));
+            .insert(identity, retained, owner);
         self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
@@ -62,14 +62,14 @@ impl ElephcEvalContext {
         }
         let Some(owner) = self
             .pcntl_foreign_callables
-            .get(&source)
-            .map(|(_, owner)| owner.clone())
+            .metadata(&source)
+            .cloned()
         else {
             return Ok(());
         };
         let retained = values.retain(target)?;
         self.pcntl_foreign_callables
-            .insert(target_identity, (retained, owner));
+            .insert(target_identity, retained, owner);
         self.may_have_foreign_pcntl_callables = true;
         Ok(())
     }
@@ -80,8 +80,7 @@ impl ElephcEvalContext {
         callback: RuntimeCellHandle,
     ) -> Option<&pcntl_runtime::EvalPcntlContextLease> {
         self.pcntl_foreign_callables
-            .get(&(callback.as_ptr() as usize))
-            .map(|(_, owner)| owner)
+            .metadata(&(callback.as_ptr() as usize))
     }
 
     /// Retires each exported cell before its context lease, chaining both teardown results.
@@ -90,7 +89,7 @@ impl ElephcEvalContext {
         mut pending: Option<RuntimeCellHandle>,
         mut release: impl FnMut(RuntimeCellHandle, Option<RuntimeCellHandle>) -> Option<RuntimeCellHandle>,
     ) -> Option<RuntimeCellHandle> {
-        for (_, (callback, owner)) in std::mem::take(&mut self.pcntl_foreign_callables) {
+        for (callback, owner) in self.pcntl_foreign_callables.take_all() {
             pending = owner.retire(release(callback, pending));
         }
         pending
@@ -119,18 +118,21 @@ impl ElephcEvalContext {
 
     /// Detaches persistent value owners before native releases can reenter the context.
     pub(crate) fn take_context_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
-        self.enum_cases.drain().map(|(_, cell)| cell)
-            .chain(self.enum_case_values.drain().map(|(_, cell)| cell))
-            .chain(self.constants.drain().map(|(_, cell)| cell))
-            .chain(self.static_locals.drain().map(|(_, cell)| cell))
-            .chain(self.static_properties.drain().map(|(_, cell)| cell))
-            .chain(self.class_constants.drain().map(|(_, cell)| cell))
-            .chain(self.instance_defaults.drain().map(|(_, cell)| cell))
-            .chain(self.error_handler.take().map(|handler| handler.callback))
-            .chain(self.error_handler_stack.drain(..).flatten().map(|handler| handler.callback))
-            .chain(self.exception_handler.take())
-            .chain(self.exception_handler_stack.drain(..).flatten())
-            .collect()
+        let mut owners = self.enum_cases.take_all();
+        owners.extend(self.enum_case_values.take_all());
+        owners.extend(self.constants.take_all());
+        owners.extend(self.static_locals.take_all());
+        owners.extend(self.static_properties.take_all());
+        owners.extend(self.class_constants.take_all());
+        owners.extend(self.instance_defaults.take_all());
+        owners.extend(
+            self.error_handlers
+                .take_all()
+                .into_iter()
+                .map(|handler| handler.callback),
+        );
+        owners.extend(self.exception_handlers.take_all());
+        owners
     }
 
     /// Prevents nested ABI owner releases from freeing a context during destructor callbacks.
@@ -161,10 +163,8 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_locals
-            .insert((function_name.into(), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        self.static_locals
+            .replace_distinct((function_name.into(), name.into()), cell)
     }
 
     /// Returns a stored static property cell for an eval-declared class.
@@ -182,10 +182,8 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_properties
-            .insert((normalize_class_name(class_name), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        self.static_properties
+            .replace_distinct((normalize_class_name(class_name), name.into()), cell)
     }
 
     /// Binds one eval static property slot to a persistent PHP reference target.
@@ -233,10 +231,8 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .instance_defaults
-            .insert((normalize_class_name(class_name), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        self.instance_defaults
+            .replace_distinct((normalize_class_name(class_name), name.into()), cell)
     }
 
     /// Stores one eval class constant cell and returns any replaced distinct cell.
@@ -246,10 +242,8 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .class_constants
-            .insert((normalize_class_name(class_name), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        self.class_constants
+            .replace_distinct((normalize_class_name(class_name), name.into()), cell)
     }
 
     /// Returns the PHP internal array pointer tracked for one runtime array cell.
@@ -334,29 +328,24 @@ impl ElephcEvalContext {
         &mut self,
         replacement: Option<EvalErrorHandlerState>,
     ) -> Option<EvalErrorHandlerState> {
-        let previous = self.error_handler;
-        self.error_handler_stack.push(previous);
-        self.error_handler = replacement;
-        previous
+        self.error_handlers.push(replacement)
     }
 
     /// Restores the previous eval user error handler and returns the discarded current handler.
     pub(crate) fn restore_error_handler_state(
         &mut self,
     ) -> Option<EvalErrorHandlerState> {
-        let discarded = self.error_handler.take();
-        self.error_handler = self.error_handler_stack.pop().flatten();
-        discarded
+        self.error_handlers.restore()
     }
 
     /// Returns the currently active eval user error handler.
     pub(crate) const fn error_handler_state(&self) -> Option<EvalErrorHandlerState> {
-        self.error_handler
+        self.error_handlers.current()
     }
 
     /// Temporarily removes the active handler without changing its restoration stack.
     pub(crate) fn suspend_error_handler(&mut self) -> Option<EvalErrorHandlerState> {
-        self.error_handler.take()
+        self.error_handlers.suspend()
     }
 
     /// Restores a suspended handler unless its callback installed a replacement.
@@ -364,12 +353,7 @@ impl ElephcEvalContext {
         &mut self,
         suspended: EvalErrorHandlerState,
     ) -> Option<EvalErrorHandlerState> {
-        if self.error_handler.is_none() {
-            self.error_handler = Some(suspended);
-            None
-        } else {
-            Some(suspended)
-        }
+        self.error_handlers.resume(suspended)
     }
 
     /// Installs an eval uncaught-exception handler and returns the previous handler.
@@ -377,22 +361,17 @@ impl ElephcEvalContext {
         &mut self,
         replacement: Option<RuntimeCellHandle>,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.exception_handler;
-        self.exception_handler_stack.push(previous);
-        self.exception_handler = replacement;
-        previous
+        self.exception_handlers.push(replacement)
     }
 
     /// Restores the previous eval exception handler and returns the discarded handler.
     pub(crate) fn restore_exception_handler_state(&mut self) -> Option<RuntimeCellHandle> {
-        let discarded = self.exception_handler.take();
-        self.exception_handler = self.exception_handler_stack.pop().flatten();
-        discarded
+        self.exception_handlers.restore()
     }
 
     /// Returns the currently active eval uncaught-exception handler without transferring ownership.
     pub(crate) const fn exception_handler_state(&self) -> Option<RuntimeCellHandle> {
-        self.exception_handler
+        self.exception_handlers.current()
     }
 
     /// Returns active eval call frames from the current frame to the outermost frame.
@@ -878,12 +857,14 @@ mod persistent_owner_tests {
         context.constants.insert("dynamic".to_string(), cells[0]);
         context.enum_cases.insert(("State".to_string(), "Open".to_string()), cells[1]);
         context.enum_case_values.insert(("State".to_string(), "Open".to_string()), cells[2]);
-        context.error_handler = Some(EvalErrorHandlerState { callback: cells[3], levels: -1 });
-        context.error_handler_stack.push(Some(EvalErrorHandlerState {
+        context.push_error_handler(Some(EvalErrorHandlerState {
             callback: cells[4], levels: -1,
         }));
-        context.exception_handler = Some(cells[5]);
-        context.exception_handler_stack.push(Some(cells[6]));
+        context.push_error_handler(Some(EvalErrorHandlerState {
+            callback: cells[3], levels: -1,
+        }));
+        context.push_exception_handler(Some(cells[6]));
+        context.push_exception_handler(Some(cells[5]));
 
         let drained = context.take_context_cell_owners();
         for cell in cells {

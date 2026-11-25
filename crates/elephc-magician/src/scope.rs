@@ -15,13 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
-
-/// Records whether a scope entry owns or borrows its runtime cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScopeCellOwnership {
-    Borrowed,
-    Owned,
-}
+pub use elephc_memoir::runtime_owners::RuntimeCellOwnership as ScopeCellOwnership;
 
 /// Tracks the observable PHP state associated with one named scope cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

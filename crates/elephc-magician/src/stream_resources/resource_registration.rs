@@ -128,7 +128,7 @@ impl EvalStreamResources {
         self.user_wrapper_streams.insert(
             id,
             EvalUserWrapperStream {
-                object,
+                object: RuntimeOwnerSlot::new(object),
                 class_name: class_name.to_string(),
                 uri: uri.to_string(),
                 mode: mode.to_string(),
@@ -149,7 +149,7 @@ impl EvalStreamResources {
         self.user_wrapper_directories.insert(
             id,
             EvalUserWrapperDirectory {
-                object,
+                object: RuntimeOwnerSlot::new(object),
                 class_name: class_name.to_string(),
             },
         );
@@ -183,7 +183,17 @@ impl EvalStreamResources {
     ) -> Option<EvalUserWrapperDirectoryInfo> {
         self.user_wrapper_directories
             .remove(&id)
-            .map(|directory| directory.info())
+            .map(EvalUserWrapperDirectory::into_info)
+    }
+
+    /// Removes a userspace-wrapper stream and transfers its object owner to close cleanup.
+    pub(crate) fn close_user_wrapper_stream(
+        &mut self,
+        id: i64,
+    ) -> Option<EvalUserWrapperStreamInfo> {
+        self.user_wrapper_streams
+            .remove(&id)
+            .map(EvalUserWrapperStream::into_info)
     }
 
     /// Updates the cached EOF state for a userspace-wrapper stream.

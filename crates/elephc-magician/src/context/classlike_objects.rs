@@ -194,14 +194,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_cases.insert(
+        self.enum_cases.replace_distinct(
             (
                 normalize_class_name(enum_name),
                 normalize_enum_case_name(case_name),
             ),
             cell,
-        );
-        previous.filter(|previous| *previous != cell)
+        )
     }
 
     /// Returns a materialized backing value for one eval backed-enum case.
@@ -225,14 +224,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_case_values.insert(
+        self.enum_case_values.replace_distinct(
             (
                 normalize_class_name(enum_name),
                 normalize_enum_case_name(case_name),
             ),
             cell,
-        );
-        previous.filter(|previous| *previous != cell)
+        )
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.

@@ -95,11 +95,10 @@ fn eval_count_chars_mode_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message =
-        values.string("count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)")?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception(
+        "ValueError",
+        "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)",
+        context,
+        values,
+    )
 }

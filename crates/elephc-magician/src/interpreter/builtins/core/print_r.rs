@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 eval_builtin! {
     contract: "print_r",
     area: Core,
@@ -36,7 +37,6 @@ pub(in crate::interpreter) enum EvalDebugPropertyVisibilityKind {
 }
 
 /// Object property entry collected before rendering object headers.
-#[derive(Clone)]
 pub(in crate::interpreter) struct EvalDebugObjectProperty {
     pub(in crate::interpreter) name: String,
     /// Original integer dynamic key, when the property hash stored one instead of a string.
@@ -44,6 +44,37 @@ pub(in crate::interpreter) struct EvalDebugObjectProperty {
     pub(in crate::interpreter) visibility: EvalDebugPropertyVisibility,
     pub(in crate::interpreter) value: RuntimeCellHandle,
     pub(in crate::interpreter) is_reference: bool,
+}
+
+/// Owns every acquired property value until one debug renderer has consumed the entries.
+pub(in crate::interpreter) struct EvalDebugObjectProperties {
+    entries: Vec<EvalDebugObjectProperty>,
+    owners: StagedRuntimeOwners,
+}
+
+impl EvalDebugObjectProperties {
+    /// Renders the collected entries and retires their leases on success and failure.
+    pub(in crate::interpreter) fn consume<V: RuntimeValueOps, R>(
+        self,
+        context: &mut ElephcEvalContext,
+        values: &mut V,
+        render: impl FnOnce(
+            &[EvalDebugObjectProperty],
+            &mut ElephcEvalContext,
+            &mut V,
+        ) -> Result<R, EvalStatus>,
+    ) -> Result<R, EvalStatus> {
+        with_runtime_owners(&self.owners, || {
+            let result = render(&self.entries, context, values);
+            self.owners
+                .complete(result, |cell| eval_release_value(context, values, cell))
+        })
+    }
+
+    /// Transfers the collected property leases to a traversal that outlives the metadata rows.
+    pub(in crate::interpreter) fn into_values(self) -> Vec<RuntimeCellHandle> {
+        self.owners.take_all()
+    }
 }
 
 /// Returns the integer key PHP's dump walker would print for one object-property key.
@@ -219,29 +250,32 @@ fn eval_print_r_append_object(
     objects_seen.push(object_key);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
     let properties = eval_debug_object_properties(value, identity, &class_name, context, values)?;
-    output.extend_from_slice(class_name.as_bytes());
-    output.extend_from_slice(b" Object\n");
-    eval_print_r_append_indent(depth, output);
-    output.extend_from_slice(b"(\n");
-    for property in &properties {
-        eval_print_r_append_indent(depth + 1, output);
-        eval_print_r_append_object_key(property, output);
-        output.extend_from_slice(b" => ");
-        eval_print_r_append_value(
-            property.value,
-            context,
-            values,
-            depth + 2,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-        output.extend_from_slice(b"\n");
-    }
-    eval_print_r_append_indent(depth, output);
-    output.extend_from_slice(b")\n");
+    let result = properties.consume(context, values, |properties, context, values| {
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b" Object\n");
+        eval_print_r_append_indent(depth, output);
+        output.extend_from_slice(b"(\n");
+        for property in properties {
+            eval_print_r_append_indent(depth + 1, output);
+            eval_print_r_append_object_key(property, output);
+            output.extend_from_slice(b" => ");
+            eval_print_r_append_value(
+                property.value,
+                context,
+                values,
+                depth + 2,
+                arrays_seen,
+                objects_seen,
+                output,
+            )?;
+            output.extend_from_slice(b"\n");
+        }
+        eval_print_r_append_indent(depth, output);
+        output.extend_from_slice(b")\n");
+        Ok(())
+    });
     objects_seen.pop();
-    Ok(())
+    result
 }
 
 /// Renders native debug properties after an unprotected hook, matching PHP print_r.
@@ -333,11 +367,16 @@ pub(in crate::interpreter) fn eval_debug_object_class_name(
             return Ok(class.name().trim_start_matches('\\').to_string());
         }
     }
-    let class_name = values.object_class_name(value)?;
-    let bytes = values.string_bytes(class_name)?;
-    values.release(class_name)?;
-    String::from_utf8(trim_leading_namespace_separator(&bytes).to_vec())
-        .map_err(|_| EvalStatus::RuntimeFatal)
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let class_name = owners.stage(values.object_class_name(value)?);
+            let bytes = values.string_bytes(class_name.borrowed())?;
+            String::from_utf8(trim_leading_namespace_separator(&bytes).to_vec())
+                .map_err(|_| EvalStatus::RuntimeFatal)
+        })();
+        owners.complete(result, |cell| values.release(cell))
+    })
 }
 
 /// Collects object properties visible to debug-output rendering.
@@ -347,16 +386,49 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
-    if let Some(properties) = eval_debug_info_properties(object, class_name, context, values)? {
-        return Ok(properties);
-    }
-    if let Some(identity) = identity {
-        if context.dynamic_object_class(identity).is_some() {
-            return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
+) -> Result<EvalDebugObjectProperties, EvalStatus> {
+    let owners = StagedRuntimeOwners::default();
+    let temporaries = StagedRuntimeOwners::default();
+    let entries = with_runtime_owners(&(&owners, &temporaries), || {
+        let result = (|| {
+            if let Some(properties) =
+                eval_debug_info_properties(
+                    object,
+                    class_name,
+                    context,
+                    values,
+                    &owners,
+                    &temporaries,
+                )?
+            {
+                return Ok(properties);
+            }
+            if let Some(identity) = identity {
+                if context.dynamic_object_class(identity).is_some() {
+                    return eval_debug_dynamic_object_properties(
+                        object,
+                        identity,
+                        class_name,
+                        context,
+                        values,
+                        &owners,
+                        &temporaries,
+                    );
+                }
+            }
+            eval_debug_public_object_properties(object, values, &owners, &temporaries)
+        })();
+        let result = temporaries.complete(result, |cell| {
+            eval_release_value(context, values, cell)
+        });
+        match result {
+            Ok(entries) => Ok(entries),
+            Err(status) => owners.complete(Err(status), |cell| {
+                eval_release_value(context, values, cell)
+            }),
         }
-    }
-    eval_debug_public_object_properties(object, values)
+    })?;
+    Ok(EvalDebugObjectProperties { entries, owners })
 }
 
 /// Replaces the object's visible properties with `__debugInfo()`'s returned array, as PHP's
@@ -366,6 +438,8 @@ fn eval_debug_info_properties(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
+    temporaries: &StagedRuntimeOwners,
 ) -> Result<Option<Vec<EvalDebugObjectProperty>>, EvalStatus> {
     let declared = context.class_method(class_name, "__debugInfo").is_some()
         || context
@@ -381,37 +455,39 @@ fn eval_debug_info_properties(
     if !declared {
         return Ok(None);
     }
-    let result = eval_method_call_result(object, "__debugInfo", Vec::new(), context, values)?;
+    let result = temporaries.stage(eval_method_call_result(
+        object,
+        "__debugInfo",
+        Vec::new(),
+        context,
+        values,
+    )?);
     let tag = values.type_tag(result)?;
     if tag == EVAL_TAG_NULL {
         // PHP 8.5 deprecates `null` but keeps the empty property table it produces.
-        values.release(result)?;
         return Ok(Some(Vec::new()));
     }
     if tag != EVAL_TAG_ARRAY && tag != EVAL_TAG_ASSOC {
-        values.release(result)?;
         return Err(EvalStatus::RuntimeFatal);
     }
     let len = values.array_len(result)?;
     let mut properties = Vec::with_capacity(len);
     for position in 0..len {
-        let key = values.array_iter_key(result, position)?;
+        let key = temporaries.stage(values.array_iter_key(result.borrowed(), position)?);
         let key_bytes = values.string_bytes(key)?;
         let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
-        values.release(key)?;
         let name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let value = values.array_iter_value(result, position)?;
+        let value = owners.stage(values.array_iter_value(result.borrowed(), position)?);
         properties.push(EvalDebugObjectProperty {
             name,
             numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },
-            value,
+            value: value.borrowed(),
             is_reference: false,
         });
     }
-    values.release(result)?;
     if elephc_builtin_contract::lookup_class(class_name)
         .is_some_and(|class| class.dump_dynamic_properties_first)
     {
@@ -424,6 +500,8 @@ fn eval_debug_info_properties(
             &HashSet::new(),
             &mut properties_with_dynamic,
             values,
+            owners,
+            temporaries,
         )?;
         properties_with_dynamic.extend(properties);
         return Ok(Some(properties_with_dynamic));
@@ -438,6 +516,8 @@ fn eval_debug_dynamic_object_properties(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
+    temporaries: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     let mut properties = Vec::new();
     let mut storage_keys = HashSet::new();
@@ -456,10 +536,10 @@ fn eval_debug_dynamic_object_properties(
                 continue;
             }
             let alias = context.dynamic_property_alias(identity, &storage_name).cloned();
-            let value = match &alias {
+            let value = owners.stage(match &alias {
                 Some(target) => eval_reference_target_value(target, context, values)?,
                 None => values.property_get(object, &storage_name)?,
-            };
+            });
             if property.visibility() == EvalVisibility::Public {
                 emitted_public_names.insert(property.name().to_string());
             }
@@ -467,7 +547,7 @@ fn eval_debug_dynamic_object_properties(
                 name: property.name().to_string(),
                 numeric_key: None,
                 visibility: eval_debug_property_visibility(class.name(), property.visibility()),
-                value,
+                value: value.borrowed(),
                 is_reference: alias.is_some(),
             });
         }
@@ -479,6 +559,8 @@ fn eval_debug_dynamic_object_properties(
         &emitted_public_names,
         &mut properties,
         values,
+        owners,
+        temporaries,
     )?;
     Ok(properties)
 }
@@ -490,13 +572,14 @@ fn eval_debug_append_dynamic_public_properties(
     emitted_public_names: &HashSet<String>,
     properties: &mut Vec<EvalDebugObjectProperty>,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
+    temporaries: &StagedRuntimeOwners,
 ) -> Result<(), EvalStatus> {
     let property_count = values.object_property_len(object)?;
     for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
+        let key = temporaries.stage(values.object_property_iter_key(object, position)?);
         let key_bytes = values.string_bytes(key)?;
         let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
-        values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         if key_name.contains('\0')
             || storage_keys.contains(&key_name)
@@ -504,14 +587,14 @@ fn eval_debug_append_dynamic_public_properties(
         {
             continue;
         }
-        let value = values.property_get(object, &key_name)?;
+        let value = owners.stage(values.property_get(object, &key_name)?);
         properties.push(EvalDebugObjectProperty {
             name: key_name,
             numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },
-            value,
+            value: value.borrowed(),
             is_reference: false,
         });
     }
@@ -522,23 +605,24 @@ fn eval_debug_append_dynamic_public_properties(
 fn eval_debug_public_object_properties(
     object: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
+    temporaries: &StagedRuntimeOwners,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     let property_count = values.object_property_len(object)?;
     let mut properties = Vec::with_capacity(property_count);
     for position in 0..property_count {
-        let key = values.object_property_iter_key(object, position)?;
+        let key = temporaries.stage(values.object_property_iter_key(object, position)?);
         let key_bytes = values.string_bytes(key)?;
         let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
-        values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let value = values.property_get(object, &key_name)?;
+        let value = owners.stage(values.property_get(object, &key_name)?);
         properties.push(EvalDebugObjectProperty {
             name: key_name,
             numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },
-            value,
+            value: value.borrowed(),
             is_reference: false,
         });
     }

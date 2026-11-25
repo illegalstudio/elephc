@@ -1360,11 +1360,12 @@ fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("unsetenv");
 
     // -- release the temporary copy on both success and failure --
-    abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    elephc_memoir::interop::c_strings::emit_release_call_scoped_c_strings(
+        ctx.emitter,
+        1,
+        16,
+        elephc_memoir::interop::c_strings::ForeignReturnShape::Scalar,
+    );
 }
 
 /// Emits AArch64 `putenv()`, using `unsetenv()` when the argument has no equals sign.

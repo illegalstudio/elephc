@@ -49,7 +49,6 @@ impl EvalStreamResources {
             ok = stream.finalize_on_close();
         }
         closed = closed
-            || self.user_wrapper_streams.remove(&id).is_some()
             || self.filter_resources.remove(&id)
             || self.socket_listeners.remove(&id).is_some();
         self.socket_names.remove(&id);
