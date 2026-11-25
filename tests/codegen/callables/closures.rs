@@ -9,6 +9,30 @@
 
 use crate::support::*;
 
+/// Many private temporaries must not invalidate an unrelated closure at destructor boundaries.
+#[test]
+fn test_scoped_closure_bind_after_try_with_many_unescaped_locals() {
+    let mut source = String::from(r#"<?php
+class SparseCallableVault { private string $code = 'open'; }
+class SparseCallableCleanup { public function __destruct() {} }
+function sparse_callable_scope(int $seed): void {
+    $guard = new SparseCallableCleanup();
+    $peek = function() { return $this->code; };
+"#);
+    for index in 0..256 {
+        source.push_str(&format!("$local{index} = 'payload{index}';\n"));
+    }
+    source.push_str(r#"
+    $inventory = get_defined_vars();
+    try { unset($guard); $length = strlen((string) $seed); } catch (Error $error) {}
+    $bound = Closure::bind($peek, new SparseCallableVault(), SparseCallableVault::class);
+    echo count($inventory), ':', $bound();
+}
+sparse_callable_scope(2);
+"#);
+    assert_eq!(compile_and_run(&source), "259:open");
+}
+
 // --- Anonymous functions (closures) and arrow functions ---
 
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.

@@ -13,6 +13,7 @@
 
 mod string_append;
 mod reflection_locals;
+mod escaped_callables;
 pub(crate) use reflection_locals::ReflectionBindings;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -5334,15 +5335,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Invalidates every tracked callable local whose cell escaped this activation.
     fn invalidate_escaped_callable_locals(&mut self) {
-        let escaped = self
-            .static_callable_local_epochs
-            .keys()
-            .filter(|name| {
-                self.ref_bound_locals.contains(*name)
-                    || (self.in_main && self.all_global_var_names.contains(*name))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let escaped = escaped_callables::names(
+            &self.static_callable_local_epochs,
+            &self.ref_bound_locals,
+            &self.all_global_var_names,
+            self.in_main,
+        );
         for name in escaped {
             self.clear_static_callable_local(&name);
         }

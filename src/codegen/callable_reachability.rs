@@ -9,12 +9,20 @@
 //! - Local string values are propagated through the EIR CFG to a fixed point.
 //! - Control-flow joins union finite name sets; unknown inputs keep the result open.
 //! - Ref-cell and eval writes invalidate affected local facts conservatively.
+//! - CFG states store finite facts sparsely; absent local slots remain unknown.
 
 use std::collections::{BTreeSet, VecDeque};
 
 use crate::ir::{
     BlockId, Function, Immediate, LocalSlotId, Module, Op, Terminator, ValueId,
 };
+
+mod local_state;
+
+use local_state::CallableLocalState;
+
+#[cfg(test)]
+mod sparse_tests;
 
 const MAX_FINITE_CALLABLE_NAMES: usize = 32;
 
@@ -88,8 +96,8 @@ fn analyze_value_names(module: &Module, function: &Function) -> Vec<CallableName
         return value_names;
     }
 
-    let unknown_locals = vec![CallableNameSet::Unknown; function.locals.len()];
-    let mut block_inputs = vec![None::<Vec<CallableNameSet>>; function.blocks.len()];
+    let unknown_locals = CallableLocalState::new(function.locals.len());
+    let mut block_inputs = vec![None::<CallableLocalState>; function.blocks.len()];
     let entry_index = function.entry.as_raw() as usize;
     if entry_index >= block_inputs.len() {
         return value_names;
@@ -108,7 +116,7 @@ fn analyze_value_names(module: &Module, function: &Function) -> Vec<CallableName
         }
     }
 
-    let mut block_outputs = vec![None::<Vec<CallableNameSet>>; function.blocks.len()];
+    let mut block_outputs = vec![None::<CallableLocalState>; function.blocks.len()];
     while let Some(block_id) = worklist.pop_front() {
         let block_index = block_id.as_raw() as usize;
         let Some(mut state) = block_inputs[block_index].clone() else {
@@ -129,7 +137,7 @@ fn analyze_value_names(module: &Module, function: &Function) -> Vec<CallableName
                 continue;
             }
             let changed = match &mut block_inputs[successor_index] {
-                Some(input) => merge_local_states(input, &state),
+                Some(input) => input.merge_from(&state),
                 None => {
                     block_inputs[successor_index] = Some(state.clone());
                     true
@@ -156,7 +164,7 @@ fn scan_block(
     module: &Module,
     function: &Function,
     block: &crate::ir::BasicBlock,
-    state: &mut [CallableNameSet],
+    state: &mut CallableLocalState,
     value_names: &mut [CallableNameSet],
 ) {
     for inst_id in &block.instructions {
@@ -177,7 +185,7 @@ fn scan_block(
 fn instruction_result_names(
     module: &Module,
     inst: &crate::ir::Instruction,
-    state: &[CallableNameSet],
+    state: &CallableLocalState,
     value_names: &[CallableNameSet],
 ) -> CallableNameSet {
     match inst.op {
@@ -195,7 +203,7 @@ fn instruction_result_names(
             .immediate
             .as_ref()
             .and_then(|immediate| match immediate {
-                Immediate::LocalSlot(slot) => state.get(slot.as_raw() as usize),
+                Immediate::LocalSlot(slot) => state.get(*slot),
                 _ => None,
             })
             .cloned()
@@ -219,7 +227,7 @@ fn instruction_result_names(
 /// Updates local facts after an instruction that writes or invalidates local storage.
 fn apply_local_transfer(
     inst: &crate::ir::Instruction,
-    state: &mut [CallableNameSet],
+    state: &mut CallableLocalState,
     value_names: &[CallableNameSet],
 ) {
     match (inst.op, inst.immediate.as_ref()) {
@@ -254,27 +262,15 @@ fn apply_local_transfer(
             set_local_state(state, *second, CallableNameSet::Unknown);
         }
         (Op::EvalLiteralCall | Op::EvalScopeSet | Op::ListUnpack, _) => {
-            state.fill(CallableNameSet::Unknown);
+            state.clear();
         }
         _ => {}
     }
 }
 
 /// Replaces one local fact when the referenced slot exists.
-fn set_local_state(state: &mut [CallableNameSet], slot: LocalSlotId, names: CallableNameSet) {
-    if let Some(local) = state.get_mut(slot.as_raw() as usize) {
-        *local = names;
-    }
-}
-
-/// Joins a predecessor's local facts into a successor input state.
-fn merge_local_states(target: &mut [CallableNameSet], incoming: &[CallableNameSet]) -> bool {
-    target
-        .iter_mut()
-        .zip(incoming)
-        .fold(false, |changed, (target, incoming)| {
-            target.merge_from(incoming) || changed
-        })
+fn set_local_state(state: &mut CallableLocalState, slot: LocalSlotId, names: CallableNameSet) {
+    state.set(slot, names);
 }
 
 /// Returns blocks entered through implicit exception-handler control-flow edges.

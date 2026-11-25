@@ -26,3 +26,7 @@ mod foreach_loops;
 // must be preserved across loop iterations.
 #[path = "loops/loop_state.rs"]
 mod loop_state;
+
+// Dense conditional loop bodies must remain bounded while preserving every exit.
+#[path = "loops/path_budget.rs"]
+mod path_budget;

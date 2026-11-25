@@ -62,6 +62,13 @@ property hook bodies and other input or result representations retain inline
 lowering. The helper inventory is prepared once per module emission, avoiding
 repeated large class-dispatch ladders in the assembly buffer.
 
+Finite string-callable analysis keeps CFG local states sparse. An absent slot
+means unknown; joins retain a finite fact only when both predecessors have it,
+union their names and drop the fact when the finite-name budget is exceeded.
+Reference and opaque scope writes remove the affected facts. Exception-handler
+roots start unknown. This avoids allocating a locals-sized vector for every
+block while preserving open runtime callable dispatch.
+
 Runtime-selected native methods that need distinct argument plans select their
 concrete class in EIR before evaluating the arguments. This includes variadic
 collectors, surplus user-method arguments and missing methods handled by `__call`.
