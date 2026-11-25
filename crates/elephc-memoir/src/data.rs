@@ -219,7 +219,8 @@ pub fn append_string_scratch_capacity(out: &mut String, heap_size: usize) {
 
 /// Reserves the string scratch arena and its allocation cursor.
 pub fn append_string_scratch_storage(out: &mut String, heap_size: usize, target: &impl DataTarget) {
-    out.push_str(&target.common("_concat_buf", heap_size.max(65_536)));
+    // Keep the reservation and the published bounds equal even for arenas above 1 GiB.
+    out.push_str(&target.common("_concat_buf", crate::strings::concat_scratch::scratch_capacity(heap_size)));
     out.push_str(&target.common("_concat_off", 8));
 }
 

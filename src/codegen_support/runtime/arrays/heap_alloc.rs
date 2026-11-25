@@ -75,6 +75,43 @@ mod tests {
         }
     }
 
+    /// Verifies every free-block reuse path checks the live budget before publishing a block.
+    #[test]
+    fn reused_heap_blocks_respect_live_memory_limit() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_alloc(&mut emitter);
+            let asm = emitter.output();
+            let section = |start: &str, end: &str| {
+                let start = asm.find(start).unwrap_or_else(|| panic!("{name}: missing {start}"));
+                let end = asm[start..]
+                    .find(end)
+                    .map(|offset| start + offset)
+                    .unwrap_or_else(|| panic!("{name}: missing {end}"));
+                &asm[start..end]
+            };
+
+            for (path, instructions) in [
+                (
+                    "small-bin reuse",
+                    section("__rt_heap_alloc_small_bin_found:\n", "__rt_heap_alloc_small_bin_unmarked:\n"),
+                ),
+                (
+                    "split free-block reuse",
+                    section("__rt_heap_alloc_fl_found:\n", "__rt_heap_alloc_fl_take_whole:\n"),
+                ),
+                (
+                    "whole free-block reuse",
+                    section("__rt_heap_alloc_fl_take_whole:\n", "__rt_heap_alloc_count:\n"),
+                ),
+            ] {
+                assert!(instructions.contains("_gc_live"), "{name}: {path} live-byte check");
+                assert!(instructions.contains("_heap_limit"), "{name}: {path} runtime ceiling check");
+                assert!(instructions.contains("__rt_heap_exhausted"), "{name}: {path} exhaustion branch");
+            }
+        }
+    }
+
     /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
     #[test]
     fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {
