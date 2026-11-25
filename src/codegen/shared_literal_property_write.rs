@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Scope, opcode, exact spelling and the original value type identify one body.
-//! - Only borrowed (or persistent) refcounted values are shared; an owned value stays inline.
+//! - Borrowed, persistent and Mixed values are shared; the caller releases an owned Mixed box the
+//!   inline store would have adopted. Other owned refcounted values stay inline.
 //! - The inner write carries a compiler-generated span, so the caller's published site survives.
 //! - Each call passes its source line for dynamic-property diagnostics.
 
@@ -56,10 +57,12 @@ fn literal_site(function: &Function, inst: &Instruction) -> Option<(DataId, Valu
         _ => return None,
     };
     let operand = function.value(value)?;
-    // An owned value may be consumed by the inline store, which takes its reference. The helper
-    // only borrows its operand and retains its own copy, so the caller's owner would leak.
+    // The helper borrows its operand and retains its own reference. An owned Mixed box is
+    // released by `emit_call` exactly when the inline store would have adopted it; other owned
+    // refcounted values keep the inline store, which decides their transfer itself.
     if Ownership::php_type_needs_lifetime_tracking(&operand.php_type)
         && !matches!(operand.ownership, Ownership::Borrowed | Ownership::Persistent)
+        && operand.php_type.codegen_repr() != PhpType::Mixed
     {
         return None;
     }
@@ -133,7 +136,15 @@ pub(super) fn emit_call(ctx: &mut FunctionContext<'_>, object: ValueId, value: V
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, if string_value { 3 } else { 2 }),
         i64::from(inst.span.map_or(0, |span| span.line)));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    // The inline store adopts an owned box EIR emits no cleanup for. The helper retained its own
+    // reference instead, so the caller ends that ownership after the call.
+    let adopted = ctx.function.value(value).is_some_and(|operand| operand.php_type.codegen_repr() == PhpType::Mixed)
+        && ctx.value_can_own_mixed_box_source(value)?;
     abi::emit_call_label(ctx.emitter, label);
+    if adopted {
+        ctx.load_value_to_result(value)?;
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
     Ok(())
 }
 
@@ -271,25 +282,32 @@ mod tests {
         assert_eq!(plan.helpers[0].0.property, "different");
     }
 
-    /// An owned refcounted value stays on the inline store, which may consume it; borrowed
-    /// values share the helper, and its inner store never republishes a source location.
+    /// Borrowed values and owned Mixed boxes share the helper, other owned refcounted values stay
+    /// on the inline store, and the helper's inner store never republishes a source location.
     #[test]
-    fn owned_values_stay_inline_and_inner_stores_keep_the_caller_site() {
+    fn owned_non_mixed_values_stay_inline_and_inner_stores_keep_the_caller_site() {
         let mut module = Module::new(Target::parse("linux-x86_64").unwrap());
         let data = module.data.intern_string("value");
         for dynamic in [false, true] {
-            let key = WriteKey { scope: None, property: "value".into(), dynamic,
-                value_type: PhpType::Mixed, value_ir: IrType::Heap(IrHeapKind::Mixed) };
-            let mut function = helper_function(&key, data, &format!("write_site_{dynamic}"));
-            let opcode = if dynamic { Op::DynamicPropSet } else { Op::PropSet };
-            let index = function.instructions.iter().position(|inst| inst.op == opcode).unwrap();
-            let inst = function.instructions[index].clone();
-            assert!(inst.span.is_some_and(|span| !span.is_from_source()), "{inst:?}");
-            assert!(literal_site(&function, &inst).is_some(), "a borrowed value is shared");
-            let value = *inst.operands.last().unwrap();
-            for ownership in [Ownership::Owned, Ownership::MaybeOwned, Ownership::Moved] {
-                function.values[value.as_raw() as usize].ownership = ownership;
-                assert!(literal_site(&function, &inst).is_none(), "{ownership:?} stays inline");
+            for (value_type, value_ir, owned_shared) in [
+                (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), true),
+                (PhpType::Str, IrType::Str, false),
+                (PhpType::Array(Box::new(PhpType::Mixed)), IrType::Heap(IrHeapKind::Array), false),
+            ] {
+                let key = WriteKey { scope: None, property: "value".into(), dynamic,
+                    value_type: value_type.clone(), value_ir };
+                let mut function = helper_function(&key, data, &format!("write_site_{dynamic}"));
+                let opcode = if dynamic { Op::DynamicPropSet } else { Op::PropSet };
+                let index = function.instructions.iter().position(|inst| inst.op == opcode).unwrap();
+                let inst = function.instructions[index].clone();
+                assert!(inst.span.is_some_and(|span| !span.is_from_source()), "{inst:?}");
+                assert!(literal_site(&function, &inst).is_some(), "a borrowed {value_type:?} is shared");
+                let value = *inst.operands.last().unwrap();
+                for ownership in [Ownership::Owned, Ownership::MaybeOwned, Ownership::Moved] {
+                    function.values[value.as_raw() as usize].ownership = ownership;
+                    assert_eq!(literal_site(&function, &inst).is_some(), owned_shared,
+                        "{ownership:?} {value_type:?}");
+                }
             }
         }
     }
