@@ -74,6 +74,8 @@ pub(in crate::resolver) struct DiscoveryEntry {
     declaration_state: ResolveState,
     include_chain: Vec<PathBuf>,
     pub(in crate::resolver) repeatable: bool,
+    /// Records this file's own once guard, independently of an enclosing once include.
+    explicitly_once: bool,
     pub(in crate::resolver) exclusive_group: Option<String>,
     pub(in crate::resolver) exclusive_branch: Option<usize>,
 }
@@ -116,14 +118,22 @@ impl DiscoveryOutput {
             declaration_state,
             include_chain,
             repeatable,
+            explicitly_once: !repeatable,
             exclusive_group: None,
             exclusive_branch: None,
         });
     }
 
-    /// Appends all entries from another output in discovery order.
+    /// Merges declarations in order, sharing each explicit once file across nested outputs.
     pub(super) fn extend(&mut self, other: DiscoveryOutput) {
-        self.entries.extend(other.entries);
+        for entry in other.entries {
+            // An enclosing once guard only limits repetition of its own body: a plain child
+            // include can still redeclare an earlier file and must retain that diagnosis.
+            if entry.explicitly_once && self.contains_canonical(&entry.canonical) {
+                continue;
+            }
+            self.entries.push(entry);
+        }
     }
 
     /// Returns true if any entry in this output has the given canonical path.
@@ -180,6 +190,7 @@ impl DiscoveryOutput {
                     (entry.clone(), 0)
                 });
                 branch_entry.0.repeatable |= entry.repeatable;
+                branch_entry.0.explicitly_once &= entry.explicitly_once;
                 branch_entry.1 += 1;
             }
 
@@ -190,6 +201,7 @@ impl DiscoveryOutput {
                     (entry.clone(), 0)
                 });
                 merged_entry.0.repeatable |= entry.repeatable;
+                merged_entry.0.explicitly_once &= entry.explicitly_once;
                 merged_entry.1 = merged_entry.1.max(count);
             }
         }

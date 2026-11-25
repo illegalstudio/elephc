@@ -1334,28 +1334,38 @@ fn runtime_user_function_descriptor_cases(
     candidate_names: Option<&[String]>,
     strict_php: bool,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
-    let mut functions = ctx
-        .module
-        .functions
-        .iter()
+    let concrete_functions = ctx.module.functions.iter()
         .filter(|function| {
             function.has_source_identity()
                 && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .collect::<Vec<_>>();
-    functions.sort_by(|left, right| left.name.cmp(&right.name));
+    let by_name = concrete_functions.iter()
+        .map(|function| (php_symbol_key(function.name.trim_start_matches('\\')), *function))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut functions = concrete_functions.into_iter()
+        .map(|function| (function.name.clone(), function))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    // The public include name dispatches through its active variant, just like a direct call.
+    for group in crate::ir::function_variants::collect_dispatch_groups(ctx.module) {
+        if let Some(function) = group.variants.iter().find_map(|variant| {
+            by_name.get(&php_symbol_key(variant.trim_start_matches('\\')))
+        }) {
+            functions.entry(group.name).or_insert(*function);
+        }
+    }
 
     let mut cases = Vec::new();
-    for function in functions {
+    for (name, function) in functions {
         if !strict_php
             && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
-                &php_symbol_key(&function.name),
+                &php_symbol_key(&name),
                 true,
             )
         {
             continue;
         }
-        if !runtime_callable_name_is_reachable(&function.name, candidate_names) {
+        if !runtime_callable_name_is_reachable(&name, candidate_names) {
             continue;
         }
         let wrapper_sig =
@@ -1365,22 +1375,22 @@ fn runtime_user_function_descriptor_cases(
         let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return, true);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
-            &function_symbol(&function.name),
-            Some(&function.name),
+            &function_symbol(&name),
+            Some(&name),
             callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             Some(&case_sig),
             &[],
             &[],
             callable_descriptor::CallableDescriptorInvocation::named(
                 callable_descriptor::CallableDescriptorShape::Function,
-                &function.name,
+                &name,
             ),
             Some(&invoker_label),
         );
         cases.push(callable_dispatch::RuntimeCallableCase {
-            label: function_symbol(&function.name),
+            label: function_symbol(&name),
             descriptor_label,
-            php_name: Some(function.name.clone()),
+            php_name: Some(name.clone()),
         });
     }
     cases
