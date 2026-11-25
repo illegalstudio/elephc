@@ -256,7 +256,7 @@ pub(super) fn lower_declared_mixed_prop_get(
 }
 
 /// Reads a real dynamic entry first, then uses magic accessors only when that key is absent.
-fn emit_hash_property_read(
+pub(super) fn emit_hash_property_read(
     ctx: &mut FunctionContext<'_>, class: &str, property: &str, object_reg: &str,
     hash_offset: usize, mode: PropertyFetchMode, done_label: &str,
 ) -> Result<()> {
@@ -440,7 +440,7 @@ fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, property: &str) {
 /// Answers a `Mixed` property read from the receiver's magic accessors, leaving an owned Mixed
 /// cell in the result register: a probe asks `__isset` first and answers null when it says no,
 /// then reads through `__get` (or answers `true` when the class has no `__get`).
-fn emit_magic_property_arm(
+pub(super) fn emit_magic_property_arm(
     ctx: &mut FunctionContext<'_>,
     arm: &MixedMagicArm,
     property: &str,

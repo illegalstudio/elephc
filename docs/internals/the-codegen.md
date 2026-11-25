@@ -62,6 +62,16 @@ property hook bodies and other input or result representations retain inline
 lowering. The helper inventory is prepared once per module emission, avoiding
 repeated large class-dispatch ladders in the assembly buffer.
 
+Literal property reads on known object receivers resolve the runtime class before
+selecting storage or magic accessors. For a dynamic name, the class-specific hash
+entry wins, including a stored null: the `MagicRead`, `MagicIsset`, `MagicEmpty`
+and `MagicProbe` runtime actions carry that class's hash offset and probe it
+first, so a lazy getter that caches its result as a property runs once. A miss
+follows PHP's accessor order. `isset()` and `empty()` consult `__isset`, while
+`??` (`MagicProbe`) asks `__isset` only when declared and then reads `__get`,
+reusing the boxed receiver's accessor arm and retiring its owned cell after the
+concrete result cast.
+
 Function-local references to named globals borrow the process symbol address through
 `LoadGlobalRefCell`, rather than promoting an uninitialized GlobalAlias frame slot.
 The boxed symbol owns its payload. A per-emission inventory over all function tables

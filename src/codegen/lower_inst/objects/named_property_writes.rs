@@ -168,7 +168,8 @@ fn emit_dynamic_plan_write(
             "property write resolved to a value read",
         )),
         PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => Err(CodegenIrError::invalid_module(
             "property write resolved to a read probe",
         )),
         // php refuses the creation from this scope (a `readonly` class, including php-src's

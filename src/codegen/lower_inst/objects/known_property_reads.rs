@@ -942,7 +942,7 @@ pub(super) fn emit_hash_or_magic_isset_read(
     ctx.emitter.label(&absent_label);
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
-    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 
@@ -1016,7 +1016,7 @@ pub(super) fn emit_hash_or_magic_empty_read(
     ctx.emitter.label(&absent_label);
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
-    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 
@@ -1055,7 +1055,7 @@ pub(super) fn emit_hash_or_magic_get_read(
         }
     }
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -1177,7 +1177,7 @@ pub(super) fn emit_dynamic_plan_read(
                 *hash_offset,
                 mode.is_read() && *warns_on_miss,
             )?;
-            cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+            cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
             store_if_result(ctx, inst)
         }
         // No hash on this runtime class, so the entry can never exist: php warns on a value read
@@ -1187,7 +1187,7 @@ pub(super) fn emit_dynamic_plan_read(
                 emit_undefined_property_warning(ctx, &arm.class_name, property);
             }
             emit_boxed_null(ctx);
-            cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+            cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
             store_if_result(ctx, inst)
         }
         // php calls `__get` on this runtime class and the name is a constant here, so the arm
@@ -1219,6 +1219,14 @@ pub(super) fn emit_dynamic_plan_read(
             property,
             *hash_offset,
         ),
+        PropertyRuntimeAction::MagicProbe { hash_offset } => emit_hash_or_magic_probe_read(
+            ctx,
+            inst,
+            object,
+            &arm.class_name,
+            property,
+            *hash_offset,
+        ),
         // A silent probe would consult `__isset`, which has no codegen call site in this phase. It
         // answers php null rather than a slot so that the deferral can only lose a value, never
         // expose storage.
@@ -1233,6 +1241,69 @@ pub(super) fn emit_dynamic_plan_read(
             "property dispatch handed a refusal arm to its action emitter",
         )),
     }
+}
+
+/// Answers a literal `??` probe from the hash, then `__isset` and `__get` in php's order.
+///
+/// The boxed receiver's accessor arm already implements that order and leaves an owned Mixed
+/// cell. A class whose accessors that arm cannot call keeps the direct getter lowering.
+fn emit_hash_or_magic_probe_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    hash_offset: Option<usize>,
+) -> Result<()> {
+    let mode = PropertyFetchMode::Probe;
+    let done = ctx.next_label("hash_magic_probe_done");
+    match hash_offset {
+        Some(hash_offset) => {
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(object, base_reg)?;
+            emit_hash_property_read(ctx, class_name, property, base_reg, hash_offset, mode, &done)?;
+        }
+        None => {
+            let Some(magic) = magic_property_arm(ctx, class_name, mode)? else {
+                return lower_magic_get_prop(ctx, inst, object, class_name, property);
+            };
+            ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+            emit_magic_property_arm(ctx, &magic, property, &done)?;
+        }
+    }
+    ctx.emitter.label(&done);
+    cast_owned_dynamic_property_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Converts a dispatch's owned Mixed cell into the concrete result and retires the cell owner.
+///
+/// Managed payload casts retain or copy their value before the enclosing cell is released, so
+/// the result never borrows from the retired cell.
+fn cast_owned_dynamic_property_result(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Buffer(_)) {
+        return cast_loaded_mixed_pointer_to_result(ctx, ty);
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    cast_loaded_mixed_pointer_to_result(ctx, ty)?;
+    abi::emit_push_result_value(ctx.emitter, ty);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    match ty {
+        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+        }
+        PhpType::TaggedScalar => {
+            let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, result, tag);
+        }
+        _ => abi::emit_pop_reg(ctx.emitter, result),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Reads a RUNTIME-name undeclared property from the receiver's dynamic-property hash.

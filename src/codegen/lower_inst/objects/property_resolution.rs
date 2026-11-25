@@ -204,6 +204,15 @@ pub(super) enum PropertyRuntimeAction {
         /// The per-instance hash that must be probed before the accessors, when the class has one.
         hash_offset: Option<usize>,
     },
+    /// A literal `??` probe on a class that declares `__get`.
+    ///
+    /// php's coalesce fetch answers a stored hash entry first. A miss asks `__isset` only when
+    /// the class declares it, and reads `__get` unless `__isset` said no: the same accessor order
+    /// the boxed receiver path follows.
+    MagicProbe {
+        /// The per-instance hash that must be probed before the accessors, when the class has one.
+        hash_offset: Option<usize>,
+    },
     /// php answers an accessor this dispatch does not call.
     ///
     /// For a DIRECT name that never happens here: `crate::ir_lower::stmt::instance_property_writes`
@@ -384,12 +393,24 @@ pub(super) fn resolve_property_runtime_action(
         resolution,
         PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
     ) {
-        // `$o->p` and `$o->p ?? d` probe a stored dynamic entry before `__get`, just like
-        // `isset()`; only a miss reaches the accessor.
+        // `$o->p ?? d` keeps php's accessor order: hash entry, then `__isset` when declared,
+        // then `__get`. A get-only class still reads the getter on a miss.
+        if matches!(kind, PropertyAccessKind::DirectRead(PropertyFetchMode::Probe))
+            && class_declares_method(ctx, class_name, "__get")
+        {
+            return Ok(PropertyRuntimeAction::MagicProbe {
+                hash_offset: dynamic_property_hash_offset_for_class(
+                    ctx,
+                    class_name,
+                    property,
+                )?,
+            });
+        }
+        // `$o->p` probes a stored dynamic entry before `__get`, just like `isset()`; only a miss
+        // reaches the accessor.
         let get_read = matches!(
             kind,
-            PropertyAccessKind::DirectRead(mode)
-                if mode.uses_magic_get() || mode == PropertyFetchMode::Probe
+            PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get()
         );
         if get_read && class_declares_method(ctx, class_name, "__get") {
             return Ok(PropertyRuntimeAction::MagicRead {
@@ -824,6 +845,10 @@ pub(super) fn dynamic_property_runtime_plan_for_class(
         // raises `Cannot create dynamic property …` and a read warns `Undefined property`.
         || class_is_readonly(ctx, normalized)
         || subtree_answers_from_its_own_hash(ctx, normalized, property)?
+        // `??` on a class with `__get` but no `__isset` still reads through the getter on a miss
+        // (php's BP_VAR_IS fetch), so it needs the runtime plan's `MagicRead` arm.
+        || (matches!(kind, PropertyAccessKind::DirectRead(PropertyFetchMode::Probe))
+            && subtree_declares_magic_method(ctx, normalized, "__get"))
         || kind
             .magic_method()
             .is_some_and(|method| subtree_declares_magic_method(ctx, normalized, method));

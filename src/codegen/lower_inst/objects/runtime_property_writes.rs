@@ -577,7 +577,8 @@ fn emit_runtime_name_stacked_write_arm(
                 "runtime property write resolved to a value read",
             )),
             PropertyRuntimeAction::MagicIsset { .. }
-            | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+            | PropertyRuntimeAction::MagicEmpty { .. }
+            | PropertyRuntimeAction::MagicProbe { .. } => Err(CodegenIrError::invalid_module(
                 "runtime property write resolved to a read probe",
             )),
             PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
@@ -745,7 +746,8 @@ fn mixed_property_write_candidate(
         PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => return Ok(None),
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
         class_id,
@@ -1985,7 +1987,8 @@ pub(super) fn emit_dynamic_plan_unset(
         PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => Ok(()),
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => Ok(()),
         PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
             "unset() resolved to a runtime-name refusal",
         )),
@@ -2323,7 +2326,8 @@ fn emit_mixed_runtime_name_unset_arm(
         | PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => {
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }
