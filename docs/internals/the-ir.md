@@ -1322,10 +1322,31 @@ pieces must stay in agreement:
    internal `ext/uri` prelude classes, called directly or through an invoker
    whose declaring class is one of them, are checked only under
    `strict_types=1` (without the "called in" suffix): in coercive mode PHP only
-   deprecates a `null` bound to an internal function's scalar parameter. A
-   method is not checked when an override in a subclass or implementor declares
-   a different parameter, since lowering only knows the receiver's static class
-   and PHP binds the method selected at run time.
+   deprecates a `null` bound to an internal function's scalar parameter.
+9. **Overrides.** PHP checks the parameter of the method selected at run time.
+   A statically bound call (`A::m()`, `self::`, `parent::`, `new A`) names it,
+   so `LoweringContext::call_guard_dispatch` is `Exact`. For `$o->m()`,
+   `$o::s()` and `static::s()`, lowering walks every class the receiver can be
+   (subclasses and implementors of its static class) and groups those whose
+   selected method binds the parameter differently: a wider type (bound as
+   before the check existed) or the same scalar under another class or
+   parameter name (its own message and parameter line). Without such a group
+   the guard is unchanged. Otherwise the table follows the message suffix in
+   the immediate and the receiver object becomes the last operand (`static::`
+   reads the called-class id instead). Codegen reads it only on the cold path,
+   so the inline tag test costs the same. A private method is never overridden,
+   except that `static::m()` to a private static method runs the late-bound
+   class's redeclaration (`private_late_static_calls.rs`): the call dispatched
+   among same-signature redeclarations walks them like any `static::` call, and
+   the branch that runs the scope's own method is `Exact`. A callable whose
+   method is resolved from the receiver's static class (#2466) leaves such a
+   method unchecked.
+   `new $class($v)` and `new static($v)` dispatch on the class name: when the
+   checker records a runtime-typed positional argument (`new $class` records
+   every `mixed`/union one, since its constructor is unknown), each class whose
+   constructor checks it is constructed in a fixed-class branch of the planned
+   class-name dispatch (`dynamic_constructors.rs`), which checks it as `new A`
+   does. The other classes keep the generic dynamic-new instruction.
 
 ### Eval and Dynamic Symbols
 

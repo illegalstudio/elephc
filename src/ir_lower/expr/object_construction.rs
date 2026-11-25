@@ -111,6 +111,8 @@ pub(super) fn lower_new_object(
     let previous_description = ctx.call_description.replace(
         super::scalar_param_guards::method_guard_description(ctx, class_name.as_str(), "__construct", false),
     );
+    // `new C()` runs C's constructor: the class is named, never selected at run time.
+    let previous_dispatch = ctx.call_guard_dispatch.replace(super::GuardDispatch::Exact);
     let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
@@ -120,6 +122,7 @@ pub(super) fn lower_new_object(
         .map_or(args, |rewrite| rewrite.args.as_slice());
     let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    ctx.call_guard_dispatch = previous_dispatch;
     ctx.call_site_span = previous_call_site;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     // Publish AFTER argument evaluation: a nested construction executed by an argument
@@ -705,6 +708,47 @@ pub(super) fn lower_planned_collector_new(
     }
     let candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
     if candidates.is_empty() { return None; }
+    let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
+    let ty = PhpType::Object(fallback.to_string());
+    let object = ctx.emit_owned_value(Op::MixedUnbox, vec![mixed.value], None, ty.clone(),
+        Op::mixed_unbox_effects(&ty), Some(expr.span));
+    release_coerced_source_if_owned(ctx, mixed, Some(expr.span));
+    Some(object)
+}
+
+/// Constructs `new static(...)` through fixed-class branches when a runtime-typed argument
+/// binds a declared scalar constructor parameter of a class the late-bound name can select.
+///
+/// PHP checks the argument against the selected class's constructor
+/// (`B::__construct(): Argument #1 ($t) must be of type string, null given`). The
+/// late-bound dynamic-new opcode binds with a lenient cast, so each class of `fallback`'s
+/// subtree that needs the check is constructed by `lower_new_object`, which checks it as for
+/// `new B(...)`. The other classes keep the generic dispatch.
+pub(super) fn lower_planned_guarded_static_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    fallback: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.iter().any(|arg| ctx.scalar_guard_arg_sites.contains(&arg.span)) {
+        return None;
+    }
+    let candidates = dynamic_new_planned_candidate_classes(ctx, args, false)
+        .into_iter()
+        .filter(|candidate| class_extends_class(ctx, candidate, fallback))
+        // An inaccessible constructor keeps the generic dispatch, which refuses the call.
+        .filter(|candidate| super::dynamic_constructors::dynamic_new_constructor_is_accessible(ctx, candidate))
+        .collect::<Vec<_>>();
+    let constructor_key = php_symbol_key("__construct");
+    let guarded = candidates.iter().any(|candidate| {
+        crate::types::constructor_owner(ctx.classes, candidate)
+            .and_then(|(_, owner)| owner.methods.get(&constructor_key))
+            .is_some_and(|sig| super::dynamic_constructors::dynamic_new_args_need_scalar_guard(ctx, sig, args))
+    });
+    if !guarded {
+        return None;
+    }
     let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
     let ty = PhpType::Object(fallback.to_string());
     let object = ctx.emit_owned_value(Op::MixedUnbox, vec![mixed.value], None, ty.clone(),

@@ -418,6 +418,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Printed callable description (`Class::method`) for argument `TypeError` messages.
     pub(crate) call_description: Option<String>,
+    /// How the method named by `call_description` is selected, so a scalar-parameter check
+    /// can follow the override PHP runs. `None` means unknown: such a check is skipped when
+    /// an override binds the parameter differently.
+    pub(crate) call_guard_dispatch: Option<crate::ir_lower::expr::GuardDispatch>,
     /// Call span of the `ReflectionMethod::invoke*()` currently dispatching its target.
     ///
     /// Reflection calls run under weak typing in php-src, so an explicitly reflected
@@ -912,6 +916,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
+            call_guard_dispatch: None,
             reflected_invoke_call_span: None,
             call_site_span: None,
             scalar_guard_deferral: None,

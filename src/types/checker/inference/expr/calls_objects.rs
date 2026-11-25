@@ -292,7 +292,18 @@ impl Checker {
                 self.record_unresolved_callee_argument_aliases(args);
                 self.infer_type(name_expr, env)?;
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    let ty = self.infer_type(arg, env)?;
+                    // The selected constructor may declare a scalar parameter: EIR lowering
+                    // checks a runtime-typed positional argument against it, through the
+                    // fixed-class binding of each class whose constructor needs the check.
+                    let positional = !matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. });
+                    if positional
+                        && [PhpType::Int, PhpType::Float, PhpType::Str, PhpType::Bool].iter().any(|declared| {
+                            crate::types::param_binding::runtime_scalar_guard_needed(declared, &ty, self.strict_types)
+                        })
+                    {
+                        self.record_scalar_guard_arg_site(arg.span);
+                    }
                 }
                 Ok(PhpType::Mixed)
             }

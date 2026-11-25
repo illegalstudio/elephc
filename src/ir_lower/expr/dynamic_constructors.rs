@@ -264,12 +264,69 @@ fn dynamic_new_class_is_planning_candidate(
         return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
     }
     if sig.variadic.is_some() {
-        return false;
+        // The generic dynamic-new path converts a leading scalar argument before it reaches
+        // the constructor thunk, so a variadic constructor whose declared scalar parameter
+        // receives a runtime-typed positional argument is constructed through the fixed-class
+        // branch too (`__construct(string $s, ...$rest)` refuses `new $c($null)`). A hidden
+        // collector (eval, backtraces) is not a declared variadic and keeps the generic path.
+        return !crate::func_args::sig_collects_surplus_args(sig)
+            && !crate::func_args::sig_has_hidden_argc_param(sig)
+            && !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg)
+            && dynamic_new_args_need_scalar_guard(ctx, sig, args)
+            && dynamic_new_constructor_is_accessible(ctx, class_name)
+            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
     }
-    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
+    if !dynamic_new_args_need_planning(sig, args)
+        && !owns_promoted_references
+        && !(dynamic_new_args_need_scalar_guard(ctx, sig, args)
+            && dynamic_new_constructor_is_accessible(ctx, class_name))
+    {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
+}
+
+/// Returns true when a positional argument the checker recorded as runtime-typed binds a
+/// declared non-nullable scalar parameter of `sig`.
+///
+/// PHP checks that argument against the constructor of the class selected at run time. The
+/// generic dynamic-new opcode binds it with a lenient cast, so such a class is constructed
+/// through the fixed-class branch, whose argument binding raises the `TypeError`.
+pub(super) fn dynamic_new_args_need_scalar_guard(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> bool {
+    args.iter()
+        .take_while(|arg| !is_spread_arg(arg) && !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        .enumerate()
+        .any(|(index, arg)| {
+            ctx.scalar_guard_arg_sites.contains(&arg.span)
+                && crate::types::param_binding::runtime_scalar_guard_param(sig, index).is_some()
+        })
+}
+
+/// Returns true when the current scope may call `class_name`'s constructor.
+///
+/// A fixed-class branch runs the constructor without the visibility check the generic
+/// dynamic-new instruction performs (`Call to private A::__construct() from global scope`), so
+/// only an accessible constructor is planned for a scalar check. PHP refuses the call before
+/// checking any argument, and the generic instruction keeps that order. Mirrors the codegen
+/// refusal (`constructor_visibility_refusal`): a protected constructor is callable from its
+/// class's ancestors and descendants.
+pub(super) fn dynamic_new_constructor_is_accessible(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let Some((owner_name, owner)) = crate::types::constructor_owner(ctx.classes, class_name) else {
+        return true;
+    };
+    let scope = ctx.current_class.as_deref();
+    match owner.method_visibilities.get(&php_symbol_key("__construct")) {
+        None | Some(Visibility::Public) => true,
+        Some(Visibility::Private) => scope.is_some_and(|scope| php_symbol_key(scope) == php_symbol_key(owner_name)),
+        Some(Visibility::Protected) => scope.is_some_and(|scope| {
+            class_extends_class(ctx, scope, owner_name) || class_extends_class(ctx, owner_name, scope)
+        }),
+    }
 }
 
 /// Returns true when a constructor signature would reshape the source argument list.
