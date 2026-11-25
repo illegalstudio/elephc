@@ -1109,6 +1109,7 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
+    release_magic_set_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&caught_label);
@@ -1118,6 +1119,7 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
+    release_magic_set_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&recursive_label);
@@ -1166,6 +1168,21 @@ fn emit_runtime_magic_set_call(
         }
     }
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Retires an owned Mixed box this write was to adopt but `__set` only borrowed.
+///
+/// The magic setter receives the value as an ordinary borrowed argument and keeps no pointer to
+/// the box. EIR emits no cleanup for a box the store adopts, so the call site ends that ownership
+/// once `__set` returns or throws, after the local handler and guard node are gone.
+fn release_magic_set_adopted_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !dynamic_property_mixed_value_adopts_source(ctx, value, &value_ty)? {
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &value_ty);
     Ok(())
 }
 
@@ -1737,6 +1754,7 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
     let handled = ctx.next_label("eval_prop_set_handled");
     let raise = ctx.next_label("eval_prop_set_raise");
     let done = ctx.next_label("eval_prop_set_done");
+    let adopted = dynamic_property_mixed_value_adopts_source(ctx, value, value_ty)?;
     materialize_dynamic_property_mixed_value(ctx, value, value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     // Frame from here: [sp] Throwable out slot, [sp+16] value cell, then the caller's block.
@@ -1803,8 +1821,13 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
 
     ctx.emitter.label(&plain);
     if native_done_label.is_some() {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        // The native arms below box the value again. A cell that adopted the source's owned box
+        // hands it to their store untouched: releasing it here freed the box the store then
+        // adopted. Any other cell holds its own reference.
+        if !adopted {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         ctx.emitter.label(&done);
         return Ok(());
