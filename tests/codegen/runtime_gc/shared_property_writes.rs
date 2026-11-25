@@ -9,7 +9,8 @@
 //! - XML capability lowers `$mixed->name .= $text` to an owned Mixed box the store adopts, so
 //!   repeated sites share an adopting helper body.
 //! - A magic `__set` only borrows that box, so the write retires it whether `__set` returns or
-//!   throws.
+//!   throws. Writes that store nothing (refusal, non-object receiver, dispatch miss) retire it
+//!   too.
 //! - With the eval bridge linked, the eval-object probe runs before the native arms and must hand
 //!   the adopted box to them intact.
 
@@ -104,6 +105,68 @@ adopt_run();
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "xml\ndestruct:b0\nb0|x0\nb0|x0|y0\ndestruct:b1\nb1|x1\nb1|x1|y1\ndestruct:b2\nb2|x2\nb2|x2|y2\n");
     assert!(assembly.contains("adopt=true"), "the repeated adopted writes must share an adopting body");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// PHP source whose adopted boxes reach writes that store nothing: a refused private property,
+/// a scalar receiver and a Closure receiver that matches no dispatch arm.
+const UNSTORED_WRITES: &str = r#"<?php
+class UnstoredPrivate { private mixed $secret = 'p'; public function __get(string $name): mixed { return 'g'; } }
+class UnstoredFrame { public mixed $block = null; }
+function unstored_frame(mixed $block): mixed { $frame = new UnstoredFrame(); $frame->block = $block; return $frame; }
+function secret_one(mixed $frame, string $html): void { $frame->block->secret .= $html; }
+function secret_two(mixed $frame, string $html): void { $frame->block->secret .= $html; }
+function label_one(mixed $frame, string $html): void { $frame->block->label .= $html; }
+function label_two(mixed $frame, string $html): void { $frame->block->label .= $html; }
+function unstored_run(): void {
+    $xml = simplexml_load_string("<root><item>xml</item></root>");
+    echo (string) $xml->item, "\n";
+    for ($round = 0; $round < 3; $round++) {
+        $private = unstored_frame(new UnstoredPrivate());
+        try { secret_one($private, "a$round"); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+        try { secret_two($private, "b$round"); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+        $scalar = unstored_frame(5);
+        try { label_one($scalar, "c$round"); } catch (Error $error) {}
+        try { label_two($scalar, "d$round"); } catch (Error $error) {}
+        echo json_encode($scalar->block), "\n";
+        $closure = unstored_frame(function () use ($round) { return "closure$round"; });
+        try { label_one($closure, "e$round"); } catch (Error $error) {}
+        try { label_two($closure, "f$round"); } catch (Error $error) {}
+        echo ($closure->block)(), "\n";
+    }
+}
+unstored_run();
+"#;
+
+/// Stdout of `UNSTORED_WRITES`, which PHP 8.6 prints the same way.
+const UNSTORED_STDOUT: &str = "xml\nCannot access private property UnstoredPrivate::$secret\nCannot access private property UnstoredPrivate::$secret\n5\nclosure0\nCannot access private property UnstoredPrivate::$secret\nCannot access private property UnstoredPrivate::$secret\n5\nclosure1\nCannot access private property UnstoredPrivate::$secret\nCannot access private property UnstoredPrivate::$secret\n5\nclosure2\n";
+
+/// An adopted box is retired when the shared write stores nothing: refusal, non-object receiver
+/// and dispatch miss.
+#[test]
+fn test_adopted_box_is_retired_when_the_write_stores_nothing() {
+    if skip_without_xml_native("test_adopted_box_is_retired_when_the_write_stores_nothing") { return; }
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(UNSTORED_WRITES);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, UNSTORED_STDOUT);
+    assert!(assembly.contains("adopt=true"), "the repeated adopted writes must share an adopting body");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The non-storing writes keep the same balance without EIR optimization.
+#[test]
+fn test_adopted_box_is_retired_when_the_write_stores_nothing_no_ir_opt() {
+    without_ir_opt(test_adopted_box_is_retired_when_the_write_stores_nothing);
+}
+
+/// With the eval bridge linked, the probe hands the box on and the dispatch miss retires it.
+#[test]
+fn test_eval_linked_adopted_box_is_retired_when_the_write_stores_nothing() {
+    if skip_without_xml_native("test_eval_linked_adopted_box_is_retired_when_the_write_stores_nothing") { return; }
+    let source = format!("{UNSTORED_WRITES}$code = $argc > 5 ? 'return 1;' : 'return 2;';\necho eval($code), \"\\n\";\n");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{UNSTORED_STDOUT}2\n"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

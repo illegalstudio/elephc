@@ -378,7 +378,7 @@ pub(super) fn lower_mixed_named_prop_set(
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    emit_branch_if_receiver_not_object(ctx, value, &done_label)?;
     push_mixed_unboxed_object_payload(ctx);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -391,6 +391,7 @@ pub(super) fn lower_mixed_named_prop_set(
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
+                release_unstored_adopted_value(ctx, value)?;
                 super::super::exceptions::emit_error(ctx, message);
             }
             MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
@@ -909,12 +910,14 @@ fn emit_refined_untyped_tag_guarded_store(
 ) -> Result<()> {
     if refined_untyped_store_tags(slot).is_empty() {
         abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+        release_unstored_adopted_value(ctx, value)?;
         super::super::exceptions::emit_error(ctx, message);
         return Ok(());
     }
     let store_label = ctx.next_label("refined_untyped_mixed_store");
     emit_refined_untyped_tag_guard(ctx, value, slot, &store_label)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+    release_unstored_adopted_value(ctx, value)?;
     super::super::exceptions::emit_error(ctx, message);
     ctx.emitter.label(&store_label);
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -1109,7 +1112,7 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
-    release_magic_set_adopted_value(ctx, value)?;
+    release_unstored_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&caught_label);
@@ -1119,13 +1122,14 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
-    release_magic_set_adopted_value(ctx, value)?;
+    release_unstored_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
     if let Some(message) = recursive_refusal {
         abi::emit_release_temporary_stack(ctx.emitter, staged_stack_bytes);
+        release_unstored_adopted_value(ctx, value)?;
         super::super::exceptions::emit_error(ctx, message);
     } else {
         if let Some(hash_offset) = hash_offset {
@@ -1147,6 +1151,7 @@ fn emit_runtime_magic_set_call(
             )?;
             abi::emit_jump(ctx.emitter, &done_label);
         } else {
+            release_unstored_adopted_value(ctx, value)?;
             emit_readonly_runtime_dynamic_property_error(
                 ctx,
                 class_name,
@@ -1171,12 +1176,38 @@ fn emit_runtime_magic_set_call(
     Ok(())
 }
 
-/// Retires an owned Mixed box this write was to adopt but `__set` only borrowed.
+/// Branches to `done_label` when the unboxed receiver is not an object.
 ///
-/// The magic setter receives the value as an ordinary borrowed argument and keeps no pointer to
-/// the box. EIR emits no cleanup for a box the store adopts, so the call site ends that ownership
-/// once `__set` returns or throws, after the local handler and guard node are gone.
-fn release_magic_set_adopted_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+/// An adopted value box takes a separate exit that retires it first; the object path keeps the
+/// unboxed payload registers intact.
+fn emit_branch_if_receiver_not_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    done_label: &str,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !dynamic_property_mixed_value_adopts_source(ctx, value, &value_ty)? {
+        emit_branch_if_mixed_unboxed_not_object(ctx, done_label);
+        return Ok(());
+    }
+    let object_label = ctx.next_label("mixed_prop_set_object_receiver");
+    let not_object_label = ctx.next_label("mixed_prop_set_not_object_receiver");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &not_object_label);
+    abi::emit_jump(ctx.emitter, &object_label);
+    ctx.emitter.label(&not_object_label);
+    release_unstored_adopted_value(ctx, value)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&object_label);
+    Ok(())
+}
+
+/// Retires an owned Mixed box this write was to adopt on a path that does not store it.
+///
+/// EIR emits no cleanup for a box the store adopts, so every exit that keeps no pointer to it ends
+/// that ownership itself: a magic `__set` that only borrowed the argument (once it returned or
+/// threw, after the local handler and guard node are gone), a non-object receiver, a dispatch miss
+/// and a refusal error.
+fn release_unstored_adopted_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     if !dynamic_property_mixed_value_adopts_source(ctx, value, &value_ty)? {
         return Ok(());
@@ -1419,7 +1450,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    emit_branch_if_receiver_not_object(ctx, value, &done_label)?;
     push_mixed_unboxed_object_payload(ctx);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
@@ -1490,6 +1521,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
+                release_unstored_adopted_value(ctx, value)?;
                 super::super::exceptions::emit_error(ctx, message);
             }
             MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
@@ -1557,6 +1589,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    release_unstored_adopted_value(ctx, value)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
