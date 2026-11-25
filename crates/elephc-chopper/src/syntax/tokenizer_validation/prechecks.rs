@@ -10,7 +10,9 @@
 use crate::scanner::{newline_count, operator, Operator, HALT_COMPILER_OUTERMOST_SCOPE_MESSAGE};
 
 use super::diagnostics::*;
-use super::parser_view::{enclosing_braces, parser_view, ternary_colon_before_label};
+use super::parser_view::{
+    arrow_starts_function_body, enclosing_braces, parser_view, ternary_colon_before_label,
+};
 use super::reference_scan::{
     is_reference_marker, is_write_continuation, reference_chain_end, reference_target_starts_at,
 };
@@ -330,7 +332,8 @@ pub(crate) fn invalid_reference_write_continuation_error<T: SourceToken>(
         let assignment = previous_id == i64::from(b'=');
         let foreach_value = previous_id == tok::T_AS;
         let arrow_entry = previous_id == tok::T_DOUBLE_ARROW
-            && arrow_introduces_reference_entry(tokens, previous, &enclosing, &braces);
+            && arrow_introduces_reference_entry(tokens, previous, &enclosing, &braces)
+            && !arrow_starts_function_body(tokens, previous, close_of);
         let use_capture = previous_id == i64::from(b'(')
             && enclosing[index] != u32::MAX
             && previous_significant_index(tokens, enclosing[index] as usize)
@@ -470,6 +473,11 @@ pub(crate) fn invalid_array_reference_error<T: SourceToken>(
             continue;
         }
         let Some((terminator, true)) = delimiters.last().copied() else { continue; };
+        if tokens[previous].id() == tok::T_DOUBLE_ARROW
+            && arrow_starts_function_body(tokens, previous, close_of)
+        {
+            continue;
+        }
         let Some(target) = next_significant_index(tokens, index) else {
             return Some(end_of_file_expecting(source.len(), None));
         };
