@@ -1,7 +1,9 @@
 //! Purpose:
 //! End-to-end checks for PHP constructs that runtime `eval()` fragments used to reject:
 //! the `@` operator, `throw` expressions, `const` statements, by-reference function
-//! declarations and trailing commas in parameter and closure `use` lists.
+//! declarations and trailing commas in parameter and closure `use` lists. It also checks that a
+//! `catch` matches an eval-declared interface on an `Exception` subclass, and that throwing a
+//! non-`Throwable` object raises a catchable `Error`.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests_eval eval_fragment_constructs`.
@@ -34,6 +36,10 @@ $reflected = new ReflectionFunction('eval_fragment_counter');
 echo eval_fragment_counter(), $reflected->returnsReference() ? 'R' : 'r', '|';
 $pair = function ($left, $right,) use ($quiet,) { return $left . $right; };
 echo $pair('a', 'b'), '|';
+interface EvalFragmentMarker { public function value(); }
+class EvalFragmentThrown extends Exception implements EvalFragmentMarker { public function value() { return 42; } }
+try { throw new EvalFragmentThrown(); } catch (EvalFragmentMarker $caught) { echo $caught->value(), '|'; }
+try { throw new stdClass; } catch (Error $error) { echo $error->getMessage(), '|'; }
 $ok = false;
 $ok || throw new RuntimeException('thrown from eval');
 EVAL : '';
@@ -45,7 +51,10 @@ try {
 "#);
 
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "null|null|restored||36|1R|ab|thrown from eval\n");
+    assert_eq!(
+        output.stdout,
+        "null|null|restored||36|1R|ab|42|Cannot throw objects that do not implement Throwable|thrown from eval\n",
+    );
     assert_eq!(output.stderr.matches("Undefined variable $eval_loud_variable").count(), 1, "{}", output.stderr);
     assert!(!output.stderr.contains("eval_missing_variable"), "{}", output.stderr);
     assert!(!output.stderr.contains("Undefined array key"), "{}", output.stderr);
