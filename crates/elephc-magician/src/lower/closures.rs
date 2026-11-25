@@ -25,7 +25,7 @@ pub(super) fn lower_closure(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr> {
         body,
         is_arrow: false,
         is_static,
-        by_ref_return: false,
+        by_ref_return,
         captures,
         capture_refs,
     } = expr.kind else {
@@ -56,6 +56,7 @@ pub(super) fn lower_closure(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr> {
         .with_parameter_by_ref_flags(signature.by_ref)
         .with_parameter_variadic_flags(signature.is_variadic)
         .with_return_type(signature.return_type)
+        .with_returns_by_ref(by_ref_return)
         .with_strict_types(scope.strict_types);
     Some(EvalExpr::Closure { function, captures: lowered_captures, is_static })
 }

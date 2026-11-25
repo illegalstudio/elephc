@@ -244,6 +244,8 @@ pub(super) fn lower_expression(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr
             then_branch: None,
             else_branch: Box::new(lower_expression(scope, *default)?),
         },
+        ExprKind::ErrorSuppress(inner) => EvalExpr::ErrorSuppress(Box::new(lower_expression(scope, *inner)?)),
+        ExprKind::Throw(inner) => EvalExpr::Throw(Box::new(lower_expression(scope, *inner)?)),
         ExprKind::Negate(inner) => lower_unary(scope, *inner, EvalUnaryOp::Negate)?,
         ExprKind::Not(inner) => lower_unary(scope, *inner, EvalUnaryOp::LogicalNot)?,
         ExprKind::BitNot(inner) => lower_unary(scope, *inner, EvalUnaryOp::BitNot)?,

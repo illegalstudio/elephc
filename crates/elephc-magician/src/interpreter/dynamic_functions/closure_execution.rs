@@ -734,6 +734,7 @@ fn visit_static_var_declarations(
             | EvalStmt::EnumDecl(_)
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
+            | EvalStmt::ConstDecl { .. }
             | EvalStmt::InterfaceDecl(_)
             | EvalStmt::DynamicPropertyArrayAppend { .. }
             | EvalStmt::DynamicPropertyArraySet { .. }

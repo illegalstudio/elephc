@@ -13,8 +13,10 @@ use super::*;
 
 mod calls;
 mod closures;
+mod control_operators;
 
 use closures::eval_closure_expr;
+use control_operators::{eval_error_suppressed_expr, eval_throw_expr};
 pub(in crate::interpreter) use closures::eval_closure_object_expr;
 
 pub(in crate::interpreter) use calls::*;
@@ -432,5 +434,9 @@ fn eval_expr_with_result_ownership(
         }
         EvalExpr::Unary { op, expr } => eval_unary_expr(*op, expr, context, scope, values),
         EvalExpr::Binary { op, left, right } => eval_binary_expr(*op, left, right, context, scope, values),
+        EvalExpr::ErrorSuppress(operand) => {
+            eval_error_suppressed_expr(operand, own_result, context, scope, values)
+        }
+        EvalExpr::Throw(operand) => eval_throw_expr(operand, context, scope, values),
     }
 }

@@ -112,7 +112,9 @@ mod tests {
     /// `strict_types` mode, which changes the serialized payload.
     /// BUMPED TO 32: strict_types declarations must precede every other eval statement.
     /// BUMPED TO 33: Chopper scans and parses included scripts and eval fragments.
-    const RECORDED_FINGERPRINT: u64 = 413075983107789334;
+    /// BUMPED TO 35: `@` and `throw` expressions, `const` statements, the `@` token, and
+    /// the by-reference return flag of eval functions and closures.
+    const RECORDED_FINGERPRINT: u64 = 8478801418252257849;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

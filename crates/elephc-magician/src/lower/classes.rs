@@ -251,6 +251,7 @@ pub(super) fn lower_method(scope: &Scope<'_>, mut method: ClassMethod) -> Option
         parameter_is_by_ref: lowered.parameter_is_by_ref().to_vec(),
         parameter_is_variadic: lowered.parameter_is_variadic().to_vec(),
         return_type: lowered.return_type().cloned(),
+        returns_by_ref: lowered.returns_by_ref(),
         body: lowered.body().to_vec(),
     };
     let template = super::templates::retain_template(
