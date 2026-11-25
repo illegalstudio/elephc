@@ -277,6 +277,21 @@ fn chopper_ast_lowers_supported_eval_fragments() {
     }
 }
 
+/// Accepts the trailing commas PHP 8 allows in parameter, closure `use` and `unset()` lists.
+#[test]
+fn chopper_accepts_trailing_commas_in_runtime_lists() {
+    for source in [
+        "function sample($x,) {}",
+        "$f = function ($x,) {};",
+        "unset($name,);",
+        "class Sample { public function call($a,) {} }",
+        "$f = function () use ($value,) {};",
+        "$f = function () use ($first, &$second,) {};",
+    ] {
+        parse_fragment(source.as_bytes()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
 /// Rejects invalid syntax and unsupported runtime constructs.
 #[test]
 fn chopper_rejects_invalid_runtime_fragments() {
@@ -285,15 +300,14 @@ fn chopper_rejects_invalid_runtime_fragments() {
         "for ($i = 0, $j = 0; $i < 3; $i = $i + 1) {}",
         "try { echo 1; } catch (Exception) echo 2;",
         "function sample($x = f()) {}",
-        "function sample($x,) {}",
         "enum();",
-        "unset($name,);",
         "switch ($key) { case 1; echo 'one'; }",
         "class Sample { public callable $value; }",
-        "class Sample { public function call($a,) {} }",
         "function tick() { static $a = 1, $b = 2; }",
         "$f = function () use ($value, $value) {};",
-        "$f = function () use ($value,) {};",
+        "$f = function () use () {};",
+        "$f = function () use (,) {};",
+        "function sample(,) {}",
         "declare(ticks=1); return 8;",
         "declare(strict_types=1, ticks=1); return 8;",
         "declare(strict_types=1) { return 8; }",
