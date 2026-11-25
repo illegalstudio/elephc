@@ -150,8 +150,10 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     }) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         // A concrete object read from final Mixed storage owns its unboxed lease.
-        // Finalization removes this release when the local still lends a concrete value.
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        // A boxed receiver still borrows its local/global cell after the append.
+        if matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(), PhpType::Object(_)) {
+            crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        }
         return;
     }
     emit_array_append_operation(ctx, op, array_value, value, span);
