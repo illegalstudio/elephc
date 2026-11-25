@@ -145,6 +145,9 @@ pub(super) fn lower_const_dynamic_prop_set(
         // Keep runtime class, magic and dynamic-hash precedence while pruning declared slots
         // whose names cannot match this literal. The named fast path cannot stage a guarded
         // `__set` call or preserve existing-entry-before-magic precedence on its own.
+        if let Some(label) = crate::codegen::shared_literal_property_write::helper_label(ctx, inst, property) {
+            return crate::codegen::shared_literal_property_write::emit_call(ctx, object, value, inst, &label);
+        }
         return lower_runtime_mixed_prop_set(ctx, object, property_value, value, Some(property), inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
@@ -353,6 +356,9 @@ pub(super) fn lower_mixed_named_prop_set(
     property: &str,
     inst: &Instruction,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_literal_property_write::helper_label(ctx, inst, property) {
+        return crate::codegen::shared_literal_property_write::emit_call(ctx, object, value, inst, &label);
+    }
     let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
     if candidates.is_empty() {
         return lower_mixed_prop_set(ctx, object, value, property);

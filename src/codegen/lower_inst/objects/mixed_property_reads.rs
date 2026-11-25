@@ -56,6 +56,10 @@ pub(super) fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_literal_property_read::helper_label(ctx, inst, property) {
+        crate::codegen::shared_literal_property_read::emit_call(ctx, object, &label)?;
+        return store_if_result(ctx, inst);
+    }
     let mode = property_fetch_mode(inst);
     let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
     // A user class may answer this name exclusively from its per-instance property hash. Such

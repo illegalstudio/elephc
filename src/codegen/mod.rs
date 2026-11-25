@@ -54,6 +54,8 @@ mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
 mod shared_property_read;
+mod shared_literal_property_read;
+mod shared_literal_property_write;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_mbstring_callable;

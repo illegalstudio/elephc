@@ -52,6 +52,16 @@ name and static or instance kind. The lookup retains the previous scanner's
 answers without rescanning all method bodies. Literal-only wrapper snapshots
 reuse these tables; a separate module emission starts with an empty index.
 
+Repeated literal-name property reads from boxed `Mixed` receivers share one
+synthetic EIR body per lexical class scope, exact property spelling and fetch
+mode. The helper borrows the already evaluated receiver and returns the ordinary
+owned Mixed result through normal frame and exception cleanup. It lowers the
+original literal `DynamicPropGet`, preserving declared slots, visibility, magic
+accessors, dynamic hashes and typed initialization. Single sites, quiet reads,
+property hook bodies and other input or result representations retain inline
+lowering. The helper inventory is prepared once per module emission, avoiding
+repeated large class-dispatch ladders in the assembly buffer.
+
 Runtime-selected native methods that need distinct argument plans select their
 concrete class in EIR before evaluating the arguments. This includes variadic
 collectors, surplus user-method arguments and missing methods handled by `__call`.

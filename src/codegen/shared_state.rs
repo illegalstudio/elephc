@@ -69,6 +69,10 @@ pub(crate) struct SharedCodegenState {
     count_guard_sharing: Option<bool>,
     /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
     pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
+    /// Repeated literal-name Mixed reads, keyed by lexical scope, name and fetch mode.
+    pub(super) literal_property_read_helpers: Option<super::shared_literal_property_read::ReadPlan>,
+    /// Repeated literal writes preserve their opcode, visibility and exact value contract.
+    pub(super) literal_property_write_helpers: Option<super::shared_literal_property_write::WritePlan>,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls
