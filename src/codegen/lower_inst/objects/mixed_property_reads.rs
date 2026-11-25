@@ -376,10 +376,13 @@ pub(super) fn magic_property_arm(
         // A probe php answers from `__isset` must never call `__get` in its place. An undeclared
         // return type keeps php's truthiness: `emit_magic_isset_answer` coerces any boxable answer
         // to bool. A by-reference answer is only read as a bool cell, so anything else gets no arm.
+        // An untyped `__isset` that returns null or nothing is inferred `void`: it boxes as null,
+        // which is falsy, so it still answers the probe.
         let readable = if target.by_ref_return {
             target.return_ty.codegen_repr() == PhpType::Bool
         } else {
             magic_result_boxes_cleanly(&target.return_ty)
+                || target.return_ty.codegen_repr() == PhpType::Void
         };
         if !readable {
             return Ok(None);

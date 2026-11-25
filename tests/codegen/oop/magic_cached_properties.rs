@@ -200,3 +200,49 @@ run();
 fn test_magic_coalesce_untyped_isset_truthiness_no_ir_opt() {
     without_ir_opt(test_magic_coalesce_untyped_isset_truthiness);
 }
+
+/// An untyped `__isset` that returns null or nothing is inferred `void`; its null answer is falsy,
+/// so a literal `??` probe answers the default without calling `__get`, with and without a
+/// dynamic-property hash and on boxed receivers.
+#[test]
+fn test_magic_coalesce_void_isset_answers_default() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class UntypedHashNull {
+    public function __isset($name) { echo "isset:$name\n"; return null; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+class UntypedPlainEmpty {
+    public function __isset($name) { echo "isset:$name\n"; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+#[AllowDynamicProperties]
+class UntypedHashEmpty {
+    public function __isset($name) { echo "isset:$name\n"; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+class UntypedPlainNull {
+    public function __isset($name) { echo "isset:$name\n"; return null; }
+    public function __get($name): string { echo "get:$name\n"; return "from-get"; }
+}
+function run_void(): void {
+    echo (new UntypedHashNull)->{'missing'} ?? "default", "\n";
+    echo (new UntypedPlainEmpty)->{'missing'} ?? "default", "\n";
+    echo (new UntypedHashEmpty)->{'missing'} ?? "default", "\n";
+    echo (new UntypedPlainNull)->{'missing'} ?? "default", "\n";
+    $boxed = [new UntypedPlainNull, new UntypedHashEmpty];
+    foreach ($boxed as $object) { echo $object->{'boxed'} ?? "default", "\n"; }
+    unset($boxed, $object);
+}
+run_void();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "isset:missing\ndefault\n".repeat(4) + &"isset:boxed\ndefault\n".repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The void `__isset` answer is independent of EIR optimization.
+#[test]
+fn test_magic_coalesce_void_isset_answers_default_no_ir_opt() {
+    without_ir_opt(test_magic_coalesce_void_isset_answers_default);
+}
