@@ -1137,3 +1137,90 @@ echo followup_count(new FollowupStringCount());
     assert_eq!(out.stdout, "7");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Legacy Iterator and ArrayAccess implementations retain values returned by tentative methods.
+#[test]
+fn test_iterator_arrayaccess_return_type_will_change() {
+    let out = compile_and_run(r#"<?php
+class LegacyHookIterator implements Iterator, ArrayAccess {
+    private $items = array('a' => array('one'), 'b' => array('two'));
+    private $keys = array('a', 'b');
+    private $position = 0;
+    #[\ReturnTypeWillChange] public function current() { return isset($this->keys[$this->position]) ? $this->items[$this->keys[$this->position]] : false; }
+    #[\ReturnTypeWillChange] public function next() { ++$this->position; return $this->current(); }
+    #[\ReturnTypeWillChange] public function key() { return $this->keys[$this->position] ?? null; }
+    #[\ReturnTypeWillChange] public function valid() { return isset($this->keys[$this->position]); }
+    #[\ReturnTypeWillChange] public function rewind() { $this->position = 0; }
+    #[\ReturnTypeWillChange] public function offsetExists($offset) { return isset($this->items[$offset]); }
+    #[\ReturnTypeWillChange] public function offsetGet($offset) { return $this->items[$offset] ?? null; }
+    #[\ReturnTypeWillChange] public function offsetSet($offset, $value) { $this->items[$offset] = $value; }
+    #[\ReturnTypeWillChange] public function offsetUnset($offset) { unset($this->items[$offset]); }
+}
+
+$iterator = new LegacyHookIterator();
+echo json_encode($iterator->current()), '|', json_encode($iterator->next()), '|';
+foreach ($iterator as $key => $value) { echo $key, ':', json_encode($value), ';'; }
+$iterator['c'] = array('three');
+echo '|', json_encode($iterator['c']), '|', isset($iterator['c']) ? '1' : '0';
+"#);
+    assert_eq!(out, r#"["one"]|["two"]|a:["one"];b:["two"];|["three"]|1"#);
+}
+
+/// Dimension append passes null to offsetSet for concrete, interface and mixed receivers.
+#[test]
+fn test_array_access_append_uses_null_offset_set() {
+    let out = compile_and_run(r#"<?php
+class AppendBox implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {
+        echo json_encode($key), ':', json_encode($value), '|';
+    }
+    public function offsetUnset(mixed $key): void {}
+    public function append(mixed $value): void { throw new LogicException('wrong append'); }
+}
+function append_interface(ArrayAccess $box): void { $box[] = 'interface'; }
+function append_mixed(mixed $box): void { $box[] = 'mixed'; }
+$box = new AppendBox();
+$box[] = 'concrete';
+append_interface($box);
+append_mixed($box);
+"#);
+    assert_eq!(out, "null:\"concrete\"|null:\"interface\"|null:\"mixed\"|");
+}
+
+/// An append evaluates its RHS once before a throwing offsetSet unwinds normally.
+#[test]
+fn test_array_access_append_preserves_exception_order() {
+    let out = compile_and_run(r#"<?php
+class RejectAppend implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {
+        echo $key === null ? 'N' : 'K';
+        throw new RuntimeException((string)$value);
+    }
+    public function offsetUnset(mixed $key): void {}
+}
+function append_rhs(): string { echo 'R'; return 'caught'; }
+function append_rejected(ArrayAccess $box): void { $box[] = append_rhs(); }
+try { append_rejected(new RejectAppend()); }
+catch (RuntimeException $error) { echo '|', $error->getMessage(); }
+"#);
+    assert_eq!(out, "RN|caught");
+}
+
+/// Existing intrinsic append routes remain usable alongside user ArrayAccess append.
+#[test]
+fn test_array_access_append_keeps_internal_container_routes() {
+    let out = compile_and_run(r#"<?php
+$object = new ArrayObject();
+$object[] = 'object';
+$iterator = new ArrayIterator();
+$iterator[] = 'iterator';
+$list = new SplDoublyLinkedList();
+$list[] = 'list';
+echo $object[0], '|', $iterator[0], '|', $list[0];
+"#);
+    assert_eq!(out, "object|iterator|list");
+}

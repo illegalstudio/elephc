@@ -146,7 +146,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
         return;
     }
     if super::native_dimension_append::lower(ctx, array_value, value, span, |ctx, array, value| {
-        ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span));
+        emit_array_append_operation(ctx, op, array, value, span);
     }) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         // A concrete object read from final Mixed storage owns its unboxed lease.
@@ -154,9 +154,27 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
         crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
         return;
     }
-    ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
+    emit_array_append_operation(ctx, op, array_value, value, span);
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Passes a null offset to user ArrayAccess while preserving internal dimension handlers.
+fn emit_array_append_operation(
+    ctx: &mut LoweringContext<'_, '_>, op: Op, array: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
+    let user_array_access = op == Op::RuntimeCall
+        && matches!(ctx.builder.value_php_type(array.value).codegen_repr(), PhpType::Object(name)
+            if ctx.interfaces.contains_key(&name)
+                || ctx.classes.get(&name).is_some_and(|info| !info.is_internal));
+    let operands = if user_array_access {
+        let null = ctx.builder.emit_const_null();
+        vec![array.value, null, value.value]
+    } else {
+        vec![array.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
 }
 
 /// Extracts an admitted value into a declared builder's scalar or callable element storage.
