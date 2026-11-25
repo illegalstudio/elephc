@@ -58,6 +58,30 @@ pub(crate) fn build_interface_info_recursive(
         ));
     }
 
+    // A failed build leaves `building` as it found it, so a later walk that reaches the interface
+    // reports its own error again rather than a false cycle.
+    let result = build_listed_interface_info(
+        interface_name,
+        interface_map,
+        class_map,
+        checker,
+        next_interface_id,
+        building,
+    );
+    building.remove(interface_name);
+    result
+}
+
+/// Builds `interface_name` once `build_interface_info_recursive` has listed it in `building`,
+/// pulling its parents first.
+fn build_listed_interface_info(
+    interface_name: &str,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_interface_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     let interface = interface_map.get(interface_name).cloned().ok_or_else(|| {
         CompileError::new(
             crate::span::Span::dummy(),
@@ -547,7 +571,6 @@ pub(crate) fn build_interface_info_recursive(
         },
     );
     *next_interface_id += 1;
-    building.remove(interface_name);
     Ok(())
 }
 

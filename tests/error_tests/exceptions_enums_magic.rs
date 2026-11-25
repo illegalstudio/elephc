@@ -270,13 +270,13 @@ fn test_error_pure_enum_case_cannot_have_backing_value() {
 }
 
 /// Verifies that a backed enum with two cases sharing the same backing value
-/// (e.g., `case Red = 1; case Crimson = 1`) reports
-/// "Duplicate enum backing value".
+/// (e.g., `case Red = 1; case Crimson = 1`) reports PHP's
+/// "Duplicate value in enum Color for cases Red and Crimson".
 #[test]
 fn test_error_enum_duplicate_backing_value() {
     expect_error(
         "<?php enum Color: int { case Red = 1; case Crimson = 1; }",
-        "Duplicate enum backing value",
+        "Duplicate value in enum Color for cases Red and Crimson",
     );
 }
 
@@ -735,12 +735,13 @@ fn test_enum_review_nested_trait_requirement_stops_at_the_satisfying_trait() {
 }
 
 /// The intermediate trait's own implementation must honour the requirement it satisfies, as
-/// php 8.5.12 reports `Declaration of Middle::f(): string must be compatible with T::f(): int`.
+/// php 8.5.12 reports `Declaration of Middle::f(): string must be compatible with T::f(): int`:
+/// the trait is checked, and named, before the enum that uses it.
 #[test]
 fn test_error_enum_review_nested_trait_return_requirement() {
     expect_error(
         "<?php trait T { abstract public function f(): int; } trait Middle { use T; public function f(): string { return 'bad'; } } enum E { case Ready; use Middle; }",
-        "incompatible return type",
+        "Cannot change return type when implementing trait method: Middle::f",
     );
 }
 

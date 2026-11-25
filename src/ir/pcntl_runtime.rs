@@ -34,6 +34,12 @@ pub enum PcntlRuntime {
     GetLastError,
     GetPriority,
     GetQosClass,
+    PosixGetEuid,
+    PosixGetLastError,
+    PosixGetPgrp,
+    PosixIsatty,
+    PosixKill,
+    PosixStrError,
     SetCpuAffinity,
     SetNs,
     SetProcessGroup,
@@ -65,6 +71,8 @@ impl PcntlRuntime {
     pub const fn signature(self) -> RuntimeCallSignature {
         let (min_operands, max_operands) = match self {
             Self::Alarm
+            | Self::PosixIsatty
+            | Self::PosixStrError
             | Self::SignalGetHandler
             | Self::StrError
             | Self::Unshare
@@ -82,12 +90,15 @@ impl PcntlRuntime {
             | Self::GetCpu
             | Self::GetLastError
             | Self::GetQosClass
+            | Self::PosixGetEuid
+            | Self::PosixGetLastError
+            | Self::PosixGetPgrp
             | Self::SignalDispatch => (0, Some(0)),
             Self::GetCpuAffinity => (0, Some(1)),
             Self::GetPriority => (0, Some(2)),
             Self::SetCpuAffinity => (0, Some(2)),
             Self::SetNs => (0, Some(2)),
-            Self::SetProcessGroup => (2, Some(2)),
+            Self::PosixKill | Self::SetProcessGroup => (2, Some(2)),
             Self::SetPriority => (1, Some(3)),
             Self::SetQosClass => (1, Some(1)),
             Self::SetSession => (0, Some(0)),
@@ -118,6 +129,12 @@ impl PcntlRuntime {
             Self::GetLastError => "pcntl.get_last_error",
             Self::GetPriority => "pcntl.getpriority",
             Self::GetQosClass => "pcntl.getqos_class",
+            Self::PosixGetEuid => "posix.geteuid",
+            Self::PosixGetLastError => "posix.get_last_error",
+            Self::PosixGetPgrp => "posix.getpgrp",
+            Self::PosixIsatty => "posix.isatty",
+            Self::PosixKill => "posix.kill",
+            Self::PosixStrError => "posix.strerror",
             Self::SetCpuAffinity => "pcntl.setcpuaffinity",
             Self::SetNs => "pcntl.setns",
             Self::SetProcessGroup => "posix.setpgid",
@@ -171,10 +188,13 @@ impl PcntlRuntime {
             | Self::WIfStopped
             | Self::WStopSig
             | Self::WTermSig => E::PURE,
-            Self::StrError => E::from_bits_retain(E::ALLOC_HEAP.bits()),
+            Self::StrError | Self::PosixStrError => E::from_bits_retain(E::ALLOC_HEAP.bits()),
             Self::GetCpu
             | Self::GetCpuAffinity
             | Self::GetLastError
+            | Self::PosixGetEuid
+            | Self::PosixGetLastError
+            | Self::PosixGetPgrp
             => E::from_bits_retain(
                 E::READS_PROCESS.bits() | E::READS_HEAP.bits() | E::ALLOC_HEAP.bits(),
             ),
@@ -226,6 +246,8 @@ impl PcntlRuntime {
             ),
             Self::SetCpuAffinity
             | Self::Daemon
+            | Self::PosixIsatty
+            | Self::PosixKill
             | Self::SetNs
             | Self::SetProcessGroup
             | Self::SetPriority
@@ -258,6 +280,7 @@ impl PcntlRuntime {
             | Self::SignalGetHandler
             | Self::SignalTimedWait
             | Self::SignalWaitInfo
+            | Self::PosixStrError
             | Self::StrError
             | Self::WExitStatus
             | Self::WStopSig
@@ -316,6 +339,12 @@ mod tests {
             PcntlRuntime::GetLastError,
             PcntlRuntime::GetPriority,
             PcntlRuntime::GetQosClass,
+            PcntlRuntime::PosixGetEuid,
+            PcntlRuntime::PosixGetLastError,
+            PcntlRuntime::PosixGetPgrp,
+            PcntlRuntime::PosixIsatty,
+            PcntlRuntime::PosixKill,
+            PcntlRuntime::PosixStrError,
             PcntlRuntime::SetCpuAffinity,
             PcntlRuntime::SetNs,
             PcntlRuntime::SetProcessGroup,

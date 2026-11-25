@@ -191,6 +191,11 @@ pub(super) fn validate_method_parent_override(
             Err(EvalStatus::RuntimeFatal)
         } else { Ok(()) };
     }
+    // Zend binds traits after the parent's methods, so any parent method, private or static
+    // included, overrides an abstract trait method made `as final`.
+    if method.is_abstract() && method.is_final() && method.trait_origin().is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if parent_method.visibility() == EvalVisibility::Private {
         return Ok(());
     }
@@ -243,6 +248,10 @@ pub(super) fn validate_method_aot_parent_override(
         return if flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0 || method.is_abstract() || method.is_static() {
             Err(EvalStatus::RuntimeFatal)
         } else { Ok(()) };
+    }
+    // As for an eval parent: any AOT parent method overrides an abstract `as final` import.
+    if method.is_abstract() && method.is_final() && method.trait_origin().is_some() {
+        return Err(EvalStatus::RuntimeFatal);
     }
     if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         return Ok(());
