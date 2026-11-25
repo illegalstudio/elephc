@@ -67,6 +67,8 @@ const FLOAT_TAG: u8 = 2;
 pub(in crate::codegen) const OBJECT_TAG: u8 = 6;
 /// The runtime tag carrying a PHP bool payload.
 pub(in crate::codegen) const BOOL_TAG: u8 = 3;
+/// The runtime tag carrying a PHP Closure descriptor.
+const CLOSURE_TAG: u8 = 10;
 
 /// Stack layout of the string-to-int diagnostic frame.
 const STRING_TO_INT_PTR_OFFSET: usize = 0;
@@ -896,7 +898,7 @@ fn plan_tag_actions(
         PhpType::Void | PhpType::Never => Some(null_actions()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some(array_actions()),
         PhpType::Iterable => Some(iterable_actions(ctx)),
-        PhpType::Object(class_name) if class_name.is_empty() => Some(any_object_actions()),
+        ty if ty.uses_boxed_object_storage() => Some(any_object_actions()),
         PhpType::Object(class_name) => {
             Some(object_actions(ctx, std::slice::from_ref(class_name)))
         }
@@ -995,6 +997,7 @@ fn any_object_actions() -> Vec<TagAction> {
             any_class: true,
             ..ObjectPlan::default()
         }),
+        CLOSURE_TAG => TagAction::Accept,
         _ => TagAction::Reject,
     })
 }
@@ -1151,6 +1154,7 @@ fn union_actions(
         ),
         4 | 5 if has(&MemberKind::Array) => TagAction::Accept,
         6 if !object_plan.rejects_every_class() => TagAction::ObjectClasses(object_plan.clone()),
+        CLOSURE_TAG if object_plan.any_class => TagAction::Accept,
         8 if has(&MemberKind::Null) => TagAction::Accept,
         _ => TagAction::Reject,
     })))
@@ -1223,7 +1227,7 @@ fn classify_member(member: &PhpType) -> Option<MemberKind> {
         PhpType::False => Some(MemberKind::False),
         PhpType::Void | PhpType::Never => Some(MemberKind::Null),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some(MemberKind::Array),
-        PhpType::Object(class_name) if class_name.is_empty() => Some(MemberKind::AnyObject),
+        ty if ty.uses_boxed_object_storage() => Some(MemberKind::AnyObject),
         PhpType::Object(class_name) => Some(MemberKind::Object(class_name.clone())),
         _ => None,
     }
@@ -1576,6 +1580,20 @@ mod tests {
         assert_eq!(php_type_name(&PhpType::Object(String::new())), "object");
         assert_eq!(php_type_name(&PhpType::Mixed), "mixed");
         assert_eq!(php_type_name(&PhpType::Iterable), "Traversable|array");
+    }
+
+    /// Generic object property storage accepts the runtime Closure descriptor tag.
+    #[test]
+    fn generic_object_property_accepts_closure_tag() {
+        let closure = RUNTIME_TAGS
+            .iter()
+            .position(|(tag, _)| *tag == CLOSURE_TAG)
+            .expect("the runtime tag table contains Closure");
+        assert!(matches!(any_object_actions()[closure], TagAction::Accept));
+        assert_eq!(
+            classify_member(&PhpType::Object("object".to_string())),
+            Some(MemberKind::AnyObject)
+        );
     }
 
     /// Every declared type the guard declines to model is a recorded decision with a reason.

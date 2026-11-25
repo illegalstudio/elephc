@@ -15,17 +15,12 @@ pub fn emit_destructor_throw(emitter: &mut Emitter) {
     emitter.label_global("__rt_throw_boxed_destructor_exception");
     match emitter.target.arch {
         Arch::AArch64 => {
-            // -- transfer the box owner to one independent native object owner --
-            emitter.instruction("sub sp, sp, #32");                             // reserve box and object owners plus frame linkage
+            // -- transfer the box through Memoir's validated ownership kernel --
+            emitter.instruction("sub sp, sp, #32");                             // reserve the raw object owner plus frame linkage
             emitter.instruction("stp x29, x30, [sp, #16]");                     // preserve the caller while ownership changes representation
             emitter.instruction("add x29, sp, #16");                            // establish the native transfer frame
-            emitter.instruction("str x0, [sp]");                                // consume the owned Throwable box returned by eval
-            emitter.instruction("bl __rt_mixed_unbox");                         // expose the validated Throwable object payload
-            emitter.instruction("mov x0, x1");                                  // pass the raw object to the retain helper
-            emitter.instruction("bl __rt_incref");                              // acquire the native exception owner before releasing the box
-            emitter.instruction("str x0, [sp, #8]");                            // preserve that owner across boxed-cell release
-            emitter.instruction("ldr x0, [sp]");                                // recover the input box being consumed
-            emitter.instruction("bl __rt_decref_mixed");                        // release the box without destroying its now-retained object
+            emitter.instruction("bl __rt_throwable_take_boxed");                // consume the box and return one independent raw owner
+            emitter.instruction("str x0, [sp, #8]");                            // preserve the transferred owner across exception publication
             // -- publish the new exception before chaining and native unwinding --
             abi::emit_load_symbol_to_reg(emitter, "x1", "_exc_value", 0);
             emitter.instruction("ldr x0, [sp, #8]");                            // recover the raw owner acquired above
@@ -36,17 +31,12 @@ pub fn emit_destructor_throw(emitter: &mut Emitter) {
             emitter.instruction("b __rt_throw_current");                        // the native collector boundary or PHP caller receives the throw
         }
         Arch::X86_64 => {
-            // -- transfer the box owner to one independent native object owner --
+            // -- transfer the box through Memoir's validated ownership kernel --
             emitter.instruction("push rbp");                                    // preserve the caller and align helper calls
             emitter.instruction("mov rbp, rsp");                                // establish stable transfer-local slots
-            emitter.instruction("sub rsp, 16");                                 // reserve the input box and new raw-object owner
-            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // consume the owned Throwable box returned by eval
-            emitter.instruction("call __rt_mixed_unbox");                       // expose the validated raw Throwable payload
-            emitter.instruction("mov rax, rdi");                                // pass that object to the internal retain helper
-            emitter.instruction("call __rt_incref");                            // acquire one native exception owner
-            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // preserve the new owner across boxed-cell release
-            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // recover the owned input box
-            emitter.instruction("call __rt_decref_mixed");                      // consume the box while the new raw owner keeps its object alive
+            emitter.instruction("sub rsp, 16");                                 // reserve the new raw-object owner
+            emitter.instruction("call __rt_throwable_take_boxed");              // consume the box and return one independent raw owner
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // preserve the transferred owner across exception publication
             // -- publish the new exception before chaining and native unwinding --
             abi::emit_load_symbol_to_reg(emitter, "rdi", "_exc_value", 0);
             emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // recover the new raw exception owner
@@ -70,9 +60,8 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_destructor_throw(&mut emitter);
             let asm = emitter.output();
-            assert!(asm.find("__rt_incref").unwrap() < asm.find("__rt_decref_mixed").unwrap(), "{name}");
-            assert!(asm.find("__rt_decref_mixed").unwrap() < asm.find("__rt_throw_current").unwrap(), "{name}");
-            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}");
+            assert!(asm.find("__rt_throwable_take_boxed").unwrap() < asm.find("__rt_throw_current").unwrap(), "{name}");
+            assert!(!asm.contains("__rt_mixed_unbox") && !asm.contains("__rt_decref_mixed"), "{name}");
         }
     }
 }

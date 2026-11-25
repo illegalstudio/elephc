@@ -58,7 +58,13 @@ pub(super) fn check_static_property_assign(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
 
-    if target.property_has_declared_type {
+    // As for instance properties, boxed values are validated by the runtime property-store
+    // guard. Rejecting `mixed` here would forbid a value that can satisfy the declaration at
+    // run time, including a Closure crossing a generic `object` boundary.
+    let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
+        || crate::types::object_boundary::runtime_object_boundary(&target.prop_ty, &val_ty)
+            .is_some();
+    if target.property_has_declared_type && !defers_to_runtime_property_typing {
         checker.require_compatible_arg_type(
             &target.prop_ty,
             &val_ty,

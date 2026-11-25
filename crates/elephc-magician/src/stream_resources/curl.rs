@@ -32,6 +32,7 @@ impl EvalStreamResources {
                 write_user: false,
                 private_value: RuntimeOwnerSlot::default(),
                 callbacks: Default::default(),
+                callback_owners: std::array::from_fn(|_| RuntimeOwnerSlot::default()),
             },
         );
         id
@@ -75,6 +76,7 @@ impl EvalStreamResources {
                 // and `curl_copy_handle()` re-installs them onto the copy afterwards —
                 // exactly the loop `crate::curl_prelude::curl_copy_handle` runs.
                 callbacks: Default::default(),
+                callback_owners: std::array::from_fn(|_| RuntimeOwnerSlot::default()),
             },
         );
         Ok(id)
@@ -183,12 +185,13 @@ impl EvalStreamResources {
 
     /// Detaches every PHP cell owned by one easy-handle record before cleanup can re-enter.
     fn take_curl_easy_handle_php_owners(handle: &mut EvalCurlEasyHandle) -> Vec<RuntimeCellHandle> {
-        let mut owners = Vec::with_capacity(1 + handle.callbacks.len());
+        let mut owners = Vec::with_capacity(1 + handle.callback_owners.len());
         if let Some(private) = handle.private_value.take_optional() {
             owners.push(private);
         }
-        for slot in &mut handle.callbacks {
-            if let EvalCurlCallbackSlot::Callable(owner) = std::mem::take(slot) {
+        for (state, slot) in handle.callbacks.iter_mut().zip(&handle.callback_owners) {
+            *state = EvalCurlCallbackKind::Empty;
+            if let Some(owner) = slot.take_optional() {
                 owners.push(owner);
             }
         }
@@ -240,11 +243,14 @@ impl EvalStreamResources {
             };
             return (false, detached);
         };
-        let previous = std::mem::replace(current, value);
-        let detached = match previous {
-            EvalCurlCallbackSlot::Callable(cell) => vec![cell],
-            _ => Vec::new(),
+        let owner = handle.callback_owners.get(slot).expect("callback state and owner arrays match");
+        let (replacement, kind) = match value {
+            EvalCurlCallbackSlot::Empty => (None, EvalCurlCallbackKind::Empty),
+            EvalCurlCallbackSlot::Silent => (None, EvalCurlCallbackKind::Silent),
+            EvalCurlCallbackSlot::Callable(cell) => (Some(cell), EvalCurlCallbackKind::Callable),
         };
+        *current = kind;
+        let detached = owner.replace(replacement).into_iter().collect();
         (true, detached)
     }
 
@@ -258,8 +264,9 @@ impl EvalStreamResources {
             return Vec::new();
         };
         let mut owners = Vec::new();
-        for slot in &mut handle.callbacks {
-            if let EvalCurlCallbackSlot::Callable(cell) = std::mem::take(slot) {
+        for (state, slot) in handle.callbacks.iter_mut().zip(&handle.callback_owners) {
+            *state = EvalCurlCallbackKind::Empty;
+            if let Some(cell) = slot.take_optional() {
                 owners.push(cell);
             }
         }
@@ -278,15 +285,16 @@ impl EvalStreamResources {
             .callbacks
             .iter()
             .enumerate()
-            .filter(|(_, slot)| **slot != EvalCurlCallbackSlot::Empty)
-            .map(|(index, slot)| {
-                let slot = match *slot {
-                    EvalCurlCallbackSlot::Callable(cell) => {
-                        EvalCurlCallbackSlot::Callable(cell.borrowed())
-                    }
-                    other => other,
+            .filter(|(_, state)| **state != EvalCurlCallbackKind::Empty)
+            .map(|(index, state)| {
+                let state = match *state {
+                    EvalCurlCallbackKind::Empty => EvalCurlCallbackSlot::Empty,
+                    EvalCurlCallbackKind::Silent => EvalCurlCallbackSlot::Silent,
+                    EvalCurlCallbackKind::Callable => EvalCurlCallbackSlot::Callable(
+                        handle.callback_owners[index].borrowed(),
+                    ),
                 };
-                (index, slot)
+                (index, state)
             })
             .collect()
     }

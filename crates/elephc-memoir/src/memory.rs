@@ -13,6 +13,26 @@ use crate::abi;
 use crate::Emitter;
 use crate::Arch;
 
+/// Branches when an unsigned allocation size exceeds the configured arena capacity.
+pub fn emit_branch_if_size_exceeds_heap(
+    emitter: &mut impl Emitter,
+    size: &str,
+    scratch: &str,
+    overflow: &str,
+) {
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_heap_max", 0);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {size}, {scratch}"));             // compare the requested byte count with the managed arena
+            emitter.instruction(&format!("b.hi {overflow}"));                   // reject requests that cannot fit in the arena
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {size}, {scratch}"));             // compare the requested byte count with the managed arena
+            emitter.instruction(&format!("ja {overflow}"));                     // reject requests that cannot fit in the arena
+        }
+    }
+}
+
 /// Emits leaf helpers shared by direct PHP calls and boxed eval dispatch.
 pub fn emit_memory(emitter: &mut impl Emitter) {
     let arm = emitter.arch() == Arch::AArch64;

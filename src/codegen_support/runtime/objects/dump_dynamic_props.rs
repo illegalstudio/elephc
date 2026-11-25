@@ -45,8 +45,9 @@ pub(crate) fn emit_load_dump_dyn_hash(
             emitter.instruction(&format!("cbz {scratch_reg}, {miss_label}"));   // no tail (or a __debugInfo projection) dumps nothing more
             abi::emit_symbol_address(emitter, scratch_reg, "_class_object_payload_sizes");
             emitter.instruction(&format!("ldr {scratch_reg}, [{scratch_reg}, {class_reg}, lsl #3]")); // load the class payload size
-            emitter.instruction(&format!("sub {scratch_reg}, {scratch_reg}, #8"));   // the dynamic hash is the last payload word
-            emitter.instruction(&format!("ldr {out_reg}, [{object_reg}, {scratch_reg}]")); // load the dynamic-property hash pointer
+            elephc_memoir::values::object_storage::emit_load_trailing_word(
+                emitter, object_reg, scratch_reg, out_reg,
+            );
             emitter.instruction(&format!("cbz {out_reg}, {miss_label}"));       // a never-written tail holds no hash yet
         }
         Arch::X86_64 => {
@@ -55,7 +56,9 @@ pub(crate) fn emit_load_dump_dyn_hash(
             emitter.instruction(&format!("je {miss_label}"));                   // no tail (or a __debugInfo projection) dumps nothing more
             abi::emit_symbol_address(emitter, scratch_reg, "_class_object_payload_sizes");
             emitter.instruction(&format!("mov {scratch_reg}, QWORD PTR [{scratch_reg} + {class_reg} * 8]")); // load the class payload size
-            emitter.instruction(&format!("mov {out_reg}, QWORD PTR [{object_reg} + {scratch_reg} - 8]")); // load the hash from the last payload word
+            elephc_memoir::values::object_storage::emit_load_trailing_word(
+                emitter, object_reg, scratch_reg, out_reg,
+            );
             emitter.instruction(&format!("test {out_reg}, {out_reg}"));         // was the tail ever allocated?
             emitter.instruction(&format!("jz {miss_label}"));                   // a never-written tail holds no hash yet
         }

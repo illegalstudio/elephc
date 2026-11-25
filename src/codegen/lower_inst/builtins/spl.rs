@@ -1,12 +1,12 @@
 //! Purpose:
 //! Lowers SPL object-introspection builtins for the EIR backend.
-//! Handles stable object ids and object hashes using the concrete heap pointer.
+//! Handles stable object ids and object hashes using the concrete heap allocation.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - Object ids use the heap pointer as a process-stable identity.
+//! - Object ids accept raw named-class pointers and boxed generic-object or Closure payloads.
 //!   `spl_object_hash()` stringifies that identity with the shared itoa helper.
 //! - A boxed or callable argument is unwrapped at run time: a Closure keeps its own handle, an
 //!   invokable object converted to a callable stands for its receiver, and any other value raises

@@ -176,7 +176,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_constant_fetch_or_glo
     let box_ty = ctx.raw_value_php_type(native)?;
     crate::codegen::lower_inst::globals_constants::box_loaded_value_as_mixed(
         ctx, native, &box_ty,
-    );
+    )?;
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }

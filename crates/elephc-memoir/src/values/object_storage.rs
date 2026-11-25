@@ -9,7 +9,7 @@
 //! - The allocated payload has one owner and an assigned native object handle.
 
 use crate::layout::{OBJECT_HEAP_KIND, THROWABLE_HEAP_KIND, object_declared_slot_offset};
-use crate::{Emitter, HeapKind};
+use crate::{Arch, Emitter, HeapKind};
 
 /// Emits a C entry that projects the class id of a live borrowed native object.
 pub fn emit_c_class_id(emitter: &mut impl Emitter) {
@@ -55,6 +55,24 @@ pub fn emit_zero_declared_slots(emitter: &mut impl Emitter, object: &str, count:
         let offset = object_declared_slot_offset(index);
         emitter.emit_store_zero_to_address(object, offset);
         emitter.emit_store_zero_to_address(object, offset + 8);
+    }
+}
+
+/// Loads the final payload word from an object whose total payload size is already known.
+pub fn emit_load_trailing_word(
+    emitter: &mut impl Emitter,
+    object: &str,
+    payload_size: &str,
+    destination: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("sub {payload_size}, {payload_size}, #8")); // locate the final owned payload word
+            emitter.instruction(&format!("ldr {destination}, [{object}, {payload_size}]")); // load the trailing object owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {destination}, QWORD PTR [{object} + {payload_size} - 8]")); // load the trailing object owner
+        }
     }
 }
 

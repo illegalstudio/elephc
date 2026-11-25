@@ -33,68 +33,79 @@ pub fn emit_append_previous(emitter: &mut impl Emitter) {
 /// Adapts compact and ordinary Throwable payloads using AArch64 native arguments.
 fn aarch64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_append_previous");
-    emitter.instruction("ldrb w9, [x0, #-8]");                                  // distinguish compact raw ownership from a boxed property
-    emitter.instruction("cmp w9, #6");                                          // check whether insertion can transfer the raw previous pointer
-    emitter.instruction("b.eq __rt_throwable_append_previous_raw");             // compact payloads require no cell allocation
     emitter.instruction("sub sp, sp, #48");                                     // reserve owner, previous value, replaced cell, and native linkage
     emitter.instruction("stp x29, x30, [sp, #32]");                             // retain native linkage across allocation and null-cell release
     emitter.instruction("add x29, sp, #32");                                    // establish a stable insertion frame
     emitter.instruction("stp x0, x1, [sp]");                                    // retain the destination and transferred previous owner
-    emitter.instruction("ldr x9, [x0, #40]");                                   // retain the existing null cell until replacement is installed
+    emitter.instruction("bl __rt_throwable_previous_slot");                     // resolve compact, ordinary, and reference property storage
+    emitter.instruction("cbz x0, __rt_throwable_append_previous_release");      // consume the owner when no writable previous slot exists
+    emitter.instruction("cbz x1, __rt_throwable_append_previous_raw");          // raw slots adopt the existing owner directly
+    emitter.instruction("str x0, [sp, #24]");                                   // preserve the effective boxed slot across allocation
+    emitter.instruction("ldr x9, [x0]");                                        // retain the existing null cell until replacement is installed
     emitter.instruction("str x9, [sp, #16]");                                   // preserve the nullable cell across allocation
-    emitter.instruction("mov x0, #24");                                         // allocate a complete three-word Mixed object cell
-    emitter.instruction("bl __rt_heap_alloc");                                  // reserve independent storage without retaining the transferred child
-    emitter.instruction("mov x9, #5");                                          // stamp the box as Mixed heap storage
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the canonical Mixed heap kind
-    emitter.instruction("mov x9, #6");                                          // identify the boxed child as an object
-    emitter.instruction("str x9, [x0]");                                        // store the runtime object tag
-    emitter.instruction("ldp x9, x10, [sp]");                                   // recover destination and transferred previous owner
-    emitter.instruction("str x10, [x0, #8]");                                   // consume the previous owner into its new property cell
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the unused object payload word
-    emitter.instruction("str x0, [x9, #40]");                                   // publish the independent previous property cell
-    emitter.instruction("str xzr, [x9, #48]");                                  // clear the inherited property high word
+    emitter.instruction("ldr x1, [sp, #8]");                                    // supply the owned previous object as the boxed payload
+    emitter.instruction("mov x0, #6");                                          // runtime tag six denotes an object payload
+    emitter.instruction("mov x2, #0");                                          // object values have no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // create a Mixed box with its own retained object owner
+    emitter.instruction("ldr x9, [sp, #24]");                                   // recover the effective previous-property slot
+    emitter.instruction("str x0, [x9]");                                        // publish the replacement before retiring displaced owners
     emitter.instruction("ldr x0, [sp, #16]");                                   // consume the replaced null cell without affecting its aliases
     emitter.instruction("bl __rt_decref_any");                                  // release the old null cell after publishing the new owner
+    emitter.label("__rt_throwable_append_previous_release");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // recover the raw owner retained by the new box or rejected slot
+    emitter.instruction("bl __rt_decref_any");                                  // balance that owner after boxing or failed insertion
+    emitter.instruction("b __rt_throwable_append_previous_return");             // skip the direct-transfer path
+    emitter.label("__rt_throwable_append_previous_raw");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // recover the raw previous owner being transferred
+    emitter.instruction("cbnz x2, __rt_throwable_append_previous_raw_store");   // reference cells expose only their effective payload word
+    emitter.instruction("str xzr, [x0, #8]");                                   // clear the high half of an inline raw-object property
+    emitter.label("__rt_throwable_append_previous_raw_store");
+    emitter.instruction("str x9, [x0]");                                        // publish the owner in the resolved raw slot
+    emitter.label("__rt_throwable_append_previous_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore native linkage
     emitter.instruction("add sp, sp, #48");                                     // release insertion staging storage
     emitter.instruction("ret");                                                 // return after transferring exactly one previous owner
-    emitter.label("__rt_throwable_append_previous_raw");
-    emitter.instruction("str x1, [x0, #40]");                                   // transfer the previous owner directly into compact Throwable storage
-    emitter.instruction("str xzr, [x0, #48]");                                  // clear the unused high word of the compact previous slot
-    emitter.instruction("ret");                                                 // finish insertion without an additional retain
 }
 
 /// Applies the same previous-slot representation and owner-transfer rules under SysV.
 fn x86_64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_append_previous");
-    emitter.instruction("cmp BYTE PTR [rdi - 8], 6");                           // distinguish compact raw previous storage
-    emitter.instruction("je __rt_throwable_append_previous_raw");               // transfer directly when no nullable cell is needed
     emitter.instruction("push rbp");                                            // align the stack and retain the caller frame
     emitter.instruction("mov rbp, rsp");                                        // establish stable insertion staging
     emitter.instruction("sub rsp, 32");                                         // reserve owner, transferred previous, and replaced null cell
     emitter.instruction("mov QWORD PTR [rsp], rdi");                            // preserve the destination Throwable
     emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                        // preserve transferred previous ownership across allocation
-    emitter.instruction("mov r10, QWORD PTR [rdi + 40]");                       // recover the old nullable property cell
+    emitter.instruction("mov rax, rdi");                                        // pass the destination through the runtime result convention
+    emitter.instruction("call __rt_throwable_previous_slot");                   // resolve compact, ordinary, and reference property storage
+    emitter.instruction("test rax, rax");                                       // check whether a writable previous slot exists
+    emitter.instruction("jz __rt_throwable_append_previous_release");           // consume the owner when metadata has no slot
+    emitter.instruction("test edx, edx");                                       // inspect the effective slot representation
+    emitter.instruction("jz __rt_throwable_append_previous_raw");               // raw slots accept the transferred owner directly
+    emitter.instruction("mov QWORD PTR [rsp + 24], rax");                       // preserve the effective boxed slot across allocation
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // recover the old nullable property cell
     emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // retain the replaced cell until new storage is published
-    emitter.instruction("mov rax, 24");                                         // reserve a full three-word Mixed cell
-    emitter.instruction("call __rt_heap_alloc");                                // allocate independent property storage
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::layout::x86_64_heap_kind_word(5))); // materialize the canonical Mixed kind and allocator marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the Mixed cell header
-    emitter.instruction("mov QWORD PTR [rax], 6");                              // identify the transferred child as an object
-    emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // recover the consumed previous owner
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer the child into its new Mixed property cell
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the unused object payload word
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the destination Throwable
-    emitter.instruction("mov QWORD PTR [r10 + 40], rax");                       // publish the independent previous property
-    emitter.instruction("mov QWORD PTR [r10 + 48], 0");                         // clear the unused inherited property high word
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                        // supply the owned previous object as the boxed payload
+    emitter.instruction("mov eax, 6");                                          // runtime tag six denotes an object payload
+    emitter.instruction("xor esi, esi");                                        // object values have no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // create a Mixed box with its own retained object owner
+    emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                       // recover the effective previous-property slot
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the replacement before retiring displaced owners
     emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // consume the replaced null cell
     emitter.instruction("call __rt_decref_any");                                // preserve aliases while dropping the replaced property owner
+    emitter.label("__rt_throwable_append_previous_release");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // recover the raw owner retained by the box or rejected slot
+    emitter.instruction("call __rt_decref_any");                                // balance that owner after boxing or failed insertion
+    emitter.instruction("jmp __rt_throwable_append_previous_return");           // skip the direct-transfer path
+    emitter.label("__rt_throwable_append_previous_raw");
+    emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // recover the raw previous owner being transferred
+    emitter.instruction("test ecx, ecx");                                       // reference cells expose only their effective payload word
+    emitter.instruction("jnz __rt_throwable_append_previous_raw_store");        // preserve the reference cell's adjacent storage
+    emitter.instruction("mov QWORD PTR [rax + 8], 0");                          // clear the high half of an inline raw-object property
+    emitter.label("__rt_throwable_append_previous_raw_store");
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the owner in the resolved raw slot
+    emitter.label("__rt_throwable_append_previous_return");
     emitter.instruction("leave");                                               // restore the native caller frame
     emitter.instruction("ret");                                                 // return after consuming exactly one previous owner
-    emitter.label("__rt_throwable_append_previous_raw");
-    emitter.instruction("mov QWORD PTR [rdi + 40], rsi");                       // transfer the raw previous owner into compact storage
-    emitter.instruction("mov QWORD PTR [rdi + 48], 0");                         // clear the unused compact previous high word
-    emitter.instruction("ret");                                                 // return without changing the transferred owner count
 }
 
 /// Emits slot lookup and borrowed raw-object reads for every supported target.
@@ -105,7 +116,7 @@ pub fn emit_throwable_previous(emitter: &mut impl Emitter) {
     }
 }
 
-/// Emits ARM64 lookup returning the effective slot in x0 and its boxed flag in x1.
+/// Emits ARM64 lookup returning the slot in x0, boxed flag in x1 and reference flag in x2.
 fn emit_read_aarch64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_previous_slot");
     // -- locate either the compact raw link or the ordinary physical property --
@@ -122,6 +133,7 @@ fn emit_read_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("ldr x10, [x10, x11, lsl #3]");                         // load the offset and storage flags for this class
     emitter.instruction("cbz x10, __rt_throwable_previous_missing");            // preserve holes created by reachability pruning
     emitter.instruction("and x1, x10, #1");                                     // expose whether the effective slot owns a Mixed box
+    emitter.instruction("ubfx x2, x10, #1, #1");                                // expose whether the slot is reached through a reference cell
     emitter.instruction("and x11, x10, #-8");                                   // remove flags to recover the aligned byte offset
     emitter.instruction("add x0, x0, x11");                                     // locate the physical object-property slot
     emitter.instruction("tbz x10, #1, __rt_throwable_previous_slot_return");    // ordinary properties already expose their effective slot
@@ -131,10 +143,12 @@ fn emit_read_aarch64(emitter: &mut impl Emitter) {
     emitter.label("__rt_throwable_previous_compact");
     emitter.instruction("add x0, x0, #40");                                     // compact links have one fixed raw-object offset
     emitter.instruction("mov x1, #0");                                          // compact previous links are never Mixed boxes
+    emitter.instruction("mov x2, #0");                                          // compact links are inline rather than reference-backed
     emitter.instruction("ret");                                                 // leave the borrowed effective slot in x0
     emitter.label("__rt_throwable_previous_missing");
     emitter.instruction("mov x0, #0");                                          // zero represents a missing effective slot
     emitter.instruction("mov x1, #0");                                          // missing slots have no storage flags
+    emitter.instruction("mov x2, #0");                                          // missing slots have no reference indirection
     emitter.instruction("ret");                                                 // never dereference an unknown layout
 
     emitter.label_global("__rt_throwable_previous");
@@ -159,7 +173,7 @@ fn emit_read_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("ret");                                                 // return the borrowed raw previous object or zero
 }
 
-/// Emits the same lookup on System V, returning the effective slot in rax and boxed flag in rdx.
+/// Emits the same lookup on System V, returning the slot in rax, boxed flag in edx and reference flag in ecx.
 fn emit_read_x86_64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_previous_slot");
     // -- locate either the compact raw link or the ordinary physical property --
@@ -178,6 +192,8 @@ fn emit_read_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("jz __rt_throwable_previous_missing");                  // preserve holes in the class-id table
     emitter.instruction("mov rdx, r10");                                        // copy descriptor bits before discarding the offset
     emitter.instruction("and edx, 1");                                          // expose whether the effective slot owns a Mixed box
+    emitter.instruction("mov rcx, r10");                                        // copy the reference-indirection flag for owner publication
+    emitter.instruction("and ecx, 2");                                          // preserve whether the resolved slot is reference-backed
     emitter.instruction("mov r11, r10");                                        // preserve reference indirection while extracting the offset
     emitter.instruction("and r11, -8");                                         // remove flags from the aligned byte offset
     emitter.instruction("add rax, r11");                                        // locate the physical object-property slot
@@ -189,10 +205,12 @@ fn emit_read_x86_64(emitter: &mut impl Emitter) {
     emitter.label("__rt_throwable_previous_compact");
     emitter.instruction("add rax, 40");                                         // locate the compact raw-object previous link
     emitter.instruction("xor edx, edx");                                        // compact links never own Mixed boxes
+    emitter.instruction("xor ecx, ecx");                                        // compact links are inline rather than reference-backed
     emitter.instruction("ret");                                                 // return the borrowed effective slot
     emitter.label("__rt_throwable_previous_missing");
     emitter.instruction("xor eax, eax");                                        // zero represents a missing slot
     emitter.instruction("xor edx, edx");                                        // missing slots have no storage flags
+    emitter.instruction("xor ecx, ecx");                                        // missing slots have no reference indirection
     emitter.instruction("ret");                                                 // avoid dereferencing unknown class layouts
 
     emitter.label_global("__rt_throwable_previous");

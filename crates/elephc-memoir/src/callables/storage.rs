@@ -28,7 +28,7 @@ pub const fn capture_offset(index: usize) -> usize {
 pub enum ObjectHandle {
     /// An internal callable descriptor does not publish its own public identity.
     Internal,
-    /// Reserve the handle before initializing the allocated descriptor.
+    /// Reserve a public object handle for the allocated descriptor.
     Public,
 }
 
@@ -43,6 +43,19 @@ pub fn emit_allocate_descriptor(
         crate::object_handles::emit_acquire_object_handle(emitter);
     }
     emitter.emit_reg_move(destination, result);
+}
+
+/// Allocates and initializes a descriptor whose byte count is already in the result register.
+pub fn emit_allocate_initialized_descriptor_from_result_size(
+    emitter: &mut impl Emitter,
+    handle: ObjectHandle,
+) {
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    let result = emitter.int_result_reg();
+    emit_initialize_runtime_descriptor(emitter, result);
+    if matches!(handle, ObjectHandle::Public) {
+        crate::object_handles::emit_acquire_object_handle(emitter);
+    }
 }
 
 /// Builds an owned descriptor with a static template header and cleared captures.

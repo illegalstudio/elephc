@@ -751,6 +751,14 @@ fn property_result_type(
         return PhpType::Mixed;
     }
     let object_ty = ctx.builder.value_php_type(object);
+    // A runtime-checked receiver, including generic `object` and `?object`, keeps a boxed Mixed
+    // representation so Closure descriptors retain their runtime tag. Its properties are selected
+    // by the runtime class ladder. Looking for semantic `Object("object")` in the class table
+    // instead falls through to the expression's scalar syntax guess and makes a later property hop
+    // interpret the boxed result as an integer.
+    if crate::types::object_boundary::runtime_checked_object_source(&object_ty) {
+        return PhpType::Mixed;
+    }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             return PhpType::Mixed;
@@ -1411,9 +1419,9 @@ pub(super) fn lower_property_isset_probe_from_value(
 /// Returns whether `$object->name` must be probed through the runtime-name form.
 ///
 /// Only a receiver whose class is unknown at compile time needs it: `property_isset_action`
-/// answers for every singular object class, and a name the checker refused never reaches
-/// lowering. A boxed `Mixed` receiver has neither, so its declared-slot ladder is the one place
-/// where a probe would otherwise take the raising value-read arm.
+/// answers for every concrete singular object class, and a name the checker refused never reaches
+/// lowering. Boxed `Mixed`, generic `object`, and interface receivers identify their class only at
+/// run time, so their declared-slot ladder must carry the quiet probe mode.
 pub(super) fn property_probe_needs_runtime_name_form(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
@@ -1429,10 +1437,11 @@ pub(super) fn property_probe_needs_runtime_name_form(
 
 /// The receiver-TYPE half of the decision above, for a receiver already lowered to a value.
 ///
-/// A nullable or union receiver that still resolves to one object class keeps the ordinary named
-/// read: its declared slot is known and the checker has already ruled on the name.
+/// A nullable or union receiver that still resolves to one concrete object class keeps the
+/// ordinary named read: its declared slot is known and the checker has already ruled on the name.
 pub(super) fn property_probe_needs_runtime_name_form_for_type(receiver_ty: &PhpType) -> bool {
-    matches!(receiver_ty.codegen_repr(), PhpType::Object(ref name) if normalized_class_name(name).is_none())
+    receiver_ty.uses_boxed_object_storage()
+        || matches!(receiver_ty.codegen_repr(), PhpType::Object(ref name) if normalized_class_name(name).is_none())
         || (singular_object_class(receiver_ty).is_none()
             && matches!(
             receiver_ty.codegen_repr(),

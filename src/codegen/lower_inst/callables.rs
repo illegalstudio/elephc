@@ -2458,20 +2458,19 @@ fn emit_boxed_callable_array_selector_slots(
     let string_label = ctx.next_label("boxed_callable_array_string_slots");
     let done_label = ctx.next_label("boxed_callable_array_slots_done");
     emit_load_callable_array_base(ctx, source, array_reg)?;
+    elephc_memoir::values::array_header::emit_load_value_type_tag(
+        ctx.emitter,
+        array_reg,
+        stamp_reg,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
-            ctx.emitter.instruction(&format!("lsr {}, {}, #8", stamp_reg, stamp_reg)); // move the value-type byte into the low bits
-            ctx.emitter.instruction(&format!("and {}, {}, #0x7f", stamp_reg, stamp_reg)); // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, #7", stamp_reg));         // do the array slots contain boxed Mixed cells?
             ctx.emitter.instruction(&format!("b.eq {}", mixed_label));          // decode each selector through __rt_mixed_unbox
             ctx.emitter.instruction(&format!("cmp {}, #1", stamp_reg));         // do the array slots contain string pointer/length pairs?
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // synthesize string-tagged selectors from typed slots
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
-            ctx.emitter.instruction(&format!("shr {}, 8", stamp_reg));          // move the value-type byte into the low bits
-            ctx.emitter.instruction(&format!("and {}, 0x7f", stamp_reg));       // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, 7", stamp_reg));          // do the array slots contain boxed Mixed cells?
             ctx.emitter.instruction(&format!("je {}", mixed_label));            // decode each selector through __rt_mixed_unbox
             ctx.emitter.instruction(&format!("cmp {}, 1", stamp_reg));          // do the array slots contain string pointer/length pairs?

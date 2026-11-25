@@ -89,7 +89,7 @@ pub(crate) fn php_cast_result_type(target: &CastType, source: &PhpType) -> PhpTy
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
         CastType::Array => array_cast_result_type(source),
-        CastType::Object if matches!(source.codegen_repr(), PhpType::Object(_)) => source.clone(),
+        CastType::Object if matches!(source, PhpType::Object(_)) => source.clone(),
         CastType::Object
             if matches!(source.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
         {

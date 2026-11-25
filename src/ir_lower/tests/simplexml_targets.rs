@@ -553,9 +553,18 @@ echo $doc->saveXML();
                 && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");
         }
     }
+    let erased_string = module.functions.iter().find(|function| function.name == "xmlErasedStringParameter").unwrap();
+    let erased_cast = erased_string.instructions.iter().find(|inst| {
+        inst.op == crate::ir::Op::Cast
+            && inst.immediate == Some(crate::ir::Immediate::CastTarget(crate::ir::IrType::Str))
+    }).expect("generic object string cast must remain explicit in EIR");
+    assert_eq!(
+        erased_string.value(erased_cast.operands[0]).unwrap().php_type.codegen_repr(),
+        crate::types::PhpType::Mixed,
+        "{target}: generic object string contexts must consume boxed storage",
+    );
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
-    assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");

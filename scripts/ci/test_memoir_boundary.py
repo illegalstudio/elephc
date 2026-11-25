@@ -4,9 +4,11 @@ import unittest
 
 from scripts.audit_memoir_boundary import (
     MIGRATED_OWNER_FIELDS,
+    MIGRATED_SOURCE_CONTRACTS,
     audit_archive_symbols,
     audit_metadata,
     audit_migrated_owner_fields,
+    audit_migrated_source_contract,
     audit_source,
     rust_tokens,
 )
@@ -259,6 +261,49 @@ class MigratedOwnerBoundaryTests(unittest.TestCase):
             "pub(super) error_handlers: RuntimeOwnerHistory<usize>,", "")
         findings = audit_migrated_owner_fields("context/core.rs", source)
         self.assertEqual({finding.code for finding in findings}, {"owner-field"})
+
+
+class MigratedSourceContractTests(unittest.TestCase):
+    """Keep compiler and Magician consumers on the Memoir APIs they adopted."""
+
+    def test_required_delegation_passes_without_local_policy(self):
+        """Accept a consumer that uses every required API and no forbidden primitive."""
+        contract = {
+            "required": ("memoir::replace_owner(", "memoir::load_header("),
+            "forbidden": ("__rt_heap_alloc",),
+        }
+        source = "memoir::replace_owner(); memoir::load_header();"
+        self.assertEqual(audit_migrated_source_contract("consumer.rs", source, contract), [])
+
+    def test_missing_delegation_is_rejected(self):
+        """Report each Memoir API that disappears from a migrated consumer."""
+        contract = {"required": ("memoir::replace_owner(", "memoir::load_header(")}
+        findings = audit_migrated_source_contract(
+            "consumer.rs", "memoir::replace_owner();", contract)
+        self.assertEqual({finding.code for finding in findings}, {"memoir-delegation"})
+
+    def test_reintroduced_physical_policy_is_rejected(self):
+        """Reject direct allocator or runtime-global policy after centralization."""
+        contract = {"forbidden": ("__rt_heap_alloc", "_heap_max")}
+        findings = audit_migrated_source_contract(
+            "consumer.rs", 'emit("__rt_heap_alloc"); emit("_heap_max");', contract)
+        self.assertEqual([finding.code for finding in findings],
+                         ["consumer-policy", "consumer-policy"])
+
+    def test_repository_contracts_cover_all_eight_migration_groups(self):
+        """Guard the owner, descriptor, Throwable, argument, header, symbol, global and tail groups."""
+        locations = set(MIGRATED_SOURCE_CONTRACTS)
+        witnesses = {
+            "crates/elephc-magician/src/scope.rs",
+            "src/codegen_support/runtime/callables/closure_copy.rs",
+            "src/codegen_support/runtime/exceptions/initialize.rs",
+            "src/codegen_support/wrappers/fiber.rs",
+            "src/codegen/lower_inst/builtins/isset.rs",
+            "src/codegen_support/abi/symbols.rs",
+            "src/codegen_support/runtime/strings/bin2hex_len.rs",
+            "src/codegen_support/runtime/objects/dump_dynamic_props.rs",
+        }
+        self.assertTrue(witnesses <= locations)
 
 
 class ArchiveBoundaryTests(unittest.TestCase):

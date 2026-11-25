@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Each target emits the native marker update before releasing an object property payload.
+    /// Each target emits the native marker update before releasing a boxed generic-object payload.
     #[test]
     fn typed_unset_marks_storage_before_releasing_its_owner() {
         let tokens = crate::lexer::tokenize("<?php class UnsetStorage { public object $value; }").unwrap();
@@ -161,7 +161,7 @@ mod tests {
             emit_property_unset_helper(&module, &mut emitter, &mut DataSection::new(), &slots);
             let asm = emitter.output();
             assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_typed_property_unset_v2")), "{name}");
-            let release = asm.find("__rt_decref_object").unwrap();
+            let release = asm.find("__rt_decref_mixed").unwrap();
             let store = if target.arch == Arch::AArch64 { "str x10, [x9, #16]" } else { "mov QWORD PTR [r11 + 16], r10" };
             assert!(asm.find(store).is_some_and(|marker| marker < release), "{name}");
         }

@@ -224,7 +224,7 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;
     let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
-    box_loaded_value_as_mixed(ctx, value, &box_ty);
+    box_loaded_value_as_mixed(ctx, value, &box_ty)?;
     store_if_result(ctx, inst)
 }
 
@@ -250,25 +250,31 @@ pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instructio
         let source_ty = ctx.load_value_to_result(value)?;
         let raw_source_ty = ctx.raw_value_php_type(value)?;
         let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
-        box_loaded_value_as_mixed(ctx, value, &box_ty);
+        box_loaded_value_as_mixed(ctx, value, &box_ty)?;
     }
     store_if_result(ctx, inst)
 }
 
-/// Boxes a loaded value while keeping borrowed string-offset bytes outside managed heap headers.
+/// Boxes a loaded value, consuming an eligible owner while preserving borrowed byte views.
 pub(in crate::codegen::lower_inst) fn box_loaded_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     box_ty: &PhpType,
-) {
+) -> Result<()> {
+    let consumes_source = ctx.value_can_own_mixed_box_source(value)?;
     let staged = if box_ty.codegen_repr() == PhpType::Str {
         let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
         super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
     } else {
         false
     };
-    emit_box_current_value_as_mixed(ctx.emitter, box_ty);
+    if consumes_source {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, box_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, box_ty);
+    }
     super::ownership::release_string_byte_stage(ctx, staged);
+    Ok(())
 }
 
 /// Selects the runtime boxing strategy without losing erased array-layout metadata.

@@ -95,27 +95,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp]");                                        // advance through the borrowed new chain
     emitter.instruction("b __rt_exception_chain_scan");                         // check the next node against every old-chain ancestor
 
-    // -- adopt the old owner using the actual previous-slot representation --
+    // -- delegate physical previous-owner adoption to Memoir --
     emitter.label("__rt_exception_chain_append");
     emitter.instruction("ldr x0, [sp]");                                        // recover the tail whose previous link is empty
-    emitter.instruction("bl __rt_throwable_previous_slot");                     // resolve raw, boxed, and reference property storage
-    emitter.instruction("cbz x0, __rt_exception_chain_release");                // absent storage cannot adopt an owner
-    emitter.instruction("cbz x1, __rt_exception_chain_raw");                    // raw slots adopt the existing object owner directly
-    emitter.instruction("str x0, [sp, #24]");                                   // preserve the effective slot across Mixed allocation
-    emitter.instruction("ldr x9, [x0]");                                        // borrow the existing null box before replacement
-    emitter.instruction("str x9, [sp, #32]");                                   // release the old null box only after publishing the new one
     emitter.instruction("ldr x1, [sp, #8]");                                    // supply the owned old exception as the boxed payload
-    emitter.instruction("mov x0, #6");                                          // runtime tag six denotes an object payload
-    emitter.instruction("mov x2, #0");                                          // object values have no high payload word
-    emitter.instruction("bl __rt_mixed_from_value");                            // create a Mixed box with its own retained object owner
-    emitter.instruction("ldr x9, [sp, #24]");                                   // recover the effective previous-property slot
-    emitter.instruction("str x0, [x9]");                                        // publish the box before releasing either displaced owner
-    emitter.instruction("ldr x0, [sp, #32]");                                   // recover the displaced null box
-    emitter.instruction("bl __rt_decref_any");                                  // release the box that no longer belongs to the property
-    emitter.instruction("b __rt_exception_chain_release");                      // balance the raw owner now retained by the new box
-    emitter.label("__rt_exception_chain_raw");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // recover the raw owner to transfer
-    emitter.instruction("str x9, [x0]");                                        // the previous link adopts it without a redundant retain
+    emitter.instruction("bl __rt_throwable_append_previous");                   // consume the owner through Memoir's layout-aware kernel
+    emitter.instruction("str xzr, [sp, #8]");                                   // record that the incoming owner was consumed
     emitter.label("__rt_exception_chain_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller after successful ownership transfer
     emitter.instruction("add sp, sp, #64");                                     // release traversal storage
@@ -200,29 +185,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // advance the borrowed new-chain cursor
     emitter.instruction("jmp __rt_exception_chain_scan");                       // validate the next node against the old chain
 
-    // -- adopt the old owner using the actual previous-slot representation --
+    // -- delegate physical previous-owner adoption to Memoir --
     emitter.label("__rt_exception_chain_append");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the new-chain tail
-    emitter.instruction("call __rt_throwable_previous_slot");                   // resolve its effective previous-property slot
-    emitter.instruction("test rax, rax");                                       // check whether metadata supplied a writable slot
-    emitter.instruction("jz __rt_exception_chain_release");                     // absent storage cannot adopt the previous owner
-    emitter.instruction("test edx, edx");                                       // inspect the effective slot's boxed flag
-    emitter.instruction("jz __rt_exception_chain_raw");                         // raw slots consume the old object owner directly
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the effective slot across allocation
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // inspect the old null box being displaced
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save that box for post-publication release
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the old exception as the boxed object payload
-    emitter.instruction("mov eax, 6");                                          // runtime tag six denotes an object
-    emitter.instruction("xor esi, esi");                                        // object payloads have no second word
-    emitter.instruction("call __rt_mixed_from_value");                          // retain the object under a fresh Mixed box owner
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the effective previous slot
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the new owner before releasing old storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the displaced null box
-    emitter.instruction("call __rt_decref_any");                                // release the box no longer owned by the property
-    emitter.instruction("jmp __rt_exception_chain_release");                    // balance the old raw owner retained by the new box
-    emitter.label("__rt_exception_chain_raw");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // recover the old raw owner
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // transfer that owner directly into the raw previous link
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the new-chain tail as the destination
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the old exception owner for consumption
+    emitter.instruction("call __rt_throwable_append_previous");                 // consume the owner through Memoir's layout-aware kernel
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // record that the incoming owner was consumed
     emitter.label("__rt_exception_chain_return");
     emitter.instruction("leave");                                               // restore the caller after ownership transfer
     emitter.instruction("ret");                                                 // leave no owner or cursor in this helper
@@ -262,7 +230,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Chaining uses layout-aware reads for both chains and publishes boxed links before releasing.
+    /// Chaining uses layout-aware reads and delegates physical owner adoption to Memoir.
     #[test]
     fn exception_chain_uses_storage_metadata_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -270,10 +238,33 @@ mod tests {
             emit_exception_chain(&mut emitter);
             let asm = emitter.output();
             assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 2, "{name}");
-            assert!(asm.contains("__rt_throwable_previous_slot"), "{name}");
-            assert!(asm.find("__rt_mixed_from_value").unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
-            assert!(asm.contains("__rt_exception_chain_ancestors:") && asm.contains("__rt_exception_chain_raw:"), "{name}");
+            assert!(asm.contains("__rt_throwable_append_previous"), "{name}");
+            assert!(!asm.contains("__rt_mixed_from_value"), "{name}");
+            assert!(asm.contains("__rt_exception_chain_ancestors:"), "{name}");
             assert!(!asm.contains("elephc_php_previous_exception"), "{name}");
+        }
+    }
+
+    /// Memoir clears inline raw-property padding without overwriting reference-cell storage.
+    #[test]
+    fn throwable_append_previous_distinguishes_inline_and_reference_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            elephc_memoir::values::throwable_previous::emit_append_previous(&mut emitter);
+            elephc_memoir::values::throwable_previous::emit_throwable_previous(&mut emitter);
+            let arch = emitter.target.arch;
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_throwable_append_previous_raw_store:"), "{name}");
+            match arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("ubfx x2, x10, #1, #1"), "{name}");
+                    assert!(asm.contains("str xzr, [x0, #8]"), "{name}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("and ecx, 2"), "{name}");
+                    assert!(asm.contains("mov QWORD PTR [rax + 8], 0"), "{name}");
+                }
+            }
         }
     }
 

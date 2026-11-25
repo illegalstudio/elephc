@@ -165,20 +165,17 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // create the boxed Throwable argument
     emitter.instruction("mov x20, x0");                                         // preserve the argument cell across array allocation
     emitter.instruction("mov x0, #1");                                          // allocate one visible handler argument slot
-    emitter.instruction("mov x1, #8");                                          // indexed array elements begin with the generic runtime shape
-    emitter.instruction("bl __rt_array_new");                                   // create the descriptor invoker argument array
-    emitter.instruction("mov x1, x20");                                         // append the boxed Throwable cell
-    emitter.instruction("bl __rt_array_push_refcounted");                       // the array retains its own argument-cell owner
-    emitter.instruction("mov x21, x0");                                         // preserve the completed raw argument array
-    emitter.instruction("mov x0, x20");                                         // release the construction-time Mixed owner
-    emitter.instruction("bl __rt_decref_mixed");                                // leave ownership solely with the array
-    emitter.instruction("mov x0, #4");                                          // runtime tag 4 boxes the indexed argument array
-    emitter.instruction("mov x1, x21");                                         // pass the raw array payload
-    emitter.instruction("mov x2, #0");                                          // arrays have no high payload word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the argument container for the uniform invoker ABI
-    emitter.instruction("mov x20, x0");                                         // keep the boxed container across raw-array release
-    emitter.instruction("mov x0, x21");                                         // drop the raw array's construction owner
-    emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
+    elephc_memoir::callables::argument_storage::emit_append_owned_cell_from_registers(
+        emitter, "x0", "x20", "x21",
+    );
+    elephc_memoir::callables::argument_storage::emit_box_owned_container(
+        emitter,
+        "x21",
+        "x20",
+        elephc_memoir::ValueTag::new(4),
+        |emitter| abi::emit_call_label(emitter, "__rt_decref_any"),
+    );
 
     emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
     emitter.instruction("cbnz x9, 2f");                                         // continue only with a valid uniform invoker
@@ -219,21 +216,17 @@ fn emit_uncaught_exception_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // create the boxed Throwable argument
     emitter.instruction("mov r14, rax");                                        // preserve the argument cell across array allocation
     emitter.instruction("mov edi, 1");                                          // allocate one visible handler argument slot
-    emitter.instruction("mov esi, 8");                                          // indexed array elements begin with the generic runtime shape
-    emitter.instruction("call __rt_array_new");                                 // create the descriptor invoker argument array
-    emitter.instruction("mov rdi, rax");                                        // append into the new raw array
-    emitter.instruction("mov rsi, r14");                                        // append the boxed Throwable cell
-    emitter.instruction("call __rt_array_push_refcounted");                     // the array retains its own argument-cell owner
-    emitter.instruction("mov r15, rax");                                        // preserve the completed raw argument array
-    emitter.instruction("mov rax, r14");                                        // release the construction-time Mixed owner
-    emitter.instruction("call __rt_decref_mixed");                              // leave ownership solely with the array
-    emitter.instruction("mov rax, 4");                                          // runtime tag 4 boxes the indexed argument array
-    emitter.instruction("mov rdi, r15");                                        // pass the raw array payload
-    emitter.instruction("xor esi, esi");                                        // arrays have no high payload word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the argument container for the uniform invoker ABI
-    emitter.instruction("mov r14, rax");                                        // keep the boxed container across raw-array release
-    emitter.instruction("mov rax, r15");                                        // drop the raw array's construction owner
-    emitter.instruction("call __rt_decref_any");                                // the boxed container now owns the array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
+    elephc_memoir::callables::argument_storage::emit_append_owned_cell_from_registers(
+        emitter, "rax", "r14", "r15",
+    );
+    elephc_memoir::callables::argument_storage::emit_box_owned_container(
+        emitter,
+        "r15",
+        "r14",
+        elephc_memoir::ValueTag::new(4),
+        |emitter| abi::emit_call_label(emitter, "__rt_decref_any"),
+    );
 
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
     emitter.instruction("test r10, r10");                                       // reject malformed descriptors without an invoker

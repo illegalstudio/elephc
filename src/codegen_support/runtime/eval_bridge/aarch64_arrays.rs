@@ -339,8 +339,9 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cbz x12, __elephc_eval_value_object_property_len_zero"); // classes without the tail expose no dynamic properties
     abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");    // resolve the class payload-size table
     emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // load the object payload size
-    emitter.instruction("sub x12, x12, #8");                                    // the dynamic hash is the last payload word
-    emitter.instruction("ldr x9, [x9, x12]");                                   // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "x9", "x12", "x9",
+    );
     emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null property hashes are treated as empty objects
     emitter.instruction("ldr x0, [x9]");                                        // load the hash entry count
     emitter.instruction("ret");                                                 // return the public property count to Rust
@@ -375,8 +376,9 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cbz x12, __elephc_eval_value_object_property_iter_key_null"); // classes without the tail expose no keys
     abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");    // resolve the class payload-size table
     emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // load the object payload size
-    emitter.instruction("sub x12, x12, #8");                                    // the dynamic hash is the last payload word
-    emitter.instruction("ldr x9, [x9, x12]");                                   // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "x9", "x12", "x9",
+    );
     emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
     emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
     emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order property counter at zero

@@ -28,6 +28,121 @@ MIGRATED_OWNER_FIELDS = {
     "exception_handlers": "RuntimeOwnerHistory",
     "pcntl_foreign_callables": "RuntimeOwnerRecordMap",
 }
+MIGRATED_SOURCE_CONTRACTS = {
+    "crates/elephc-magician/src/context/core.rs": {
+        "required": ("pending_throw: RuntimeOwnerSlot",),
+    },
+    "crates/elephc-magician/src/context/pcntl_runtime.rs": {
+        "required": ("callback: Option<RuntimeAddressOwner>",),
+    },
+    "crates/elephc-magician/src/scope.rs": {
+        "required": (
+            "cell: RuntimeOwnerSlot",
+            "RuntimeOwnerSlot::for_ownership(",
+        ),
+        "forbidden": ("RuntimeCellHandle::from_raw(cell.as_ptr())",),
+    },
+    "crates/elephc-magician/src/stream_resources/types.rs": {
+        "required": ("callback_owners: [RuntimeOwnerSlot;",),
+    },
+    "src/codegen/lower_inst/callables/selector_tables.rs": {
+        "required": ("callables::storage::emit_allocate_descriptor(",),
+        "forbidden": (
+            'instruction("bl __rt_heap_alloc")',
+            'instruction("call __rt_heap_alloc")',
+            'instruction("bl __rt_object_handle_acquire")',
+            'instruction("call __rt_object_handle_acquire")',
+        ),
+    },
+    "src/codegen_support/runtime/callables/closure_copy.rs": {
+        "required": ("emit_allocate_initialized_descriptor_from_result_size(",),
+        "forbidden": (
+            'instruction("bl __rt_heap_alloc")',
+            'instruction("call __rt_heap_alloc")',
+            'instruction("bl __rt_object_handle_acquire")',
+            'instruction("call __rt_object_handle_acquire")',
+        ),
+    },
+    "src/codegen_support/runtime/exceptions/initialize.rs": {
+        "required": ("throwable_storage::emit_initialize(",),
+    },
+    "src/codegen_support/runtime/exceptions/chain.rs": {
+        "required": ("__rt_throwable_append_previous",),
+    },
+    "src/codegen_support/runtime/exceptions/destructor_throw.rs": {
+        "required": ("__rt_throwable_take_boxed",),
+        "forbidden": (
+            'instruction("bl __rt_mixed_unbox")',
+            'instruction("call __rt_mixed_unbox")',
+            'instruction("bl __rt_decref_mixed")',
+            'instruction("call __rt_decref_mixed")',
+        ),
+    },
+    "src/codegen_support/wrappers/callback/descriptor.rs": {
+        "required": ("callables::argument_storage::emit_allocate_mixed_array(",),
+    },
+    "src/codegen_support/wrappers/fiber.rs": {
+        "required": ("callables::argument_storage::emit_allocate_mixed_array(",),
+    },
+    "src/codegen_support/runtime/warning_dispatch.rs": {
+        "required": ("callables::argument_storage::emit_allocate_mixed_array(",),
+    },
+    "src/codegen_support/runtime/exceptions/throw_current.rs": {
+        "required": (
+            "callables::argument_storage::emit_allocate_mixed_array(",
+            "callables::argument_storage::emit_append_owned_cell_from_registers(",
+            "callables::argument_storage::emit_box_owned_container(",
+        ),
+    },
+    "src/codegen_support/callable_invoker_args.rs": {
+        "required": (
+            "values::array_header::emit_load_value_type_tag(",
+            "callables::argument_storage::emit_box_owned_container(",
+        ),
+    },
+    "src/codegen/lower_inst/callables/scope_probe.rs": {
+        "required": ("values::array_header::emit_load_value_type_tag(",),
+    },
+    "src/codegen/lower_inst/builtins/isset.rs": {
+        "required": (
+            "values::array_header::emit_load_storage_kind(",
+            "values::array_header::emit_load_value_type_tag(",
+        ),
+    },
+    "src/codegen_support/runtime/zval/zval_pack_array_packed.rs": {
+        "required": ("values::array_header::emit_load_value_type_tag(",),
+    },
+    "src/codegen_support/abi/symbols.rs": {
+        "required": ("symbol_owners::emit_replace_result_owner(",),
+    },
+    "src/codegen/eval_static_property_helpers.rs": {
+        "required": ("symbol_owners::emit_replace_result_owner(",),
+    },
+    "src/codegen_support/runtime/strings/bin2hex_len.rs": {
+        "required": ("memory::emit_branch_if_size_exceeds_heap(",),
+        "forbidden": ("_heap_max",),
+    },
+    "src/codegen_support/runtime/strings/chunk_split_len.rs": {
+        "required": ("memory::emit_branch_if_size_exceeds_heap(",),
+        "forbidden": ("_heap_max",),
+    },
+    "src/codegen_support/runtime/exceptions/protected.rs": {
+        "required": (
+            "activation_records::emit_save_gc_release_suppression(",
+            "activation_records::emit_restore_gc_release_suppression(",
+        ),
+        "forbidden": ("_gc_release_suppressed",),
+    },
+    "src/codegen_support/runtime/objects/dump_dynamic_props.rs": {
+        "required": ("values::object_storage::emit_load_trailing_word(",),
+    },
+    "src/codegen_support/runtime/eval_bridge/aarch64_arrays.rs": {
+        "required": ("values::object_storage::emit_load_trailing_word(",),
+    },
+    "src/codegen_support/runtime/eval_bridge/x86_64_arrays.rs": {
+        "required": ("values::object_storage::emit_load_trailing_word(",),
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -280,6 +395,30 @@ def audit_migrated_owner_fields(location: str, source: str) -> list[Finding]:
     return findings
 
 
+def audit_migrated_source_contract(
+    location: str,
+    source: str,
+    contract: dict[str, tuple[str, ...]],
+) -> list[Finding]:
+    """Keep migrated consumers on Memoir APIs instead of restoring physical policy locally."""
+    findings = []
+    for required in contract.get("required", ()):
+        if required not in source:
+            findings.append(Finding(
+                "memoir-delegation",
+                location,
+                f"migrated consumer must delegate through {required}",
+            ))
+    for forbidden in contract.get("forbidden", ()):
+        if forbidden in source:
+            findings.append(Finding(
+                "consumer-policy",
+                location,
+                f"migrated consumer must not own physical memory policy {forbidden}",
+            ))
+    return findings
+
+
 def audit_archive_symbols(location: str, symbols: str) -> list[Finding]:
     """Require the eval registry and reject compiler emitter definitions in Magician."""
     memoir_symbols = [line for line in symbols.splitlines() if "elephc_memoir" in line]
@@ -331,6 +470,14 @@ def main() -> int:
         owner_context = root / "crates/elephc-magician/src/context/core.rs"
         findings.extend(audit_migrated_owner_fields(
             owner_context.relative_to(root).as_posix(), owner_context.read_text()))
+        for location, contract in MIGRATED_SOURCE_CONTRACTS.items():
+            path = root / location
+            if not path.is_file():
+                findings.append(Finding(
+                    "memoir-delegation", location, "migrated consumer source is missing"))
+                continue
+            findings.extend(audit_migrated_source_contract(
+                location, path.read_text(), contract))
         for archive in args.magician_archive:
             findings.extend(audit_magician_archive(archive))
     except subprocess.CalledProcessError as error:

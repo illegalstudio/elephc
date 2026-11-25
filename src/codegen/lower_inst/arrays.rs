@@ -2653,8 +2653,11 @@ fn emit_array_get_in_bounds_aarch64(
     let widened_done = if !matches!(elem_ty, PhpType::Void | PhpType::Never | PhpType::Mixed) {
         let typed = ctx.next_label("array_get_typed_payload");
         let done = ctx.next_label("array_get_widened_done");
-        ctx.emitter.instruction(&format!("ldr x11, [{}, #-8]", array_reg));     // load the runtime indexed-array value type
-        elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x11", "x11");
+        elephc_memoir::values::array_header::emit_load_value_type_tag(
+            ctx.emitter,
+            array_reg,
+            "x11",
+        );
         ctx.emitter.instruction("cmp x11, #7");                                 // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("b.ne {}", typed));                    // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
@@ -2790,12 +2793,11 @@ fn emit_array_get_in_bounds_x86_64(
     let widened_done = if !matches!(elem_ty, PhpType::Void | PhpType::Never | PhpType::Mixed) {
         let typed = ctx.next_label("array_get_typed_payload");
         let done = ctx.next_label("array_get_widened_done");
-        let load_value_type = format!(
-            "mov rcx, QWORD PTR [{} - 8]",
-            array_reg
+        elephc_memoir::values::array_header::emit_load_value_type_tag(
+            ctx.emitter,
+            array_reg,
+            "rcx",
         );
-        ctx.emitter.instruction(&load_value_type);                              // load the runtime indexed-array value type
-        elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rcx", "rcx");
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("jne {}", typed));                     // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // move to the pointer-sized Mixed payload base

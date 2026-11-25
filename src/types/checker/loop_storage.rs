@@ -1846,8 +1846,9 @@ mod tests {
     }
 
     /// A loop append of a subclass instance keeps an `array<Actor>` builder's object storage,
-    /// while the wider and unrelated directions still box the builder before the loop, exactly
-    /// as EIR's indexed write keeps or widens the same element.
+    /// while the wider and unrelated named directions still box the builder before the loop,
+    /// exactly as EIR's indexed write keeps or widens the same element. Generic `object` elements
+    /// are already boxed, so appending a named object needs no pre-loop conversion.
     #[test]
     fn indexed_object_append_keeps_the_element_only_for_a_nominal_upcast() {
         assert_eq!(object_append_contracts("Actor", "Player"), Vec::new());
@@ -1855,7 +1856,7 @@ mod tests {
         let boxed = vec![("items".to_string(), PhpType::Array(Box::new(PhpType::Mixed)))];
         assert_eq!(object_append_contracts("Player", "Actor"), boxed);
         assert_eq!(object_append_contracts("Actor", "Stranger"), boxed);
-        assert_eq!(object_append_contracts("", "Player"), boxed);
+        assert_eq!(object_append_contracts("", "Player"), Vec::new());
     }
 
     /// An indexed literal of related classes keeps object slots typed as their common class,

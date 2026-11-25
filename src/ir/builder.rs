@@ -817,7 +817,8 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 /// the associative logical type; cleanup remains safe because array decref dispatches by heap kind.
 /// Pointers and packed record addresses are one raw address word too, so a pointer-word slot
 /// (see `pointer_word_storage`) reads as a record address or as another pointer type as is.
-/// Object class/interface names likewise refine the checked view of the same object pointer.
+/// Named object class/interface names likewise refine the checked view of the same object pointer;
+/// generic `object` is excluded because its tagged storage also admits Closure descriptors.
 ///
 /// Codegen consumes this predicate too, so its no-coercion path and EIR release
 /// pruning cannot classify an ordinary borrowed local view differently.

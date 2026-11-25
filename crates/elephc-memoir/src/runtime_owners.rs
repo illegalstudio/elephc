@@ -78,6 +78,39 @@ impl PartialEq for RuntimeCellHandle {
 
 impl Eq for RuntimeCellHandle {}
 
+/// Send-safe storage for one owned runtime cell behind a process-global mutex.
+///
+/// The pointer is kept as an address so the container remains `Send` without claiming that
+/// arbitrary runtime cells may be dereferenced from another thread. Consumers may borrow the
+/// address for lookup or transfer the original cleanup obligation after removing the record.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuntimeAddressOwner {
+    address: usize,
+}
+
+impl RuntimeAddressOwner {
+    /// Erases one owned handle for storage in a Send-safe process registry.
+    pub fn new(owner: RuntimeCellHandle) -> Self {
+        debug_assert!(!owner.is_borrowed(), "a process registry requires an owned runtime cell");
+        Self { address: owner.as_ptr() as usize }
+    }
+
+    /// Returns whether this record owns the same runtime-cell address.
+    pub fn matches(&self, cell: RuntimeCellHandle) -> bool {
+        self.address == cell.as_ptr() as usize
+    }
+
+    /// Lends the stored cell without transferring its cleanup obligation.
+    pub fn borrowed(&self) -> RuntimeCellHandle {
+        RuntimeCellHandle::from_raw(self.address as *mut RuntimeCell).borrowed()
+    }
+
+    /// Restores the owned handle after the enclosing registry detached this record.
+    pub fn into_owned(self) -> RuntimeCellHandle {
+        RuntimeCellHandle::from_raw(self.address as *mut RuntimeCell)
+    }
+}
+
 /// One actual Rust owner whose address remains stable across the native call and cleanup.
 pub struct RuntimeOwnerSlot(Cell<RuntimeCellHandle>);
 
@@ -148,6 +181,15 @@ impl RuntimeOwnerSlot {
 
     /// Moves one cleanup obligation, preserving borrowed provenance when no lease exists.
     pub fn new(value: RuntimeCellHandle) -> Self { Self(Cell::new(value)) }
+
+    /// Classifies one persistent record as an owner or observer without exposing handle flags.
+    pub fn for_ownership(value: RuntimeCellHandle, ownership: RuntimeCellOwnership) -> Self {
+        let value = match ownership {
+            RuntimeCellOwnership::Owned => RuntimeCellHandle::from_raw(value.as_ptr()),
+            RuntimeCellOwnership::Borrowed => value.borrowed(),
+        };
+        Self::new(value)
+    }
 
     /// Lends the cell to a native consumer without transferring its owning lease.
     pub fn borrowed(&self) -> RuntimeCellHandle { self.0.get().borrowed() }
@@ -671,6 +713,29 @@ pub fn release_in_order<T, E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Process-global storage lends borrowed views and transfers its original cleanup obligation.
+    #[test]
+    fn runtime_address_owner_separates_borrow_from_transfer() {
+        let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let owner = RuntimeAddressOwner::new(cell);
+        let borrowed = owner.borrowed();
+        assert_eq!(borrowed, cell);
+        assert!(borrowed.is_borrowed());
+        let transferred = owner.into_owned();
+        assert_eq!(transferred, cell);
+        assert!(!transferred.is_borrowed());
+    }
+
+    /// Persistent slot classification keeps the cleanup obligation inside Memoir.
+    #[test]
+    fn runtime_owner_slot_classifies_persistent_ownership() {
+        let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell).borrowed();
+        let owner = RuntimeOwnerSlot::for_ownership(cell, RuntimeCellOwnership::Owned);
+        let observer = RuntimeOwnerSlot::for_ownership(cell, RuntimeCellOwnership::Borrowed);
+        assert!(!owner.take().is_borrowed());
+        assert!(observer.take().is_borrowed());
+    }
 
     /// Persistent maps detach only distinct displaced owners and drain exactly once.
     #[test]

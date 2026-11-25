@@ -20,12 +20,15 @@
 //! - The caller rejects a missing descriptor (null or the in-band null sentinel) first.
 
 use crate::codegen_support::callable_descriptor::{
-    emit_initialize_runtime_descriptor, CALLABLE_DESC_ENVIRONMENT_OFFSET,
+    CALLABLE_DESC_ENVIRONMENT_OFFSET,
     CALLABLE_DESC_KIND_INSTANCE_METHOD, CALLABLE_DESC_KIND_MASK, CALLABLE_DESC_KIND_OBJECT_INVOKE,
     CALLABLE_DESC_ORIGIN_ARRAY, CALLABLE_DESC_ORIGIN_STRING, CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::callables::storage::{
+    ObjectHandle, emit_allocate_initialized_descriptor_from_result_size,
+};
 
 /// Capture binding tags whose payload is a refcounted heap value, as descriptor release treats them.
 const HEAP_CAPTURE_TAGS: [u64; 6] = [4, 5, 6, 7, 10, 12];
@@ -88,9 +91,7 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the capture count
     emitter.instruction(&format!("mov x0, #{capture}"));                        // the fixed descriptor header
     emitter.instruction("add x0, x0, x10, lsl #4");                             // plus one 16-byte slot per capture
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = fresh descriptor block
-    emit_initialize_runtime_descriptor(emitter, "x0");
-    emitter.instruction("bl __rt_object_handle_acquire");                       // a Closure is an object: draw its handle from the object pool
+    emit_allocate_initialized_descriptor_from_result_size(emitter, ObjectHandle::Public);
     emitter.instruction("str x0, [sp, #16]");                                   // save the new descriptor
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source descriptor
     for offset in (0..capture).step_by(16) {
@@ -216,9 +217,7 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp+8]");                                    // reload the capture count
     emitter.instruction("shl rax, 4");                                          // one 16-byte slot per capture
     emitter.instruction(&format!("add rax, {capture}"));                        // plus the fixed descriptor header
-    emitter.instruction("call __rt_heap_alloc");                                // rax = fresh descriptor block
-    emit_initialize_runtime_descriptor(emitter, "rax");
-    emitter.instruction("call __rt_object_handle_acquire");                     // a Closure is an object: draw its handle from the object pool
+    emit_allocate_initialized_descriptor_from_result_size(emitter, ObjectHandle::Public);
     emitter.instruction("mov [rsp+16], rax");                                   // save the new descriptor
     emitter.instruction("mov r9, [rsp]");                                       // r9 = source descriptor
     for offset in (0..capture).step_by(8) {

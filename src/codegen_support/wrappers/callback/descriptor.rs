@@ -11,7 +11,6 @@
 //! - The consuming invocation boundary releases temporary arguments even when a callback throws.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::arrays::emit_array_value_type_stamp;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
@@ -246,7 +245,6 @@ fn emit_build_descriptor_invoker_arg_array(
 
     emit_allocate_descriptor_arg_array(emitter, total_count);
     abi::store_at_offset(emitter, abi::int_result_reg(emitter), array_frame_offset);
-    emit_array_value_type_stamp(emitter, abi::int_result_reg(emitter), &PhpType::Mixed);
 
     for (idx, ty) in wrapper.descriptor_prefix_types.iter().enumerate() {
         load_descriptor_prefix_arg_to_result(emitter, env_reg, idx, ty);
@@ -298,18 +296,12 @@ fn load_descriptor_prefix_arg_to_result(
 /// Allocates the temporary indexed array used as the descriptor invoker argument container.
 fn emit_allocate_descriptor_arg_array(emitter: &mut Emitter, visible_count: usize) {
     let capacity = visible_count.max(4) as i64;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_int_immediate(emitter, "x0", capacity);
-            abi::emit_load_int_immediate(emitter, "x1", 8);
-            abi::emit_call_label(emitter, "__rt_array_new"); // allocate the descriptor invoker argument array
-        }
-        Arch::X86_64 => {
-            abi::emit_load_int_immediate(emitter, "rdi", capacity);
-            abi::emit_load_int_immediate(emitter, "rsi", 8);
-            abi::emit_call_label(emitter, "__rt_array_new"); // allocate the descriptor invoker argument array
-        }
-    }
+    abi::emit_load_int_immediate(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 0),
+        capacity,
+    );
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
 }
 
 /// Loads a spilled callback-visible argument back into the ABI result registers.

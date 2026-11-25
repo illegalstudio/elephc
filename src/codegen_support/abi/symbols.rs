@@ -13,7 +13,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{emit_load_from_address, emit_reg_move, emit_store_to_address};
+use super::frame::{emit_load_from_address, emit_store_to_address};
 #[cfg(test)]
 use super::frame::{load_at_offset_scratch, store_at_offset_scratch};
 #[cfg(test)]
@@ -580,12 +580,10 @@ fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, rel
         emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the callable descriptor result into symbol storage
         return;
     }
-    let previous_reg = secondary_scratch_reg(emitter);
-    // -- publish-before-retire callable descriptor overwrite --
-    emit_load_symbol_to_reg(emitter, previous_reg, symbol, 0); // capture the previous descriptor before the slot is overwritten
-    emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the replacement descriptor so the slot owns it before any release runs
-    emit_push_reg(emitter, result_reg); // preserve the published descriptor result across the aligned release call
-    emit_reg_move(emitter, result_reg, previous_reg); // move the previous descriptor into the release-helper argument register
-    emit_call_label(emitter, "__rt_callable_descriptor_release"); // retire the previous descriptor after its replacement is already published
-    emit_pop_reg(emitter, result_reg); // restore the published descriptor result after the release call
+    elephc_memoir::symbol_owners::emit_replace_result_owner(
+        emitter,
+        symbol,
+        |_| {},
+        |emitter| emit_call_label(emitter, "__rt_callable_descriptor_release"),
+    );
 }

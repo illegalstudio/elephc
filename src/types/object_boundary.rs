@@ -10,11 +10,12 @@
 //! Key details:
 //! - The checker and EIR lowering MUST agree: every boundary the checker admits through
 //!   `runtime_object_boundary` is guarded by lowering, so a non-object never reaches storage
-//!   whose ABI expects an object pointer.
+//!   whose ABI expects either a named-class pointer or a tagged generic-object box.
 //! - Targets are classes, interfaces, `object`, and unions of those with `null`. A union with a
 //!   scalar member, and `callable`, keep their existing rules.
-//! - Sources are boxed: `mixed`, or a union that names the bare `object` type (`object|null`).
-//!   A union of named classes keeps the static rules, which already prove it or refuse it.
+//! - Sources are boxed: `mixed`, generic `object`, or a union that names generic `object`
+//!   (`object|null`). A union of named classes keeps the static rules, which already prove it
+//!   or refuse it.
 
 use super::PhpType;
 
@@ -51,8 +52,9 @@ pub(crate) fn declared_object_boundary(expected: &PhpType) -> Option<ObjectBound
 pub(crate) fn runtime_checked_object_source(actual: &PhpType) -> bool {
     match actual {
         PhpType::Mixed => true,
+        PhpType::Object(class) if class.is_empty() || class.eq_ignore_ascii_case("object") => true,
         PhpType::Union(members) => {
-            members.iter().any(|member| matches!(member, PhpType::Object(class) if class.is_empty()))
+            members.iter().any(PhpType::uses_boxed_object_storage)
                 && members.iter().all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
         }
         _ => false,
@@ -70,6 +72,21 @@ pub(crate) fn runtime_object_boundary(expected: &PhpType, actual: &PhpType) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Generic object storage stays tagged while named classes retain raw pointer storage.
+    #[test]
+    fn generic_object_uses_boxed_codegen_storage() {
+        let generic = PhpType::Object(String::new());
+        let named = PhpType::Object("Closure".into());
+        assert!(generic.uses_boxed_object_storage());
+        assert_eq!(generic.codegen_repr(), PhpType::Mixed);
+        assert_eq!(
+            crate::types::php_cast_result_type(&crate::parser::ast::CastType::Object, &generic),
+            generic
+        );
+        assert!(!named.uses_boxed_object_storage());
+        assert_eq!(named.codegen_repr(), named);
+    }
 
     /// Verifies classes, `object` and nullable class unions are boundaries; scalars are not.
     #[test]
@@ -93,17 +110,17 @@ mod tests {
         }
     }
 
-    /// Verifies only `mixed` and unions naming the bare `object` type earn the runtime check.
+    /// Verifies boxed `mixed` and generic-object sources earn the runtime check.
     #[test]
     fn runtime_checked_sources_are_mixed_or_wider_objects() {
         let target = PhpType::Object("Fiber".into());
         let object_or_null = PhpType::Union(vec![PhpType::Object(String::new()), PhpType::Void]);
         assert!(runtime_object_boundary(&target, &PhpType::Mixed).is_some());
         assert!(runtime_object_boundary(&target, &object_or_null).is_some());
+        assert!(runtime_object_boundary(&target, &PhpType::Object(String::new())).is_some());
         for static_source in [
             PhpType::Union(vec![PhpType::Object("Fiber".into()), PhpType::Void]),
             PhpType::Union(vec![PhpType::Object(String::new()), PhpType::Int]),
-            PhpType::Object(String::new()),
             PhpType::Int,
         ] {
             assert!(runtime_object_boundary(&target, &static_source).is_none(), "{static_source:?}");

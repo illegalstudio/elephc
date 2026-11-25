@@ -103,6 +103,12 @@ pub(super) fn lower_prop_get_nonnull(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    // A nullsafe postfix chain guards its receiver in EIR and then deliberately emits an ordinary
+    // `PropGet`. Preserve the boxed generic-object representation here as well as at the explicit
+    // `NullsafePropGet` entry point, before an empty semantic class name can reach slot lookup.
+    if crate::types::object_boundary::runtime_checked_object_source(&raw_value_php_type(ctx, object)?) {
+        return lower_mixed_prop_get(ctx, inst, object, property);
+    }
     // `num` is GMP's virtual debug projection, not a declared property. PHP reads a real
     // dynamic property when one was created, otherwise warns `Undefined property` and
     // answers null. Route that name through the dynamic hash probe with its miss warning.

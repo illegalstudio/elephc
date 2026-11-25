@@ -9,6 +9,43 @@
 
 use crate::{abi, Arch, Emitter, ValueTag};
 
+/// Loads the indexed-array element tag from the packed heap header.
+pub fn emit_load_value_type_tag(
+    emitter: &mut impl Emitter,
+    array: &str,
+    destination: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {destination}, [{array}, #-8]")); // load the packed indexed-array metadata word
+            emitter.instruction(&format!("ubfx {destination}, {destination}, #8, #7")); // isolate the element tag and discard the COW flag
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {destination}, QWORD PTR [{array} - 8]")); // load the packed indexed-array metadata word
+            emitter.instruction(&format!("shr {destination}, 8"));              // move the element tag byte into the low lane
+            emitter.instruction(&format!("and {destination}, 0x7f"));           // isolate the element tag and discard the COW flag
+        }
+    }
+}
+
+/// Loads the physical storage kind from the low byte of an array heap header.
+pub fn emit_load_storage_kind(
+    emitter: &mut impl Emitter,
+    array: &str,
+    destination: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {destination}, [{array}, #-8]")); // load the packed array ownership and storage metadata
+            emitter.instruction(&format!("and {destination}, {destination}, #0xff")); // isolate the physical storage-kind byte
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {destination}, QWORD PTR [{array} - 8]")); // load the packed array ownership and storage metadata
+            emitter.instruction(&format!("and {destination}, 0xff"));           // isolate the physical storage-kind byte
+        }
+    }
+}
+
 /// Stamps a caller-selected element tag without changing the array's ownership metadata.
 pub fn emit_array_value_type_stamp(emitter: &mut impl Emitter, array_reg: &str, value_type_tag: ValueTag) {
     match emitter.arch() {
@@ -118,6 +155,6 @@ pub fn emit_load_element_stride(emitter: &mut impl Emitter, array: &str, stride:
 /// Decodes the x86-64 packed element tag from its shifted metadata word.
 /// Both register names refer to the same register, at the required operand widths.
 pub fn emit_extract_value_tag_x86_64(emitter: &mut impl Emitter, metadata: &str, tag: &str) {
-    emitter.instruction(&format!("shr {metadata}, 8"));                        // position the packed tag in the low byte
+    emitter.instruction(&format!("shr {metadata}, 8"));                         // position the packed tag in the low byte
     emitter.instruction(&format!("and {tag}, 0x7f"));                           // discard ownership flags and heap magic
 }

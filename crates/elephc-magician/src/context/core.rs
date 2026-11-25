@@ -10,7 +10,7 @@
 use super::*;
 use crate::errors::EvalStatus;
 use elephc_memoir::runtime_owners::{
-    RuntimeOwnerHistory, RuntimeOwnerMap, RuntimeOwnerRecordMap,
+    RuntimeOwnerHistory, RuntimeOwnerMap, RuntimeOwnerRecordMap, RuntimeOwnerSlot,
 };
 
 /// One installed eval user error handler and its accepted level mask.
@@ -130,7 +130,7 @@ pub struct ElephcEvalContext {
     pub(super) class_stack: Vec<String>,
     pub(super) called_class_stack: Vec<String>,
     pub(super) magic_stack: Vec<EvalMagicScope>,
-    pub(super) pending_throw: Option<RuntimeCellHandle>,
+    pub(super) pending_throw: RuntimeOwnerSlot,
     pub(super) spl_autoload_extensions: String,
     pub(super) streams: EvalStreamResources,
     pub(super) json_last_error: i64,
@@ -241,7 +241,7 @@ impl ElephcEvalContext {
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
-            pending_throw: None,
+            pending_throw: RuntimeOwnerSlot::default(),
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,
@@ -348,7 +348,7 @@ impl ElephcEvalContext {
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
-            pending_throw: None,
+            pending_throw: RuntimeOwnerSlot::default(),
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,

@@ -217,6 +217,37 @@ initFetchWrite(new InitFetchRoot()); initFetchReadWrite(new InitFetchRoot());
     }
 }
 
+/// Erased iterable-property writes box a borrowed slot payload instead of consuming its owner.
+#[test]
+fn iterable_property_autovivification_borrows_raw_payload_on_every_target() {
+    let source = r#"<?php
+class IterableFetchRoot { public iterable $items; }
+function iterableFetchWrite(mixed $box): void { $box->items[0] = 1; }
+iterableFetchWrite(new IterableFetchRoot());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "iterableFetchWrite").unwrap();
+        let read = function.instructions.iter().find(|inst| inst.op == Op::PropGet
+            && inst.result_php_type.codegen_repr() == crate::types::PhpType::Iterable)
+            .expect("the runtime-selected iterable slot is read before boxing");
+        let read_value = read.result.expect("the iterable property read produces a value");
+        assert_eq!(
+            function.value(read_value).map(|value| value.ownership),
+            Some(crate::ir::Ownership::MaybeOwned),
+            "{target}: a property read must not claim its slot's raw payload owner",
+        );
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedBox
+            && inst.operands.first().copied() == Some(read_value)),
+            "{target}: the borrowed iterable payload must receive an independent box");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// By-reference foreach rejects an uninitialized typed array before its mutable slot fetch.
 #[test]
 fn by_ref_foreach_guards_uninitialized_array_property_on_every_target() {

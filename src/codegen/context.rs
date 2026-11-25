@@ -1763,6 +1763,11 @@ impl<'a> FunctionContext<'a> {
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
         if matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }) {
+                return Ok(false);
+            }
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                 return Ok(false);
             };

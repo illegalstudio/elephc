@@ -26,7 +26,6 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 pub(crate) use elephc_memoir::callables::storage::{
     HEADER_BYTES as CALLABLE_DESC_STATIC_SIZE, emit_copy_descriptor_header_to_runtime,
-    emit_initialize_runtime_descriptor,
 };
 
 pub(crate) const CALLABLE_DESC_KIND_CLOSURE: u64 = CallableDescriptorShape::Closure as u64;

@@ -825,6 +825,11 @@ impl Checker {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Bool, PhpType::False) => true,
+            // A compiler-native callable descriptor represents a PHP Closure value. Generic
+            // `object` keeps boxed storage specifically so that descriptor can cross the
+            // boundary without being mistaken for a raw object pointer.
+            (PhpType::Object(name), PhpType::Callable)
+                if name.is_empty() || name.eq_ignore_ascii_case("object") => true,
             // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
             // Object parameters use the narrower `ParamBinding::ObjectGuard` route below;
             // accepting them here would also admit unchecked Mixed function returns.
@@ -1381,8 +1386,17 @@ impl Checker {
                     if !proven_callable_array && !runtime_descriptor_projection
                         && !literal_str_replace_search
                     {
+                        // Internal and prelude methods do not enable scalar coercion, but a
+                        // boxed source reaching a class-like declaration still needs the same
+                        // checker-to-lowering runtime object guard as a user-defined method.
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
+                            || (!supplied_reference
+                                && crate::types::object_boundary::runtime_object_boundary(
+                                    expected_ty,
+                                    &actual_ty,
+                                )
+                                .is_some())
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
                             || (supplied_reference
                                 && expected_ty.codegen_repr() == PhpType::Mixed

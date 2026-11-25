@@ -72,9 +72,11 @@ pub(in crate::codegen) fn emit_scope_is_callable_probe(
             ctx.emitter.instruction(&format!("ldr x10, [{}]", array_reg));      // load the array element count
             ctx.emitter.instruction("cmp x10, #2");                             // only [receiver, method] can be callable
             ctx.emitter.instruction(&format!("b.ne {}", miss));                 // another length is not callable
-            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed value-type stamp
-            ctx.emitter.instruction("lsr x10, x10, #8");                        // move the value-type byte into the low bits
-            ctx.emitter.instruction("and x10, x10, #0x7f");                     // isolate the slot representation
+            elephc_memoir::values::array_header::emit_load_value_type_tag(
+                ctx.emitter,
+                array_reg,
+                "x10",
+            );
             ctx.emitter.instruction(&format!("cmp x10, #{}", ARRAY_STAMP_MIXED)); // do the slots hold boxed Mixed cells?
             ctx.emitter.instruction(&format!("b.eq {}", shaped));               // read them as Mixed selectors
             ctx.emitter.instruction(&format!("cmp x10, #{}", ARRAY_STAMP_STRING)); // do the slots hold string pairs?
@@ -85,9 +87,11 @@ pub(in crate::codegen) fn emit_scope_is_callable_probe(
             ctx.emitter.instruction(&format!("je {}", miss));                   // leave before reading its header
             ctx.emitter.instruction(&format!("cmp QWORD PTR [{}], 2", array_reg)); // only [receiver, method] can be callable
             ctx.emitter.instruction(&format!("jne {}", miss));                  // another length is not callable
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed value-type stamp
-            ctx.emitter.instruction("shr r10, 8");                              // move the value-type byte into the low bits
-            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the slot representation
+            elephc_memoir::values::array_header::emit_load_value_type_tag(
+                ctx.emitter,
+                array_reg,
+                "r10",
+            );
             ctx.emitter.instruction(&format!("cmp r10, {}", ARRAY_STAMP_MIXED)); // do the slots hold boxed Mixed cells?
             ctx.emitter.instruction(&format!("je {}", shaped));                 // read them as Mixed selectors
             ctx.emitter.instruction(&format!("cmp r10, {}", ARRAY_STAMP_STRING)); // do the slots hold string pairs?

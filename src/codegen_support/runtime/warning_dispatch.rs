@@ -278,11 +278,8 @@ fn emit_arguments(e: &mut Emitter) {
     let arm = e.target.arch == Arch::AArch64;
     let result = abi::int_result_reg(e);
     let scratch = if arm { "x10" } else { "r10" };
-    for (index, value) in [(0, 4), (1, 8)] {
-        abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, index), value);
-    }
-    abi::emit_call_label(e, "__rt_array_new");
-    crate::codegen_support::emit_array_value_type_stamp(e, result, &PhpType::Mixed);
+    abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, 0), 4);
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(e);
     save(e, ARRAY);
     for index in 0..4 {
         match index {

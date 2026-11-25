@@ -329,7 +329,22 @@ pub(super) struct EvalCurlEasyHandle {
     /// integers (the slot index and this handle's eval table key), never the callable, so
     /// this table is what keeps the PHP value alive between `curl_setopt()` and the
     /// transfer that fires it.
-    pub(super) callbacks: [EvalCurlCallbackSlot; crate::curl_ffi::SLOT_COUNT],
+    pub(super) callbacks: [EvalCurlCallbackKind; crate::curl_ffi::SLOT_COUNT],
+    /// Memoir-owned roots corresponding to `Callable` callback states.
+    pub(super) callback_owners: [RuntimeOwnerSlot; crate::curl_ffi::SLOT_COUNT],
+}
+
+/// Persistent callback state without embedding a raw runtime-cell owner.
+#[cfg(feature = "curl")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum EvalCurlCallbackKind {
+    /// Nothing is installed in the bridge slot.
+    #[default]
+    Empty,
+    /// The bridge trampoline stays installed without a PHP callable.
+    Silent,
+    /// The corresponding `callback_owners` slot retains the PHP callable.
+    Callable,
 }
 
 /// One `CURLOPT_*FUNCTION` slot's eval-side state.

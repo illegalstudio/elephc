@@ -326,16 +326,16 @@ fn emit_instance_target_table_scan(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, state + receiver_offset);
     abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(
+    elephc_memoir::callables::storage::emit_allocate_descriptor(
         ctx.emitter,
-        result_reg,
-        (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16) as i64,
+        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16,
+        descriptor_reg,
+        if closure {
+            elephc_memoir::callables::storage::ObjectHandle::Public
+        } else {
+            elephc_memoir::callables::storage::ObjectHandle::Internal
+        },
     );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    if closure {
-        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
-    }
-    abi::emit_reg_move(ctx.emitter, descriptor_reg, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, template_reg, 16);
     callable_descriptor::emit_copy_descriptor_header_to_runtime(ctx.emitter, descriptor_reg, template_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);

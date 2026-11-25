@@ -1024,7 +1024,9 @@ fn lower_iterable_property_write(
     key_already_diagnosed: bool,
 ) {
     let data = ctx.intern_string(property);
-    let current = ctx.emit_owned_value(
+    // The raw Iterable payload is still owned by the property slot. Boxing must retain an
+    // independent payload owner instead of consuming a reference this read never acquired.
+    let current = ctx.emit_value(
         Op::PropGet,
         vec![object.value],
         Some(Immediate::Data(data)),

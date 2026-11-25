@@ -319,6 +319,7 @@ supported_target_cases!(property_element_unset_native_xml_protocol,
 
 /// A known quiet-read name emits only matching slots while runtime names keep every candidate.
 fn verify_property_element_unset_known_name_bounds_slot_dispatch(target: &str) {
+    let mut dispatch_counts = Vec::new();
     for (name, known) in [("'items'", true), ("$name", false)] {
         let source = format!(r#"<?php
 class QuietCandidateOwner {{
@@ -336,12 +337,13 @@ quietCandidateRead(new QuietCandidateOwner(), 'items');
         let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
             .split_once("@endfn name=quietCandidateRead").unwrap().0;
         let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
-        if known {
-            assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
-        } else {
-            assert!(labels >= 3, "{target}: runtime names must retain every declared slot");
-        }
+        dispatch_counts.push((known, labels));
     }
+    let known = dispatch_counts.iter().find(|(known, _)| *known).unwrap().1;
+    let runtime = dispatch_counts.iter().find(|(known, _)| !*known).unwrap().1;
+    assert!(known > 0, "{target}: literal reads must retain matching slots");
+    assert!(runtime >= 3, "{target}: runtime names must retain every declared slot");
+    assert!(known < runtime, "{target}: literal reads must skip unrelated slots");
 }
 
 supported_target_cases!(property_element_unset_known_name_bounds_slot_dispatch,

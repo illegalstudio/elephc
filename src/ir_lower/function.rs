@@ -2542,7 +2542,7 @@ fn logical_object_reference_body_signature(
             .get(index)
             .copied()
             .unwrap_or(false)
-            && matches!(source_type.codegen_repr(), PhpType::Object(_))
+            && matches!(source_type, PhpType::Object(_))
         {
             *php_type = source_type.clone();
         }

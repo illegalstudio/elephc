@@ -17,16 +17,16 @@ use crate::span::Span;
 use crate::types::PhpType;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 
-/// Checks and extracts a boxed assignment before publishing it through a raw object cell.
+/// Checks a boxed assignment before publishing it through declared object reference storage.
 ///
-/// An object-payload reference cannot change its representation after another frame has
-/// acquired it. Reject incompatible replacements explicitly, including a finally assignment
-/// of null, instead of storing a Mixed pointer in the object word.
+/// A named-class reference extracts the raw object payload its stable slot expects. A generic
+/// `object` reference keeps boxed storage so it can preserve Closure descriptors. Both reject
+/// incompatible replacements explicitly, including a finally assignment of null.
 pub(super) fn coerce_reference_store(
     ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
     target: &PhpType, span: Option<Span>,
 ) -> LoweredValue {
-    let PhpType::Object(class) = target.codegen_repr() else { return value; };
+    let PhpType::Object(class) = target else { return value; };
     if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
         return value;
     }
@@ -60,6 +60,9 @@ pub(super) fn coerce_reference_store(
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Throw(error), span.unwrap_or_else(Span::dummy)));
     ctx.builder.position_at_end(accepted);
     ctx.restore_initialized_slots(initialized);
+    if target.uses_boxed_object_storage() {
+        return value;
+    }
     let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),
         Op::mixed_unbox_effects(target), span);
     crate::ir_lower::ownership::release_if_owned(ctx, value, span);
@@ -92,7 +95,7 @@ pub(super) fn guard_parameters(
             if let Some(hint) = crate::types::signatures::variadic_source_element_type_expr(&signature) {
                 let element = resolve_context_type(ctx, ctx.type_expr_to_php_type_for_value(hint));
                 let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
-                    && matches!(element.codegen_repr(), PhpType::Object(_));
+                    && matches!(element, PhpType::Object(_));
                 if object_reference_guard
                     || crate::types::builtin_classes::native_object_sink_needs_null_guard(
                         &element,
@@ -111,8 +114,7 @@ pub(super) fn guard_parameters(
         } else { ty.clone() };
         let declared_type = resolve_context_type(ctx, declared_type);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
-        let object_reference_guard = by_ref
-            && matches!(declared_type.codegen_repr(), PhpType::Object(_));
+        let object_reference_guard = by_ref && matches!(declared_type, PhpType::Object(_));
         if name == "this" || !signature.declared_params.get(index).copied().unwrap_or(false)
             || (!object_reference_guard
                 && !crate::types::builtin_classes::native_object_sink_needs_null_guard(
@@ -172,7 +174,7 @@ fn guard_object_reference_parameter(
     callable: &str,
 ) {
     let span = Span::dummy();
-    let PhpType::Object(class) = declared_type.codegen_repr() else { return; };
+    let PhpType::Object(class) = declared_type else { return; };
     let expected = crate::types::diagnostic_names::php_type_name(declared_type);
     // Native object slots can encode null without changing their static class hint.
     // Reject it before a diagnostic's is_object/get_class can trust that hint.
@@ -264,7 +266,7 @@ fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize, t
     let prefix = Expr::binop(Expr::binop(Expr::string_lit(format!("{callable}(): Argument #")),
         BinOp::Concat, Expr::var(&number)), BinOp::Concat,
         Expr::string_lit(format!(" must be of type {expected}, ")));
-    let (condition, given) = if let PhpType::Object(class) = ty.codegen_repr() {
+    let (condition, given) = if let PhpType::Object(class) = ty {
         let accepted = if class.is_empty() || class.eq_ignore_ascii_case("object") {
             call("is_object", &value)
         } else {
@@ -313,7 +315,7 @@ pub(super) fn needs_parameter_guards(
             hint.map(crate::ir_lower::context::type_expr_to_php_type).unwrap_or_else(|| ty.clone())
         } else { ty.clone() };
         let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
-            && matches!(declared.codegen_repr(), PhpType::Object(_));
+            && matches!(declared, PhpType::Object(_));
         // A declared `callable` (alone, in a union, or as a variadic element) checks the value
         // PHP binds at the call, so a generator must raise its `TypeError` before returning.
         let callable_guard = declared.declares_callable()

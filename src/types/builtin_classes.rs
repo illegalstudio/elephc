@@ -102,9 +102,9 @@ pub(crate) fn native_object_sink_needs_null_guard(
     if *ty == super::PhpType::Iterable {
         return classes.keys().any(|candidate| has_native_dimensions(candidate, classes));
     }
-    let super::PhpType::Object(name) = ty.codegen_repr() else { return false; };
-    if has_native_dimensions(&name, classes) { return true; }
-    (name.is_empty() || name.eq_ignore_ascii_case("object") || interfaces.contains_key(&name))
+    let super::PhpType::Object(name) = ty else { return false; };
+    if has_native_dimensions(name, classes) { return true; }
+    (name.is_empty() || name.eq_ignore_ascii_case("object") || interfaces.contains_key(name))
         && classes.keys().any(|candidate| has_native_dimensions(candidate, classes))
 }
 

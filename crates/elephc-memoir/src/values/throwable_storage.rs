@@ -27,6 +27,17 @@ pub const PREVIOUS: usize = 40;
 /// Offset of the auxiliary word used by cold error paths.
 const AUXILIARY: usize = 48;
 
+const INITIALIZE_FRAME: usize = 96;
+const INITIALIZE_RECEIVER: usize = 8;
+const INITIALIZE_MESSAGE: usize = 16;
+const INITIALIZE_MESSAGE_LEN: usize = 24;
+const INITIALIZE_CODE: usize = 32;
+const INITIALIZE_PREVIOUS: usize = 40;
+const INITIALIZE_OLD_MESSAGE: usize = 48;
+const INITIALIZE_OLD_PREVIOUS: usize = 56;
+const INITIALIZE_PREVIOUS_SLOT: usize = 64;
+const INITIALIZE_NEW_PREVIOUS: usize = 72;
+
 /// Allocates a compact Throwable with one owner and an assigned native handle.
 pub fn emit_allocate(emitter: &mut impl Emitter) {
     emitter.emit_load_int_immediate(emitter.int_result_reg(), PAYLOAD_BYTES);
@@ -122,6 +133,84 @@ pub fn emit_default_fields(emitter: &mut impl TargetAbi, payload: &str) {
     emit_default_code(emitter, payload);
     emit_throwable_creation_line_unknown(emitter, payload);
     emit_empty_previous(emitter, payload);
+}
+
+/// Replaces every constructor-owned Throwable field before retiring displaced owners.
+pub fn emit_initialize(emitter: &mut impl Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let object = emitter.symbol_scratch_reg();
+    let scratch = abi::secondary_scratch_reg(emitter);
+    let (string, length) = abi::string_result_regs(emitter);
+
+    emitter.blank();
+    emitter.label_global("__rt_throwable_initialize");
+    abi::emit_frame_prologue(emitter, INITIALIZE_FRAME);
+    for (index, offset) in [
+        INITIALIZE_RECEIVER,
+        INITIALIZE_MESSAGE,
+        INITIALIZE_MESSAGE_LEN,
+        INITIALIZE_CODE,
+        INITIALIZE_PREVIOUS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let argument = abi::int_arg_reg_name(emitter, index);
+        abi::store_at_offset(emitter, argument, offset);
+    }
+    abi::load_at_offset(emitter, result, INITIALIZE_RECEIVER);
+    abi::emit_call_label(emitter, "__rt_throwable_previous_slot");
+    abi::store_at_offset(emitter, result, INITIALIZE_PREVIOUS_SLOT);
+    abi::emit_load_from_address(emitter, scratch, result, 0);
+    abi::store_at_offset(emitter, scratch, INITIALIZE_OLD_PREVIOUS);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cbnz x1, __rt_throwable_initialize_boxed");    // ordinary properties retain the normalized Mixed parameter
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdx, rdx");                               // inspect the previous slot's physical representation
+            emitter.instruction("jnz __rt_throwable_initialize_boxed");         // boxed slots must not receive a raw Throwable pointer
+        }
+    }
+    abi::load_at_offset(emitter, result, INITIALIZE_PREVIOUS);
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #6");                                  // a normalized nullable Throwable is either an object or null
+            emitter.instruction("csel x0, x1, xzr, eq");                        // compact storage owns the object directly or canonical zero
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 6");                                  // a normalized nullable Throwable is either an object or null
+            emitter.instruction("mov eax, 0");                                  // seed the raw-null representation without changing flags
+            emitter.instruction("cmove rax, rdi");                              // compact storage owns the object directly when present
+        }
+    }
+    abi::emit_jump(emitter, "__rt_throwable_initialize_retain");
+    emitter.label("__rt_throwable_initialize_boxed");
+    abi::load_at_offset(emitter, result, INITIALIZE_PREVIOUS);
+    emitter.label("__rt_throwable_initialize_retain");
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::store_at_offset(emitter, result, INITIALIZE_NEW_PREVIOUS);
+
+    abi::load_at_offset(emitter, string, INITIALIZE_MESSAGE);
+    abi::load_at_offset(emitter, length, INITIALIZE_MESSAGE_LEN);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::load_at_offset(emitter, object, INITIALIZE_RECEIVER);
+    abi::emit_load_from_address(emitter, scratch, object, MESSAGE_POINTER);
+    abi::store_at_offset(emitter, scratch, INITIALIZE_OLD_MESSAGE);
+    abi::emit_store_to_address(emitter, string, object, MESSAGE_POINTER);
+    abi::emit_store_to_address(emitter, length, object, MESSAGE_LENGTH);
+    abi::load_at_offset(emitter, scratch, INITIALIZE_CODE);
+    abi::emit_store_to_address(emitter, scratch, object, CODE);
+    abi::load_at_offset(emitter, object, INITIALIZE_PREVIOUS_SLOT);
+    abi::load_at_offset(emitter, result, INITIALIZE_NEW_PREVIOUS);
+    abi::emit_store_to_address(emitter, result, object, 0);
+    abi::load_at_offset(emitter, result, INITIALIZE_OLD_MESSAGE);
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    abi::load_at_offset(emitter, result, INITIALIZE_OLD_PREVIOUS);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_frame_restore(emitter, INITIALIZE_FRAME);
+    abi::emit_return(emitter);
 }
 
 /// Builds a compact error with a zeroed auxiliary word using the caller ABI scratch register.

@@ -11,7 +11,7 @@
 
 use elephc_memoir::activation_records;
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
 
 /// Emits an exception-contained callback around a body using the retained C input slots.
@@ -40,8 +40,7 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.instruction("stp x0, x1, [sp, #224]");                              // retain the first two callback-specific C arguments
     emitter.instruction("stp x2, x3, [sp, #240]");                              // retain byte/output pointers and optional message length
     activation_records::emit_save_runtime_try_prefix(emitter, "x10");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_gc_release_suppressed", 0);
-    emitter.instruction("str x10, [sp, #256]");                                 // park the separate GC suppression word
+    activation_records::emit_save_gc_release_suppression(emitter, "x10", 256);
     emitter.instruction("mov x10, sp");                                         // publish this stack record as the PHP exception boundary
     activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // address the platform jump buffer inside the handler record
@@ -56,8 +55,7 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.instruction("mov x0, #2");                                          // preserve the throwable already published by the PHP unwinder
     emitter.label(&format!("{name}_done"));
     activation_records::emit_restore_runtime_try_prefix(emitter, "x10");
-    emitter.instruction("ldr x10, [sp, #256]");                                 // reload the separate GC suppression word
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_gc_release_suppressed", 0);
+    activation_records::emit_restore_gc_release_suppression(emitter, "x10", 256);
     emitter.instruction("ldp x29, x30, [sp, #272]");                            // restore the original C caller after callback cleanup
     emitter.instruction("add sp, sp, #288");                                    // release the complete exception boundary and callback spills
     emitter.instruction("ret");                                                 // return success or PendingThrowable without unwinding through Rust
@@ -72,8 +70,7 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
         emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], {register}")); // retain each incoming C argument before setjmp clobbers registers
     }
     activation_records::emit_save_runtime_try_prefix(emitter, "r10");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_gc_release_suppressed", 0);
-    emitter.instruction("mov QWORD PTR [rsp + 256], r10");                      // park the separate GC suppression word
+    activation_records::emit_save_gc_release_suppression(emitter, "r10", 256);
     emitter.instruction("mov r10, rsp");                                        // publish this stack record as the protected PHP handler
     activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!("lea rdi, [rsp + {TRY_HANDLER_JMP_BUF_OFFSET}]")); // address the platform jump buffer through the first C argument
@@ -89,8 +86,7 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
     emitter.instruction("mov eax, 2");                                          // retain the native unwinder's published pending throwable
     emitter.label(&format!("{name}_done"));
     activation_records::emit_restore_runtime_try_prefix(emitter, "r10");
-    emitter.instruction("mov r10, QWORD PTR [rsp + 256]");                      // reload the separate GC suppression word
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_gc_release_suppressed", 0);
+    activation_records::emit_restore_gc_release_suppression(emitter, "r10", 256);
     emitter.instruction("leave");                                               // discard the full handler and restore the C caller frame
     emitter.instruction("ret");                                                 // return success or PendingThrowable without crossing Rust via longjmp
 }

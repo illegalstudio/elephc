@@ -353,7 +353,9 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_object_property_len_zero");     // classes without the tail expose no dynamic properties
     abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
-    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "r10", "r11", "r10",
+    );
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null property hashes are treated as empty objects
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the hash entry count
@@ -389,7 +391,9 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // classes without the tail expose no keys
     abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
-    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
+    elephc_memoir::values::object_storage::emit_load_trailing_word(
+        emitter, "r10", "r11", "r10",
+    );
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls

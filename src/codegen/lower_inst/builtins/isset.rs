@@ -433,8 +433,11 @@ fn emit_isset_array_offset_missing_aarch64(
         len_reg,
         missing,
     );
-    ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
-    ctx.emitter.instruction(&format!("and {}, {}, #0xff", len_reg, len_reg));   // isolate the low byte holding the storage kind
+    elephc_memoir::values::array_header::emit_load_storage_kind(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+    );
     ctx.emitter.instruction(&format!("cmp {}, #3", len_reg));                   // kind 3 = storage was promoted to a hash at runtime
     ctx.emitter.instruction(&format!("b.eq {}", promoted));                     // a promoted array has no packed payload to index into
     ctx.load_value_to_reg(index, result_reg)?;
@@ -478,10 +481,11 @@ fn emit_isset_array_offset_missing_x86_64(
         len_reg,
         missing,
     );
-    ctx.emitter.instruction(
-        &format!("mov {}, QWORD PTR [{} - 8]", len_reg, array_reg)
-    );                                                                          // load the storage-kind metadata word from the array header
-    ctx.emitter.instruction(&format!("and {}, 0xff", len_reg));                 // isolate the low byte holding the storage kind
+    elephc_memoir::values::array_header::emit_load_storage_kind(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+    );
     ctx.emitter.instruction(&format!("cmp {}, 3", len_reg));                    // kind 3 = storage was promoted to a hash at runtime
     ctx.emitter.instruction(&format!("je {}", promoted));                       // a promoted array has no packed payload to index into
     ctx.load_value_to_reg(array, array_reg)?;
@@ -591,12 +595,11 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
             let boxed = ctx.next_label("isset_pointer_elem_boxed");
             let checked = ctx.next_label("isset_pointer_elem_checked");
-            ctx.emitter.instruction(
-                &format!("ldr {}, [{}, #-8]", tag_reg, array_reg)
-            );                                                                  // load the packed kind word holding the array's runtime value type
-            ctx.emitter.instruction(
-                &format!("ubfx {}, {}, #8, #7", tag_reg, tag_reg)
-            );                                                                  // extract the runtime value_type tag, dropping the COW bit
+            elephc_memoir::values::array_header::emit_load_value_type_tag(
+                ctx.emitter,
+                array_reg,
+                tag_reg,
+            );
             ctx.emitter.instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach the elements
@@ -652,11 +655,11 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
             let boxed = ctx.next_label("isset_pointer_elem_boxed");
             let checked = ctx.next_label("isset_pointer_elem_checked");
-            ctx.emitter.instruction(
-                &format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)
-            );                                                                  // load the packed kind word holding the array's runtime value type
-            ctx.emitter.instruction(&format!("shr {}, 8", tag_reg));            // move the runtime value_type tag byte into the low lane
-            ctx.emitter.instruction(&format!("and {}, 0x7f", tag_reg));         // isolate the runtime value_type tag, dropping the COW bit
+            elephc_memoir::values::array_header::emit_load_value_type_tag(
+                ctx.emitter,
+                array_reg,
+                tag_reg,
+            );
             ctx.emitter.instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach the elements

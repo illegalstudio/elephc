@@ -704,12 +704,13 @@ impl ElephcEvalContext {
 
     /// Records a Throwable cell that escaped from an eval-executed function call.
     pub fn set_pending_throw(&mut self, value: RuntimeCellHandle) {
-        self.pending_throw = Some(value);
+        let previous = self.pending_throw.replace(Some(value));
+        debug_assert!(previous.is_none(), "pending Throwable replaced before it was taken");
     }
 
     /// Returns and clears the Throwable cell currently escaping through eval.
     pub fn take_pending_throw(&mut self) -> Option<RuntimeCellHandle> {
-        self.pending_throw.take()
+        self.pending_throw.take_optional()
     }
 
     /// Returns the eval-local SPL autoload extension list.

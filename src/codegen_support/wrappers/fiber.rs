@@ -8,7 +8,6 @@
 //! Key details:
 //! - Wrapper frames must preserve captured values and follow the same cleanup rules as user functions.
 
-use crate::codegen_support::arrays::emit_array_value_type_stamp;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::{abi, callable_descriptor, runtime};
@@ -150,10 +149,8 @@ fn emit_allocate_descriptor_start_arg_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #4");                                          // default descriptor argument-array capacity
     emitter.instruction("cmp x21, #4");                                         // does the actual start() arity exceed the small-array default?
     emitter.instruction("csel x0, x21, x0, hi");                                // use the actual arity when it is larger than four
-    emitter.instruction("mov x1, #8");                                          // descriptor argument arrays store boxed Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate the descriptor invoker argument array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
     emitter.instruction("mov x22, x0");                                         // keep the argument array pointer across element retains
-    emit_array_value_type_stamp(emitter, "x22", &PhpType::Mixed);
 }
 
 /// Copies Fiber start arguments into an ARM64 Mixed-pointer array, retaining each cell.
@@ -266,10 +263,8 @@ fn emit_allocate_descriptor_start_arg_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 4");                                          // default descriptor argument-array capacity
     emitter.instruction("cmp r14, 4");                                          // does the actual start() arity exceed the small-array default?
     emitter.instruction("cmova rdi, r14");                                      // use the actual arity when it is larger than four
-    emitter.instruction("mov rsi, 8");                                          // descriptor argument arrays store boxed Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate the descriptor invoker argument array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
     emitter.instruction("mov r15, rax");                                        // keep the argument array pointer across element retains
-    emit_array_value_type_stamp(emitter, "r15", &PhpType::Mixed);
 }
 
 /// Copies Fiber start arguments into an x86_64 Mixed-pointer array, retaining each cell.
@@ -375,10 +370,8 @@ fn spill_variadic_start_arg_array_aarch64(
     emitter.instruction("mov x0, #4");                                          // default variadic tail array capacity
     emitter.instruction("cmp x22, #4");                                         // does the actual variadic tail exceed the small-array default?
     emitter.instruction("csel x0, x22, x0, hi");                                // use the actual tail count when it is larger than four
-    emitter.instruction("mov x1, #8");                                          // variadic tail arrays store boxed Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate the Fiber variadic tail array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
     emitter.instruction(&format!("str x0, [sp, #{}]", slot_offset));            // spill the variadic array pointer for the final closure call
-    emit_array_value_type_stamp(emitter, "x0", &PhpType::Mixed);
 
     emitter.instruction("mov x23, #0");                                         // start copying tail values at ...$args[0]
     emitter.label(&loop_label);
@@ -710,10 +703,8 @@ fn spill_variadic_start_arg_array_x86_64(
     emitter.instruction("mov rdi, 4");                                          // default variadic tail array capacity
     emitter.instruction("cmp r15, 4");                                          // does the actual variadic tail exceed the small-array default?
     emitter.instruction("cmova rdi, r15");                                      // use the actual tail count when it is larger than four
-    emitter.instruction("mov rsi, 8");                                          // variadic tail arrays store boxed Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate the Fiber variadic tail array
+    elephc_memoir::callables::argument_storage::emit_allocate_mixed_array(emitter);
     abi::store_at_offset(emitter, "rax", slot_offset);
-    emit_array_value_type_stamp(emitter, "rax", &PhpType::Mixed);
 
     emitter.instruction("xor ebx, ebx");                                        // start copying tail values at ...$args[0]
     emitter.label(&loop_label);

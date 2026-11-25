@@ -98,6 +98,29 @@ pub fn emit_save_runtime_try_prefix(emitter: &mut impl crate::Emitter, scratch: 
     });
 }
 
+/// Saves GC-release suppression beside a caller-owned protected activation record.
+pub fn emit_save_gc_release_suppression(
+    emitter: &mut impl crate::Emitter,
+    scratch: &str,
+    offset: usize,
+) {
+    emitter.emit_load_symbol_to_reg(scratch, "_gc_release_suppressed", 0);
+    emitter.emit_store_to_sp(scratch, offset);
+}
+
+/// Restores GC-release suppression from a caller-owned protected activation record.
+pub fn emit_restore_gc_release_suppression(
+    emitter: &mut impl crate::Emitter,
+    scratch: &str,
+    offset: usize,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldr {scratch}, [sp, #{offset}]")), // reload the protected GC suppression word
+        Arch::X86_64 => emitter.instruction(&format!("mov {scratch}, QWORD PTR [rsp + {offset}]")), // reload the protected GC suppression word
+    }
+    emitter.emit_store_reg_to_symbol(scratch, "_gc_release_suppressed", 0);
+}
+
 /// Installs the sentinel prefix used when an exception escapes a fresh coroutine.
 pub fn emit_save_fiber_entry_prefix(emitter: &mut impl crate::Emitter, scratch: &str) {
     for field in REWIND_FIELDS {

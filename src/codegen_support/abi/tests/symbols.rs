@@ -182,9 +182,8 @@ fn test_non_pic_store_x9_uses_distinct_aarch64_scratch() {
 /// Gates the callable-descriptor static store on every AArch64 supported target
 /// (macos-aarch64, ios-arm64, ios-sim-arm64, linux-aarch64): the replacement descriptor must be
 /// published into the slot before the previous descriptor is released, the previous descriptor
-/// must be captured before the publish overwrites it, and the descriptor result must be preserved
-/// across a single 16-byte aligned push/pop bracketing the release call so the nested call stays
-/// aligned even when a captured-object destructor throws or reenters the slot.
+/// must be captured before the publish overwrites it, and both owners must be preserved in aligned
+/// stack slots while the release call can throw or reenter the static slot.
 #[test]
 fn test_callable_static_store_publishes_before_release_aarch64() {
     use crate::codegen_support::platform::AppleVariant;
@@ -202,29 +201,36 @@ fn test_callable_static_store_publishes_before_release_aarch64() {
         let load_prev = out
             .find("    ldr x10, [x9]\n")
             .unwrap_or_else(|| panic!("previous descriptor load missing on {}", target));
+        let preserve_prev = out
+            .find("    str x10, [sp, #-16]!\n")
+            .unwrap_or_else(|| panic!("previous descriptor preserve missing on {}", target));
         let publish = out
             .find("    str x0, [x9]\n")
             .unwrap_or_else(|| panic!("published descriptor store missing on {}", target));
-        let push = out
+        let preserve_result = out
             .find("    str x0, [sp, #-16]!\n")
-            .unwrap_or_else(|| panic!("aligned descriptor preserve missing on {}", target));
+            .unwrap_or_else(|| panic!("result descriptor preserve missing on {}", target));
+        let load_release_arg = out
+            .find("    ldr x0, [sp, #16]\n")
+            .unwrap_or_else(|| panic!("previous descriptor restore missing on {}", target));
         let release = out
             .find("    bl __rt_callable_descriptor_release\n")
             .unwrap_or_else(|| panic!("descriptor release call missing on {}", target));
-        let pop = out
+        let restore_result = out
             .find("    ldr x0, [sp], #16\n")
-            .unwrap_or_else(|| panic!("aligned descriptor restore missing on {}", target));
+            .unwrap_or_else(|| panic!("result descriptor restore missing on {}", target));
 
-        assert!(load_prev < publish, "previous descriptor must be captured before publish on {}", target);
-        assert!(publish < push, "descriptor must be published before it is preserved on {}", target);
-        assert!(push < release, "descriptor result must be preserved before the release call on {}", target);
-        assert!(release < pop, "descriptor result must be restored after the release call on {}", target);
-        assert!(out.contains("    mov x0, x10\n"), "release argument move missing on {}", target);
+        assert!(load_prev < preserve_prev, "previous descriptor must be captured before preservation on {}", target);
+        assert!(preserve_prev < publish, "previous descriptor must be safe before publish on {}", target);
+        assert!(publish < preserve_result, "descriptor must be published before its result is preserved on {}", target);
+        assert!(preserve_result < load_release_arg, "both owners must be preserved before loading the release argument on {}", target);
+        assert!(load_release_arg < release, "previous descriptor must be restored before release on {}", target);
+        assert!(release < restore_result, "descriptor result must be restored after the release call on {}", target);
     }
 }
 
 /// Gates the callable-descriptor static store on linux-x86_64: same publish-before-retire ordering
-/// and a single 16-byte aligned `sub rsp, 16` / `add rsp, 16` bracket around the SysV release call.
+/// and aligned owner slots around the SysV release call.
 #[test]
 fn test_callable_static_store_publishes_before_release_x86_64() {
     let mut emitter = test_emitter_x86();
@@ -234,24 +240,31 @@ fn test_callable_static_store_publishes_before_release_x86_64() {
     let load_prev = out
         .find("    mov r10, QWORD PTR [rip + _demo_symbol]\n")
         .expect("previous descriptor load missing on linux-x86_64");
+    let preserve_prev = out
+        .find("    mov QWORD PTR [rsp], r10\n")
+        .expect("previous descriptor preserve missing on linux-x86_64");
     let publish = out
         .find("    mov QWORD PTR [rip + _demo_symbol], rax\n")
         .expect("published descriptor store missing on linux-x86_64");
-    let push = out
-        .find("    sub rsp, 16\n")
-        .expect("aligned descriptor preserve missing on linux-x86_64");
+    let preserve_result = out
+        .find("    mov QWORD PTR [rsp], rax\n")
+        .expect("result descriptor preserve missing on linux-x86_64");
+    let load_release_arg = out
+        .find("    mov rax, QWORD PTR [rsp + 16]\n")
+        .expect("previous descriptor restore missing on linux-x86_64");
     let release = out
         .find("    call __rt_callable_descriptor_release\n")
         .expect("descriptor release call missing on linux-x86_64");
-    let pop = out
-        .find("    add rsp, 16\n")
-        .expect("aligned descriptor restore missing on linux-x86_64");
+    let restore_result = out
+        .find("    mov rax, QWORD PTR [rsp]\n")
+        .expect("result descriptor restore missing on linux-x86_64");
 
-    assert!(load_prev < publish, "previous descriptor must be captured before publish");
-    assert!(publish < push, "descriptor must be published before it is preserved");
-    assert!(push < release, "descriptor result must be preserved before the release call");
-    assert!(release < pop, "descriptor result must be restored after the release call");
-    assert!(out.contains("    mov rax, r10\n"), "release argument move missing on linux-x86_64");
+    assert!(load_prev < preserve_prev, "previous descriptor must be captured before preservation");
+    assert!(preserve_prev < publish, "previous descriptor must be safe before publish");
+    assert!(publish < preserve_result, "descriptor must be published before its result is preserved");
+    assert!(preserve_result < load_release_arg, "both owners must be preserved before loading the release argument");
+    assert!(load_release_arg < release, "previous descriptor must be restored before release");
+    assert!(release < restore_result, "descriptor result must be restored after the release call");
 }
 
 /// Verifies the first callable-descriptor static store (no previous owner) publishes the

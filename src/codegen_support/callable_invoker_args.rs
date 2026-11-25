@@ -176,18 +176,11 @@ fn emit_load_indexed_array_runtime_value_type_tag(
     tag_reg: &str,
     emitter: &mut Emitter,
 ) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}, #-8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
-            emitter.instruction(&format!("lsr {}, {}, #8", tag_reg, tag_reg));  // move the indexed-array value_type tag into the low bits
-            emitter.instruction(&format!("and {}, {}, #0x7f", tag_reg, tag_reg)); // isolate the runtime indexed-array value_type tag
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
-            emitter.instruction(&format!("shr {}, 8", tag_reg));                // move the indexed-array value_type tag into the low bits
-            emitter.instruction(&format!("and {}, 0x7f", tag_reg));             // isolate the runtime indexed-array value_type tag
-        }
-    }
+    elephc_memoir::values::array_header::emit_load_value_type_tag(
+        emitter,
+        array_reg,
+        tag_reg,
+    );
 }
 
 /// Clones and converts an associative callback argument array to boxed Mixed entries.
@@ -224,22 +217,13 @@ pub(crate) fn emit_box_invoker_arg_clone_as_mixed(
     container_ty: &PhpType,
     emitter: &mut Emitter,
 ) {
-    let tag_reg = abi::secondary_scratch_reg(emitter);
-    let zero_reg = abi::tertiary_scratch_reg(emitter);
-
-    abi::emit_push_reg(emitter, dest_reg);                                      // preserve the cloned argument container while Mixed boxing retains it
-    abi::emit_load_int_immediate(
+    elephc_memoir::callables::argument_storage::emit_box_owned_container(
         emitter,
-        tag_reg,
-        value_boxing::runtime_value_tag(container_ty) as i64,
+        dest_reg,
+        dest_reg,
+        elephc_memoir::ValueTag::new(value_boxing::runtime_value_tag(container_ty)),
+        |emitter| abi::emit_decref_if_refcounted(emitter, container_ty),
     );
-    abi::emit_load_int_immediate(emitter, zero_reg, 0);
-    value_boxing::emit_box_runtime_payload_as_mixed(emitter, tag_reg, dest_reg, zero_reg);
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed Mixed argument while dropping the clone owner
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_decref_if_refcounted(emitter, container_ty);
-    abi::emit_pop_reg(emitter, dest_reg);                                       // move the boxed Mixed argument into the invoker ABI register
-    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved clone slot after ownership transfer
 }
 
 /// Branches to `label` when a boxed invoker argument carries `expected_tag`.

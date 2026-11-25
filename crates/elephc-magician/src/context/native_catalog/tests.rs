@@ -98,7 +98,7 @@ fn native_catalog_shares_metadata_without_sharing_activation_state() {
         assert!(next.included_files.is_empty());
         assert!(!next.may_have_foreign_pcntl_callables);
         assert!(next.global_scope.is_none());
-        assert!(next.pending_throw.is_none());
+        assert!(next.pending_throw.is_empty());
         assert!(next.static_properties.is_empty());
         assert!(next.closures.is_empty());
     }

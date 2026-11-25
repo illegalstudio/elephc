@@ -10,12 +10,10 @@
 //! - The accept set comes from `crate::types::object_boundary`, the predicate the checker used
 //!   to admit the value, so every admitted boundary is guarded.
 //! - `static` is tested against the called class, the way PHP checks a late-static return.
-//! - The value stays boxed; a caller whose declared storage is a raw object unboxes it on the
-//!   accepted edge.
+//! - The value stays boxed; a caller whose named-class storage is a raw object unboxes it on the
+//!   accepted edge, while generic `object` preserves the runtime tag.
 //! - The rejected edge parks the value in a rooted hidden slot so the message can name its
 //!   runtime type once without re-evaluating the source expression.
-//! - A bare `object` boundary unboxes to a raw object pointer, which cannot hold elephc's
-//!   closure storage, so a `Closure` is rejected there (PHP accepts it).
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op, PhpTypePredicate, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
@@ -45,9 +43,6 @@ pub(crate) fn guard_runtime_object_value(
     let initialized = ctx.initialized_slots_snapshot();
     let accepted = ctx.builder.create_named_block("object.boundary.runtime.accepted", vec![]);
     let rejected = ctx.builder.create_named_block("object.boundary.runtime.rejected", vec![]);
-    if raw_object_storage(boundary) {
-        reject_closure_payload(ctx, value, rejected, span);
-    }
     let mut tests = Vec::new();
     if boundary.nullable {
         tests.push(None);
@@ -79,30 +74,6 @@ pub(crate) fn guard_runtime_object_value(
     ctx.builder.position_at_end(accepted);
     ctx.restore_initialized_slots(initialized);
     value
-}
-
-/// Returns whether the boundary is a bare, non-nullable `object`, whose declared storage is a
-/// raw object pointer.
-fn raw_object_storage(boundary: &ObjectBoundary) -> bool {
-    !boundary.nullable && boundary.classes.len() == 1
-        && (boundary.classes[0].is_empty() || boundary.classes[0].eq_ignore_ascii_case("object"))
-}
-
-/// Sends a closure payload to the rejected edge.
-///
-/// PHP accepts a `Closure` at an `object` boundary, but elephc keeps closures in callable
-/// storage that a raw object pointer cannot hold: unboxing one would hand the callee a
-/// descriptor read as an object. Throwing the boundary `TypeError` keeps that value out.
-fn reject_closure_payload(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, rejected: crate::ir::BlockId, span: Span,
-) {
-    let data = ctx.intern_class_name("Closure");
-    let closure = ctx.emit_value(Op::InstanceOf, vec![value.value], Some(Immediate::Data(data)),
-        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
-    let next = ctx.builder.create_named_block("object.boundary.runtime.not_closure", vec![]);
-    ctx.builder.terminate(Terminator::CondBr { cond: closure.value,
-        then_target: rejected, then_args: vec![], else_target: next, else_args: vec![] });
-    ctx.builder.position_at_end(next);
 }
 
 /// Tests `value instanceof static` against the called class: `$this` in an instance method,

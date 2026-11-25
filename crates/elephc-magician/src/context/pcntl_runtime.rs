@@ -12,7 +12,8 @@
 
 use super::{ElephcEvalContext, EvalPcntlSignalHandler};
 use crate::errors::EvalStatus;
-use crate::value::{RuntimeCell, RuntimeCellHandle};
+use crate::value::RuntimeCellHandle;
+use elephc_memoir::runtime_owners::RuntimeAddressOwner;
 use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use std::sync::{Mutex, OnceLock};
 
@@ -173,11 +174,10 @@ impl Drop for EvalPcntlContextLease {
 }
 
 /// Pointer-free storage used behind the process-global mutex.
-#[derive(Clone, Copy)]
 struct StoredSignalEntry {
     context: usize,
     disposition: Option<i64>,
-    callback: usize,
+    callback: Option<RuntimeAddressOwner>,
 }
 
 #[derive(Default)]
@@ -200,17 +200,19 @@ fn pcntl_runtime() -> &'static Mutex<PcntlRuntimeState> {
 /// Returns the active eval-owned handler for one signal.
 pub(crate) fn signal_handler(signal: i32) -> Option<EvalPcntlSignalEntry> {
     let state = pcntl_runtime().lock().ok()?;
-    stored_to_entry(*state.handlers.get(&signal)?, true)
+    stored_to_borrowed_entry(state.handlers.get(&signal)?)
 }
 
 /// Returns one handler for dispatch while pinning its owning context until invocation ends.
 pub(crate) fn begin_handler_dispatch(signal: i32) -> Option<EvalPcntlSignalEntry> {
     let mut state = pcntl_runtime().lock().ok()?;
-    let stored = *state.handlers.get(&signal)?;
-    if stored.context != 0 {
-        *state.active_contexts.entry(stored.context).or_default() += 1;
+    let stored = state.handlers.get(&signal)?;
+    let context = stored.context;
+    let entry = stored_to_borrowed_entry(stored)?;
+    if context != 0 {
+        *state.active_contexts.entry(context).or_default() += 1;
     }
-    stored_to_entry(stored, true)
+    Some(entry)
 }
 
 /// Pins the detached owner of one handler callable when another eval context invokes it.
@@ -221,14 +223,13 @@ pub(crate) fn begin_callable_use(
     if let Some(owner) = current_context.pcntl_foreign_callable_owner(callback) {
         return Some(owner.clone());
     }
-    let callback = callback.as_ptr() as usize;
     let current_context = current_context as *const ElephcEvalContext as usize;
     let mut state = pcntl_runtime().lock().ok()?;
     let context = state
         .handlers
         .values()
         .find(|entry| {
-            entry.callback == callback
+            entry.callback.as_ref().is_some_and(|owner| owner.matches(callback))
                 && entry.context != 0
                 && entry.context != current_context
         })?
@@ -242,14 +243,14 @@ pub(crate) fn begin_callable_use(
 
 /// Returns whether one runtime cell is retained as an eval PCNTL handler callable.
 pub(crate) fn is_handler_callable(callback: RuntimeCellHandle) -> bool {
-    let callback = callback.as_ptr() as usize;
     pcntl_runtime()
         .lock()
         .map(|state| {
             state
                 .handlers
                 .values()
-                .any(|entry| entry.callback == callback && entry.context != 0)
+                .any(|entry| entry.callback.as_ref().is_some_and(|owner| owner.matches(callback))
+                    && entry.context != 0)
         })
         .unwrap_or(false)
 }
@@ -264,19 +265,19 @@ pub(crate) fn replace_signal_handler(
         EvalPcntlSignalHandler::Disposition(disposition) => StoredSignalEntry {
             context: 0,
             disposition: Some(disposition),
-            callback: 0,
+            callback: None,
         },
         EvalPcntlSignalHandler::Callable(callback) => StoredSignalEntry {
             context: context as usize,
             disposition: None,
-            callback: callback.as_ptr() as usize,
+            callback: Some(RuntimeAddressOwner::new(callback)),
         },
     };
     let mut state = pcntl_runtime().lock().ok()?;
     state
         .handlers
         .insert(signal, stored)
-        .and_then(|stored| stored_to_entry(stored, false))
+        .and_then(stored_into_entry)
 }
 
 /// Marks a frame-owned context as detached when an active signal handler still references it.
@@ -396,21 +397,22 @@ pub(crate) fn fiber_dispatching() -> bool {
 }
 
 /// Converts pointer-free registry storage back into an interpreter-facing entry.
-fn stored_to_entry(
-    stored: StoredSignalEntry,
-    borrowed: bool,
-) -> Option<EvalPcntlSignalEntry> {
+fn stored_to_borrowed_entry(stored: &StoredSignalEntry) -> Option<EvalPcntlSignalEntry> {
     let handler = match stored.disposition {
         Some(disposition) => EvalPcntlSignalHandler::Disposition(disposition),
-        None if stored.callback != 0 => {
-            let callback = RuntimeCellHandle::from_raw(stored.callback as *mut RuntimeCell);
-            EvalPcntlSignalHandler::Callable(if borrowed {
-                callback.borrowed()
-            } else {
-                callback
-            })
-        }
-        None => return None,
+        None => EvalPcntlSignalHandler::Callable(stored.callback.as_ref()?.borrowed()),
+    };
+    Some(EvalPcntlSignalEntry {
+        context: stored.context as *mut ElephcEvalContext,
+        handler,
+    })
+}
+
+/// Transfers a detached process-registry owner back to interpreter cleanup.
+fn stored_into_entry(stored: StoredSignalEntry) -> Option<EvalPcntlSignalEntry> {
+    let handler = match stored.disposition {
+        Some(disposition) => EvalPcntlSignalHandler::Disposition(disposition),
+        None => EvalPcntlSignalHandler::Callable(stored.callback?.into_owned()),
     };
     Some(EvalPcntlSignalEntry {
         context: stored.context as *mut ElephcEvalContext,
@@ -468,5 +470,5 @@ pub(crate) fn take_shutdown_handler() -> Option<(i32, EvalPcntlSignalEntry)> {
     state.async_signals = false;
     let signal = *state.handlers.keys().min()?;
     let stored = state.handlers.remove(&signal)?;
-    stored_to_entry(stored, false).map(|entry| (signal, entry))
+    stored_into_entry(stored).map(|entry| (signal, entry))
 }
