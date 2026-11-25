@@ -14,6 +14,12 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Final symbol-visibility processing consumes the owned user assembly buffer and
+appends its directives in place. ELF hidden symbols and Mach-O private externs
+retain their first-declaration order, export allowlists and linker-supplied
+internals. Reusing reserved capacity avoids allocating another copy of the
+complete assembly body during executable and library finalization.
+
 Dynamic operators with boxed operands share a synthetic EIR function per operator
 when internal object handlers are available. Scalar counterparts use the ordinary
 boxing conversion; source expressions are evaluated before the call and their

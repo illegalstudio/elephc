@@ -636,7 +636,7 @@ fn finalize_user_asm(
     let generated_runtime_features = shared.generated_runtime_features();
     Ok(GeneratedUserAsm {
         asm: crate::codegen::visibility::append_hidden_directives_with_extras(
-            &user_asm,
+            user_asm,
             &exported,
             module.target.platform,
             additional_internal,

@@ -385,6 +385,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         web,
     });
 
+    // Keep only the post-link values before another process builds the object.
+    // Large source graphs otherwise retain their assembly and EIR throughout assembly.
+    let post_link_probe_key = ir_module.probe_key;
+    let post_link_warning = dynamic_eval_capability_warning(
+        runtime_features,
+        crate::ir_lower::module_runs_interpreted_code(&ir_module),
+    );
+    drop(user_asm);
+    drop(ir_module);
+
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
@@ -472,7 +482,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     // Write the build key next to the binary: `elephc monitor <address> --key`
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
-    if let Some(key) = ir_module.probe_key {
+    if let Some(key) = post_link_probe_key {
         let sidecar = output_paths.bin.with_extension("key");
         if let Err(err) = crate::pipeline::artifact_io::write_private_artifact(
             &sidecar,
@@ -491,10 +501,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::clear();
     timings.report();
-    if let Some(warning) = dynamic_eval_capability_warning(
-        runtime_features,
-        crate::ir_lower::module_runs_interpreted_code(&ir_module),
-    ) {
+    if let Some(warning) = post_link_warning {
         eprintln!("{warning}");
     }
     if announce_success {
