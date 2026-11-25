@@ -1233,7 +1233,7 @@ fn emit_implicit_callable_class_lookup_errors(
 /// Branches to `receiver_label` with the receiver object in the second payload register (`x1` /
 /// `rdi`) when the callable descriptor in `descriptor_reg` is an invokable object converted to a
 /// callable (kind `ObjectInvoke`); falls through otherwise.
-fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, receiver_label: &str) {
+pub(super) fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, receiver_label: &str) {
     use crate::codegen_support::callable_descriptor as desc;
     let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
     let receiver = desc::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
