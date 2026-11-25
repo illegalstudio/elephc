@@ -1169,6 +1169,15 @@ defaults, `ReflectionClass::getConstant()` / `getConstants()`,
 
 ## Backend Contract
 
+Under `--web`, request superglobals use native string-keyed hashes in every
+scope. Plain assignments from `mixed` values or unrestricted PHP `array`
+returns must coerce their boxed container into that hash layout before
+`StoreGlobal`. Otherwise a later `LoadGlobal` passes the boxed cell to a hash
+reader. Assignment coercion retains the replacement independently of previous
+array aliases. A boxed PHP array is first unboxed through an indexed view, then
+`ArrayToHash` inspects its runtime heap kind and either passes a hash through or
+rebuilds an indexed array. Ordinary CLI global storage remains boxed.
+
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
 - Shared runtime, ABI, platform, and metadata helpers belong in
   `src/codegen_support/`.

@@ -62,6 +62,7 @@ mod erased_xml_presence;
 mod ordinary_prefix_storage;
 mod scalar_parameter_owners;
 mod global_return_owners;
+mod web_superglobal_assignments;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;
 mod mbstring_fast_semantics;
