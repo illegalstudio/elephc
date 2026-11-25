@@ -10,7 +10,7 @@
 //! - Generated runtime requirements remain separately tracked during emission.
 
 use super::SharedCodegenState;
-use crate::ir::{Module, PcntlRuntime};
+use crate::ir::{Immediate, Module, Op, PcntlRuntime};
 
 /// Read-only module properties that must agree for every emitted function frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +21,21 @@ pub(in crate::codegen) struct ModuleRuntimeFacts {
 }
 
 impl SharedCodegenState {
+    /// Discovers borrowed global addresses once, including every emitted function table.
+    pub(in crate::codegen) fn global_has_reference(&self, module: &Module, name: &str) -> bool {
+        self.global_reference_names.get_or_init(|| {
+            module.functions.iter().chain(&module.class_methods).chain(&module.closures)
+                .chain(&module.fiber_wrappers).chain(&module.callback_wrappers)
+                .chain(&module.extern_callback_trampolines).chain(&module.runtime_callable_invokers)
+                .flat_map(|function| &function.instructions)
+                .filter(|inst| inst.op == Op::LoadGlobalRefCell)
+                .filter_map(|inst| match inst.immediate {
+                    Some(Immediate::GlobalName(id)) => module.data.global_names.get(id.as_raw() as usize).cloned(),
+                    _ => None,
+                }).collect()
+        }).contains(name)
+    }
+
     /// Computes source-body flags once, preserving the existing complete-module predicates.
     pub(in crate::codegen) fn module_runtime_facts(&self, module: &Module) -> ModuleRuntimeFacts {
         *self.module_runtime_facts.get_or_init(|| ModuleRuntimeFacts {

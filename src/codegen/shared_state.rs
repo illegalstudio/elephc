@@ -39,6 +39,8 @@ pub(crate) struct SharedCodegenState {
     module_runtime_facts: std::cell::OnceCell<module_runtime::ModuleRuntimeFacts>,
     /// Immutable function, extern and public include-group names shared by all contexts.
     module_callable_index: std::cell::OnceCell<module_callables::ModuleCallableIndex>,
+    /// Global symbols whose local aliases can expose a persistent boxed reference wrapper.
+    global_reference_names: std::cell::OnceCell<std::collections::HashSet<String>>,
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,

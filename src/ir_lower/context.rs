@@ -4135,6 +4135,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if target == source {
             return;
         }
+        // A global declaration has no initialized local payload to promote. Its symbol owns
+        // the boxed value, so a function-local alias borrows that stable writable address.
+        if !self.in_main && self.local_uses_global_storage(source)
+            && !self.local_uses_global_storage(target)
+            && self.global_alias_type(source) == PhpType::Mixed
+            && !self.should_load_from_eval_scope(source)
+        {
+            let global = self.intern_global_name(source);
+            let address = self.emit_value(
+                Op::LoadGlobalRefCell, Vec::new(), Some(Immediate::GlobalName(global)),
+                PhpType::Pointer(None), Op::LoadGlobalRefCell.default_effects(), span,
+            );
+            self.bind_local_ref_cell_ptr(target, address, PhpType::Mixed, span);
+            return;
+        }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         let source_repr = self.local_type(source).codegen_repr();

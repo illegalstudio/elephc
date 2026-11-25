@@ -62,6 +62,14 @@ property hook bodies and other input or result representations retain inline
 lowering. The helper inventory is prepared once per module emission, avoiding
 repeated large class-dispatch ladders in the assembly buffer.
 
+Function-local references to named globals borrow the process symbol address through
+`LoadGlobalRefCell`, rather than promoting an uninitialized GlobalAlias frame slot.
+The boxed symbol owns its payload. A per-emission inventory over all function tables
+selects the existing persistent Mixed publisher for ordinary writes to referenced
+globals, keeping captured wrapper identity and publishing before payload retirement.
+This corrects local alias values, global rebinding, snapshots and destructor ordering;
+it does not implement the general `$GLOBALS` symbol-table view or indexed unset.
+
 Finite string-callable analysis keeps CFG local states sparse. An absent slot
 means unknown; joins retain a finite fact only when both predecessors have it,
 union their names and drop the fact when the finite-name budget is exceeded.

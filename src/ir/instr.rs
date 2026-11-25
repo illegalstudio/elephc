@@ -1067,6 +1067,8 @@ pub enum Op {
     /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
+    /// Borrows the process-lifetime boxed value slot of a named global for a local reference.
+    LoadGlobalRefCell,
     StoreGlobal,
     LoadStaticLocal,
     StoreStaticLocal,
@@ -1646,7 +1648,7 @@ impl Op {
             PushCallOperandOwner | PopCallOperandOwner => {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
-            LoadGlobal
+            LoadGlobal | LoadGlobalRefCell
             | LoadStaticProperty
             | StaticPropInitialized
             | StaticLocalUninitialized
@@ -2023,6 +2025,7 @@ impl Op {
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
+            LoadGlobalRefCell => "load_global_ref_cell",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
