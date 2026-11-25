@@ -153,3 +153,37 @@ echo isset($u) || isset($v) ? 'set' : 'unset';"#);
 
     assert_eq!(output, "10:ab:cd:unset");
 }
+
+/// Verifies `const` accepts PHP's constant-expression forms, folding literal-decided branches.
+#[test]
+fn const_statement_accepts_constant_expression_initializers() {
+    let (output, warnings) = run(r#"const CE_A = (int) "5", CE_B = true ? 1 : $x, CE_C = 0 && $x, CE_D = "a" ?: $x, CE_F = null ?? 5;
+const CE_G = [1, 2][1], CE_H = -PHP_INT_MAX, CE_J = 1 <=> 2;
+const CE_K = strlen(...);
+const CE_L = static function () { return 7; };
+const CE_M = new stdClass;
+echo CE_A, CE_B, CE_C ? "t" : "f", CE_D, CE_F, CE_G, CE_H, CE_J, (CE_K)("ab"), (CE_L)(), CE_M instanceof stdClass ? "o" : "-";"#);
+
+    assert_eq!(output, "51fa52-9223372036854775807-127o");
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+/// Verifies an initializer PHP refuses to compile makes the whole fragment invalid before it runs.
+#[test]
+fn const_statement_rejects_non_constant_initializers() {
+    for source in [
+        "echo 'A'; $a = 1; const CE_BAD = $a; echo CE_BAD;",
+        "function ce_bad_call() { echo 'called'; return 1; } echo 'A'; const CE_BAD = ce_bad_call();",
+        "const CE_BAD = @PHP_EOL;",
+        "const CE_BAD = 1 instanceof stdClass;",
+        "const CE_BAD = function () { return 1; };",
+        "$a = 1; const CE_BAD = static function () use ($a) { return $a; };",
+        "const CE_BAD = static::class;",
+        "const CE_BAD = new ArrayObject(...[[1]]);",
+        "const CE_BAD = print 1;",
+        "$i = 0; const CE_BAD = [1, 2][$i];",
+        "const CE_BAD = null ?? throw new Exception('x');",
+    ] {
+        assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
+    }
+}

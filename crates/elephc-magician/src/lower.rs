@@ -23,6 +23,7 @@ use crate::parser::SharedParseFailure;
 pub(crate) mod attributes;
 mod classes;
 mod class_like;
+mod constant_expressions;
 mod members;
 mod signatures;
 mod closures;
@@ -258,8 +259,12 @@ fn lower_statements(scope: &Scope<'_>, ast: impl IntoIterator<Item = Stmt>, stat
 ///
 /// Nested statement lists never reach this: `lower_statements` refuses a `ConstDecl`, so a
 /// `const` inside a function, method, closure or block makes the fragment invalid, as in PHP.
+/// An initializer that is not a constant expression makes it invalid too, before any statement
+/// of the fragment runs, as PHP's compile error does.
 fn lower_const_decl(scope: &Scope<'_>, name: String, value: Expr) -> Option<EvalStmt> {
-    Some(EvalStmt::ConstDecl { name: scope.qualify(&name), value: lower_expression(scope, value)? })
+    let value = lower_expression(scope, value)?;
+    constant_expressions::is_constant_expression(&value)
+        .then(|| EvalStmt::ConstDecl { name: scope.qualify(&name), value })
 }
 
 /// Recognizes an unqualified call to the unset language construct.

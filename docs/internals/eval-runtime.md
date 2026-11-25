@@ -643,7 +643,8 @@ Compiled `@` uses the runtime suppression depth instead; both leave a user error
 handler in place. `EvalExpr::Throw` raises through the pending-Throwable channel that
 calls already use. `EvalStmt::ConstDecl` registers a `const` statement's
 namespace-qualified name when it runs, with PHP's profile-dependent redefinition
-warning. `EvalFunction` and `EvalStmt::FunctionDecl` record `function &f()` for
+warning; lowering first checks that the initializer is a constant expression
+(`lower/constant_expressions.rs`), so an invalid one refuses the whole fragment. `EvalFunction` and `EvalStmt::FunctionDecl` record `function &f()` for
 reflection; such a function is kept out of the bytecode slice.
 
 `EvalStmt::DimensionWrite` carries a complete receiver expression, an optional
