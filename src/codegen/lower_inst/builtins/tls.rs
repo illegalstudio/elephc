@@ -68,7 +68,7 @@ pub(crate) fn lower_tls_mark_early_data(
         "__elephc_tls_mark_early_data",
     )?;
     let fd = abi::int_result_reg(ctx.emitter);
-    let skip = "__rt_tls_mark_early_data_done";
+    let skip = ctx.next_label("tls_mark_early_data_done");
     match ctx.emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_https_early_data_attempted", 0);
@@ -98,8 +98,44 @@ pub(crate) fn lower_tls_mark_early_data(
             ctx.emitter.instruction(&format!("mov BYTE PTR [r10 + {fd}], r11b")); // publish the early-data status for this stream
         }
     }
-    ctx.emitter.label(skip);
+    ctx.emitter.label(&skip);
     abi::emit_load_int_immediate(ctx.emitter, fd, 0x7fff_ffff_ffff_fffe);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_tls_set_session_new_cb($descriptor, $adapter)` through the
+/// published bridge slot.
+pub(crate) fn lower_tls_set_session_new_cb(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_tls_set_session_new_cb", 2)?;
+    let descriptor = expect_operand(inst, 0)?;
+    let adapter = expect_operand(inst, 1)?;
+    let skip = ctx.next_label("tls_set_session_new_cb_done");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_elephc_tls_set_session_new_cb_fn", 0);
+            ctx.emitter.instruction(&format!("cbz x10, {skip}"));             // no TLS bridge: leave the global unset
+            ctx.load_value_to_reg(descriptor, "x0")?;                          // descriptor argument
+            ctx.load_value_to_reg(adapter, "x1")?;                             // adapter address argument
+            ctx.emitter.instruction("blr x10");                                // install/clear the bridge callback
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_elephc_tls_set_session_new_cb_fn", 0);
+            ctx.emitter.instruction(&format!("test r10, r10"));                // no TLS bridge: leave the global unset
+            ctx.emitter.instruction(&format!("jz {skip}"));                    // skip the bridge call
+            ctx.load_value_to_reg(descriptor, "rdi")?;                         // descriptor argument
+            ctx.load_value_to_reg(adapter, "rsi")?;                            // adapter address argument
+            ctx.emitter.instruction("call r10");                               // install/clear the bridge callback
+        }
+    }
+    ctx.emitter.label(&skip);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
     store_if_result(ctx, inst)
 }
 

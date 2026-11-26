@@ -104,6 +104,35 @@ function __elephc_tls_apply_psk_client($options) {
     \__elephc_tls_set_psk_client_cb($callback);
 }
 
+function __elephc_tls_set_session_new_cb_cb($callback) {
+    if ($callback === null) {
+        \__elephc_tls_set_session_new_cb(0, 0);
+        return;
+    }
+    if (!\is_callable($callback)) {
+        throw new \TypeError("ssl.session_new_cb must be a valid callback");
+    }
+    $normalized = \__elephc_normalize_callable($callback);
+    $wrapped = function ($stream, $pem) use ($normalized) {
+        $session = \call_user_func(["Openssl\\Session", "import"], $pem);
+        $normalized($stream, $session);
+    };
+    $wrapped = \__elephc_normalize_callable($wrapped);
+    \__ElephcStreamContexts::$sessionCallbacks[] = $wrapped;
+    \__elephc_tls_set_session_new_cb(\__elephc_callable_ptr($wrapped), \__elephc_tls_adapter_addr());
+}
+
+function __elephc_tls_apply_session_new($options) {
+    $callback = null;
+    if (\is_array($options)
+        && \isset($options["ssl"])
+        && \is_array($options["ssl"])
+        && \array_key_exists("session_new_cb", $options["ssl"])) {
+        $callback = $options["ssl"]["session_new_cb"];
+    }
+    \__elephc_tls_set_session_new_cb_cb($callback);
+}
+
 function __elephc_fopen_https($filename, $use_include_path, $context) {
     $body = \__elephc_file_get_contents($filename, $use_include_path, $context);
     if ($body === false) {
@@ -317,6 +346,7 @@ fn stream_context_registry_class() -> Stmt {
         .static_prop("optionsById", t_array(), Some(e_array(vec![])))
         .static_prop("byStream", t_array(), Some(e_array(vec![])))
         .static_prop("pskCallbacks", t_array(), Some(e_array(vec![])))
+        .static_prop("sessionCallbacks", t_array(), Some(e_array(vec![])))
         .build()
 }
 

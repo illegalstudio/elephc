@@ -103,6 +103,9 @@ pub(super) fn lower(
         RuntimeFnId::TlsMarkEarlyData => Some({
             crate::codegen::lower_inst::builtins::tls::lower_tls_mark_early_data(ctx, inst)
         }),
+        RuntimeFnId::TlsSetSessionNewCb => Some({
+            crate::codegen::lower_inst::builtins::tls::lower_tls_set_session_new_cb(ctx, inst)
+        }),
         RuntimeFnId::CurlEasySetoptLong => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_long(ctx, inst)
         }),

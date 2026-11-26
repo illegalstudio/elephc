@@ -624,7 +624,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     if php_version >= elephc::php_version::PhpVersion::Php86
         && (source.contains("session_data")
             || source.contains("psk_client_cb")
-            || source.contains("psk_server_cb"))
+            || source.contains("psk_server_cb")
+            || source.contains("session_new_cb"))
     {
         check_result
             .required_libraries

@@ -12,4 +12,5 @@
 
 pub mod __elephc_tls_adapter_addr;
 pub mod __elephc_tls_mark_early_data;
+pub mod __elephc_tls_set_session_new_cb;
 pub mod __elephc_tls_set_psk_client;

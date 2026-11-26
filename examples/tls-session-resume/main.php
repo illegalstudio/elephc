@@ -21,10 +21,14 @@ printf(
     $session->getCipher(),
 );
 
+$captured = null;
 $context = stream_context_create([
     "ssl" => [
         "session_data" => $session,
         "early_data" => "GET / HTTP/1.0\r\n\r\n",
+        "session_new_cb" => function ($stream, $newSession) use (&$captured) {
+            $captured = $newSession;
+        },
     ],
 ]);
 
@@ -33,3 +37,4 @@ $meta = stream_get_meta_data($stream);
 echo "early data: ", $meta["crypto"]["early_data"] ?? "not attempted", "\n";
 echo stream_get_contents($stream);
 fclose($stream);
+echo "new session: ", $captured === null ? "none" : $captured->getProtocol(), "\n";

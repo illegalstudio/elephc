@@ -298,6 +298,8 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     // rustls bridge for it.
     let tls_libssl = php_version >= crate::php_version::PhpVersion::Php86
         && program_uses_libssl_tls(&ast);
+    let tls_session_new = php_version >= crate::php_version::PhpVersion::Php86
+        && program_uses_session_new_cb(&ast);
     timings.record_since("resolve", phase_started);
     // Compile-time deprecations raised while each physical file was prepared, reported where
     // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
@@ -639,7 +641,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
     let ast = crate::openssl_prelude::inject_if_used(
         ast,
-        with_crates.contains("openssl"),
+        with_crates.contains("openssl") || tls_session_new,
         &mut prelude_inventory,
     );
     let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);
@@ -1477,6 +1479,15 @@ mod tests {
     }
 }
 
+/// Returns whether the user program names `ssl.session_new_cb`, which needs
+/// the `Openssl\Session` declaration even when the callback omits a type hint.
+fn program_uses_session_new_cb(program: &[crate::parser::ast::Stmt]) -> bool {
+    crate::prelude_prune::usage::collect(program)
+        .literals
+        .iter()
+        .any(|literal| literal.eq_ignore_ascii_case("session_new_cb"))
+}
+
 /// Returns whether the user program names a PHP 8.6 option that needs libssl.
 fn program_uses_libssl_tls(program: &[crate::parser::ast::Stmt]) -> bool {
     crate::prelude_prune::usage::collect(program)
@@ -1486,5 +1497,6 @@ fn program_uses_libssl_tls(program: &[crate::parser::ast::Stmt]) -> bool {
             literal.eq_ignore_ascii_case("session_data")
                 || literal.eq_ignore_ascii_case("psk_client_cb")
                 || literal.eq_ignore_ascii_case("psk_server_cb")
+                || literal.eq_ignore_ascii_case("session_new_cb")
         })
 }

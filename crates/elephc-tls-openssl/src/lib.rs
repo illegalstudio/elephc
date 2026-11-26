@@ -96,11 +96,14 @@ const BIO_CTRL_INFO: c_int = 3;
 const SSL_CTRL_SET_TLSEXT_HOSTNAME: c_int = 55;
 /// `TLSEXT_NAMETYPE_host_name`.
 const TLSEXT_NAMETYPE_HOST_NAME: c_long = 0;
-/// `SSL_CTRL_SET_SESS_CACHE_MODE`.
-#[cfg(all(test, elephc_tls_openssl_native))]
-const SSL_CTRL_SET_SESS_CACHE_MODE: c_int = 44;
 /// `SSL_CTRL_SET_MAX_PROTO_VERSION`.
 const SSL_CTRL_SET_MAX_PROTO_VERSION: c_int = 124;
+/// `SSL_CTRL_SET_SESS_CACHE_MODE`.
+const SSL_CTRL_SET_SESS_CACHE_MODE: c_int = 44;
+/// `SSL_SESS_CACHE_CLIENT`.
+const SSL_SESS_CACHE_CLIENT: c_long = 0x0001;
+/// `SSL_SESS_CACHE_NO_INTERNAL`.
+const SSL_SESS_CACHE_NO_INTERNAL: c_long = 0x0300;
 /// `SSL_SESS_CACHE_SERVER`.
 #[cfg(all(test, elephc_tls_openssl_native))]
 const SSL_SESS_CACHE_SERVER: c_long = 2;
@@ -212,6 +215,10 @@ extern "C" {
         written: *mut usize,
     ) -> c_int;
     fn SSL_get_early_data_status(ssl: *const SSL) -> c_int;
+    fn SSL_CTX_sess_set_new_cb(
+        ctx: *mut SSL_CTX,
+        callback: Option<unsafe extern "C" fn(*mut SSL, *mut SSL_SESSION) -> c_int>,
+    );
 }
 
 #[cfg(all(test, elephc_tls_openssl_native))]
@@ -271,6 +278,26 @@ thread_local! {
     /// Maximum early data advertised by the PSK session built for this
     /// connection; 0 disables 0-RTT.
     static PSK_MAX_EARLY_DATA: RefCell<u32> = const { RefCell::new(0) };
+}
+
+/// One PHP-supplied session-new callback, decomposed at the PHP layer.
+#[derive(Clone, Copy)]
+struct SessionCallback {
+    descriptor: *mut c_void,
+    adapter: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut PskCallSpec) -> i64,
+}
+
+// The descriptor is owned and rooted by compiled PHP, and the adapter is a
+// process-wide code address. The bridge only stores/calls them while a
+// handshake is active on the connecting thread.
+unsafe impl Send for SessionCallback {}
+
+/// The process-wide `ssl.session_new_cb` callback.
+static SESSION_CALLBACK: OnceLock<Mutex<Option<SessionCallback>>> = OnceLock::new();
+
+/// Returns the process-wide session-new callback slot.
+fn session_callback() -> &'static Mutex<Option<SessionCallback>> {
+    SESSION_CALLBACK.get_or_init(|| Mutex::new(None))
 }
 
 /// One PHP-supplied external-PSK callback, decomposed at the PHP layer.
@@ -426,6 +453,19 @@ unsafe fn create_client_ctx(
             return None;
         }
     }
+    if session_callback()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some()
+    {
+        SSL_CTX_sess_set_new_cb(ctx, Some(session_new_cb));
+        SSL_CTX_ctrl(
+            ctx,
+            SSL_CTRL_SET_SESS_CACHE_MODE,
+            SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL,
+            ptr::null_mut(),
+        );
+    }
     Some(ctx)
 }
 
@@ -447,6 +487,83 @@ unsafe fn parse_session(pem: &[u8]) -> Option<*mut SSL_SESSION> {
     }
 }
 
+/// OpenSSL new-session callback: exports the negotiated session to PEM and
+/// invokes the PHP `ssl.session_new_cb` callable through the shared adapter.
+///
+/// # Safety
+/// Called by libssl during/after a handshake on the connecting thread.
+unsafe extern "C" fn session_new_cb(_ssl: *mut SSL, session: *mut SSL_SESSION) -> c_int {
+    let Some(callback) = *session_callback().lock().unwrap_or_else(|p| p.into_inner()) else {
+        return 0;
+    };
+    if session.is_null() {
+        return 0;
+    }
+    let bio = BIO_new(BIO_s_mem());
+    if bio.is_null() {
+        return 0;
+    }
+    if PEM_write_bio_SSL_SESSION(bio, session) != 1 {
+        BIO_free(bio);
+        return 0;
+    }
+    let mut data: *mut c_char = ptr::null_mut();
+    let length = BIO_ctrl(
+        bio,
+        BIO_CTRL_INFO,
+        0,
+        &mut data as *mut *mut c_char as *mut c_void,
+    );
+    let pem = if length > 0 && !data.is_null() {
+        std::slice::from_raw_parts(data as *const u8, length as usize).to_vec()
+    } else {
+        Vec::new()
+    };
+    BIO_free(bio);
+    if pem.is_empty() {
+        return 0;
+    }
+    let argument = PskCallArg {
+        tag: 1,
+        lo: pem.as_ptr() as i64,
+        hi: pem.len() as i64,
+    };
+    let mut spec = PskCallSpec {
+        argc: 1,
+        argv: &argument as *const PskCallArg,
+        result_kind: 0,
+        out_buf: ptr::null_mut(),
+        out_cap: 0,
+        out_len: 0,
+        status: 0,
+    };
+    let _ = (callback.adapter)(callback.descriptor, ptr::null_mut(), &mut spec);
+    0
+}
+
+/// C ABI: installs or clears the PHP `ssl.session_new_cb` callback.
+#[no_mangle]
+pub extern "C" fn elephc_tls_set_session_new_cb(
+    descriptor: *mut c_void,
+    adapter: *const c_void,
+) {
+    let callback = if descriptor.is_null() || adapter.is_null() {
+        None
+    } else {
+        Some(SessionCallback {
+            descriptor,
+            adapter: unsafe {
+                std::mem::transmute::<
+                    *const c_void,
+                    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut PskCallSpec) -> i64,
+                >(adapter)
+            },
+        })
+    };
+    *session_callback().lock().unwrap_or_else(|p| p.into_inner()) = callback;
+}
+
+/// Invokes the installed PHP PSK callback and returns its `(identity, psk)`
 /// Invokes the installed PHP PSK callback and returns its `(identity, psk)`
 /// byte pair, or `None` for a null/empty/failed result.
 ///
@@ -1734,6 +1851,174 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
         server.join().expect("PSK server thread");
     }
 
+    /// A TLS 1.3 server context with a session cache for ticket delivery.
+    unsafe fn server_context_tls13(cert: &PathBuf, key: &PathBuf) -> *mut SSL_CTX {
+        let ctx = SSL_CTX_new(TLS_server_method());
+        assert!(!ctx.is_null());
+        let cert = CString::new(cert.as_os_str().as_bytes()).unwrap();
+        let key = CString::new(key.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            SSL_CTX_use_certificate_file(ctx, cert.as_ptr(), SSL_FILETYPE_PEM),
+            1
+        );
+        assert_eq!(
+            SSL_CTX_use_PrivateKey_file(ctx, key.as_ptr(), SSL_FILETYPE_PEM),
+            1
+        );
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, None);
+        assert_eq!(
+            SSL_CTX_set_session_id_context(ctx, b"elephc".as_ptr(), 6),
+            1
+        );
+        let _ = SSL_CTX_ctrl(
+            ctx,
+            SSL_CTRL_SET_SESS_CACHE_MODE,
+            SSL_SESS_CACHE_SERVER,
+            ptr::null_mut(),
+        );
+        assert_eq!(
+            SSL_CTX_ctrl(
+                ctx,
+                SSL_CTRL_SET_MAX_PROTO_VERSION,
+                TLS1_3_VERSION as c_long,
+                ptr::null_mut(),
+            ),
+            1
+        );
+        ctx
+    }
+
+    /// Runs a one-connection TLS 1.3 server that issues a session ticket.
+    fn serve_tls13(
+        cert: PathBuf,
+        key: PathBuf,
+        port_tx: mpsc::Sender<u16>,
+        done_tx: mpsc::Sender<bool>,
+    ) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind TLS 1.3 server");
+        port_tx
+            .send(listener.local_addr().expect("TLS 1.3 server address").port())
+            .expect("send TLS 1.3 server port");
+        let accepted = unsafe {
+            let ctx = server_context_tls13(&cert, &key);
+            let (stream, _) = listener.accept().expect("accept TLS 1.3 client");
+            let ssl = SSL_new(ctx);
+            assert!(!ssl.is_null());
+            assert_eq!(SSL_set_fd(ssl, stream.as_raw_fd()), 1);
+            let handshake = SSL_accept(ssl) == 1;
+            if handshake {
+                let mut byte = [0u8; 1];
+                assert_eq!(SSL_read(ssl, byte.as_mut_ptr() as *mut c_void, 1), 1);
+                assert_eq!(
+                    SSL_write(ssl, b"tls13".as_ptr() as *const c_void, 5),
+                    5
+                );
+            }
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            handshake
+        };
+        done_tx.send(accepted).expect("send TLS 1.3 server result");
+    }
+
+    /// Connects insecure over TLS 1.3 and publishes the handle.
+    unsafe fn connect_insecure_tls13(host: &str, port: u16) -> i64 {
+        let ctx = create_client_ctx(true, None, None, Some(TLS1_3_VERSION as c_long));
+        let Some(ctx) = ctx else { return -1; };
+        let ssl = SSL_new(ctx);
+        assert!(!ssl.is_null());
+        let stream = TcpStream::connect((host, port)).expect("connect TLS 1.3 client");
+        assert_eq!(SSL_set_fd(ssl, stream.as_raw_fd()), 1);
+        assert_eq!(SSL_connect(ssl), 1, "client TLS 1.3 handshake: {:?}", last_error());
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        lock_handles().insert(
+            id,
+            Entry {
+                ssl: ssl as usize,
+                ctx: ctx as usize,
+                stream,
+                early_data_status: 0,
+            },
+        );
+        id
+    }
+
+    /// Captured session PEMs from the test `session_new_cb` adapter.
+    static SESSION_PEMS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+    /// Test adapter: records the PEM string argument of `session_new_cb`.
+    unsafe extern "C" fn session_new_test_adapter(
+        _descriptor: *mut c_void,
+        _object: *mut c_void,
+        spec: *mut PskCallSpec,
+    ) -> i64 {
+        if (*spec).argc != 1 {
+            return 0;
+        }
+        let argument = &*(*spec).argv;
+        if argument.tag != 1 || argument.hi <= 0 {
+            return 0;
+        }
+        let bytes = std::slice::from_raw_parts(
+            argument.lo as *const u8,
+            argument.hi as usize,
+        );
+        let pem = String::from_utf8_lossy(bytes).into_owned();
+        SESSION_PEMS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(pem);
+        0
+    }
+
+    /// Verifies that libssl's new-session callback reaches compiled PHP with a
+    /// PEM `SSL_SESSION` on a TLS 1.3 connection.
+    #[test]
+    fn tls13_session_new_callback_round_trip() {
+        elephc_tls_set_session_new_cb(
+            1 as *mut c_void,
+            session_new_test_adapter as *const c_void,
+        );
+        let (cert, key) = certificate_files();
+        let (port_tx, port_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = thread::spawn(move || serve_tls13(cert, key, port_tx, done_tx));
+        let port = port_rx.recv().expect("TLS 1.3 server port");
+
+        let handle = unsafe { connect_insecure_tls13("127.0.0.1", port) };
+        assert!(handle > 0, "TLS 1.3 connect: {:?}", last_error());
+        write_byte_tls(handle, b'a');
+        assert_eq!(read_exact_tls(handle, 5), b"tls13");
+        elephc_tls_openssl_close(handle);
+        assert!(done_rx.recv().expect("TLS 1.3 server result"));
+        server.join().expect("TLS 1.3 server thread");
+
+        let mut captured = Vec::new();
+        for _ in 0..40 {
+            captured = SESSION_PEMS
+                .get_or_init(|| Mutex::new(Vec::new()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if !captured.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        elephc_tls_set_session_new_cb(ptr::null_mut(), ptr::null());
+        assert!(
+            !captured.is_empty(),
+            "session_new_cb was not invoked"
+        );
+        assert!(
+            captured[0].contains("BEGIN SSL SESSION PARAMETERS"),
+            "callback did not receive a PEM session: {captured:?}"
+        );
+    }
+
+    /// Verifies that an exported TLS 1.2 session resumes on the next connection.
     /// Verifies that an exported TLS 1.2 session resumes on the next connection.
     #[test]
     fn tls12_session_resumption_round_trip() {

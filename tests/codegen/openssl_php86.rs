@@ -256,6 +256,42 @@ echo is_string($body) && strpos($body, "Cipher") !== false ? "psk-ok\n" : "psk-f
     );
 }
 
+/// `ssl.session_new_cb` receives the TLS 1.3 ticket as an `Openssl\Session`
+/// object through the libssl-to-PHP callback adapter.
+#[test]
+fn test_openssl_session_new_callback_php86() {
+    if skip_without_openssl_native("test_openssl_session_new_callback_php86") {
+        return;
+    }
+    if skip_without_openssl_cli("test_openssl_session_new_callback_php86") {
+        return;
+    }
+    let server = OpensslSessionServer::start_tls13_early(
+        crate::codegen::io::streams::TEST_HTTPS_CERT_PEM,
+        crate::codegen::io::streams::TEST_HTTPS_KEY_PEM,
+    )
+    .expect("openssl CLI is available after its skip gate");
+    let source = r#"<?php
+$captured = null;
+$context = stream_context_get_default();
+stream_context_set_option($context, "ssl", "verify_peer", "0");
+stream_context_set_option($context, "ssl", "session_new_cb", function ($stream, $session) use (&$captured) {
+    $captured = $session;
+});
+$body = file_get_contents("https://127.0.0.1:PHP_TEST_PORT/", false, $context);
+echo $captured instanceof Openssl\Session ? $captured->getProtocol() : "none", "\n";
+echo is_string($body) && strlen($body) > 0 ? "body\n" : "empty\n";
+"#
+    .replace("PHP_TEST_PORT", &server.port().to_string());
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "TLSv1.3\nbody\n");
+    assert!(
+        server.wait_for_state("write session ticket", 1, std::time::Duration::from_secs(5)),
+        "server did not issue a TLS 1.3 ticket: {}",
+        server.state_log()
+    );
+}
+
 /// A TLS 1.3 session resumption sends `ssl.early_data` as 0-RTT; the local
 /// OpenSSL server reports `read end of early data` for the connection.
 #[test]

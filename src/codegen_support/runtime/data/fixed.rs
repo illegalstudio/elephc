@@ -1323,6 +1323,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_tls_psk_client_descriptor", 8, target));
     out.push_str(&comm_directive("_tls_psk_client_adapter", 8, target));
     out.push_str(&comm_directive("_elephc_tls_early_data_status_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_set_session_new_cb_fn", 8, target));
     out.push_str(&comm_directive("_https_early_data_attempted", 8, target));
     out.push_str(&comm_directive("_https_early_data_status", 8, target));
     out.push_str(&comm_directive("_https_early_data_ptr", 8, target));

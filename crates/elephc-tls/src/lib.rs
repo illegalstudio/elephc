@@ -702,6 +702,18 @@ pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
     -1
 }
 
+/// Rustls cannot run the libssl session-new callback path; the libssl bridge
+/// supplies the real implementation.
+#[no_mangle]
+pub extern "C" fn elephc_tls_set_session_new_cb(
+    descriptor: *mut std::ffi::c_void,
+    adapter: *const std::ffi::c_void,
+) {
+    if !descriptor.is_null() || !adapter.is_null() {
+        crate::error::record("TLS session callbacks require the libssl backend");
+    }
+}
+
 /// Rustls has no TLS 1.3 early-data path in this build.
 #[no_mangle]
 pub extern "C" fn elephc_tls_early_data_status(_handle_id: i64) -> i64 {

@@ -252,6 +252,14 @@ during the TLS handshake through the shared callable adapter; TLS 1.3 uses
 handshake completes. `ssl.psk_server_cb` is accepted but unused for client
 streams.
 
+PHP 8.6's `ssl.session_new_cb` receives each new TLS session ticket as an
+`Openssl\Session` object. The libssl bridge exports the `SSL_SESSION` to PEM and
+re-enters compiled PHP through the shared callable adapter; the prelude imports
+the PEM and invokes `callback($stream, $session)`. The callback receives `null`
+instead of the live stream resource. The client-only stream backend leaves the
+server-side `session_get_cb`, `session_remove_cb`, `session_id_context`,
+`max_early_data`, `early_data_cb`, and `psk_server_cb` options unimplemented.
+
 `ssl.early_data` sends a client 0-RTT payload with `SSL_write_early_data` when
 the resumed session or external PSK advertises early-data support. The
 `stream_get_meta_data()` result of an `fopen('https://...')` stream exposes
