@@ -25,7 +25,9 @@ fn direct_strlen_retires_temporary_and_borrowed_string_leases() {
         let program = parse_fragment(source.as_bytes()).unwrap();
         let returned = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         values.release(returned).unwrap();
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         for (id, value) in &values.values {
             if matches!(value, FakeValue::String(_)) {
                 assert_eq!(values.cell_owners[id], 0, "{source}: {value:?}");
@@ -50,7 +52,9 @@ fn nested_eval_retires_owned_and_borrowed_sources_even_when_parsing_fails() {
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
         assert_eq!(result.is_err(), fails, "{source}");
         if let Ok(returned) = result { values.release(returned).unwrap(); }
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         for (id, value) in &values.values {
             if matches!(value, FakeValue::String(_)) {
                 assert_eq!(values.cell_owners[id], 0, "{source}: {value:?}");

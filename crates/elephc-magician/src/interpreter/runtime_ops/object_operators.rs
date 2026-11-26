@@ -10,6 +10,9 @@
 //! - Strict identity bypasses dispatch; class-name and comparison temporaries are released.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 use elephc_builtin_contract::{ClassContract, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectOperandDispatch};
 
 /// Resolves the actual runtime class without retaining a transient class-name cell.
@@ -17,10 +20,12 @@ fn operator_class(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
 ) -> Result<Option<&'static ClassContract>, EvalStatus> {
     if values.type_tag(value)? != EVAL_TAG_OBJECT { return Ok(None); }
-    let name = values.object_class_name(value)?;
-    let bytes = values.string_bytes(name);
-    let released = values.release(name);
-    let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
+    let name = RuntimeOwnerSlot::new(values.object_class_name(value)?);
+    let bytes = with_runtime_owners(&name, || {
+        let bytes = values.string_bytes(name.borrowed());
+        let released = values.release(name.take());
+        bytes.and_then(|bytes| released.map(|()| bytes))
+    })?;
     let class = std::str::from_utf8(&bytes).ok().and_then(elephc_builtin_contract::lookup_class);
     if let Some(class) = class.filter(|class| class.operators.is_some()) { return Ok(Some(class)); }
     for class in elephc_builtin_contract::classes().iter().filter(|class| class.operators.is_some()) {
@@ -38,14 +43,22 @@ pub(in crate::interpreter) fn negate(
     let number = operators.arithmetic_result == ObjectArithmeticResult::Number;
     let operation = if number { ObjectArithmetic::Mul } else { ObjectArithmetic::Sub };
     let Some(method) = operators.arithmetic_method(operation) else { return Ok(None); };
-    let factor = values.int(if number { -1 } else { 0 })?;
-    let result = values.operator_static_call(class.name, method, vec![factor, value]);
-    let released = values.release(factor);
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
-        (Ok(result), Ok(())) => Ok(Some(result)),
-    }
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &result), || {
+        let operation = (|| {
+            let factor = owners.stage(values.int(if number { -1 } else { 0 })?);
+            result.replace(Some(values.operator_static_call(
+                class.name,
+                method,
+                vec![factor.borrowed(), value],
+            )?));
+            Ok(())
+        })();
+        owners
+            .finish(operation, &result, |cell| values.release(cell))
+            .map(Some)
+    })
 }
 
 /// Runs a native clone handler and reports whether it replaces userland clone dispatch.
@@ -132,22 +145,31 @@ pub(super) fn bitwise_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = shift(values, op, left, right)? { return Ok(result); }
     if let Some(result) = bitwise(values, op, left, right)? { return Ok(result); }
-    let left_cast = numeric_cast(values, left, elephc_builtin_contract::ObjectCast::Int)?;
-    let right_cast = match numeric_cast(values, right, elephc_builtin_contract::ObjectCast::Int) {
-        Ok(value) => value,
-        Err(status) => {
-            if let Some(value) = left_cast { let _ = values.release(value); }
-            return Err(status);
-        }
-    };
-    let result = values.bitwise(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
-    let left_release = left_cast.map(|value| values.release(value)).transpose();
-    let right_release = right_cast.map(|value| values.release(value)).transpose();
-    match (result, left_release.and(right_release)) {
-        (Err(status), _) => Err(status),
-        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
-        (Ok(result), Ok(_)) => Ok(result),
-    }
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &result), || {
+        let operation = (|| {
+            let left = match numeric_cast(
+                values,
+                left,
+                elephc_builtin_contract::ObjectCast::Int,
+            )? {
+                Some(value) => owners.stage(value).borrowed(),
+                None => left,
+            };
+            let right = match numeric_cast(
+                values,
+                right,
+                elephc_builtin_contract::ObjectCast::Int,
+            )? {
+                Some(value) => owners.stage(value).borrowed(),
+                None => right,
+            };
+            result.replace(Some(values.bitwise(op, left, right)?));
+            Ok(())
+        })();
+        owners.finish(operation, &result, |cell| values.release(cell))
+    })
 }
 
 /// Applies PHP's internal-class `~$value` identity as `0 - value - 1`.
@@ -169,15 +191,28 @@ pub(super) fn bit_not(
     else {
         return Ok(None);
     };
-    let zero = values.int(0)?;
-    let negative = values.operator_static_call(class.name, method, vec![zero, value]);
-    values.release(zero)?;
-    let negative = negative?;
-    let one = values.int(1)?;
-    let result = values.operator_static_call(class.name, method, vec![negative, one]);
-    values.release(negative)?;
-    values.release(one)?;
-    result.map(Some)
+    let owners = StagedRuntimeOwners::default();
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &result), || {
+        let operation = (|| {
+            let zero = owners.stage(values.int(0)?);
+            let negative = owners.stage(values.operator_static_call(
+                class.name,
+                method,
+                vec![zero.borrowed(), value],
+            )?);
+            let one = owners.stage(values.int(1)?);
+            result.replace(Some(values.operator_static_call(
+                class.name,
+                method,
+                vec![negative.borrowed(), one.borrowed()],
+            )?));
+            Ok(())
+        })();
+        owners
+            .finish(operation, &result, |cell| values.release(cell))
+            .map(Some)
+    })
 }
 
 /// Calls an internal value class's `__elephc_to_number` adapter when one exists.
@@ -201,10 +236,12 @@ pub(super) fn truthy(
 ) -> Result<Option<bool>, EvalStatus> {
     let Some(class) = operator_class(values, value)? else { return Ok(None) };
     let Some(method) = class.operators.and_then(|ops| ops.boolean) else { return Ok(None) };
-    let result = values.operator_method_call(value, method, vec![])?;
-    let truthy = values.truthy_raw(result);
-    let released = values.release(result);
-    truthy.and_then(|truthy| released.map(|()| Some(truthy)))
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = owners.stage(values.operator_method_call(value, method, vec![])?);
+        let truthy = values.truthy_raw(result.borrowed()).map(Some);
+        owners.complete(truthy, |cell| values.release(cell))
+    })
 }
 
 /// Applies an internal numeric conversion through the same instance adapter as AOT.
@@ -256,10 +293,16 @@ pub(super) fn comparison(
         return materialize_comparison(values, op, lhs - rhs).map(Some);
     }
     let Some(method) = class.operators.and_then(|ops| ops.compare) else { return Ok(None) };
-    let result = values.operator_static_call(class.name, method, vec![left, right])?;
-    let comparison = values.raw_value_word(result).map(|value| value as i64);
-    let released = values.release(result);
-    let comparison = comparison.and_then(|value| released.map(|()| value))?;
+    let owners = StagedRuntimeOwners::default();
+    let comparison = with_runtime_owners(&owners, || {
+        let result = owners.stage(values.operator_static_call(
+            class.name,
+            method,
+            vec![left, right],
+        )?);
+        let comparison = values.raw_value_word(result.borrowed()).map(|value| value as i64);
+        owners.complete(comparison, |cell| values.release(cell))
+    })?;
     materialize_comparison(values, op, comparison).map(Some)
 }
 

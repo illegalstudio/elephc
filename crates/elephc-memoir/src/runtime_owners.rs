@@ -18,6 +18,141 @@ use std::{
 /// Opaque pointer to an elephc runtime cell.
 pub type RuntimeCell = c_void;
 
+/// Detached cell owners that must be retired as one explicit cleanup batch.
+#[derive(Default)]
+#[must_use = "detached runtime owners must be transferred or released"]
+pub struct RuntimeOwnerBatch {
+    cells: Vec<RuntimeOwnerSlot>,
+}
+
+impl RuntimeOwnerBatch {
+    /// Creates an empty detached batch.
+    pub const fn empty() -> Self {
+        Self { cells: Vec::new() }
+    }
+
+    /// Collects detached owners in their semantic acquisition order.
+    pub fn new(cells: impl IntoIterator<Item = RuntimeCellHandle>) -> Self {
+        Self {
+            cells: cells.into_iter().map(RuntimeOwnerSlot::new).collect(),
+        }
+    }
+
+    /// Reports whether the batch carries no cleanup obligations.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// Returns the number of detached cleanup obligations.
+    pub fn len(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// Borrows the detached owners without transferring the batch obligation.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = RuntimeCellHandle> + '_ {
+        self.cells
+            .iter()
+            .map(RuntimeOwnerSlot::borrowed)
+            .filter(|cell| !cell.is_null())
+    }
+
+    /// Appends another detached inventory without releasing between batches.
+    pub fn extend(&mut self, cells: impl IntoIterator<Item = RuntimeCellHandle>) {
+        self.cells
+            .extend(cells.into_iter().map(RuntimeOwnerSlot::new));
+    }
+
+    /// Appends one detached owner at the end of the semantic acquisition order.
+    pub fn push(&mut self, cell: RuntimeCellHandle) {
+        self.cells.push(RuntimeOwnerSlot::new(cell));
+    }
+
+    /// Detaches the newest outstanding owner while preserving every older batch slot.
+    pub fn pop(&mut self) -> Option<RuntimeCellHandle> {
+        while let Some(slot) = self.cells.pop() {
+            if let Some(cell) = slot.take_optional() {
+                return Some(cell);
+            }
+        }
+        None
+    }
+
+    /// Appends another detached batch without exposing either inventory as raw handles.
+    pub fn append(&mut self, mut other: Self) {
+        self.cells.append(&mut other.cells);
+    }
+
+    /// Transfers every outstanding owner to one lower-level batch adapter.
+    pub fn transfer(self) -> Vec<RuntimeCellHandle> {
+        self.cells
+            .iter()
+            .filter_map(RuntimeOwnerSlot::take_optional)
+            .collect()
+    }
+
+    /// Retires every owner under an explicit ordering and error policy.
+    pub fn release<E>(
+        &self,
+        order: ReleaseOrder,
+        errors: CleanupErrorPolicy,
+        mut release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut indices = (0..self.cells.len()).collect::<Vec<_>>();
+        if order == ReleaseOrder::Reverse {
+            indices.reverse();
+        }
+        release_in_order(indices, errors, |index| {
+            self.cells[index]
+                .take_optional()
+                .map_or(Ok(()), &mut release)
+        })
+    }
+
+    /// Retires the batch before transferring a rooted result, discarding it on cleanup failure.
+    pub fn finish<E>(
+        &self,
+        operation: Result<(), E>,
+        result: &RuntimeOwnerSlot,
+        order: ReleaseOrder,
+        errors: CleanupErrorPolicy,
+        mut release: impl FnMut(RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<RuntimeCellHandle, E> {
+        let cleanup = self.release(order, errors, &mut release);
+        result.finish(operation.and(cleanup), release)
+    }
+}
+
+impl From<Vec<RuntimeCellHandle>> for RuntimeOwnerBatch {
+    /// Wraps an existing detached inventory without copying its owner handles.
+    fn from(cells: Vec<RuntimeCellHandle>) -> Self {
+        Self::new(cells)
+    }
+}
+
+impl FromIterator<RuntimeCellHandle> for RuntimeOwnerBatch {
+    /// Collects an iterator directly into an explicit detached-owner batch.
+    fn from_iter<T: IntoIterator<Item = RuntimeCellHandle>>(iter: T) -> Self {
+        Self::new(iter)
+    }
+}
+
+impl IntoIterator for RuntimeOwnerBatch {
+    type Item = RuntimeCellHandle;
+    type IntoIter = std::vec::IntoIter<RuntimeCellHandle>;
+
+    /// Transfers the detached obligations to a consumer that owns their cleanup protocol.
+    fn into_iter(self) -> Self::IntoIter {
+        self.transfer().into_iter()
+    }
+}
+
+impl RuntimeOwners for RuntimeOwnerBatch {
+    /// Visits outstanding slot fields so callback-driven collection sees every unretired owner.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        self.cells.visit_owned_slots(visit);
+    }
+}
+
 /// Whether a persistent record must retire its runtime cell or merely observes another owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeCellOwnership {
@@ -61,6 +196,20 @@ impl RuntimeCellHandle {
     /// Marks a storage read as borrowed without changing the runtime reference count.
     pub const fn borrowed(self) -> Self {
         Self { borrowed: true, ..self }
+    }
+
+    /// Normalizes one handle as an owning lease or a borrowed observation.
+    ///
+    /// Callers selecting `Owned` must already hold the cleanup obligation represented by the
+    /// handle. This changes only publication metadata and never acquires a runtime reference.
+    pub const fn for_ownership(self, ownership: RuntimeCellOwnership) -> Self {
+        match ownership {
+            RuntimeCellOwnership::Borrowed => self.borrowed(),
+            RuntimeCellOwnership::Owned => Self {
+                borrowed: false,
+                ..self
+            },
+        }
     }
 
     /// Returns whether the expression must retain this cell before consuming it.
@@ -184,11 +333,7 @@ impl RuntimeOwnerSlot {
 
     /// Classifies one persistent record as an owner or observer without exposing handle flags.
     pub fn for_ownership(value: RuntimeCellHandle, ownership: RuntimeCellOwnership) -> Self {
-        let value = match ownership {
-            RuntimeCellOwnership::Owned => RuntimeCellHandle::from_raw(value.as_ptr()),
-            RuntimeCellOwnership::Borrowed => value.borrowed(),
-        };
-        Self::new(value)
+        Self::new(value.for_ownership(ownership))
     }
 
     /// Lends the cell to a native consumer without transferring its owning lease.
@@ -215,7 +360,7 @@ impl RuntimeOwnerSlot {
     /// Updates an existing owner after a mutation returned its receiver without a new lease.
     pub fn update_receiver(&self, receiver: RuntimeCellHandle) {
         debug_assert!(!self.is_empty() && !self.0.get().is_borrowed());
-        self.0.set(RuntimeCellHandle::from_raw(receiver.as_ptr()));
+        self.0.set(receiver.for_ownership(RuntimeCellOwnership::Owned));
     }
 
     /// Transfers the result lease or discards it when construction or cleanup failed.
@@ -303,8 +448,8 @@ impl<K: Eq + Hash> RuntimeOwnerMap<K> {
     }
 
     /// Detaches every persistent owner before release callbacks can reenter its consumer.
-    pub fn take_all(&mut self) -> Vec<RuntimeCellHandle> {
-        self.entries.drain().map(|(_, cell)| cell).collect()
+    pub fn take_all(&mut self) -> RuntimeOwnerBatch {
+        RuntimeOwnerBatch::new(self.entries.drain().map(|(_, cell)| cell))
     }
 }
 
@@ -393,12 +538,12 @@ impl RuntimeOwnerList {
     }
 
     /// Transfers owned cells to activation cleanup and leaves snapshots empty-handed.
-    pub fn into_owned(mut self) -> Vec<RuntimeCellHandle> {
+    pub fn into_owned(mut self) -> RuntimeOwnerBatch {
         if self.owns_cells {
             self.owns_cells = false;
-            std::mem::take(&mut self.cells)
+            RuntimeOwnerBatch::from(std::mem::take(&mut self.cells))
         } else {
-            Vec::new()
+            RuntimeOwnerBatch::empty()
         }
     }
 }
@@ -438,6 +583,11 @@ pub struct RuntimeOwnerHistory<T> {
 }
 
 impl<T: Copy> RuntimeOwnerHistory<T> {
+    /// Reports whether neither the active record nor any saved predecessor owns a value.
+    pub fn is_empty(&self) -> bool {
+        self.active.is_none() && self.stack.iter().all(Option::is_none)
+    }
+
     /// Installs a replacement and saves the prior active record for restoration.
     pub fn push(&mut self, replacement: Option<T>) -> Option<T> {
         let previous = self.active;
@@ -543,6 +693,16 @@ pub fn finish_owner_cleanup<R, T, E, S>(
 pub struct StagedRuntimeOwners(RefCell<Vec<RuntimeOwnerSlot>>);
 
 impl StagedRuntimeOwners {
+    /// Returns the number of stable capture slots, including slots already detached for cleanup.
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+
+    /// Reports whether every allocated capture slot is currently vacant.
+    pub fn is_empty(&self) -> bool {
+        self.0.borrow().iter().all(RuntimeOwnerSlot::is_empty)
+    }
+
     /// Records an owned temporary for later cleanup and returns the cell for borrowing.
     pub fn stage(&self, cell: RuntimeCellHandle) -> RuntimeCellHandle {
         if !cell.is_borrowed() && !cell.is_null() {
@@ -551,12 +711,71 @@ impl StagedRuntimeOwners {
         cell
     }
 
-    /// Transfers every outstanding lease in acquisition order without releasing it.
-    pub fn take_all(&self) -> Vec<RuntimeCellHandle> {
-        let count = self.0.borrow().len();
-        (0..count)
-            .filter_map(|index| self.0.borrow()[index].take_optional())
+    /// Borrows one staged cell without transferring its cleanup obligation.
+    pub fn get(&self, index: usize) -> Option<RuntimeCellHandle> {
+        self.0.borrow().get(index).and_then(|slot| {
+            let cell = slot.borrowed();
+            (!cell.is_null()).then_some(cell)
+        })
+    }
+
+    /// Copies every live capture as a borrowed value list for a native consumer.
+    pub fn borrowed_values(&self) -> Vec<RuntimeCellHandle> {
+        self.0
+            .borrow()
+            .iter()
+            .filter_map(|slot| {
+                let cell = slot.borrowed();
+                (!cell.is_null()).then_some(cell)
+            })
             .collect()
+    }
+
+    /// Finds the last live capture with the same runtime-cell identity.
+    pub fn rposition(&self, cell: RuntimeCellHandle) -> Option<usize> {
+        self.0.borrow().iter().rposition(|slot| {
+            let candidate = slot.borrowed();
+            !candidate.is_null() && candidate == cell
+        })
+    }
+
+    /// Detaches the first live capture with the same runtime-cell identity.
+    pub fn take_first(&self, cell: RuntimeCellHandle) -> Option<RuntimeCellHandle> {
+        let index = self.0.borrow().iter().position(|slot| {
+            let candidate = slot.borrowed();
+            !candidate.is_null() && candidate == cell
+        })?;
+        self.take_at(index)
+    }
+
+    /// Detaches one indexed capture while preserving every other capture index.
+    pub fn take_at(&self, index: usize) -> Option<RuntimeCellHandle> {
+        self.0.borrow().get(index).and_then(RuntimeOwnerSlot::take_optional)
+    }
+
+    /// Detaches the last allocated capture while preserving its now-vacant slot.
+    pub fn take_last(&self) -> Option<RuntimeCellHandle> {
+        self.0.borrow().last().and_then(RuntimeOwnerSlot::take_optional)
+    }
+
+    /// Publishes a replacement in one indexed slot before returning its previous owner.
+    pub fn replace_at(
+        &self,
+        index: usize,
+        replacement: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        self.0
+            .borrow()
+            .get(index)
+            .and_then(|slot| slot.replace(Some(replacement)))
+    }
+
+    /// Transfers every outstanding lease in acquisition order without releasing it.
+    pub fn take_all(&self) -> RuntimeOwnerBatch {
+        let count = self.0.borrow().len();
+        RuntimeOwnerBatch::new(
+            (0..count).filter_map(|index| self.0.borrow()[index].take_optional()),
+        )
     }
 
     /// Consumes every staged lease in acquisition order, retaining the first cleanup failure.
@@ -624,29 +843,12 @@ pub fn release_staged_cells<E>(
     operation
 }
 
-/// Consumes every lease through a contained native callback, accumulating its owned Throwable.
-///
-/// The callback returns whether this release failed. Previously accumulated exceptions can
-/// survive successful releases without setting the failure bit.
-pub fn release_owned_cells(
-    cells: impl IntoIterator<Item = RuntimeCellHandle>,
-    pending: Option<RuntimeCellHandle>,
-    mut release: impl FnMut(*mut RuntimeCell, &mut *mut RuntimeCell) -> bool,
-) -> (Option<RuntimeCellHandle>, bool) {
-    let mut thrown = pending.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
-    let mut caught = false;
-    for cell in cells {
-        caught |= release(cell.as_ptr(), &mut thrown);
-    }
-    ((!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught)
-}
-
 /// Drains detached owner batches until release callbacks leave the source empty.
 pub fn drain_owned_cell_batches<S, P>(
     source: &mut S,
     mut pending: P,
-    mut take: impl FnMut(&mut S) -> Vec<RuntimeCellHandle>,
-    mut release: impl FnMut(Vec<RuntimeCellHandle>, P) -> P,
+    mut take: impl FnMut(&mut S) -> RuntimeOwnerBatch,
+    mut release: impl FnMut(RuntimeOwnerBatch, P) -> P,
 ) -> P {
     loop {
         let owners = take(source);
@@ -731,6 +933,8 @@ mod tests {
     #[test]
     fn runtime_owner_slot_classifies_persistent_ownership() {
         let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell).borrowed();
+        assert!(!cell.for_ownership(RuntimeCellOwnership::Owned).is_borrowed());
+        assert!(cell.for_ownership(RuntimeCellOwnership::Borrowed).is_borrowed());
         let owner = RuntimeOwnerSlot::for_ownership(cell, RuntimeCellOwnership::Owned);
         let observer = RuntimeOwnerSlot::for_ownership(cell, RuntimeCellOwnership::Borrowed);
         assert!(!owner.take().is_borrowed());
@@ -747,8 +951,60 @@ mod tests {
         assert_eq!(owners.replace_distinct("key", first), None);
         assert_eq!(owners.replace_distinct("key", second), Some(first));
         assert_eq!(owners.get(&"key"), Some(&second));
-        assert_eq!(owners.take_all(), vec![second]);
+        assert_eq!(owners.take_all().iter().collect::<Vec<_>>(), vec![second]);
         assert!(owners.take_all().is_empty());
+    }
+
+    /// Batch composition keeps every outstanding slot rooted and honors reverse retirement.
+    #[test]
+    fn runtime_owner_batch_append_keeps_unretired_slots_visible() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let third = RuntimeCellHandle::from_raw(24usize as *mut RuntimeCell);
+        let mut owners = RuntimeOwnerBatch::new([first]);
+        owners.push(second);
+        owners.append(RuntimeOwnerBatch::new([third]));
+        assert_eq!(owners.iter().collect::<Vec<_>>(), [first, second, third]);
+
+        let mut released = Vec::new();
+        let result: Result<(), std::convert::Infallible> = owners.release(
+            ReleaseOrder::Reverse,
+            CleanupErrorPolicy::Ignore,
+            |cell| {
+                released.push(cell);
+                let mut visible = 0;
+                owners.visit_owned_slots(&mut |_| visible += 1);
+                assert_eq!(visible, 3 - released.len());
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(released, [third, second, first]);
+    }
+
+    /// Batch completion retains the last cleanup error and discards its rooted result.
+    #[test]
+    fn runtime_owner_batch_finish_discards_result_after_cleanup_failure() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let output = RuntimeCellHandle::from_raw(24usize as *mut RuntimeCell);
+        let owners = RuntimeOwnerBatch::new([first, second]);
+        let result = RuntimeOwnerSlot::new(output);
+        let mut released = Vec::new();
+
+        let outcome = owners.finish(
+            Ok(()),
+            &result,
+            ReleaseOrder::Forward,
+            CleanupErrorPolicy::Last,
+            |cell| {
+                released.push(cell);
+                Err(cell)
+            },
+        );
+        assert_eq!(outcome, Err(second));
+        assert_eq!(released, [first, second, output]);
+        assert!(result.is_empty());
     }
 
     /// Record maps keep metadata paired with its cell through teardown transfer.
@@ -772,14 +1028,19 @@ mod tests {
         let snapshot = owners.clone();
         assert_eq!(snapshot.get(0), Some(first.borrowed()));
         assert!(snapshot.into_owned().is_empty());
-        assert_eq!(owners.into_owned(), vec![first, second]);
+        assert_eq!(
+            owners.into_owned().iter().collect::<Vec<_>>(),
+            vec![first, second],
+        );
     }
 
     /// Handler history restores predecessors and transfers all remaining owners once.
     #[test]
     fn memoir_transfer_owner_history_preserves_restore_and_suspend() {
         let mut history = RuntimeOwnerHistory::default();
+        assert!(history.is_empty());
         assert_eq!(history.push(Some(1)), None);
+        assert!(!history.is_empty());
         assert_eq!(history.push(Some(2)), Some(1));
         assert_eq!(history.restore(), Some(2));
         assert_eq!(history.current(), Some(1));
@@ -787,6 +1048,7 @@ mod tests {
         assert_eq!(history.resume(1), None);
         assert_eq!(history.take_all(), vec![1]);
         assert!(history.take_all().is_empty());
+        assert!(history.is_empty());
     }
 
     /// Keeps a result rooted through every release and preserves the first failure.
@@ -895,13 +1157,36 @@ mod tests {
         assert_eq!(order, [first, second]);
     }
 
+    /// Indexed captures leave vacant slots so plans keep stable positions through retirement.
+    #[test]
+    fn staged_indexed_captures_preserve_positions() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let replacement = RuntimeCellHandle::from_raw(24usize as *mut RuntimeCell);
+        let owners = StagedRuntimeOwners::default();
+        assert!(owners.is_empty());
+        owners.stage(first);
+        owners.stage(second);
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners.rposition(first), Some(0));
+        assert_eq!(owners.get(1), Some(second.borrowed()));
+        assert_eq!(owners.replace_at(0, replacement), Some(first));
+        assert_eq!(owners.take_first(replacement), Some(replacement));
+        assert_eq!(owners.take_last(), Some(second));
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners.get(0), None);
+        assert_eq!(owners.get(1), None);
+        assert!(owners.is_empty());
+        assert!(owners.take_all().is_empty());
+    }
+
     /// Reentrant release callbacks can publish a second batch without leaking it.
     #[test]
     fn detached_cell_batches_drain_to_quiescence() {
         use std::collections::VecDeque;
         let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
         let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
-        let pending = RefCell::new(VecDeque::from([vec![first]]));
+        let pending = RefCell::new(VecDeque::from([RuntimeOwnerBatch::new([first])]));
         let mut released = Vec::new();
 
         drain_owned_cell_batches(
@@ -909,13 +1194,34 @@ mod tests {
             (),
             |pending| pending.borrow_mut().pop_front().unwrap_or_default(),
             |batch, ()| {
-                if batch == [first] {
-                    pending.borrow_mut().push_back(vec![second]);
+                if batch.iter().eq([first]) {
+                    pending.borrow_mut().push_back(RuntimeOwnerBatch::new([second]));
                 }
-                released.extend(batch);
+                let result: Result<(), std::convert::Infallible> = batch.release(
+                    ReleaseOrder::Forward,
+                    CleanupErrorPolicy::Ignore,
+                    |cell| {
+                        released.push(cell);
+                        Ok(())
+                    },
+                );
+                assert_eq!(result, Ok(()));
             },
         );
         assert_eq!(released, [first, second]);
+    }
+
+    /// A mutable work stack keeps older owners published while transferring its newest item.
+    #[test]
+    fn runtime_owner_batch_pops_in_reverse_order() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let mut owners = RuntimeOwnerBatch::new([first, second]);
+        assert_eq!(owners.pop(), Some(second));
+        assert_eq!(owners.iter().collect::<Vec<_>>(), vec![first]);
+        assert_eq!(owners.pop(), Some(first));
+        assert_eq!(owners.pop(), None);
+        assert!(owners.is_empty());
     }
 
     /// Releases every owner while honoring direction and retained-error selection.

@@ -35,7 +35,9 @@ fn shared_runtime_calls_balance_operand_owners() {
         }
         assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1, "{source}");
         values.release(returned).unwrap();
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         for (id, count) in &values.cell_owners {
             assert_eq!(*count, 0, "{source}: {:?}", values.values[id]);
         }

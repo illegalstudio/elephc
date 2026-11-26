@@ -341,7 +341,7 @@ pub(super) fn eval_reflection_static_local_value(
     if let Some(replaced) =
         context.set_static_local(static_key.to_string(), variable.name.clone(), value)
     {
-        values.release(replaced)?;
+        eval_release_value(context, values, replaced)?;
     }
     values.retain(value)
 }
@@ -361,9 +361,7 @@ pub(super) fn eval_reflection_static_local_initializer_value(
     context.push_function(static_key.to_string());
     let mut scope = ElephcEvalScope::new();
     let result = eval_expr(init, context, &mut scope, values);
-    for cell in scope.drain_owned_cells() {
-        values.release(cell)?;
-    }
+    let result = finish_activation_scope(&mut scope, result, context, values);
     context.pop_function();
     if declaring_class.is_some() {
         context.pop_called_class_scope();

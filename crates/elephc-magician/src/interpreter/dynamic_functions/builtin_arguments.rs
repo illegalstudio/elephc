@@ -10,6 +10,7 @@
 //! - Unsupported lvalue representations fail before reaching a native reference callback.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 use elephc_builtin_contract::BuiltinContract;
 
 /// Resolves a source argument's passing mode without changing parameter binding or diagnostics.
@@ -37,10 +38,17 @@ pub(super) fn reference(
 pub(super) fn append_spread(
     contract: &BuiltinContract, spread: RuntimeCellHandle, evaluated: &mut Vec<EvaluatedCallArg>,
     saw_named: &mut bool, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-    owners: &mut Vec<RuntimeCellHandle>,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(), EvalStatus> {
     let mut unpacked = Vec::new();
-    append_unpacked_call_arg_values_with_owners(spread, &mut unpacked, saw_named, context, values, Some(owners))?;
+    append_unpacked_call_arg_values_with_owners(
+        spread,
+        &mut unpacked,
+        saw_named,
+        context,
+        values,
+        owners,
+    )?;
     for argument in unpacked {
         if by_reference(Some(contract), argument.name.as_deref(), evaluated.len()) {
             if !values.is_reference(argument.value)? { return Err(EvalStatus::UnsupportedConstruct); }
@@ -48,7 +56,7 @@ pub(super) fn append_spread(
         } else {
             let value = values.copy_value(argument.value)?;
             context.copy_array_metadata(argument.value, value);
-            owners.push(value);
+            owners.stage(value);
             evaluated.push(EvaluatedCallArg { value, ref_target: None, ..argument });
         }
     }

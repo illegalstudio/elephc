@@ -9,6 +9,8 @@
 //! - Instantiation initializes the class first; per-object default evaluation stays silent.
 
 use super::*;
+use super::property_write_receivers::release_receivers;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Resolves a static method using private-method scope rules.
 pub(in crate::interpreter) fn eval_dynamic_static_method_for_call(
@@ -396,52 +398,49 @@ fn eval_apply_clone_properties(
     let len = values.array_len(properties)?;
     for position in 0..len {
         let key = values.array_iter_key(properties, position)?;
-        let mut owners = vec![key];
-        let mut result = (|| {
-            let value = values.array_get(properties, key)?;
-            owners.push(value);
-            let key_string = values.cast_string(key)?;
-            owners.push(key_string);
-            let key_bytes = values.string_bytes(key_string)?;
-            let property_name =
-                String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            if property_name.starts_with('\0') {
-                return eval_throw_error(
-                    "Cannot access property starting with \"\\0\"",
-                    context,
-                    values,
+        let owners = StagedRuntimeOwners::default();
+        owners.stage(key);
+        with_runtime_owners(&owners, || {
+            let result = (|| {
+                let value = values.array_get(properties, key)?;
+                owners.stage(value);
+                let key_string = values.cast_string(key)?;
+                owners.stage(key_string);
+                let key_bytes = values.string_bytes(key_string)?;
+                let property_name =
+                    String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+                if property_name.starts_with('\0') {
+                    return eval_throw_error(
+                        "Cannot access property starting with \"\\0\"",
+                        context,
+                        values,
+                    );
+                }
+                // Two independent sources can prove this entry is still part of a reference set.
+                // The eval alias table describes targets a hash entry cannot (variables, nested
+                // elements, object and static properties, cells, invoker slots), and it only knows
+                // arrays eval itself built. An override array generated code built carries its
+                // state in the native hash entry instead. Both are read for every entry, and
+                // either one refusing throws at this exact point in php's iteration order.
+                let alias_is_shared = eval_array_reference_key(key, values)?
+                    .and_then(|key| context.array_element_alias(properties, &key).cloned())
+                    .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference, scope));
+                let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
+                    properties,
+                    &property_name,
+                    Some(value),
                 );
-            }
-            // Two independent sources can prove this entry is still part of a reference set.
-            // The eval alias table describes targets a hash entry cannot (variables, nested
-            // elements, object and static properties, cells, invoker slots), and it only knows
-            // arrays eval itself built. An override array generated code built carries its
-            // state in the native hash entry instead. Both are read for every entry, and
-            // either one refusing throws at this exact point in php's iteration order.
-            let alias_is_shared = eval_array_reference_key(key, values)?
-                .and_then(|key| context.array_element_alias(properties, &key).cloned())
-                .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference, scope));
-            let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
-                properties,
-                &property_name,
-                Some(value),
-            );
-            if alias_is_shared || entry_is_shared {
-                return eval_throw_error(
-                    "Cannot assign by reference when cloning with updated properties",
-                    context,
-                    values,
-                );
-            }
-            eval_property_set_result(clone, &property_name, value, context, values)
-        })();
-        for owner in owners.into_iter().rev() {
-            let released = eval_release_value(context, values, owner);
-            if result.is_ok() {
-                result = released;
-            }
-        }
-        result?;
+                if alias_is_shared || entry_is_shared {
+                    return eval_throw_error(
+                        "Cannot assign by reference when cloning with updated properties",
+                        context,
+                        values,
+                    );
+                }
+                eval_property_set_result(clone, &property_name, value, context, values)
+            })();
+            result.and(release_receivers(&owners, context, values))
+        })?;
     }
     Ok(())
 }
@@ -706,10 +705,7 @@ pub(super) fn eval_runtime_object_class_name(
     object: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let class_name = values.object_class_name(object)?;
-    let bytes = values.string_bytes(class_name)?;
-    values.release(class_name)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    runtime_object_class_name(object, values)
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.

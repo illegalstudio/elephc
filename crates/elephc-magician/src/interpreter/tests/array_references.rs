@@ -11,6 +11,7 @@
 use super::super::*;
 use super::support::*;
 use crate::interpreter::array_references::read_owned_array_reference;
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 /// Reads live scope references through an opaque original-array token, including binary keys.
 #[test]
@@ -26,15 +27,15 @@ fn mbstring_array_reference_identity_and_late_reads() {
     context.bind_array_element_alias(token, key.clone(), EvalReferenceTarget::Variable {
         scope: &mut scope, name: "encoding".to_string(),
     });
-    let mut owners = Vec::new();
-    let read = read_owned_array_reference(token, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+    let owners = StagedRuntimeOwners::default();
+    let read = read_owned_array_reference(token, key.clone(), &mut context, &mut values, &owners).unwrap().unwrap();
     assert_eq!(values.get(read), FakeValue::String("ASCII".into()));
     values.release(read).unwrap();
     scope.set("encoding", later, ScopeCellOwnership::Borrowed);
-    let read = read_owned_array_reference(token, key, &mut context, &mut values, &mut owners).unwrap().unwrap();
+    let read = read_owned_array_reference(token, key, &mut context, &mut values, &owners).unwrap().unwrap();
     assert_eq!(values.get(read), FakeValue::String("UTF-8".into()));
     values.release(read).unwrap();
-    assert!(read_owned_array_reference(token, EvalArrayReferenceKey::Int(0), &mut context, &mut values, &mut owners).unwrap().is_none());
+    assert!(read_owned_array_reference(token, EvalArrayReferenceKey::Int(0), &mut context, &mut values, &owners).unwrap().is_none());
     assert!(owners.is_empty());
 }
 
@@ -61,9 +62,9 @@ fn mbstring_array_reference_value_copy_metadata() {
     assert!(context.array_element_alias(target, &stale).is_none());
     assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(1));
     scope.set("value", later, ScopeCellOwnership::Borrowed);
-    let mut owners = Vec::new();
+    let owners = StagedRuntimeOwners::default();
     for token in [source, target] {
-        let read = read_owned_array_reference(token, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+        let read = read_owned_array_reference(token, key.clone(), &mut context, &mut values, &owners).unwrap().unwrap();
         assert_eq!(values.get(read), FakeValue::String("after".into()));
         values.release(read).unwrap();
     }
@@ -110,8 +111,8 @@ fn array_reference_replacement_refreshes_metadata() {
         }
         assert!(context.array_element_alias(reference, &stale).is_none(), "through_cell={through_cell}");
         assert_eq!(context.array_cursor(reference), EvalArrayCursor::Position(1));
-        let mut owners = Vec::new();
-        let current = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+        let owners = StagedRuntimeOwners::default();
+        let current = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &owners).unwrap().unwrap();
         assert_eq!(values.get(current), FakeValue::String("after".into()));
         values.release(current).unwrap();
         let scalar = values.int(7).unwrap();
@@ -162,8 +163,8 @@ fn assert_array_element_writeback_preserves_metadata(through_cell: bool) {
         let after = values.int(7).unwrap();
         let previous = values.reference_replace(alias, after).unwrap();
         values.release(previous).unwrap();
-        let mut owners = Vec::new();
-        let read = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
+        let owners = StagedRuntimeOwners::default();
+        let read = read_owned_array_reference(reference, key.clone(), &mut context, &mut values, &owners).unwrap().unwrap();
         assert_eq!(values.get(read), FakeValue::Int(7));
         values.release(read).unwrap();
         assert!(owners.is_empty());

@@ -31,6 +31,20 @@ pub(super) enum EvalControl {
     Goto(String),
 }
 
+impl RuntimeOwners for EvalControl {
+    /// Publishes only the runtime cell transported by return or throw control flow.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut crate::value::RuntimeCell)) {
+        match self {
+            Self::Return(value) | Self::Throw(value) => value.visit_owned_slots(visit),
+            Self::None
+            | Self::ReturnVoid
+            | Self::Break
+            | Self::Continue
+            | Self::Goto(_) => {}
+        }
+    }
+}
+
 /// Final result of executing a parsed eval program.
 pub enum EvalOutcome {
     Value(RuntimeCellHandle),
@@ -45,6 +59,15 @@ pub(super) struct EvaluatedCallArg {
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
+}
+
+impl RuntimeOwners for EvaluatedCallArg {
+    /// Publishes a completed argument's source lease, value and owned reference metadata.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut crate::value::RuntimeCell)) {
+        self.evaluation_owner.visit_owned_slots(visit);
+        self.value.visit_owned_slots(visit);
+        self.ref_target.visit_owned_slots(visit);
+    }
 }
 
 /// One method argument after PHP parameter-order binding and default materialization.
@@ -69,6 +92,15 @@ pub(super) struct BoundNativeFunctionArgs {
     /// container become associative instead of losing the name, and it stays index-aligned with
     /// `values` because staging pushes exactly one value per bound argument, in order.
     pub(super) named_keys: Vec<Option<String>>,
+}
+
+impl RuntimeOwners for BoundNativeFunctionArgs {
+    /// Publishes source leases, staged values and reference payloads as one native activation.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut crate::value::RuntimeCell)) {
+        self.evaluation_owners.visit_owned_slots(visit);
+        self.values.visit_owned_slots(visit);
+        self.ref_slots.visit_owned_slots(visit);
+    }
 }
 
 /// One staged by-reference slot passed to a native function invoker.

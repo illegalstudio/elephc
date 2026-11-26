@@ -8,6 +8,7 @@
 //! - Declared, dynamic, magic, hooked, and reference-backed properties share visibility checks.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::StagedRuntimeOwners;
 
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
@@ -25,7 +26,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     property_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    owned: Option<&mut Vec<RuntimeCellHandle>>,
+    owned: Option<&StagedRuntimeOwners>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_property_read_result(object, property_name, context, values, owned, false)
 }
@@ -44,7 +45,7 @@ pub(super) fn eval_unset_property_get_result(
 /// Shares ordinary and quiet container reads without using an isset guard before a getter.
 pub(super) fn eval_property_read_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
+    values: &mut impl RuntimeValueOps, owned: Option<&StagedRuntimeOwners>, quiet: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
@@ -746,9 +747,8 @@ pub(super) fn eval_property_reference_target(
         return Ok(EvalReferenceTarget::Cell { cell });
     }
     let alias_name = eval_property_reference_alias_name(object_identity, storage_property_name);
-    for replaced in set_reference_alias(context, scope, &alias_name, source_name, values)? {
-        values.release(replaced)?;
-    }
+    let replaced = set_reference_alias(context, scope, &alias_name, source_name, values)?;
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(EvalReferenceTarget::Variable {
         scope: scope as *mut ElephcEvalScope,
         name: alias_name,

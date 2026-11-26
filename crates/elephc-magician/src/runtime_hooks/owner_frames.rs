@@ -15,7 +15,9 @@ pub(crate) use elephc_memoir::runtime_owners::{RuntimeOwnerSlot, RuntimeOwners, 
 #[cfg(not(test))]
 use std::ffi::c_void;
 #[cfg(not(test))]
-use elephc_memoir::runtime_owner_frame::{OwnerFrameHooks, with_owner_frame};
+use elephc_memoir::runtime_owner_frame::{
+    OwnerFrameHooks, with_mutable_owner_frame, with_owner_frame,
+};
 
 /// Keeps an immobile Rust inventory visible through native calls and explicit slot cleanup.
 pub(crate) fn with_runtime_owners<T: RuntimeOwners, R>(owners: &T, consume: impl FnOnce() -> R) -> R {
@@ -32,6 +34,32 @@ pub(crate) fn with_runtime_owners<T: RuntimeOwners, R>(owners: &T, consume: impl
     {
         let _ = owners;
         consume()
+    }
+}
+
+/// Publishes the current shape of an inventory that grows or drains between runtime calls.
+pub(crate) fn with_mutable_runtime_owners<T: RuntimeOwners, R>(
+    owners: &mut T,
+    consume: impl FnOnce(&mut T) -> R,
+) -> R {
+    #[cfg(not(test))]
+    {
+        // The owner frame visitor runs only while this worker is suspended in native code.
+        unsafe {
+            with_mutable_owner_frame(
+                owners,
+                OwnerFrameHooks {
+                    enter: __elephc_eval_owner_frame_enter_v1,
+                    leave: __elephc_eval_owner_frame_leave_v1,
+                    visit_slot: __elephc_eval_owner_frame_slot_v1,
+                },
+                consume,
+            )
+        }
+    }
+    #[cfg(test)]
+    {
+        consume(owners)
     }
 }
 

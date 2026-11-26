@@ -9,6 +9,7 @@
 //!   still evaluate arguments in source order.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 eval_builtin! {
     contract: "round",
     area: Math,
@@ -23,24 +24,28 @@ pub(in crate::interpreter) fn eval_builtin_round(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [num] => {
-            let num = eval_expr(num, context, scope, values)?;
-            eval_round_result(num, None, None, values)
-        }
-        [num, precision] => {
-            let num = eval_expr(num, context, scope, values)?;
-            let precision = eval_expr(precision, context, scope, values)?;
-            eval_round_result(num, Some(precision), None, values)
-        }
-        [num, precision, mode] => {
-            let num = eval_expr(num, context, scope, values)?;
-            let precision = eval_expr(precision, context, scope, values)?;
-            let mode = eval_expr(mode, context, scope, values)?;
-            eval_round_result(num, Some(precision), Some(mode), values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = match args {
+            [num] => {
+                let num = owners.stage(eval_expr(num, context, scope, values)?);
+                eval_round_result(num, None, None, values)
+            }
+            [num, precision] => {
+                let num = owners.stage(eval_expr(num, context, scope, values)?);
+                let precision = owners.stage(eval_expr(precision, context, scope, values)?);
+                eval_round_result(num, Some(precision), None, values)
+            }
+            [num, precision, mode] => {
+                let num = owners.stage(eval_expr(num, context, scope, values)?);
+                let precision = owners.stage(eval_expr(precision, context, scope, values)?);
+                let mode = owners.stage(eval_expr(mode, context, scope, values)?);
+                eval_round_result(num, Some(precision), Some(mode), values)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
+        finish_staged_runtime_owners(&owners, result, values)
+    })
 }
 
 /// Applies PHP `round()` to already evaluated arguments.
@@ -59,18 +64,24 @@ pub(in crate::interpreter) fn eval_round_result(
     let Some(mode) = mode else {
         return values.round(num, precision);
     };
-    for (tag, resolver) in [
-        (EVAL_PHP_ROUND_HALF_DOWN, eval_round_half_down as RoundTieResolver),
-        (EVAL_PHP_ROUND_HALF_EVEN, eval_round_half_even),
-        (EVAL_PHP_ROUND_HALF_ODD, eval_round_half_odd),
-    ] {
-        let tag = values.int(tag)?;
-        let selected = values.compare(EvalBinOp::StrictEq, mode, tag)?;
-        if values.truthy(selected)? {
-            return eval_round_tie_aware(num, precision, resolver, values);
-        }
-    }
-    values.round(num, precision)
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            for (tag, resolver) in [
+                (EVAL_PHP_ROUND_HALF_DOWN, eval_round_half_down as RoundTieResolver),
+                (EVAL_PHP_ROUND_HALF_EVEN, eval_round_half_even),
+                (EVAL_PHP_ROUND_HALF_ODD, eval_round_half_odd),
+            ] {
+                let tag = owners.stage(values.int(tag)?);
+                let selected = owners.stage(values.compare(EvalBinOp::StrictEq, mode, tag)?);
+                if values.truthy(selected)? {
+                    return eval_round_tie_aware(num, precision, resolver, values, &owners);
+                }
+            }
+            values.round(num, precision)
+        })();
+        finish_staged_runtime_owners(&owners, result, values)
+    })
 }
 
 /// Chooses between the two neighbours of an exact `.5` tie for one rounding mode.
@@ -116,11 +127,17 @@ pub(in crate::interpreter) trait RoundTieOps {
 impl<T: RuntimeValueOps> RoundTieOps for T {
     /// Computes whether a runtime numeric cell is even using the shared remainder operation.
     fn is_even(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
-        let two = self.int(2)?;
-        let remainder = self.fmod(value, two)?;
-        let zero = self.int(0)?;
-        let equal = self.compare(EvalBinOp::LooseEq, remainder, zero)?;
-        self.truthy(equal)
+        let owners = StagedRuntimeOwners::default();
+        with_runtime_owners(&owners, || {
+            let result = (|| {
+                let two = owners.stage(self.int(2)?);
+                let remainder = owners.stage(self.fmod(value, two)?);
+                let zero = owners.stage(self.int(0)?);
+                let equal = owners.stage(self.compare(EvalBinOp::LooseEq, remainder, zero)?);
+                self.truthy(equal)
+            })();
+            owners.complete(result, |cell| self.release(cell))
+        })
     }
 }
 
@@ -130,23 +147,24 @@ fn eval_round_tie_aware(
     precision: Option<RuntimeCellHandle>,
     resolver: RoundTieResolver,
     values: &mut impl RuntimeValueOps,
+    owners: &StagedRuntimeOwners,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let ten = values.float(10.0)?;
+    let ten = owners.stage(values.float(10.0)?);
     let exponent = match precision {
         Some(precision) => precision,
-        None => values.int(0)?,
+        None => owners.stage(values.int(0)?),
     };
-    let scale = values.pow(ten, exponent)?;
-    let scaled = values.mul(num, scale)?;
-    let lower = values.floor(scaled)?;
-    let half = values.float(0.5)?;
-    let midpoint = values.add(lower, half)?;
-    let is_tie = values.compare(EvalBinOp::LooseEq, scaled, midpoint)?;
+    let scale = owners.stage(values.pow(ten, exponent)?);
+    let scaled = owners.stage(values.mul(num, scale)?);
+    let lower = owners.stage(values.floor(scaled)?);
+    let half = owners.stage(values.float(0.5)?);
+    let midpoint = owners.stage(values.add(lower, half)?);
+    let is_tie = owners.stage(values.compare(EvalBinOp::LooseEq, scaled, midpoint)?);
     if !values.truthy(is_tie)? {
         return values.round(num, precision);
     }
-    let one = values.int(1)?;
-    let upper = values.add(lower, one)?;
+    let one = owners.stage(values.int(1)?);
+    let upper = owners.stage(values.add(lower, one)?);
     let chosen = resolver(lower, upper, values)?;
     values.div(chosen, scale)
 }

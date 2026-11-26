@@ -376,60 +376,128 @@ fn dispatch_user_error_handler(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, StagedRuntimeOwners,
+    };
+
     let (call_file, _, call_line, _) = context.call_site();
     let file = file.unwrap_or(&call_file);
     let line = line.map_or(call_line, |line| line as i64);
-    let callback_args = vec![
-        values.int(level)?,
-        values.string(message)?,
-        values.string(file)?,
-        values.int(line)?,
-    ];
-    match values.runtime_error_handler_dispatch(level, &callback_args) {
-        Ok(result) => {
-            for argument in callback_args {
-                values.release(argument)?;
+    let callback_owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&callback_owners, || {
+        let callback_args = (|| {
+            Ok(vec![
+                callback_owners.stage(values.int(level)?).borrowed(),
+                callback_owners.stage(values.string(message)?).borrowed(),
+                callback_owners.stage(values.string(file)?).borrowed(),
+                callback_owners.stage(values.int(line)?).borrowed(),
+            ])
+        })();
+        let callback_args = match callback_args {
+            Ok(callback_args) => callback_args,
+            Err(status) => {
+                let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                    callback_owners.take_all(),
+                    ReleaseOrder::Reverse,
+                    CleanupErrorPolicy::Ignore,
+                    context,
+                    values,
+                );
+                return Err(status);
             }
-            let Some(result) = result else {
-                return Ok(false);
-            };
-            let falls_through =
-                values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
-            values.release(result)?;
-            return Ok(!falls_through);
-        }
-        Err(EvalStatus::UnsupportedConstruct) => {}
-        Err(status) => {
-            for argument in callback_args {
-                values.release(argument)?;
+        };
+        match values.runtime_error_handler_dispatch(level, &callback_args) {
+            Ok(result) => {
+                let batch = callback_owners.take_all();
+                let result = match result {
+                    Some(result) => Some(
+                        crate::interpreter::scope_cells::finish_eval_owner_batch(
+                            &batch,
+                            Ok(result),
+                            ReleaseOrder::Forward,
+                            CleanupErrorPolicy::First,
+                            context,
+                            values,
+                        )?,
+                    ),
+                    None => {
+                        crate::interpreter::scope_cells::retire_eval_owner_batch(
+                            batch,
+                            ReleaseOrder::Forward,
+                            CleanupErrorPolicy::First,
+                            context,
+                            values,
+                        )?;
+                        None
+                    }
+                };
+                let Some(result) = result else {
+                    return Ok(false);
+                };
+                let falls_through =
+                    values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
+                eval_release_value(context, values, result)?;
+                return Ok(!falls_through);
             }
-            return Err(status);
+            Err(EvalStatus::UnsupportedConstruct) => {}
+            Err(status) => {
+                let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                    callback_owners.take_all(),
+                    ReleaseOrder::Forward,
+                    CleanupErrorPolicy::Ignore,
+                    context,
+                    values,
+                );
+                return Err(status);
+            }
         }
-    }
-    let Some(handler) = context.error_handler_state() else {
-        for argument in callback_args {
-            values.release(argument)?;
+        let Some(handler) = context.error_handler_state() else {
+            crate::interpreter::scope_cells::retire_eval_owner_batch(
+                callback_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::First,
+                context,
+                values,
+            )?;
+            return Ok(false);
+        };
+        if handler.levels & level == 0 {
+            crate::interpreter::scope_cells::retire_eval_owner_batch(
+                callback_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::First,
+                context,
+                values,
+            )?;
+            return Ok(false);
         }
-        return Ok(false);
-    };
-    if handler.levels & level == 0 {
-        for argument in callback_args {
-            values.release(argument)?;
+        let callback = match eval_callable(handler.callback, context, values) {
+            Ok(callback) => callback,
+            Err(status) => {
+                let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                    callback_owners.take_all(),
+                    ReleaseOrder::Forward,
+                    CleanupErrorPolicy::Ignore,
+                    context,
+                    values,
+                );
+                return Err(status);
+            }
+        };
+        let callback_args = callback_owners.take_all().transfer();
+        let suspended = context.suspend_error_handler().expect("active handler was just checked");
+        let result = callback.with_values(context, values, |callback, context, values| {
+            eval_evaluated_callable_with_values(callback, callback_args, context, values)
+        });
+        if let Some(discarded) = context.resume_error_handler(suspended) {
+            eval_release_value(context, values, discarded.callback)?;
         }
-        return Ok(false);
-    }
-    let callback = eval_callable(handler.callback, context, values)?;
-    let suspended = context.suspend_error_handler().expect("active handler was just checked");
-    let result = callback.with_values(context, values, |callback, context, values| {
-        eval_evaluated_callable_with_values(callback, callback_args, context, values)
-    });
-    if let Some(discarded) = context.resume_error_handler(suspended) {
-        values.release(discarded.callback)?;
-    }
-    let result = result?;
-    let falls_through = values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
-    values.release(result)?;
-    Ok(!falls_through)
+        let result = result?;
+        let falls_through = values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
+        eval_release_value(context, values, result)?;
+        Ok(!falls_through)
+    })
 }
 
 /// Returns eval-visible user constants, optionally nested under PHP's `user` category.

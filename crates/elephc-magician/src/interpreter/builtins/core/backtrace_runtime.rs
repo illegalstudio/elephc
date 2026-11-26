@@ -281,12 +281,7 @@ fn render_backtrace_argument(
             let identity = values.object_identity(value)?;
             let class_name = match context.dynamic_object_class_name(identity) {
                 Some(class_name) => class_name,
-                None => {
-                    let class_name = values.object_class_name(value)?;
-                    let bytes = values.string_bytes(class_name)?;
-                    values.release(class_name)?;
-                    String::from_utf8_lossy(&bytes).into_owned()
-                }
+                None => runtime_object_class_name(value, values)?,
             };
             Ok(format!("Object({class_name})"))
         }

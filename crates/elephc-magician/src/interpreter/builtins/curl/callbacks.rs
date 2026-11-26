@@ -402,11 +402,12 @@ fn eval_curl_publish_callback_state(
     let (published, detached) = context
         .stream_resources_mut()
         .replace_curl_easy_callback(table_id, slot, state);
-    elephc_memoir::runtime_owners::release_all(
+    crate::interpreter::scope_cells::retire_eval_owner_batch(
         detached,
         elephc_memoir::runtime_owners::ReleaseOrder::Forward,
         elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
-        |owner| eval_release_value(context, values, owner),
+        context,
+        values,
     )?;
     Ok(published)
 }
@@ -430,63 +431,83 @@ pub(in crate::interpreter) fn eval_curl_with_callback_frame<V, R>(
 where
     V: RuntimeValueOps,
 {
-    let mut installed = Vec::new();
-    let mut receiver_owners = Vec::new();
-    let setup = (|| {
-        for &table_id in handles {
-            for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
-                let callable = match state {
-                    EvalCurlCallbackSlot::Callable(cell) => {
-                        // Normalized ONCE per transfer rather than once per callback
-                        // invocation: a write callback fires per chunk, and re-resolving a
-                        // method/closure callable thousands of times would be pure overhead.
-                        let (callable, owner) = eval_callable(cell, context, values)?.into_parts();
-                        receiver_owners.extend(owner);
-                        Some(callable)
-                    }
-                    EvalCurlCallbackSlot::Silent => None,
-                    EvalCurlCallbackSlot::Empty => continue,
-                };
-                installed.push((table_id, slot, callable));
-            }
-        }
-        Ok::<(), EvalStatus>(())
-    })();
-    if let Err(status) = setup {
-        for owner in receiver_owners {
-            let _ = release_expr_result(owner, context, values);
-        }
-        return Err(status);
-    }
-    let mut frame = EvalCurlCallbackFrame {
-        context: context as *mut ElephcEvalContext,
-        values: (values as *mut V).cast::<c_void>(),
-        invoke: eval_curl_invoke_typed::<V>,
-        installed,
-        parked: None,
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, StagedRuntimeOwners,
     };
-    {
-        // SAFETY: `frame` outlives the guard — it is this function's own local and the guard
-        // is dropped at the end of this block, before `frame` is moved from or goes out of
-        // scope. A nested transfer started from inside `transfer` publishes its own frame
-        // and restores THIS one when it finishes; see this module's header for why only the
-        // innermost frame is ever read and why that keeps the aliasing argument intact.
-        let _published = unsafe { ActiveFrameGuard::publish(&raw mut frame) };
-        let outcome = transfer();
-        drop(_published);
-        // THE PARKED THROW IS RETURNED, NOT STASHED. Handing it back with the transfer's own
-        // result is what keeps nesting correct: a shared slot would let an inner transfer's
-        // throw be picked up by an outer level (or clobber one already waiting there). The
-        // caller resumes it in the very next statement — it still has to consult the
-        // bridge's gate to know a throw is why the transfer stopped, which is why resuming
-        // is a separate call rather than an `Err` from here.
-        for owner in receiver_owners {
-            if let Err(status) = release_expr_result(owner, context, values) {
-                if frame.parked.is_none() { frame.parked = Some(status); }
+
+    let receiver_owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&receiver_owners, || {
+        let mut installed = Vec::new();
+        let setup = (|| {
+            for &table_id in handles {
+                for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
+                    let callable = match state {
+                        EvalCurlCallbackSlot::Callable(cell) => {
+                            // Normalized ONCE per transfer rather than once per callback
+                            // invocation: a write callback fires per chunk, and re-resolving a
+                            // method/closure callable thousands of times would be pure overhead.
+                            let (callable, owners) =
+                                eval_callable(cell, context, values)?.into_parts();
+                            for owner in owners {
+                                receiver_owners.stage(owner);
+                            }
+                            Some(callable)
+                        }
+                        EvalCurlCallbackSlot::Silent => None,
+                        EvalCurlCallbackSlot::Empty => continue,
+                    };
+                    installed.push((table_id, slot, callable));
+                }
             }
+            Ok::<(), EvalStatus>(())
+        })();
+        if let Err(status) = setup {
+            let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                receiver_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::Ignore,
+                context,
+                values,
+            );
+            return Err(status);
         }
-        Ok((outcome, frame.parked.take()))
-    }
+        let mut frame = EvalCurlCallbackFrame {
+            context: context as *mut ElephcEvalContext,
+            values: (values as *mut V).cast::<c_void>(),
+            invoke: eval_curl_invoke_typed::<V>,
+            installed,
+            parked: None,
+        };
+        {
+            // SAFETY: `frame` outlives the guard because it is this function's own local and the guard
+            // is dropped at the end of this block, before `frame` is moved from or goes out of
+            // scope. A nested transfer started from inside `transfer` publishes its own frame
+            // and restores THIS one when it finishes; see this module's header for why only the
+            // innermost frame is ever read and why that keeps the aliasing argument intact.
+            let _published = unsafe { ActiveFrameGuard::publish(&raw mut frame) };
+            let outcome = transfer();
+            drop(_published);
+            // THE PARKED THROW IS RETURNED, NOT STASHED. Handing it back with the transfer's own
+            // result is what keeps nesting correct: a shared slot would let an inner transfer's
+            // throw be picked up by an outer level (or clobber one already waiting there). The
+            // caller resumes it in the very next statement. It still has to consult the
+            // bridge's gate to know a throw is why the transfer stopped, which is why resuming
+            // is a separate call rather than an `Err` from here.
+            if let Err(status) = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                receiver_owners.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::First,
+                context,
+                values,
+            ) {
+                if frame.parked.is_none() {
+                    frame.parked = Some(status);
+                }
+            }
+            Ok((outcome, frame.parked.take()))
+        }
+    })
 }
 
 /// Resumes a callback's parked throw after the transfer that produced it has returned.

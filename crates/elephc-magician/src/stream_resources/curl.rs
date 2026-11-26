@@ -158,12 +158,18 @@ impl EvalStreamResources {
         &mut self,
         id: i64,
         retained: RuntimeCellHandle,
-    ) -> (bool, Vec<RuntimeCellHandle>) {
+    ) -> (bool, elephc_memoir::runtime_owners::RuntimeOwnerBatch) {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return (false, vec![retained]);
+            return (
+                false,
+                elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([retained]),
+            );
         };
         let previous = handle.private_value.replace(Some(retained));
-        (true, previous.into_iter().collect())
+        (
+            true,
+            elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(previous),
+        )
     }
 
     /// Resets the PHP-layer mirror and detaches every PHP owner in one non-reentrant step.
@@ -174,7 +180,7 @@ impl EvalStreamResources {
     pub(crate) fn take_curl_easy_reset_owners(
         &mut self,
         id: i64,
-    ) -> Option<Vec<RuntimeCellHandle>> {
+    ) -> Option<elephc_memoir::runtime_owners::RuntimeOwnerBatch> {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
             return None;
         };
@@ -184,8 +190,10 @@ impl EvalStreamResources {
     }
 
     /// Detaches every PHP cell owned by one easy-handle record before cleanup can re-enter.
-    fn take_curl_easy_handle_php_owners(handle: &mut EvalCurlEasyHandle) -> Vec<RuntimeCellHandle> {
-        let mut owners = Vec::with_capacity(1 + handle.callback_owners.len());
+    fn take_curl_easy_handle_php_owners(
+        handle: &mut EvalCurlEasyHandle,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         if let Some(private) = handle.private_value.take_optional() {
             owners.push(private);
         }
@@ -199,10 +207,12 @@ impl EvalStreamResources {
     }
 
     /// Detaches every easy-handle PHP owner while retaining the native handles for `Drop`.
-    pub(super) fn take_curl_easy_php_owners(&mut self) -> Vec<RuntimeCellHandle> {
-        let mut owners = Vec::new();
+    pub(super) fn take_curl_easy_php_owners(
+        &mut self,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         for handle in self.curl_easy_handles.values_mut() {
-            owners.extend(Self::take_curl_easy_handle_php_owners(handle));
+            owners.append(Self::take_curl_easy_handle_php_owners(handle));
         }
         owners
     }
@@ -211,8 +221,7 @@ impl EvalStreamResources {
     #[cfg(test)]
     pub(crate) fn release_curl_easy_php_values(&mut self, values: &mut impl RuntimeValueOps) {
         let owners = self.take_curl_easy_php_owners();
-        let _ = elephc_memoir::runtime_owners::release_all(
-            owners,
+        let _ = owners.release(
             elephc_memoir::runtime_owners::ReleaseOrder::Forward,
             elephc_memoir::runtime_owners::CleanupErrorPolicy::Ignore,
             |owner| values.release(owner),
@@ -228,19 +237,23 @@ impl EvalStreamResources {
         id: i64,
         slot: usize,
         value: EvalCurlCallbackSlot,
-    ) -> (bool, Vec<RuntimeCellHandle>) {
+    ) -> (bool, elephc_memoir::runtime_owners::RuntimeOwnerBatch) {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            let detached = match value {
-                EvalCurlCallbackSlot::Callable(cell) => vec![cell],
-                _ => Vec::new(),
-            };
+            let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+                match value {
+                    EvalCurlCallbackSlot::Callable(cell) => Some(cell),
+                    _ => None,
+                },
+            );
             return (false, detached);
         };
         let Some(current) = handle.callbacks.get_mut(slot) else {
-            let detached = match value {
-                EvalCurlCallbackSlot::Callable(cell) => vec![cell],
-                _ => Vec::new(),
-            };
+            let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+                match value {
+                    EvalCurlCallbackSlot::Callable(cell) => Some(cell),
+                    _ => None,
+                },
+            );
             return (false, detached);
         };
         let owner = handle.callback_owners.get(slot).expect("callback state and owner arrays match");
@@ -250,7 +263,9 @@ impl EvalStreamResources {
             EvalCurlCallbackSlot::Callable(cell) => (Some(cell), EvalCurlCallbackKind::Callable),
         };
         *current = kind;
-        let detached = owner.replace(replacement).into_iter().collect();
+        let detached = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+            owner.replace(replacement),
+        );
         (true, detached)
     }
 
@@ -259,11 +274,11 @@ impl EvalStreamResources {
     pub(crate) fn take_curl_easy_callbacks(
         &mut self,
         id: i64,
-    ) -> Vec<RuntimeCellHandle> {
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return Vec::new();
+            return elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         };
-        let mut owners = Vec::new();
+        let mut owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
         for (state, slot) in handle.callbacks.iter_mut().zip(&handle.callback_owners) {
             *state = EvalCurlCallbackKind::Empty;
             if let Some(cell) = slot.take_optional() {
@@ -309,8 +324,7 @@ impl EvalStreamResources {
     ) -> Result<bool, EvalStatus> {
         let retained = values.retain(value)?;
         let (published, detached) = self.replace_curl_easy_private(id, retained);
-        elephc_memoir::runtime_owners::release_all(
-            detached,
+        detached.release(
             elephc_memoir::runtime_owners::ReleaseOrder::Forward,
             elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
             |owner| values.release(owner),
@@ -328,8 +342,7 @@ impl EvalStreamResources {
         let Some(detached) = self.take_curl_easy_reset_owners(id) else {
             return Ok(false);
         };
-        elephc_memoir::runtime_owners::release_all(
-            detached,
+        detached.release(
             elephc_memoir::runtime_owners::ReleaseOrder::Forward,
             elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
             |owner| values.release(owner),
@@ -353,8 +366,7 @@ impl EvalStreamResources {
             other => other,
         };
         let (published, detached) = self.replace_curl_easy_callback(id, slot, value);
-        elephc_memoir::runtime_owners::release_all(
-            detached,
+        detached.release(
             elephc_memoir::runtime_owners::ReleaseOrder::Forward,
             elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
             |owner| values.release(owner),
@@ -370,8 +382,7 @@ impl EvalStreamResources {
         values: &mut impl RuntimeValueOps,
     ) -> Result<(), EvalStatus> {
         let detached = self.take_curl_easy_callbacks(id);
-        elephc_memoir::runtime_owners::release_all(
-            detached,
+        detached.release(
             elephc_memoir::runtime_owners::ReleaseOrder::Forward,
             elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
             |owner| values.release(owner),

@@ -176,6 +176,56 @@ pub fn emit_clear_indexed_owner(emitter: &mut impl Emitter, table: &str, index: 
     });                                                                         // detach the table's owner before it can be released
 }
 
+/// Publishes one word into an indexed owner table without running cleanup.
+pub fn emit_store_indexed_owner(
+    emitter: &mut impl Emitter,
+    table: &str,
+    index: &str,
+    owner: &str,
+) {
+    emitter.instruction(&match emitter.arch() {
+        Arch::AArch64 => format!("str {owner}, [{table}, {index}, lsl #3]"),
+        Arch::X86_64 => format!("mov QWORD PTR [{table} + {index}*8], {owner}"),
+    });                                                                         // publish one record word without retiring its predecessor
+}
+
+/// Branches according to whether any word in an indexed owner record is published.
+pub fn emit_branch_if_indexed_record_present(
+    emitter: &mut impl Emitter,
+    table_symbols: &[&str],
+    index: &str,
+    table: &str,
+    owner: &str,
+    present: &str,
+    empty: &str,
+) {
+    for symbol in table_symbols {
+        abi::emit_symbol_address(emitter, table, symbol);
+        emit_load_indexed_owner(emitter, table, index, owner);
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("cbnz {owner}, {present}")),
+            Arch::X86_64 => {
+                emitter.instruction(&format!("test {owner}, {owner}"));         // inspect one independently owned record word
+                emitter.instruction(&format!("jnz {present}"));
+            }
+        }
+    }
+    abi::emit_jump(emitter, empty);
+}
+
+/// Detaches every word of an indexed owner record before any predecessor is released.
+pub fn emit_clear_indexed_record(
+    emitter: &mut impl Emitter,
+    table_symbols: &[&str],
+    index: &str,
+    table: &str,
+) {
+    for symbol in table_symbols {
+        abi::emit_symbol_address(emitter, table, symbol);
+        emit_clear_indexed_owner(emitter, table, index);
+    }
+}
+
 /// Registers the native result-register owner in a 32-byte stack record at the supplied offsets.
 pub fn emit_publish_in_frame(emitter: &mut impl Emitter, arm: usize, x86: usize) {
     emit_publish_frame_owner(emitter, "x0", arm, x86);

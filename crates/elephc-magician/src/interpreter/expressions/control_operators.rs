@@ -17,6 +17,7 @@
 //!   an enum case there, or `null` behind `?->`.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// PHP's `E_FATAL_ERRORS`: the levels `@` keeps reporting.
 const FATAL_ERROR_LEVELS: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
@@ -38,15 +39,18 @@ pub(super) fn eval_error_suppressed_expr(
     if !silenced {
         return result;
     }
-    let restored = restore_error_reporting(saved, context, values);
-    match (result, restored) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
+    let result = result.map(RuntimeOwnerSlot::new);
+    with_runtime_owners(&result.as_ref().ok(), || {
+        let restored = restore_error_reporting(saved, context, values);
+        match (&result, restored) {
+            (Ok(value), Ok(())) => Ok(value.take()),
+            (Ok(value), Err(status)) => {
+                let _ = release_expr_result(value.take(), context, values);
+                Err(status)
+            }
+            (Err(status), _) => Err(*status),
         }
-        (Err(status), _) => Err(status),
-    }
+    })
 }
 
 /// Raises the operand of a `throw` expression through eval's Throwable channel.
@@ -71,27 +75,36 @@ pub(in crate::interpreter) fn eval_throwable_operand(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let throwable = match values.type_tag(thrown) {
-        Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(thrown, "Throwable", context, values).map(Some),
-        Ok(_) => Ok(None),
-        Err(status) => Err(status),
-    };
-    match throwable {
-        Ok(Some(true)) => Ok(thrown),
-        Ok(found) => {
-            eval_release_value(context, values, thrown)?;
-            let message = if found.is_some() {
-                "Cannot throw objects that do not implement Throwable"
-            } else {
-                "Can only throw objects"
-            };
-            throwables::eval_throw_error(message, context, values)
+    let thrown = RuntimeOwnerSlot::new(thrown);
+    with_runtime_owners(&thrown, || {
+        let throwable = match values.type_tag(thrown.borrowed()) {
+            Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(
+                thrown.borrowed(),
+                "Throwable",
+                context,
+                values,
+            )
+            .map(Some),
+            Ok(_) => Ok(None),
+            Err(status) => Err(status),
+        };
+        match throwable {
+            Ok(Some(true)) => Ok(thrown.take()),
+            Ok(found) => {
+                eval_release_value(context, values, thrown.take())?;
+                let message = if found.is_some() {
+                    "Cannot throw objects that do not implement Throwable"
+                } else {
+                    "Can only throw objects"
+                };
+                throwables::eval_throw_error(message, context, values)
+            }
+            Err(status) => {
+                let _ = eval_release_value(context, values, thrown.take());
+                Err(status)
+            }
         }
-        Err(status) => {
-            let _ = eval_release_value(context, values, thrown);
-            Err(status)
-        }
-    }
+    })
 }
 
 /// Evaluates the receiver of a property fetch in a `const` initializer.
@@ -106,28 +119,41 @@ pub(super) fn eval_constant_property_receiver(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let receiver = eval_expr_with_result_ownership(object, context, scope, values, own_result)?;
-    let allowed = match values.type_tag(receiver) {
-        Ok(EVAL_TAG_NULL) => Ok(nullsafe),
-        Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(receiver, "UnitEnum", context, values),
-        Ok(_) => Ok(false),
-        Err(status) => Err(status),
-    };
-    match allowed {
-        Ok(true) => Ok(receiver),
-        Ok(false) => {
-            release_expr_result(receiver, context, values)?;
-            throwables::eval_throw_error(
-                "Fetching properties on non-enums in constant expressions is not allowed",
+    let receiver = RuntimeOwnerSlot::new(eval_expr_with_result_ownership(
+        object,
+        context,
+        scope,
+        values,
+        own_result,
+    )?);
+    with_runtime_owners(&receiver, || {
+        let allowed = match values.type_tag(receiver.borrowed()) {
+            Ok(EVAL_TAG_NULL) => Ok(nullsafe),
+            Ok(EVAL_TAG_OBJECT) => eval_instanceof_object_result(
+                receiver.borrowed(),
+                "UnitEnum",
                 context,
                 values,
-            )
+            ),
+            Ok(_) => Ok(false),
+            Err(status) => Err(status),
+        };
+        match allowed {
+            Ok(true) => Ok(receiver.take()),
+            Ok(false) => {
+                release_expr_result(receiver.take(), context, values)?;
+                throwables::eval_throw_error(
+                    "Fetching properties on non-enums in constant expressions is not allowed",
+                    context,
+                    values,
+                )
+            }
+            Err(status) => {
+                let _ = release_expr_result(receiver.take(), context, values);
+                Err(status)
+            }
         }
-        Err(status) => {
-            let _ = release_expr_result(receiver, context, values);
-            Err(status)
-        }
-    }
+    })
 }
 
 /// Restores the mask saved by `@` unless the operand installed one with non-fatal levels.

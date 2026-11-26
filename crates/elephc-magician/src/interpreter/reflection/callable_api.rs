@@ -545,10 +545,7 @@ pub(super) fn eval_reflection_object_has_class(
     if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
         return Ok(false);
     }
-    let actual = values.object_class_name(object)?;
-    let bytes = values.string_bytes(actual);
-    values.release(actual)?;
-    let actual = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let actual = runtime_object_class_name(object, values)?;
     Ok(actual
         .trim_start_matches('\\')
         .eq_ignore_ascii_case(class_name))

@@ -131,12 +131,7 @@ pub(in crate::interpreter) fn eval_given_type_name(
         if let Some(name) = context.dynamic_object_class_name(identity) {
             return Ok(name);
         }
-        let class_name = values.object_class_name(value)?;
-        let copied = values.string_bytes(class_name);
-        let retired = values.release(class_name);
-        let bytes = copied?;
-        retired?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        return runtime_object_class_name(value, values);
     }
     let name = match tag {
         EVAL_TAG_NULL => "null",

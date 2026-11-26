@@ -10,7 +10,7 @@
 //!   `crate::codegen::lower_inst::enums` (`cases()` / `from()` / `tryFrom()`),
 //!   `crate::codegen::lower_inst::objects::reflection` and
 //!   `crate::codegen::eval_class_constant_helpers`, which all read a case slot.
-//! - `crate::codegen::web::emit_web_reset()`, which clears the slots per request.
+//! - Process and request shutdown, which drain the slots through Memoir.
 //!
 //! Key details:
 //! - WHY LAZY. PHP creates an enum case object on FIRST ACCESS and caches it, so a
@@ -62,7 +62,7 @@
 //!   prefork worker gets a private copy the moment it writes one; the parent never
 //!   runs user code, so no slot is populated before the fork. Requests are served
 //!   serially inside a worker, so no two writers race a slot and no atomics are
-//!   needed. `emit_enum_slot_resets` clears every slot in `__rt_web_reset`, which
+//!   needed. `emit_enum_slot_cleanup` drains every slot in `__rt_web_reset`, which
 //!   keeps the pre-existing per-request lifecycle exactly: today the handler
 //!   prologue re-runs the eager initializers and overwrites the slots each request,
 //!   so cases were already per-request objects. Clearing (rather than carrying the
@@ -483,25 +483,38 @@ fn emit_enum_backing_value(
     }
 }
 
-/// Emits the `--web` per-request clear of every enum case slot.
+/// Returns every lazy enum case slot in deterministic shutdown order.
+pub(super) fn enum_owner_symbols(module: &Module) -> Vec<String> {
+    let mut sorted_enums = module.enum_infos.iter().collect::<Vec<_>>();
+    sorted_enums.sort_by_key(|(name, _)| name.as_str());
+    sorted_enums
+        .into_iter()
+        .flat_map(|(enum_name, enum_info)| {
+            enum_info
+                .cases
+                .iter()
+                .map(move |case| enum_case_symbol(enum_name, &case.name))
+        })
+        .collect()
+}
+
+/// Drains every enum case singleton and any replacement published by its destructor.
 ///
 /// Restores the pre-lazy per-request lifecycle: the eager initializers used to
 /// overwrite every slot with a fresh object at the top of each request, so cases
-/// were already per-request objects. Clearing the slot means request N+1
+/// were already per-request objects. Draining the slot means request N+1
 /// re-materializes on demand instead of reusing request N's pointer, which a
 /// per-request local cleanup may already have released.
-pub(super) fn emit_enum_slot_resets(emitter: &mut Emitter, module: &Module) {
-    let mut sorted_enums = module.enum_infos.iter().collect::<Vec<_>>();
-    sorted_enums.sort_by_key(|(name, _)| name.as_str());
-    for (enum_name, enum_info) in sorted_enums {
-        for case in &enum_info.cases {
-            let symbol = enum_case_symbol(enum_name, &case.name);
-            emitter.comment(&format!(
-                "clear lazy enum case slot {}::{}",
-                enum_name, case.name
-            ));
-            abi::emit_store_zero_to_symbol(emitter, &symbol, 0);
-        }
+pub(super) fn emit_enum_slot_cleanup(emitter: &mut Emitter, module: &Module, prefix: &str) {
+    for (index, symbol) in enum_owner_symbols(module).iter().enumerate() {
+        emitter.comment(&format!("drain lazy enum case slot {symbol}"));
+        abi::emit_drain_static_owner(
+            emitter,
+            symbol,
+            &crate::types::PhpType::Object(String::new()),
+            &format!("{prefix}_{index}"),
+            None,
+        );
     }
 }
 

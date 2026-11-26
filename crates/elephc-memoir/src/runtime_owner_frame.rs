@@ -34,6 +34,12 @@ struct Inventory<'a, T> {
     visit_slot: unsafe extern "C" fn(*const *mut RuntimeCell, *mut c_void),
 }
 
+/// Mutable inventory addressed only while its owning thread is suspended in a runtime callback.
+struct MutableInventory<T> {
+    owners: *mut T,
+    visit_slot: unsafe extern "C" fn(*const *mut RuntimeCell, *mut c_void),
+}
+
 /// Unlinks the activation before the pinned stack words can go out of scope.
 struct NativeOwnerFrameGuard<'a> {
     record: *mut c_void,
@@ -63,6 +69,38 @@ pub unsafe fn with_owner_frame<T: RuntimeOwners, R>(
     consume()
 }
 
+/// Publishes an inventory whose contents may change between runtime suspension points.
+///
+/// # Safety
+/// Hooks must satisfy `with_owner_frame` and invoke the visitor only while `consume` is
+/// suspended, never concurrently with a mutation. The inventory object itself must remain at
+/// the same address until `leave` returns. Traversal cannot retain references or slot addresses.
+pub unsafe fn with_mutable_owner_frame<T: RuntimeOwners, R>(
+    owners: &mut T,
+    hooks: OwnerFrameHooks,
+    consume: impl FnOnce(&mut T) -> R,
+) -> R {
+    let frame = std::pin::pin!(NativeOwnerFrame { storage: UnsafeCell::default(), _pin: PhantomPinned });
+    let inventory = MutableInventory {
+        owners: std::ptr::from_mut(owners),
+        visit_slot: hooks.visit_slot,
+    };
+    let record = frame.as_ref().get_ref().storage.get().cast();
+    unsafe {
+        (hooks.enter)(
+            record,
+            visit_mutable::<T>,
+            std::ptr::from_ref(&inventory).cast(),
+        );
+    }
+    let _guard = NativeOwnerFrameGuard {
+        record,
+        leave: hooks.leave,
+        _borrow: PhantomData,
+    };
+    consume(owners)
+}
+
 impl<'a> NativeOwnerFrameGuard<'a> {
     /// Ties the lifetime of the frame and inventory to the native link.
     fn link<T: RuntimeOwners>(
@@ -82,4 +120,82 @@ impl<'a> NativeOwnerFrameGuard<'a> {
 unsafe extern "C" fn visit<T: RuntimeOwners>(data: *const c_void, context: *mut c_void) {
     let inventory = unsafe { &*data.cast::<Inventory<'_, T>>() };
     inventory.owners.visit_owned_slots(&mut |slot| unsafe { (inventory.visit_slot)(slot, context); });
+}
+
+/// Reads the inventory's current shape after the mutating thread has suspended.
+///
+/// # Safety
+/// The caller must pass the live mutable inventory while no mutation is in progress.
+unsafe extern "C" fn visit_mutable<T: RuntimeOwners>(data: *const c_void, context: *mut c_void) {
+    let inventory = unsafe { &*data.cast::<MutableInventory<T>>() };
+    let owners = unsafe { &*inventory.owners };
+    owners.visit_owned_slots(&mut |slot| unsafe { (inventory.visit_slot)(slot, context); });
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use super::*;
+    use crate::runtime_owners::RuntimeCellHandle;
+    use std::cell::Cell;
+
+    thread_local! {
+        static ACTIVE_VISITOR: Cell<Option<unsafe extern "C" fn(*const c_void, *mut c_void)>> = const { Cell::new(None) };
+        static ACTIVE_DATA: Cell<*const c_void> = const { Cell::new(std::ptr::null()) };
+    }
+
+    /// Captures the frame visitor so the test can simulate a suspended collector traversal.
+    unsafe extern "C" fn enter_test_frame(
+        _record: *mut c_void,
+        visitor: unsafe extern "C" fn(*const c_void, *mut c_void),
+        data: *const c_void,
+    ) {
+        ACTIVE_VISITOR.set(Some(visitor));
+        ACTIVE_DATA.set(data);
+    }
+
+    /// Clears the simulated native activation link.
+    unsafe extern "C" fn leave_test_frame(_record: *mut c_void) {
+        ACTIVE_VISITOR.set(None);
+        ACTIVE_DATA.set(std::ptr::null());
+    }
+
+    /// Appends the currently visible owner value to the traversal result.
+    unsafe extern "C" fn record_test_slot(slot: *const *mut RuntimeCell, context: *mut c_void) {
+        let seen = unsafe { &mut *context.cast::<Vec<usize>>() };
+        seen.push(unsafe { *slot } as usize);
+    }
+
+    /// Runs the linked visitor exactly as the native collector would at a suspension point.
+    fn collect_test_slots() -> Vec<usize> {
+        let mut seen = Vec::new();
+        let visitor = ACTIVE_VISITOR.get().expect("the owner frame is linked");
+        let data = ACTIVE_DATA.get();
+        unsafe { visitor(data, std::ptr::from_mut(&mut seen).cast()); }
+        seen
+    }
+
+    /// A mutable owner frame exposes additions and removals made between traversals.
+    #[test]
+    fn mutable_owner_frame_visits_the_current_inventory_shape() {
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let mut owners = vec![first];
+        let hooks = OwnerFrameHooks {
+            enter: enter_test_frame,
+            leave: leave_test_frame,
+            visit_slot: record_test_slot,
+        };
+
+        unsafe {
+            with_mutable_owner_frame(&mut owners, hooks, |owners| {
+                assert_eq!(collect_test_slots(), [8]);
+                owners.push(second);
+                assert_eq!(collect_test_slots(), [8, 16]);
+                owners.remove(0);
+                assert_eq!(collect_test_slots(), [16]);
+            });
+        }
+        assert!(ACTIVE_VISITOR.get().is_none());
+    }
 }

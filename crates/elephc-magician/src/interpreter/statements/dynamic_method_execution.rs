@@ -150,31 +150,43 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
         })
     });
-    let persist_result = persist_static_locals(
-        context,
-        &qualified_method_name,
-        &static_names,
-        &method_scope,
-        values,
-    );
-    let writeback_result = write_back_method_ref_args(
-        method.params(),
-        &evaluated_args,
-        &method_scope,
-        context,
-        values,
+    let (persist_result, writeback_result) = with_runtime_owners(
+        &(&evaluated_args, result.as_ref().ok()),
+        || {
+            with_runtime_scope_owners(&mut method_scope, |scope| {
+                let persist_result = persist_static_locals(
+                    context,
+                    &qualified_method_name,
+                    &static_names,
+                    scope,
+                    values,
+                );
+                let writeback_result = write_back_method_ref_args(
+                    method.params(),
+                    &evaluated_args,
+                    scope,
+                    context,
+                    values,
+                );
+                (persist_result, writeback_result)
+            })
+        },
     );
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
-            &qualified_method_name,
-            method.return_type(),
-            Some(class_name),
-            Some(called_class_name),
-            control,
-            context,
-            values,
-        ),
+        (Ok(()), Ok(()), Ok(control)) => {
+            with_runtime_scope_owners(&mut method_scope, |_scope| {
+                eval_declared_return_control_value(
+                    &qualified_method_name,
+                    method.return_type(),
+                    Some(class_name),
+                    Some(called_class_name),
+                    control,
+                    context,
+                    values,
+                )
+            })
+        }
     };
     context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
@@ -311,31 +323,43 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
         })
     });
-    let persist_result = persist_static_locals(
-        context,
-        &qualified_method_name,
-        &static_names,
-        &method_scope,
-        values,
-    );
-    let writeback_result = write_back_method_ref_args(
-        method.params(),
-        &evaluated_args,
-        &method_scope,
-        context,
-        values,
+    let (persist_result, writeback_result) = with_runtime_owners(
+        &(&evaluated_args, result.as_ref().ok()),
+        || {
+            with_runtime_scope_owners(&mut method_scope, |scope| {
+                let persist_result = persist_static_locals(
+                    context,
+                    &qualified_method_name,
+                    &static_names,
+                    scope,
+                    values,
+                );
+                let writeback_result = write_back_method_ref_args(
+                    method.params(),
+                    &evaluated_args,
+                    scope,
+                    context,
+                    values,
+                );
+                (persist_result, writeback_result)
+            })
+        },
     );
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
-            &qualified_method_name,
-            method.return_type(),
-            Some(class_name),
-            Some(called_class_name),
-            control,
-            context,
-            values,
-        ),
+        (Ok(()), Ok(()), Ok(control)) => {
+            with_runtime_scope_owners(&mut method_scope, |_scope| {
+                eval_declared_return_control_value(
+                    &qualified_method_name,
+                    method.return_type(),
+                    Some(class_name),
+                    Some(called_class_name),
+                    control,
+                    context,
+                    values,
+                )
+            })
+        }
     };
     context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(

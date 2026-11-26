@@ -60,10 +60,9 @@ pub(in crate::interpreter) fn eval_var_dump_result(
         )?;
     }
     let output = values.string_bytes_value(&output)?;
-    let result = values.echo(output);
-    let cleanup = eval_release_value(context, values, output);
-    result?;
-    cleanup?;
+    with_eval_value_lease(output, context, values, |output, _, values| {
+        values.echo(output)
+    })?;
     values.null()
 }
 

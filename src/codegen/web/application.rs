@@ -82,20 +82,41 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     cleanup.call(emitter, "__rt_web_ambient_reset", false);
     for name in superglobals::SUPERGLOBALS {
         let symbol = ir_global_symbol(name);
-        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), &symbol, 0);
-        abi::store_at_offset(emitter, abi::int_result_reg(emitter), 24);
-        // Keep every typed Hash slot valid while destructors can read or write superglobals.
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 7);
-        abi::emit_call_label(emitter, "__rt_hash_new");
-        abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), &symbol, 0);
-        abi::load_at_offset(emitter, abi::int_result_reg(emitter), 24);
+        elephc_memoir::symbol_owners::emit_publish_owner(
+            emitter,
+            |emitter, previous| abi::emit_load_symbol_to_reg(emitter, previous, &symbol, 0),
+            |emitter| {
+                // Keep every typed Hash slot valid while destructors read or replace superglobals.
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_arg_reg_name(emitter.target, 0),
+                    0,
+                );
+                abi::emit_load_int_immediate(
+                    emitter,
+                    abi::int_arg_reg_name(emitter.target, 1),
+                    7,
+                );
+                abi::emit_call_label(emitter, "__rt_hash_new");
+                abi::emit_store_reg_to_symbol(
+                    emitter,
+                    abi::int_result_reg(emitter),
+                    &symbol,
+                    0,
+                );
+            },
+        );
         cleanup.call(emitter, "__rt_decref_hash", false);
     }
-    for symbol in elephc_memoir::interop::cstr_scratch::base_symbols() {
-        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-        cleanup.call(emitter, "__rt_heap_free_safe", false);
+    for (index, symbol) in elephc_memoir::interop::cstr_scratch::base_symbols().enumerate() {
+        elephc_memoir::symbol_owners::emit_drain_symbol_owner(
+            emitter,
+            symbol,
+            &format!("__rt_web_application_cstr_scratch_{index}"),
+            elephc_memoir::symbol_owners::PublishedDestructor::None,
+            |emitter| abi::emit_store_zero_to_symbol(emitter, symbol, 0),
+            |emitter| cleanup.call(emitter, "__rt_heap_free_safe", false),
+        );
     }
     elephc_memoir::strings::capture_buffer::emit_take_raw_buffer(emitter);
     cleanup.call(emitter, "__rt_heap_free_safe", false);

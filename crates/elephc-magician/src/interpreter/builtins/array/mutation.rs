@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_array_mutation_lvalue_arg(
     }
     let (array, mut target) = eval_call_arg_value(arg.value(), context, scope, values)?;
     owners.stage(array);
-    let mut reference_owners = Vec::new();
+    let mut reference_owners = elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty();
     crate::interpreter::dynamic_functions::capture_abandoned_reference_owners(
         target.as_mut(), &mut reference_owners,
     );

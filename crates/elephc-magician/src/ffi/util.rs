@@ -64,7 +64,7 @@ pub(crate) fn release_owned_scope_cells(scope: &mut ElephcEvalScope) -> Option<R
     let cells = scope.drain_owned_cells();
     #[cfg(not(test))]
     {
-        crate::runtime_hooks::release::release_native_cells(cells, None)
+        crate::runtime_hooks::release::release_native_owner_batch(cells, None)
     }
     #[cfg(test)]
     {

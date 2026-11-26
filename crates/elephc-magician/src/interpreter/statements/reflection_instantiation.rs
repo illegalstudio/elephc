@@ -8,7 +8,9 @@
 //! - Constructor visibility, without-constructor allocation, and attribute argument materialization align with PHP.
 
 use super::*;
-use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
+use crate::interpreter::builtins::collection_builder::{
+    EvalArrayBuilder, with_collection_cells,
+};
 use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Returns the runtime-visible class name for a non-eval object receiver.
@@ -16,10 +18,11 @@ pub(in crate::interpreter) fn runtime_object_class_name(
     object: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let class_name = values.object_class_name(object)?;
-    let bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)
+    let bytes = with_collection_cells(values, |values, owners| {
+        let class_name = owners.stage(values.object_class_name(object)?);
+        values.string_bytes(class_name.borrowed())
+    })?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Instantiates the class named by a materialized eval `ReflectionClass` object.

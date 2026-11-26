@@ -12,7 +12,9 @@
 
 use super::*;
 use crate::interpreter::builtins::collection_builder::with_collection_cells;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 use elephc_memoir::runtime_owners::release_staged_cells;
 
 /// Raises native initialization failures after access checks, without invoking a throwing getter.
@@ -87,7 +89,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
     property_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    owned: Option<&mut Vec<RuntimeCellHandle>>,
+    owned: Option<&StagedRuntimeOwners>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
@@ -447,7 +449,7 @@ fn eval_initialize_class(
         let value = if value.is_borrowed() { values.retain(value)? } else { value };
         let storage_name = eval_instance_property_storage_name(declaring.name(), property);
         if let Some(replaced) = context.set_instance_default_cell(class.name(), storage_name, value) {
-            values.release(replaced)?;
+            eval_release_value(context, values, replaced)?;
         }
     }
     for property in eval_initialization_ordered_properties(class)
@@ -876,12 +878,12 @@ pub(super) fn eval_builtin_property_hook_type_case(
             if let Some(replaced) =
                 context.set_enum_case_value("PropertyHookType", case_name, value.take())
             {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
             if let Some(replaced) =
                 context.set_enum_case("PropertyHookType", case_name, object.take())
             {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
             Ok(())
         })();
@@ -1100,9 +1102,8 @@ pub(super) fn eval_static_property_reference_target(
         return Ok(EvalReferenceTarget::Cell { cell });
     }
     let alias_name = eval_static_property_reference_alias_name(class_name, property_name);
-    for replaced in set_reference_alias(context, scope, &alias_name, source_name, values)? {
-        values.release(replaced)?;
-    }
+    let replaced = set_reference_alias(context, scope, &alias_name, source_name, values)?;
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(EvalReferenceTarget::Variable {
         scope: scope as *mut ElephcEvalScope,
         name: alias_name,

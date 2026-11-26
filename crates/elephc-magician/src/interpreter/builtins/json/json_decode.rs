@@ -182,22 +182,19 @@ fn eval_json_decode_object_to_cell(
     flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object("stdClass")?;
-    let result = (|| {
+    use super::super::collection_builder::{with_collection_cells, with_collection_result};
+
+    with_collection_result(values, |values, object| {
+        object.replace(Some(values.new_object("stdClass")?));
         for (key, value) in entries {
             let key = std::str::from_utf8(&key).map_err(|_| EvalStatus::RuntimeFatal)?;
-            let value = eval_json_decode_to_cell(value, flags, false, values)?;
-            let inserted = values.property_set(object, key, value);
-            let released = values.release(value);
-            inserted.and(released)?;
+            with_collection_cells(values, |values, owners| {
+                let value = owners.stage(eval_json_decode_to_cell(value, flags, false, values)?);
+                values.property_set(object.borrowed(), key, value.borrowed())
+            })?;
         }
         Ok(())
-    })();
-    if let Err(status) = result {
-        let _ = values.release(object);
-        return Err(status);
-    }
-    Ok(object)
+    })
 }
 
 /// Materializes one JSON number as an int when possible and as a float otherwise.

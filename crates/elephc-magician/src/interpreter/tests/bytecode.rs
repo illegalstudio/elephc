@@ -183,9 +183,9 @@ fn bytecode_slice_balances_failed_operand_cleanup() {
         values.fail_release_call = Some(failing_release);
         let program = parse_fragment(source.as_bytes()).unwrap();
         assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-        for cell in scope.drain_owned_cells() {
-            eval_release_value(&mut context, &mut values, cell).unwrap();
-        }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         assert_eq!(values.cell_owners.values().sum::<usize>(), 0, "{source}");
     }
 }
@@ -200,9 +200,9 @@ fn bytecode_slice_null_decrement_balances_same_cell_result() {
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
     assert_eq!(values.get(result), FakeValue::Null);
     eval_release_value(&mut context, &mut values, result).unwrap();
-    for cell in scope.drain_owned_cells() {
-        eval_release_value(&mut context, &mut values, cell).unwrap();
-    }
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(
+        scope.drain_owned_cells().transfer(), &mut context, &mut values,
+    ).unwrap();
     assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
 }
 

@@ -52,6 +52,13 @@ impl RuntimeOwners for ArgumentCleanupOwner {
     }
 }
 
+impl RuntimeOwners for ArgumentValueOwner {
+    /// Follows the shared lease as it moves from its source owner into a native pin.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        self.0.visit_owned_slots(visit);
+    }
+}
+
 impl ArgumentValueOwner {
     /// Adopts one owner already acquired by argument evaluation without retaining it again.
     pub(super) fn new(value: RuntimeCellHandle) -> Self {

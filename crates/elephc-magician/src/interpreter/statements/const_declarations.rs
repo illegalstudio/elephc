@@ -11,6 +11,7 @@
 //!   warning, whose PHP 9 suffix depends on the selected PHP profile.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// First PHP profile whose redefinition warning announces the PHP 9 error.
 const PHP_9_ERROR_SUFFIX_VERSION_ID: u32 = 80500;
@@ -23,16 +24,19 @@ pub(super) fn eval_const_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let value = eval_owned_expr(value, context, scope, values)?;
-    if eval_constant_already_defined(name, context) {
-        let warned = values.warning(&const_redefinition_warning(name));
-        eval_release_value(context, values, value)?;
-        return warned;
-    }
-    if !context.define_constant(name, value) {
-        eval_release_value(context, values, value)?;
-    }
-    Ok(())
+    let value = RuntimeOwnerSlot::new(eval_owned_expr(value, context, scope, values)?);
+    with_runtime_owners(&value, || {
+        if eval_constant_already_defined(name, context) {
+            let warned = values.warning(&const_redefinition_warning(name));
+            eval_release_value(context, values, value.take())?;
+            return warned;
+        }
+        let transferred = value.take();
+        if !context.define_constant(name, transferred) {
+            eval_release_value(context, values, transferred)?;
+        }
+        Ok(())
+    })
 }
 
 /// Formats PHP's warning for a constant declared twice under the active profile.

@@ -504,10 +504,11 @@ fn curl_reset_detaches_the_complete_php_owner_batch() {
             .expect("callback owner");
     }
 
-    let mut detached = context
+    let detached = context
         .stream_resources_mut()
         .take_curl_easy_reset_owners(id)
         .expect("known easy handle");
+    let mut detached = detached.iter().collect::<Vec<_>>();
     detached.sort_by_key(|owner| owner.as_ptr() as usize);
     let mut expected = vec![private, write, header];
     expected.sort_by_key(|owner| owner.as_ptr() as usize);

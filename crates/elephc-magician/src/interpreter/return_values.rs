@@ -32,16 +32,20 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             result
         }
         EvalControl::Return(value) => {
-            let result = eval_declared_explicit_return_value(
-                callee,
-                return_type,
-                return_owner,
-                called_class_name,
-                value,
-                context,
-                values,
-            );
-            finish_declared_return_value(value, result, context, values)
+            use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+            let owner = RuntimeOwnerSlot::new(value);
+            with_runtime_owners(&owner, || {
+                let result = eval_declared_explicit_return_value(
+                    callee,
+                    return_type,
+                    return_owner,
+                    called_class_name,
+                    owner.borrowed(),
+                    context,
+                    values,
+                );
+                finish_eval_argument_values(result, [owner.take()], context, values)
+            })
         }
         EvalControl::Throw(result) => {
             let thrown = if result.is_borrowed() { values.retain(result)? } else { result };
@@ -64,43 +68,37 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = (|| {
-        let Some(return_type) = return_type else {
-            return Ok(value);
-        };
-        if eval_declared_return_type_is_void(return_type) {
-            return if values.type_tag(value)? == EVAL_TAG_NULL {
-                Ok(value)
-            } else {
-                Err(EvalStatus::RuntimeFatal)
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    let owner = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&owner, || {
+        let result = (|| {
+            let value = owner.borrowed();
+            let Some(return_type) = return_type else {
+                return Ok(value);
             };
-        }
-        if eval_declared_return_type_is_never(return_type) {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        eval_declared_return_value(
-            callee, false, return_type, return_owner, called_class_name, value, context, values,
-        )
-    })();
-    finish_declared_return_value(value, result, context, values)
-}
-
-/// Consumes an owned return cell when type validation rejects it or replaces it with a coerced value.
-fn finish_declared_return_value(
-    original: RuntimeCellHandle,
-    result: Result<RuntimeCellHandle, EvalStatus>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !matches!(&result, Ok(value) if *value == original) {
-        if let Err(status) = eval_release_value(context, values, original) {
-            if let Ok(coerced) = result {
-                eval_release_value(context, values, coerced)?;
+            if eval_declared_return_type_is_void(return_type) {
+                return if values.type_tag(value)? == EVAL_TAG_NULL {
+                    Ok(value)
+                } else {
+                    Err(EvalStatus::RuntimeFatal)
+                };
             }
-            return Err(status);
-        }
-    }
-    result
+            if eval_declared_return_type_is_never(return_type) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_declared_return_value(
+                callee,
+                false,
+                return_type,
+                return_owner,
+                called_class_name,
+                value,
+                context,
+                values,
+            )
+        })();
+        finish_eval_argument_values(result, [owner.take()], context, values)
+    })
 }
 
 /// Materializes an implicit return according to the declared return type.

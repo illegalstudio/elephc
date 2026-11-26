@@ -30,6 +30,7 @@ pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result, eval_cast_value,
     eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_owned_dynamic_class_name,
 };
 use evaluation::*;
 
@@ -246,15 +247,16 @@ fn eval_expr_with_result_ownership(
         }
         EvalExpr::Assign { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
+            let replaced = set_owned_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
                 values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            )?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(
+                replaced, context, values,
+            )?;
             // The scope owns the stored cell; the expression result borrows that owner so
             // `eval_owned_expr` retains once when the surrounding call needs its own lease.
             Ok(value.borrowed())
@@ -426,11 +428,20 @@ fn eval_expr_with_result_ownership(
                 return eval_expr(selected, context, scope, values);
             }
             let condition = eval_owned_expr(condition, context, scope, values)?;
-            let truthy = values.truthy(condition);
-            if matches!(truthy, Ok(true)) { return Ok(condition); }
-            let released = eval_release_value(context, values, condition);
-            truthy?;
-            released?;
+            let condition = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(condition);
+            let selected = crate::runtime_hooks::owner_frames::with_runtime_owners(&condition, || {
+                let truthy = values.truthy(condition.borrowed());
+                if matches!(truthy, Ok(true)) {
+                    return Ok(Some(condition.take()));
+                }
+                let released = eval_release_value(context, values, condition.take());
+                truthy?;
+                released?;
+                Ok(None)
+            })?;
+            if let Some(condition) = selected {
+                return Ok(condition);
+            }
             eval_expr(else_branch, context, scope, values)
         }
         EvalExpr::Unary { op, expr } => eval_unary_expr(*op, expr, context, scope, values),

@@ -307,11 +307,11 @@ pub(super) fn initialize_eval_enum_case(
             if backing_value.is_some() {
                 values.property_set(object.borrowed(), "value", backing.borrowed())?;
                 if let Some(replaced) = context.set_enum_case_value(enum_decl.name(), case.name(), backing.take()) {
-                    values.release(replaced)?;
+                    eval_release_value(context, values, replaced)?;
                 }
             }
             if let Some(replaced) = context.set_enum_case(enum_decl.name(), case.name(), object.take()) {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
             Ok(())
         })();

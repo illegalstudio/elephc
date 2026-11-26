@@ -105,15 +105,52 @@ pub(in crate::interpreter) fn set_scope_cell(
     cell: RuntimeCellHandle,
     ownership: ScopeCellOwnership,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<elephc_memoir::runtime_owners::RuntimeOwnerBatch, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    use elephc_memoir::runtime_owners::RuntimeCellOwnership;
+
     let name = name.into();
-    if let Err(status) = validate_generic_local_contracts(scope, &name, cell, context, values) {
-        if ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
-        return Err(status);
-    }
-    let result = set_scope_cell_unchecked(context, scope, name, cell, ownership, values);
-    if result.is_err() && ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
-    result
+    let incoming = RuntimeOwnerSlot::for_ownership(
+        cell,
+        match ownership {
+            ScopeCellOwnership::Borrowed => RuntimeCellOwnership::Borrowed,
+            ScopeCellOwnership::Owned => RuntimeCellOwnership::Owned,
+        },
+    );
+    with_runtime_owners(&incoming, || {
+        if let Err(status) = validate_generic_local_contracts(
+            scope,
+            &name,
+            incoming.borrowed(),
+            context,
+            values,
+        ) {
+            if ownership == ScopeCellOwnership::Owned {
+                let _ = eval_release_value(context, values, incoming.take());
+            }
+            return Err(status);
+        }
+        let result = set_scope_cell_unchecked(
+            context,
+            scope,
+            name,
+            incoming.borrowed(),
+            ownership,
+            values,
+        );
+        match result {
+            Ok(replaced) => {
+                incoming.take();
+                Ok(replaced)
+            }
+            Err(status) => {
+                if ownership == ScopeCellOwnership::Owned {
+                    let _ = eval_release_value(context, values, incoming.take());
+                }
+                Err(status)
+            }
+        }
+    })
 }
 
 /// Marks an in-place write in the scope that actually owns the visible binding.
@@ -139,18 +176,26 @@ pub(in crate::interpreter) fn mark_scope_binding_changed(
 fn set_scope_cell_unchecked(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, name: String,
     cell: RuntimeCellHandle, ownership: ScopeCellOwnership, values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<elephc_memoir::runtime_owners::RuntimeOwnerBatch, EvalStatus> {
     if let Some(reference) = visible_scope_cell(context, scope, &name) {
         if values.is_reference(reference)? {
             if reference == cell {
                 mark_scope_binding_changed(context, scope, &name)?;
-                return Ok(Vec::new());
+                return Ok(if ownership == ScopeCellOwnership::Owned {
+                    elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([
+                        cell.for_ownership(ScopeCellOwnership::Owned),
+                    ])
+                } else {
+                    elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty()
+                });
             }
             let previous = values.reference_replace(reference, cell)?;
             context.copy_array_metadata(cell, reference);
             mark_scope_binding_changed(context, scope, &name)?;
-            let mut released = vec![previous];
-            if ownership == ScopeCellOwnership::Owned { released.push(cell); }
+            let mut released = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([previous]);
+            if ownership == ScopeCellOwnership::Owned {
+                released.push(cell.for_ownership(ScopeCellOwnership::Owned));
+            }
             return Ok(released);
         }
     }
@@ -166,26 +211,49 @@ pub(in crate::interpreter) fn set_owned_scope_cell(
     name: String,
     cell: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if let Err(status) = validate_generic_local_contracts(scope, &name, cell, context, values) {
-        let _ = eval_release_value(context, values, cell);
-        return Err(status);
-    }
-    let result = (|| {
-        if let Some(reference) = visible_scope_cell(context, scope, &name) {
-            if values.is_reference(reference)? {
-                let same_owner = reference == cell;
-                let mut replaced = set_scope_cell_unchecked(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
-                if same_owner { replaced.push(cell); }
-                return Ok(replaced);
+) -> Result<elephc_memoir::runtime_owners::RuntimeOwnerBatch, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+    let incoming = RuntimeOwnerSlot::new(cell);
+    with_runtime_owners(&incoming, || {
+        if let Err(status) = validate_generic_local_contracts(
+            scope,
+            &name,
+            incoming.borrowed(),
+            context,
+            values,
+        ) {
+            let _ = eval_release_value(context, values, incoming.take());
+            return Err(status);
+        }
+        let result = (|| {
+            if let Some(reference) = visible_scope_cell(context, scope, &name) {
+                if values.is_reference(reference)? {
+                    return set_scope_cell_unchecked(
+                        context,
+                        scope,
+                        name,
+                        incoming.borrowed(),
+                        ScopeCellOwnership::Owned,
+                        values,
+                    );
+                }
+            }
+            update_scope_cell(context, scope, name, |scope, name| {
+                scope.set_owned_respecting_references(name, incoming.borrowed())
+            })
+        })();
+        match result {
+            Ok(replaced) => {
+                incoming.take();
+                Ok(replaced)
+            }
+            Err(status) => {
+                let _ = eval_release_value(context, values, incoming.take());
+                Err(status)
             }
         }
-        update_scope_cell(context, scope, name, |scope, name| {
-            scope.set_owned_respecting_references(name, cell)
-        })
-    })();
-    if result.is_err() { let _ = eval_release_value(context, values, cell); }
-    result
+    })
 }
 
 /// Applies a storage mutation to the actual scope behind a local or global alias.
@@ -194,10 +262,10 @@ fn update_scope_cell(
     scope: &mut ElephcEvalScope,
     name: String,
     update: impl FnOnce(&mut ElephcEvalScope, String) -> Vec<RuntimeCellHandle>,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<elephc_memoir::runtime_owners::RuntimeOwnerBatch, EvalStatus> {
     if let Some(global) = eval_superglobal_scope(context, scope, &name) {
         let global = unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
-        return Ok(update(global, name));
+        return Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(update(global, name)));
     }
     if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
@@ -205,14 +273,14 @@ fn update_scope_cell(
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
-            return Ok(update(scope, global_name));
+            return Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(update(scope, global_name)));
         }
         let Some(global_scope) = (unsafe { global_scope.as_mut() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        return Ok(update(global_scope, global_name));
+        return Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(update(global_scope, global_name)));
     }
-    Ok(update(scope, name))
+    Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(update(scope, name)))
 }
 
 /// Creates a PHP reference alias between two eval-visible variable names.
@@ -222,13 +290,17 @@ pub(in crate::interpreter) fn set_reference_alias(
     target: &str,
     source: &str,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<elephc_memoir::runtime_owners::RuntimeOwnerBatch, EvalStatus> {
     if let Some(declared) = scope.local_type(target).cloned() {
         let current = visible_scope_cell(context, scope, source);
-        let value = current.map_or_else(|| values.null(), Ok)?;
-        let checked = validate_generic_local(&declared, target, value, context, values);
-        if current.is_none() { let released = eval_release_value(context, values, value); checked.and(released)?; }
-        else { checked?; }
+        if let Some(value) = current {
+            validate_generic_local(&declared, target, value, context, values)?;
+        } else {
+            let value = values.null()?;
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                validate_generic_local(&declared, target, value, context, values)
+            })?;
+        }
     }
     let mut types = generic_local_contracts(scope, source, context);
     if let Some(declared) = scope.local_type(target).filter(|ty| !types.contains(ty)) { types.push(declared.clone()); }
@@ -239,11 +311,11 @@ pub(in crate::interpreter) fn set_reference_alias(
     }
     if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
         scope.mark_global_alias_to(target.to_string(), global_name);
-        return Ok(Vec::new());
+        return Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty());
     }
     if eval_superglobal_scope(context, scope, source).is_some() {
         scope.mark_global_alias_to(target.to_string(), source.to_string());
-        return Ok(Vec::new());
+        return Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::empty());
     }
     let (cell, ownership) = scope_entry(context, scope, source)
         .filter(|entry| entry.flags().is_visible())
@@ -252,7 +324,9 @@ pub(in crate::interpreter) fn set_reference_alias(
             |entry| Ok((entry.cell(), entry.flags().ownership)),
         )?;
     if values.is_reference(cell)? { context.bind_local_reference_types(cell, &types); }
-    Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
+    Ok(elephc_memoir::runtime_owners::RuntimeOwnerBatch::new(
+        scope.set_reference(target.to_string(), source.to_string(), cell, ownership),
+    ))
 }
 
 /// Unsets a variable, removing only the local alias when the name is a `global` alias.
@@ -299,29 +373,90 @@ pub(in crate::interpreter) fn finish_activation_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
-    finish_owner_cleanup(
-        result, scope.drain_owned_cells(), CleanupErrorPolicy::Last, &mut (context, values),
-        |(context, values), value| eval_release_value(context, &mut **values, value),
-        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+    let owners = scope.drain_owned_cells();
+    finish_eval_owner_batch(
+        &owners,
+        result,
+        ReleaseOrder::Forward,
+        CleanupErrorPolicy::Last,
+        context,
+        values,
     )
 }
 
 /// Retires every displaced scope owner while exposing the remaining leases to the collector.
 pub(in crate::interpreter) fn retire_replaced_scope_cells(
-    replaced: Vec<RuntimeCellHandle>,
+    replaced: impl IntoIterator<Item = RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
-    match replaced.as_slice() {
-        [] => return Ok(()),
-        [cell] => return eval_release_value(context, values, *cell),
-        _ => {}
-    }
-    let owners = StagedRuntimeOwners::default();
-    for cell in replaced { owners.stage(cell); }
-    with_runtime_owners(&owners, || owners.release(Ok(()), |cell| {
-        eval_release_value(context, values, cell)
-    }))
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+    };
+    retire_eval_owner_batch(
+        RuntimeOwnerBatch::new(replaced),
+        ReleaseOrder::Forward,
+        CleanupErrorPolicy::First,
+        context,
+        values,
+    )
+}
+
+/// Retires one detached Memoir batch while every outstanding slot remains a collector root.
+pub(in crate::interpreter) fn retire_eval_owner_batch(
+    owners: elephc_memoir::runtime_owners::RuntimeOwnerBatch,
+    order: elephc_memoir::runtime_owners::ReleaseOrder,
+    errors: elephc_memoir::runtime_owners::CleanupErrorPolicy,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+
+    with_runtime_owners(&owners, || {
+        owners.release(order, errors, |cell| {
+            eval_release_value(context, values, cell)
+        })
+    })
+}
+
+/// Retires a detached batch before transferring a rooted operation result.
+pub(in crate::interpreter) fn finish_eval_owner_batch(
+    owners: &elephc_memoir::runtime_owners::RuntimeOwnerBatch,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    order: elephc_memoir::runtime_owners::ReleaseOrder,
+    errors: elephc_memoir::runtime_owners::CleanupErrorPolicy,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::RuntimeOwnerSlot;
+
+    let result_owner = RuntimeOwnerSlot::empty();
+    let operation = result.map(|result| {
+        debug_assert!(result_owner.replace(Some(result)).is_none());
+    });
+    with_runtime_owners(&(owners, &result_owner), || {
+        owners.finish(operation, &result_owner, order, errors, |cell| {
+            eval_release_value(context, values, cell)
+        })
+    })
+}
+
+/// Finishes scalar-only staging whose owners cannot carry eval-defined destructors.
+pub(in crate::interpreter) fn finish_staged_runtime_owners(
+    owners: &elephc_memoir::runtime_owners::StagedRuntimeOwners,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::RuntimeOwnerSlot;
+
+    let result_owner = RuntimeOwnerSlot::empty();
+    let operation = result.map(|result| {
+        debug_assert!(result_owner.replace(Some(result)).is_none());
+    });
+    with_runtime_owners(&(owners, &result_owner), || {
+        owners.finish(operation, &result_owner, |cell| values.release(cell))
+    })
 }

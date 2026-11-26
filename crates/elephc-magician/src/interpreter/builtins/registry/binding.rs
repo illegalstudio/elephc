@@ -9,6 +9,7 @@
 //!   EvalIR call metadata or evaluated runtime-cell handles.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Evaluates a direct PHP-visible builtin call with named or spread arguments.
 pub(in crate::interpreter) fn eval_builtin_call(
@@ -80,8 +81,10 @@ fn eval_bound_builtin_call_from_scope(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
-    let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)
-        .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct));
+    let result = with_runtime_owners(&bound, || {
+        eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)
+            .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct))
+    });
     finish_eval_argument_values(result, bound, context, values)
 }
 
@@ -97,7 +100,7 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
 /// Applies the same builtin parameter planner while tracking defaults created for named gaps.
 pub(super) fn bind_builtin_arguments(
     name: &str, evaluated_args: Vec<EvaluatedCallArg>, values: &mut impl RuntimeValueOps,
-    owners: Option<&mut Vec<RuntimeCellHandle>>,
+    owners: Option<&StagedRuntimeOwners>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if evaluated_args.iter().all(|arg| arg.name.is_none()) {
         return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
@@ -138,7 +141,7 @@ pub(in crate::interpreter) fn bind_builtin_named_arg(
 /// Materializes named-call gaps and optionally transfers each new default to call-boundary cleanup.
 fn collect_builtin_arguments(
     name: &str, bound_args: Vec<Option<RuntimeCellHandle>>, values: &mut impl RuntimeValueOps,
-    owners: Option<&mut Vec<RuntimeCellHandle>>,
+    owners: Option<&StagedRuntimeOwners>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if !bound_args.iter().any(Option::is_some) {
         return Ok(Vec::new());
@@ -150,28 +153,32 @@ fn collect_builtin_arguments(
         .rposition(Option::is_some)
         .expect("non-empty bound args has a last supplied arg");
     let mut args = Vec::with_capacity(last_index + 1);
-    let mut defaults = Vec::new();
+    let defaults = StagedRuntimeOwners::default();
 
-    let result = (|| {
+    let result = with_runtime_owners(&defaults, || (|| {
         for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
             if let Some(value) = arg {
                 args.push(value);
             } else if index >= shape.required_param_count {
                 let value = eval_builtin_default_arg(name, index, values)?;
-                defaults.push(value);
+                if let Some(owners) = owners { owners.stage(value); }
+                else { defaults.stage(value); }
                 args.push(value);
             } else {
                 return Err(EvalStatus::RuntimeFatal);
             }
         }
         Ok(())
-    })();
+    })());
     if let Err(status) = result {
-        for value in defaults { let _ = values.release(value); }
+        let _ = defaults.take_all().release(
+            elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+            elephc_memoir::runtime_owners::CleanupErrorPolicy::Ignore,
+            |value| values.release(value),
+        );
         return Err(status);
     }
-
-    if let Some(owners) = owners { owners.extend(defaults); }
+    let _ = defaults.take_all().transfer();
 
     Ok(args)
 }

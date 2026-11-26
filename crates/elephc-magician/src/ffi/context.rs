@@ -475,6 +475,38 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
         .map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
 }
 
+/// Drains context-owned PHP cells while keeping eval destructor dispatch registered.
+///
+/// Generated terminal cleanup alternates this operation with native root retirement and cycle
+/// collection until neither side can republish an owner. The primary ABI lease remains intact.
+///
+/// # Safety
+/// `ctx` must be null or a live pointer returned by `__elephc_eval_context_new`.
+#[export_name = "__elephc_eval_context_drain_owners_v1"]
+pub unsafe extern "C" fn __elephc_eval_context_drain_owners(
+    ctx: *mut ElephcEvalContext,
+) -> *mut crate::value::RuntimeCell {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return ptr::null_mut();
+    };
+    let pending = context.take_pending_throw();
+    drain_eval_context(context, pending)
+        .map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
+}
+
+/// Reports whether a live eval context still publishes any PHP runtime-cell owner.
+///
+/// # Safety
+/// `ctx` must be null or a live pointer returned by `__elephc_eval_context_new`.
+#[export_name = "__elephc_eval_context_has_owners_v1"]
+pub unsafe extern "C" fn __elephc_eval_context_has_owners(
+    ctx: *mut ElephcEvalContext,
+) -> i64 {
+    unsafe { ctx.as_ref() }
+        .is_some_and(ElephcEvalContext::has_context_cell_owners)
+        .into()
+}
+
 /// Drops one context lease, preserving a detached callback's exception through any final cleanup.
 ///
 /// # Safety
@@ -493,7 +525,9 @@ pub(super) unsafe fn release_eval_context(
 }
 
 /// Detaches every context-owned and resource-owned PHP cell before cleanup can re-enter.
-fn take_eval_context_cell_owners(context: &mut ElephcEvalContext) -> Vec<RuntimeCellHandle> {
+fn take_eval_context_cell_owners(
+    context: &mut ElephcEvalContext,
+) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
     let mut cells = context.take_context_cell_owners();
     cells.extend(context.stream_resources_mut().take_php_cell_owners());
     cells
@@ -588,7 +622,7 @@ fn drain_eval_context(
         |cells, pending| {
             #[cfg(not(test))]
             {
-                crate::runtime_hooks::release::release_native_cells(cells, pending)
+                crate::runtime_hooks::release::release_native_owner_batch(cells, pending)
             }
             #[cfg(test)]
             {

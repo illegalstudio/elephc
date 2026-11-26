@@ -84,7 +84,8 @@ pub unsafe extern "C" fn __elephc_eval_ob_release_handler(id: u64, thrown: *mut 
         if context.abi_version() != ABI_VERSION { return 1; }
         let callback = RuntimeCellHandle::from_raw(entry.callback as *mut RuntimeCell);
         let mut values = ElephcRuntimeOps::with_context(context_ptr);
-        let failed = crate::interpreter::release_ob_handler_callbacks(vec![callback], context, &mut values).is_err();
+        let callbacks = elephc_memoir::runtime_owners::RuntimeOwnerBatch::new([callback]);
+        let failed = crate::interpreter::release_ob_handler_callbacks(callbacks, context, &mut values).is_err();
         let pending = if failed { context.take_pending_throw() } else { None };
         // The buffer owns this lease even if the function that registered it already returned.
         let pending = unsafe { super::context::release_eval_context(context_ptr, pending) };

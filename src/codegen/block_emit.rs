@@ -1121,16 +1121,16 @@ fn emit_main_function(
     web_isolation: WebIsolation,
 ) -> Result<()> {
     let entry_symbol = if web {
-        frame::WEB_HANDLER_SYMBOL
+        frame::WEB_HANDLER_SYMBOL.to_string()
     } else {
-        emitter.entry_symbol()
+        emitter.entry_symbol().to_string()
     };
-    emit_fn_marker(emitter, &function.name, entry_symbol, false);
+    emit_fn_marker(emitter, &function.name, &entry_symbol, false);
     let mut layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
-        false,
+        true,
         shared.module_runtime_facts(module).backtrace,
     );
     if web {
@@ -1170,6 +1170,7 @@ fn emit_main_function(
         }
     }
     emit_endfn_marker(ctx.emitter, function.display_name());
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_symbol);
     if web {
         frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }

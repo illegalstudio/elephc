@@ -10,7 +10,9 @@
 //! - Reference owners must not survive the call and alter later COW decisions.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 use elephc_memoir::runtime_owners::{finish_owner_cleanup, CleanupErrorPolicy};
 
 /// Invokes a callable with owned array reads and releases every temporary after writeback.
@@ -48,15 +50,18 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     if !values.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
     let copy = values.copy_value(array)?;
     context.copy_array_metadata(array, copy);
-    let mut owners = vec![copy];
+    let owners = StagedRuntimeOwners::default();
+    owners.stage(copy);
     let mut arguments = Vec::new();
     let mut saw_named = false;
     let preserved = RuntimeOwnerSlot::empty();
-    let prepared = append_unpacked_arguments(
-        copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners), true,
-        "Cannot use positional argument after named argument",
-    );
-    let owners = own_unpacked_call_argument_owners(&mut arguments, owners);
+    let prepared = with_runtime_owners(&owners, || {
+        append_unpacked_arguments(
+            copy, &mut arguments, &mut saw_named, context, values, &owners, true,
+            "Cannot use positional argument after named argument",
+        )
+    });
+    let owners = own_unpacked_call_argument_owners(&mut arguments, owners.take_all().transfer());
     with_runtime_owners(&(&owners, &preserved), || {
         let result = prepared.and_then(|()| {
             let arguments = arguments
@@ -99,7 +104,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values_with_owners(
     saw_named: &mut bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    owners: Option<&mut Vec<RuntimeCellHandle>>,
+    owners: &StagedRuntimeOwners,
 ) -> Result<(), EvalStatus> {
     append_unpacked_arguments(array, evaluated_args, saw_named, context, values, owners, true,
         "Cannot use positional argument after named argument during unpacking")
@@ -108,9 +113,9 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values_with_owners(
 /// Captures unpacked builtin values without keeping persistent references as mutable argument values.
 pub(in crate::interpreter) fn append_unpacked_value_call_args(
     array: RuntimeCellHandle, evaluated_args: &mut Vec<EvaluatedCallArg>, saw_named: &mut bool,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &StagedRuntimeOwners,
 ) -> Result<(), EvalStatus> {
-    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, Some(owners), false,
+    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, owners, false,
         "Cannot use positional argument after named argument during unpacking")
 }
 
@@ -118,90 +123,81 @@ pub(in crate::interpreter) fn append_unpacked_value_call_args(
 fn append_unpacked_arguments(
     array: RuntimeCellHandle, evaluated_args: &mut Vec<EvaluatedCallArg>, saw_named: &mut bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-    mut owners: Option<&mut Vec<RuntimeCellHandle>>, preserve_references: bool,
+    owners: &StagedRuntimeOwners, preserve_references: bool,
     order_error: &str,
 ) -> Result<(), EvalStatus> {
     let len = values.array_len(array)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let ref_target = eval_array_reference_key(key, values)?
-            .and_then(|key| context.array_element_alias(array, &key).cloned());
-        let arg = match values.type_tag(key)? {
-            EVAL_TAG_INT => {
-                if *saw_named {
-                    values.release(key)?;
-                    return eval_throw_error(order_error, context, values);
-                }
-                let read = if owners.is_some() && preserve_references {
-                    values.array_get_preserving_references(array, key)
-                } else {
-                    values.array_get(array, key)
-                };
-                let value = match read {
-                    Ok(value) => value,
-                    Err(status) => {
-                        values.release(key)?;
-                        return Err(status);
+        let key = RuntimeOwnerSlot::new(values.array_iter_key(array, position)?);
+        with_runtime_owners(&key, || {
+            let operation = (|| {
+                let ref_target = eval_array_reference_key(key.borrowed(), values)?
+                    .and_then(|key| context.array_element_alias(array, &key).cloned());
+                let arg = match values.type_tag(key.borrowed())? {
+                    EVAL_TAG_INT => {
+                        if *saw_named {
+                            return eval_throw_error(order_error, context, values);
+                        }
+                        let read = if preserve_references {
+                            values.array_get_preserving_references(array, key.borrowed())
+                        } else {
+                            values.array_get(array, key.borrowed())
+                        };
+                        let value = owners.stage(read?);
+                        let original = value;
+                        let (value, ref_target) =
+                            eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
+                        if value != original {
+                            owners.stage(value);
+                        }
+                        EvaluatedCallArg {
+                            evaluation_owner: None,
+                            name: None,
+                            value,
+                            ref_target,
+                        }
                     }
-                };
-                if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
-                let original = value;
-                let (value, ref_target) =
-                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
-                if value != original {
-                    if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
-                }
-                EvaluatedCallArg {
-                    evaluation_owner: None,
-                    name: None,
-                    value,
-                    ref_target,
-                }
-            }
-            EVAL_TAG_STRING => {
-                *saw_named = true;
-                let name = values.string_bytes(key)?;
-                let name = match String::from_utf8(name) {
-                    Ok(name) => name,
-                    Err(_) => {
-                        values.release(key)?;
+                    EVAL_TAG_STRING => {
+                        *saw_named = true;
+                        let name = String::from_utf8(values.string_bytes(key.borrowed())?)
+                            .map_err(|_| EvalStatus::RuntimeFatal)?;
+                        let read = if preserve_references {
+                            values.array_get_preserving_references(array, key.borrowed())
+                        } else {
+                            values.array_get(array, key.borrowed())
+                        };
+                        let value = owners.stage(read?);
+                        let original = value;
+                        let (value, ref_target) =
+                            eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
+                        if value != original {
+                            owners.stage(value);
+                        }
+                        EvaluatedCallArg {
+                            evaluation_owner: None,
+                            name: Some(name),
+                            value,
+                            ref_target,
+                        }
+                    }
+                    _ => {
                         return Err(EvalStatus::RuntimeFatal);
                     }
                 };
-                let read = if owners.is_some() && preserve_references {
-                    values.array_get_preserving_references(array, key)
+                let arg = if preserve_references {
+                    arg
                 } else {
-                    values.array_get(array, key)
-                };
-                let value = match read {
-                    Ok(value) => value,
-                    Err(status) => {
-                        values.release(key)?;
-                        return Err(status);
+                    EvaluatedCallArg {
+                        ref_target: None,
+                        ..arg
                     }
                 };
-                if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
-                let original = value;
-                let (value, ref_target) =
-                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
-                if value != original {
-                    if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
-                }
-                EvaluatedCallArg {
-                    evaluation_owner: None,
-                    name: Some(name),
-                    value,
-                    ref_target,
-                }
-            }
-            _ => {
-                values.release(key)?;
-                return Err(EvalStatus::RuntimeFatal);
-            }
-        };
-        values.release(key)?;
-        let arg = if preserve_references { arg } else { EvaluatedCallArg { ref_target: None, ..arg } };
-        evaluated_args.push(arg);
+                evaluated_args.push(arg);
+                Ok(())
+            })();
+            let cleanup = values.release(key.take());
+            operation.and(cleanup)
+        })?;
     }
     Ok(())
 }

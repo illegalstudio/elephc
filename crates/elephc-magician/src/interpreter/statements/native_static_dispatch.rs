@@ -350,15 +350,26 @@ pub(super) fn eval_enum_from_result(
     let mut args = bind_evaluated_function_args(&[String::from("value")], evaluated_args)?;
     let value = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
     for case_name in case_names {
-        let case = eval_enum_case_object(enum_name, &case_name, context, values)?
-            .ok_or(EvalStatus::RuntimeFatal)?;
+        let case = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+            eval_enum_case_object(enum_name, &case_name, context, values)?
+                .ok_or(EvalStatus::RuntimeFatal)?,
+        );
         let case_value = context
             .enum_case_value(enum_name, &case_name)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let equal = values.compare(EvalBinOp::StrictEq, value, case_value)?;
-        if values.truthy(equal)? {
-            return Ok(case);
+        let equal = crate::runtime_hooks::owner_frames::with_runtime_owners(&case, || {
+            values.compare(EvalBinOp::StrictEq, value, case_value)
+        })
+        .map(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new)?;
+        let matches = crate::runtime_hooks::owner_frames::with_runtime_owners(&(&case, &equal), || {
+            values.truthy(equal.borrowed())
+        });
+        let equal_cleanup = release_expr_result(equal.take(), context, values);
+        let matches = matches.and_then(|matches| equal_cleanup.map(|()| matches))?;
+        if matches {
+            return Ok(case.take());
         }
+        release_expr_result(case.take(), context, values)?;
     }
     if nullable_miss {
         values.null()

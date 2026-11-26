@@ -725,27 +725,16 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
     let result = abi::int_result_reg(ctx.emitter);
     let tag = abi::secondary_scratch_reg(ctx.emitter);
     let scalar = ctx.next_label("release_local_slot_scalar_mixed");
-    crate::codegen_support::sentinels::emit_branch_if_null_container(
+    let protected = ctx.next_label("release_local_slot_protected_mixed");
+    elephc_memoir::cleanup_fast_paths::scalar_mixed::emit_local_retirement_gate(
         ctx.emitter,
         result,
         tag,
+        &scalar,
+        &protected,
         done,
     );
-    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, #3"));                 // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("b.ls {scalar}"));                 // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, #8"));                 // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // null owns no destructor-capable child
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, 3"));                  // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("jbe {scalar}"));                  // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, 8"));                  // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("je {scalar}"));                   // null owns no destructor-capable child
-        }
-    }
+    ctx.emitter.label(&protected);
     abi::emit_decref_preserving_exception(ctx.emitter, &PhpType::Mixed);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
     abi::emit_jump(ctx.emitter, done);

@@ -59,11 +59,12 @@ fn eval_curl_reset_result(
         .stream_resources_mut()
         .take_curl_easy_reset_owners(table_id)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    elephc_memoir::runtime_owners::release_all(
+    crate::interpreter::scope_cells::retire_eval_owner_batch(
         detached,
         elephc_memoir::runtime_owners::ReleaseOrder::Forward,
         elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
-        |owner| eval_release_value(context, values, owner),
+        context,
+        values,
     )?;
     values.null()
 }

@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::super::collection_builder::with_collection_cells;
 
 /// Evaluates direct `is_a(...)` calls over eval boxed object cells and class strings.
 pub(in crate::interpreter) fn eval_is_a_declared_call(
@@ -221,15 +222,11 @@ fn eval_string_array_to_vec(
     let len = values.array_len(array)?;
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key);
-        let released_key = values.release(key);
-        let value = value?;
-        let bytes = values.string_bytes(value);
-        let released_value = values.release(value);
-        released_key?;
-        let bytes = bytes?;
-        released_value?;
+        let bytes = with_collection_cells(values, |values, owners| {
+            let key = owners.stage(values.int(position as i64)?);
+            let value = owners.stage(values.array_get(array, key.borrowed())?);
+            values.string_bytes(value.borrowed())
+        })?;
         result.push(String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?);
     }
     Ok(result)

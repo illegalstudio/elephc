@@ -52,18 +52,34 @@ impl ElephcRuntimeOps {
             } else {
                 args.push(cell.borrowed());
             }
-            Some(cell)
+            Some(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(cell))
         } else { None };
-        let outcome = interpreter::execute_context_method_call_outcome(context, object.borrowed(),
-            eval_method.unwrap_or(method), args, self)
-            .and_then(|outcome| Self::operator_outcome(context, outcome));
-        if let Some(caller) = caller {
-            if let Err(status) = self.release(caller) {
-                if let Ok(value) = outcome { self.release(value)?; }
-                return Err(status);
-            }
-        }
-        outcome
+        crate::runtime_hooks::owner_frames::with_runtime_owners(&caller, || {
+            let outcome = interpreter::execute_context_method_call_outcome(
+                context,
+                object.borrowed(),
+                eval_method.unwrap_or(method),
+                args,
+                self,
+            )
+            .and_then(|outcome| Self::operator_outcome(context, outcome))
+            .map(crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new);
+            crate::runtime_hooks::owner_frames::with_runtime_owners(
+                &outcome.as_ref().ok(),
+                || {
+                    if let Some(caller) = caller.as_ref() {
+                        if let Err(status) = self.release(caller.take()) {
+                            if let Ok(value) = &outcome { self.release(value.take())?; }
+                            return Err(status);
+                        }
+                    }
+                    match &outcome {
+                        Ok(value) => Ok(value.take()),
+                        Err(status) => Err(*status),
+                    }
+                },
+            )
+        })
     }
 
     /// Transfers a callback exception back to the active evaluator without losing its owner.

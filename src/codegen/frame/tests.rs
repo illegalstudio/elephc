@@ -110,6 +110,58 @@ fn resource_inventory_cleanup_is_pay_for_use() {
     assert!(module_uses_resource_inventory_cleanup(&module));
 }
 
+/// Main publishes an unwindable activation and converges eval and native owner roots before free.
+#[test]
+fn main_terminal_cleanup_converges_eval_owners_on_every_target() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(name).unwrap();
+        let mut module = Module::new(target);
+        module.required_runtime_features.eval_bridge = true;
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        main.add_local(
+            Some("__eval_context".to_string()),
+            IrType::I64,
+            PhpType::Pointer(None),
+            LocalKind::EvalContext,
+        );
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let assembly = generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let activation = assembly.find("_exc_call_frame_top").expect("main activation");
+        let callback = assembly
+            .find("__cdylib_exception_cleanup:")
+            .expect("main cleanup callback");
+        let drain = assembly
+            .find(&target.extern_symbol("__elephc_eval_context_drain_owners_v1"))
+            .expect("eval owner drain");
+        let rescan = assembly
+            .find(&target.extern_symbol("__elephc_eval_context_has_owners_v1"))
+            .expect("eval owner rescan");
+        let free = assembly
+            .find(&target.extern_symbol("__elephc_eval_context_free"))
+            .expect("eval context free");
+        assert!(activation < callback, "{name}: {assembly}");
+        assert!(drain < rescan && rescan < free, "{name}: {assembly}");
+        assert!(assembly[drain..rescan].contains("__rt_gc_collect_cycles_explicit"),
+            "{name}: {assembly}");
+    }
+}
+
 /// Descriptor-only backtrace reachability is carried by the frontend's hidden frame snapshot.
 #[test]
 fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruction() {

@@ -707,39 +707,75 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the current signal-table index
     emitter.instruction("cmp x9, #128");                                        // detect the end of the fixed handler table
     emitter.instruction("b.hs __rt_pcntl_release_handlers_state");              // finish with global dispatch state
+    elephc_memoir::guarded_owners::emit_branch_if_indexed_record_present(
+        emitter,
+        &[
+            "__rt_pcntl_handler_kind",
+            "__rt_pcntl_handler_descriptor",
+            "__rt_pcntl_handler_value",
+        ],
+        "x9",
+        "x10",
+        "x11",
+        "__rt_pcntl_release_handlers_active",
+        "__rt_pcntl_release_handlers_next",
+    );
+    emitter.label("__rt_pcntl_release_handlers_active");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
     emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // inspect the registered handler kind
-    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_zero");           // a default disposition needs only PHP-value cleanup
+    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_take");           // a default disposition needs no OS update
     emitter.instruction("mov x0, x9");                                          // bridge arg0 = signal number
     emitter.instruction("mov x1, #0");                                          // bridge arg1 = default disposition
     emitter.instruction("mov x2, #1");                                          // bridge arg2 = restart-syscalls flag
     emitter.instruction("mov x3, #1");                                          // bridge arg3 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_signal_fn");
     emitter.instruction("ldr x10, [x10]");                                      // load the bridge signal-registration callback
-    emitter.instruction("cbz x10, __rt_pcntl_release_handlers_zero");           // clear metadata if no bridge is available
+    emitter.instruction("cbz x10, __rt_pcntl_release_handlers_take");           // detach metadata if no bridge is available
     emitter.instruction("blr x10");                                             // restore the OS default disposition
-    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after the bridge call
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // reload the registered handler kind
-    emitter.instruction("cmp x11, #2");                                         // detect an owned callable descriptor
-    emitter.instruction("b.ne __rt_pcntl_release_handlers_zero");               // skip release for SIG_IGN
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "x10", "x9", "x0");
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the handler-table ownership
-    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after release
-    emitter.label("__rt_pcntl_release_handlers_zero");
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
-    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "x10", "x9", "x0");
-    emitter.instruction("cbz x0, __rt_pcntl_release_handlers_clear");           // untouched signals own no boxed value
-    emitter.instruction("bl __rt_decref_any");                                  // release the table's PHP-value ownership
-    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after value release
-    emitter.label("__rt_pcntl_release_handlers_clear");
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
-    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
+    emitter.label("__rt_pcntl_release_handlers_take");
+    elephc_memoir::symbol_owners::emit_replace_owner_record(
+        emitter,
+        3,
+        |emitter, word, result| {
+            emitter.instruction("ldr x9, [sp, #128]");                          // recover the table index above Memoir's snapshot
+            abi::emit_symbol_address(emitter, "x10", match word {
+                0 => "__rt_pcntl_handler_kind",
+                1 => "__rt_pcntl_handler_descriptor",
+                _ => "__rt_pcntl_handler_value",
+            });
+            elephc_memoir::guarded_owners::emit_load_indexed_owner(
+                emitter, "x10", "x9", result,
+            );
+        },
+        |emitter| {
+            emitter.instruction("ldr x9, [sp, #128]");                          // recover the stable table index
+            elephc_memoir::guarded_owners::emit_clear_indexed_record(
+                emitter,
+                &[
+                    "__rt_pcntl_handler_kind",
+                    "__rt_pcntl_handler_descriptor",
+                    "__rt_pcntl_handler_value",
+                ],
+                "x9",
+                "x10",
+            );
+        },
+        |emitter, displaced| {
+            displaced.emit_load(emitter, 0, "x0");
+            emitter.instruction("cmp x0, #2");                                  // only callable rows own descriptors
+            emitter.instruction("b.ne __rt_pcntl_release_handlers_value");      // skip descriptor cleanup for non-callable rows
+            displaced.emit_load(emitter, 1, "x0");
+            abi::emit_unary_cleanup_preserving_exception(
+                emitter, "__rt_callable_descriptor_release", "x0",
+            );
+            emitter.label("__rt_pcntl_release_handlers_value");
+            displaced.emit_load(emitter, 2, "x0");
+            emitter.instruction("cbz x0, __rt_pcntl_release_handlers_taken");   // untouched signals own no boxed value
+            abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", "x0");
+            emitter.label("__rt_pcntl_release_handlers_taken");
+        },
+    );
+    emitter.instruction("b __rt_pcntl_release_handlers_loop");                  // drain a same-signal replacement before advancing
     emitter.label("__rt_pcntl_release_handlers_next");
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the completed table index
     emitter.instruction("add x9, x9, #1");                                      // advance to the next signal
@@ -779,9 +815,23 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the current signal-table index
     emitter.instruction("cmp r9, 128");                                         // detect the end of the fixed handler table
     emitter.instruction("jae __rt_pcntl_release_handlers_state_x86");           // finish with global dispatch state
+    elephc_memoir::guarded_owners::emit_branch_if_indexed_record_present(
+        emitter,
+        &[
+            "__rt_pcntl_handler_kind",
+            "__rt_pcntl_handler_descriptor",
+            "__rt_pcntl_handler_value",
+        ],
+        "r9",
+        "r10",
+        "r11",
+        "__rt_pcntl_release_handlers_active_x86",
+        "__rt_pcntl_release_handlers_next_x86",
+    );
+    emitter.label("__rt_pcntl_release_handlers_active_x86");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
     emitter.instruction("cmp QWORD PTR [r10 + r9*8], 0");                       // inspect the registered handler kind
-    emitter.instruction("je __rt_pcntl_release_handlers_zero_x86");             // a default disposition needs only PHP-value cleanup
+    emitter.instruction("je __rt_pcntl_release_handlers_take_x86");             // a default disposition needs no OS update
     emitter.instruction("mov rdi, r9");                                         // bridge arg0 = signal number
     emitter.instruction("xor esi, esi");                                        // bridge arg1 = default disposition
     emitter.instruction("mov edx, 1");                                          // bridge arg2 = restart-syscalls flag
@@ -789,30 +839,53 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_signal_fn");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the bridge signal-registration callback
     emitter.instruction("test r10, r10");                                       // tolerate an unavailable bridge during teardown
-    emitter.instruction("jz __rt_pcntl_release_handlers_zero_x86");             // clear metadata if no bridge is available
+    emitter.instruction("jz __rt_pcntl_release_handlers_take_x86");             // detach metadata if no bridge is available
     emitter.instruction("call r10");                                            // restore the OS default disposition
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after the bridge call
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");                       // detect an owned callable descriptor
-    emitter.instruction("jne __rt_pcntl_release_handlers_zero_x86");            // skip release for SIG_IGN
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "r10", "r9", "rax");
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the handler-table ownership
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after release
-    emitter.label("__rt_pcntl_release_handlers_zero_x86");
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
-    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "r10", "r9", "rax");
-    emitter.instruction("test rax, rax");                                       // untouched signals own no boxed value
-    emitter.instruction("jz __rt_pcntl_release_handlers_clear_x86");            // skip release for an empty value slot
-    emitter.instruction("call __rt_decref_any");                                // release the table's PHP-value ownership
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after value release
-    emitter.label("__rt_pcntl_release_handlers_clear_x86");
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
-    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
-    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
+    emitter.label("__rt_pcntl_release_handlers_take_x86");
+    elephc_memoir::symbol_owners::emit_replace_owner_record(
+        emitter,
+        3,
+        |emitter, word, result| {
+            emitter.instruction("mov r9, QWORD PTR [rbp - 104]");               // recover the stable table index
+            abi::emit_symbol_address(emitter, "r10", match word {
+                0 => "__rt_pcntl_handler_kind",
+                1 => "__rt_pcntl_handler_descriptor",
+                _ => "__rt_pcntl_handler_value",
+            });
+            elephc_memoir::guarded_owners::emit_load_indexed_owner(
+                emitter, "r10", "r9", result,
+            );
+        },
+        |emitter| {
+            emitter.instruction("mov r9, QWORD PTR [rbp - 104]");               // recover the stable table index
+            elephc_memoir::guarded_owners::emit_clear_indexed_record(
+                emitter,
+                &[
+                    "__rt_pcntl_handler_kind",
+                    "__rt_pcntl_handler_descriptor",
+                    "__rt_pcntl_handler_value",
+                ],
+                "r9",
+                "r10",
+            );
+        },
+        |emitter, displaced| {
+            displaced.emit_load(emitter, 0, "rax");
+            emitter.instruction("cmp rax, 2");                                  // only callable rows own descriptors
+            emitter.instruction("jne __rt_pcntl_release_handlers_value_x86");   // skip descriptor cleanup for non-callable rows
+            displaced.emit_load(emitter, 1, "rax");
+            abi::emit_unary_cleanup_preserving_exception(
+                emitter, "__rt_callable_descriptor_release", "rax",
+            );
+            emitter.label("__rt_pcntl_release_handlers_value_x86");
+            displaced.emit_load(emitter, 2, "rax");
+            emitter.instruction("test rax, rax");                               // untouched signals own no boxed value
+            emitter.instruction("jz __rt_pcntl_release_handlers_taken_x86");    // skip release for an empty boxed-value slot
+            abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", "rax");
+            emitter.label("__rt_pcntl_release_handlers_taken_x86");
+        },
+    );
+    emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");            // drain a same-signal replacement before advancing
     emitter.label("__rt_pcntl_release_handlers_next_x86");
     emitter.instruction("add QWORD PTR [rbp - 104], 1");                        // advance and preserve the next signal index
     emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");            // continue scanning registered handlers

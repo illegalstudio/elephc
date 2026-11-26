@@ -9,7 +9,9 @@
 //! - Cleanup runs on failed argument evaluation and failed operations as well as success.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, RuntimeOwners, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, RuntimeOwners, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Prints a borrowed operand and releases its temporary owner and any separate string conversion.
 pub(in crate::interpreter) fn eval_echo_expr(
@@ -61,21 +63,21 @@ pub(in crate::interpreter) fn eval_unary_value(
                     }
                 }
             }
-            let zero = values.int(0)?;
-            let result = if op == EvalUnaryOp::Plus {
-                values.add(zero, value)
-            } else {
-                values.sub(zero, value)
-            };
-            let released = values.release(zero);
-            match (result, released) {
-                (Err(status), _) => Err(status),
-                (Ok(result), Err(status)) => {
-                    if !result.is_borrowed() { let _ = values.release(result); }
-                    Err(status)
-                }
-                (Ok(result), Ok(())) => Ok(result),
-            }
+            let owners = StagedRuntimeOwners::default();
+            let result = RuntimeOwnerSlot::empty();
+            with_runtime_owners(&(&owners, &result), || {
+                let operation = (|| {
+                    let zero = owners.stage(values.int(0)?);
+                    let value = if op == EvalUnaryOp::Plus {
+                        values.add(zero.borrowed(), value)?
+                    } else {
+                        values.sub(zero.borrowed(), value)?
+                    };
+                    result.replace(Some(value));
+                    Ok(())
+                })();
+                owners.finish(operation, &result, |cell| values.release(cell))
+            })
         }
         EvalUnaryOp::LogicalNot => {
             let truthy = values.truthy(value)?;
@@ -136,10 +138,12 @@ pub(in crate::interpreter) fn eval_comparison_condition(
     right: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let comparison = values.compare(op, left, right)?;
-    let result = values.truthy(comparison);
-    let released = values.release(comparison);
-    result.and_then(|result| released.map(|()| result))
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let comparison = owners.stage(values.compare(op, left, right)?);
+        let result = values.truthy(comparison.borrowed());
+        owners.complete(result, |cell| values.release(cell))
+    })
 }
 
 /// Retains a borrowed result before its source owner is released.
@@ -257,9 +261,12 @@ pub(in crate::interpreter) fn eval_condition(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let value = eval_owned_expr(expr, context, scope, values)?;
-    let result = values.truthy(value);
-    let released = eval_release_value(context, values, value);
-    result.and_then(|result| released.map(|()| result))
+    let owner = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&owner, || {
+        let result = values.truthy(owner.borrowed());
+        let released = eval_release_value(context, values, owner.take());
+        result.and_then(|result| released.map(|()| result))
+    })
 }
 
 /// Keeps a quiet probe's receiver alive and retires its lease on success or failure.
@@ -273,9 +280,12 @@ pub(in crate::interpreter) fn with_eval_probe_operand<V: RuntimeValueOps>(
     ) -> Result<bool, EvalStatus>,
 ) -> Result<bool, EvalStatus> {
     let owner = eval_owned_expr(expr, context, scope, values)?;
-    let result = probe(owner.borrowed(), context, scope, values);
-    let cleanup = eval_release_value(context, values, owner);
-    result.and_then(|answer| cleanup.map(|()| answer))
+    let owner = RuntimeOwnerSlot::new(owner);
+    with_runtime_owners(&owner, || {
+        let result = probe(owner.borrowed(), context, scope, values);
+        let cleanup = eval_release_value(context, values, owner.take());
+        result.and_then(|answer| cleanup.map(|()| answer))
+    })
 }
 
 /// Runs a consumer of borrowed operands and returns its independent result after releasing leases.

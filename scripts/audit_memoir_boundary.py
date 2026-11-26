@@ -39,6 +39,7 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": (
             "cell: RuntimeOwnerSlot",
             "RuntimeOwnerSlot::for_ownership(",
+            "cell.for_ownership(ScopeCellOwnership::Owned)",
         ),
         "forbidden": ("RuntimeCellHandle::from_raw(cell.as_ptr())",),
     },
@@ -126,6 +127,7 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": (
             "symbol_owners::emit_publish_owner(",
             "symbol_owners::emit_publish_address_owner(",
+            "cleanup_fast_paths::scalar_mixed::emit_local_retirement_gate(",
         ),
     },
     "src/codegen/lower_inst/objects/property_stores.rs": {
@@ -139,7 +141,12 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": ("symbol_owners::emit_publish_staged_owner(",),
     },
     "src/codegen/frame.rs": {
-        "required": ("abi::emit_drain_static_owner(",),
+        "required": (
+            "abi::emit_drain_static_owner(",
+            "terminal_cleanup::emit_fixed_point_pass(",
+            "__elephc_eval_context_drain_owners_v1",
+            "__elephc_eval_context_has_owners_v1",
+        ),
         "forbidden": ("emit_static_symbol_value_cleanup(",),
     },
     "src/codegen/web.rs": {
@@ -147,7 +154,70 @@ MIGRATED_SOURCE_CONTRACTS = {
         "forbidden": ("emit_release_symbol_value(",),
     },
     "src/codegen/web/application/shutdown.rs": {
-        "required": ("abi::emit_drain_static_owner(",),
+        "required": (
+            "abi::emit_drain_static_owner(",
+            "terminal_cleanup::emit_fixed_point_pass(",
+            "scope.allow_collection(",
+            "scope.suppress_collection(",
+        ),
+    },
+    "src/codegen/web/application.rs": {
+        "required": (
+            "symbol_owners::emit_publish_owner(",
+            "symbol_owners::emit_drain_symbol_owner(",
+        ),
+    },
+    "src/codegen_support/runtime/emitters/managed.rs": {
+        "required": ("arrays::emit_published_graph_destructors(",),
+    },
+    "src/codegen/lower_inst/externs.rs": {
+        "required": ("symbol_owners::emit_publish_owner(",),
+    },
+    "src/codegen/lower_inst/builtins/pcntl_handlers.rs": {
+        "required": ("symbol_owners::emit_replace_owner_record(",),
+    },
+    "src/codegen_support/runtime/system/pcntl.rs": {
+        "required": (
+            "symbol_owners::emit_replace_owner_record(",
+            "guarded_owners::emit_load_indexed_owner(",
+            "guarded_owners::emit_clear_indexed_record(",
+        ),
+    },
+    "src/codegen/lower_inst/builtins/system.rs": {
+        "required": ("__rt_exception_cleanup_frames",),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/runtime_introspection.rs": {
+        "required": (
+            "StagedRuntimeOwners",
+            "retire_eval_owner_batch(",
+            "finish_eval_owner_batch(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs": {
+        "required": ("StagedRuntimeOwners",),
+    },
+    "crates/elephc-magician/src/stream_resources/curl.rs": {
+        "required": ("RuntimeOwnerBatch",),
+    },
+    "crates/elephc-magician/src/stream_resources/owners.rs": {
+        "required": ("RuntimeOwnerBatch",),
+    },
+    "crates/elephc-magician/src/ffi/context.rs": {
+        "required": (
+            "RuntimeOwnerBatch",
+            "__elephc_eval_context_drain_owners_v1",
+            "has_context_cell_owners",
+        ),
+    },
+    "crates/elephc-magician/src/ffi/mbstring_array_references.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "take_all().release("),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/argument_owners.rs": {
+        "required": (
+            "RuntimeOwnerBatch",
+            "retire_eval_owner_batch(",
+            "with_mutable_runtime_owners",
+        ),
     },
     "src/codegen/eval_constructor_helpers.rs": {
         "required": (
@@ -161,10 +231,297 @@ MIGRATED_SOURCE_CONTRACTS = {
         "forbidden": ("CELL_OFFSET", "__rt_incref"),
     },
     "crates/elephc-magician/src/interpreter/scope_cells.rs": {
-        "required": ("finish_owner_cleanup(", "owners.release("),
+        "required": (
+            "RuntimeOwnerBatch",
+            "RuntimeOwnerSlot::for_ownership(",
+            "with_runtime_owners(&incoming",
+            "finish_eval_owner_batch(",
+            "owners.release(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/statements/property_write_receivers.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "take_all().release("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/property_dimension_writes.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "take_at("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/dimension_writes.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "release_receivers("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/property_dimension_unset.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "release_receivers("),
+    },
+    "crates/elephc-magician/src/interpreter/expressions/owned.rs": {
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerSlot", "with_runtime_owners(", "take_all().release("),
+    },
+    "crates/elephc-magician/src/interpreter/array_references.rs": {
+        "required": ("StagedRuntimeOwners", "owners.stage("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/instance_property_access.rs": {
+        "required": ("Option<&StagedRuntimeOwners>",),
+    },
+    "crates/elephc-magician/src/interpreter/statements/static_property_access.rs": {
+        "required": ("Option<&StagedRuntimeOwners>",),
     },
     "crates/elephc-magician/src/interpreter/output_handlers.rs": {
-        "required": ("finish_owner_cleanup(", "release_in_order("),
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerBatch", "with_runtime_owners(", "take_all().release("),
+    },
+    "crates/elephc-magician/src/interpreter/runtime_ops/simplexml_properties.rs": {
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerSlot", "with_runtime_owners(", "take_all().release("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/local_offset_writes.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "release_receivers("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/class_resolution.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "release_receivers("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/registry/owned_arguments.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(", "finish_eval_owner_batch("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/registry/binding.rs": {
+        "required": (
+            "Option<&StagedRuntimeOwners>",
+            "owners.stage(",
+            "with_runtime_owners(&defaults",
+            "with_runtime_owners(&bound",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions.rs": {
+        "required": (
+            "StagedRuntimeOwners",
+            "RuntimeOwnerSlot",
+            "with_mutable_runtime_owners",
+            "owners.stage(",
+            "owners.take_first(",
+            "eval_owned_dynamic_class_name(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/builtin_arguments.rs": {
+        "required": ("StagedRuntimeOwners", "owners.stage("),
+    },
+    "crates/elephc-magician/src/interpreter/call_argument_owners.rs": {
+        "required": (
+            "StagedRuntimeOwners",
+            "RuntimeOwnerSlot",
+            "owners.take_all().transfer(",
+        ),
+    },
+    "crates/elephc-memoir/src/runtime_owner_frame.rs": {
+        "required": ("with_mutable_owner_frame", "visit_mutable::<T>"),
+    },
+    "crates/elephc-memoir/src/runtime_owners.rs": {
+        "required": (
+            "pub struct RuntimeOwnerBatch",
+            "pub fn pop(&mut self)",
+            "pub struct StagedRuntimeOwners",
+            "pub const fn for_ownership(self, ownership: RuntimeCellOwnership)",
+        ),
+    },
+    "crates/elephc-magician/src/runtime_hooks/owner_frames.rs": {
+        "required": ("with_mutable_runtime_owners", "with_mutable_owner_frame("),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/function_staging.rs": {
+        "required": ("with_mutable_runtime_owners", "RuntimeOwnerBatch"),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/function_binding.rs": {
+        "required": ("with_mutable_runtime_owners",),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/method_binding.rs": {
+        "required": ("with_mutable_runtime_owners", "with_runtime_owners(&args"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/native_argument_binding.rs": {
+        "required": ("RuntimeOwnerBatch", "with_mutable_runtime_owners"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/native_constructor_defaults.rs": {
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerSlot"),
+    },
+    "crates/elephc-magician/src/interpreter/expressions/evaluation.rs": {
+        "required": (
+            "RuntimeOwnerBatch",
+            "RuntimeOwnerSlot",
+            "eval_owned_dynamic_class_name(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/expressions/closures.rs": {
+        "required": ("StagedRuntimeOwners", "finish_eval_owner_batch("),
+    },
+    "crates/elephc-magician/src/runtime_hooks/release.rs": {
+        "required": ("release_native_owner_batch", "RuntimeOwnerBatch", "cells.release("),
+    },
+    "crates/elephc-magician/src/runtime_hooks/object_owners.rs": {
+        "required": ("StagedRuntimeOwners", "release_owner_batch("),
+    },
+    "crates/elephc-magician/src/runtime_hooks/mod.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&arg_array"),
+    },
+    "crates/elephc-magician/src/runtime_hooks/ops.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(&arg_array"),
+    },
+    "crates/elephc-magician/src/runtime_hooks/ops/collection_calls.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&value"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/registry/callable/execution.rs": {
+        "required": ("RuntimeOwnerBatch", "arguments.finish("),
+    },
+    "crates/elephc-magician/src/interpreter/pcntl_escape.rs": {
+        "required": ("RuntimeOwnerBatch", "with_mutable_runtime_owners", "pending.pop()"),
+        "forbidden": ("Vec<(RuntimeCellHandle, bool)>",),
+    },
+    "crates/elephc-magician/src/interpreter/bytecode/vm.rs": {
+        "required": ("impl RuntimeOwners for Vm", "with_mutable_runtime_owners"),
+    },
+    "crates/elephc-magician/src/interpreter/control.rs": {
+        "required": (
+            "impl RuntimeOwners for EvalControl",
+            "impl RuntimeOwners for EvaluatedCallArg",
+        ),
+    },
+    "crates/elephc-magician/src/context/reference_metadata.rs": {
+        "required": ("impl RuntimeOwners for EvalReferenceTarget",),
+    },
+    "crates/elephc-magician/src/interpreter/return_values.rs": {
+        "required": ("RuntimeOwnerSlot", "finish_eval_argument_values("),
+    },
+    "crates/elephc-magician/src/interpreter/dynamic_functions/closure_execution.rs": {
+        "required": ("with_runtime_scope_owners", "result.as_ref().ok()"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/dynamic_method_execution.rs": {
+        "required": ("with_runtime_scope_owners", "result.as_ref().ok()"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/native_method_execution.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&result.as_ref().ok()"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs": {
+        "required": ("RuntimeOwnerSlot", "callback.borrowed()"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs": {
+        "required": ("RuntimeOwnerSlot", "callback.borrowed()"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs": {
+        "required": ("RuntimeOwnerSlot", "finish_eval_argument_values("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/loop_statements.rs": {
+        "required": (
+            "RuntimeOwnerSlot",
+            "release_staged_cells(",
+            "retire_replaced_scope_cells(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/include_exec.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&source", "with_runtime_owners(&path"),
+    },
+    "crates/elephc-magician/src/interpreter/expressions/control_operators.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&result.as_ref().ok()", "with_runtime_owners(&thrown"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/property_dimension_guards.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&current"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/constant_evaluation.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&equal", "with_runtime_owners(&value"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/native_static_dispatch.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&(&case, &equal)"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/array/sort.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&result"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/math/round.rs": {
+        "required": (
+            "StagedRuntimeOwners",
+            "finish_staged_runtime_owners(&owners",
+            "owners.stage(eval_expr(",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/array/count.rs": {
+        "required": ("stage_collection_entry", "with_collection_cells"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/array/iterator_apply.rs": {
+        "required": ("with_eval_operands", "RuntimeOwnerSlot", "with_runtime_owners(&iterator"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/class_metadata.rs": {
+        "required": ("with_collection_cells", "owners.stage(values.array_get("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/object_inventory.rs": {
+        "required": ("with_collection_cells", "owners.stage(values.reflection_property_names("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/symbols/is_a.rs": {
+        "required": ("with_collection_cells", "owners.stage(values.array_get("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs": {
+        "required": ("with_collection_cells", "result.with_values("),
+    },
+    "crates/elephc-magician/src/interpreter/reflection/member_construction.rs": {
+        "required": ("with_collection_cells", "owners.stage(values.object_property_iter_key("),
+    },
+    "crates/elephc-magician/src/interpreter/statements/array_append.rs": {
+        "required": ("with_collection_cells", "with_collection_result"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/callable_objects.rs": {
+        "required": ("EvalArrayBuilder", "RuntimeOwnerSlot"),
+    },
+    "crates/elephc-magician/src/interpreter/runtime_ops/object_operators.rs": {
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerSlot", "owners.finish("),
+    },
+    "crates/elephc-magician/src/interpreter/generics/types.rs": {
+        "required": ("with_collection_cells", "owners.stage(values.array_iter_value("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs": {
+        "required": ("with_collection_cells", "with_collection_result"),
+    },
+    "crates/elephc-magician/src/ffi/execute.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_scope_owners"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/reflection_instantiation.rs": {
+        "required": ("with_collection_cells", "RuntimeOwnerSlot"),
+    },
+    "crates/elephc-magician/src/interpreter/operands.rs": {
+        "required": ("StagedRuntimeOwners", "RuntimeOwnerSlot", "owners.finish("),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/native_debug.rs": {
+        "required": ("StagedRuntimeOwners", "with_runtime_owners(&owners"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/print_r.rs": {
+        "required": ("with_eval_value_lease", "StagedRuntimeOwners"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs": {
+        "required": ("with_eval_value_lease",),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&(&value, &result)"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/symbols/isset.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&result"),
+    },
+    "crates/elephc-magician/src/interpreter/builtins/symbols/empty.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&value"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/property_dispatch.rs": {
+        "required": ("eval_owned_dynamic_class_name(",),
+    },
+    "crates/elephc-magician/src/interpreter/statements/array_updates.rs": {
+        "required": (
+            "eval_owned_dynamic_class_name(",
+            "with_runtime_owners(&owner",
+            "values.release(owner.take())",
+        ),
+    },
+    "crates/elephc-magician/src/interpreter/statements/const_declarations.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&value"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/dispatch.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&(&current, &value)"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/core_attributes.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&result"),
+    },
+    "crates/elephc-magician/src/interpreter/reflection/owner_materialization.rs": {
+        "required": ("RuntimeOwnerSlot", "with_runtime_owners(&closure", "with_eval_value_lease"),
+    },
+    "crates/elephc-magician/src/interpreter/statements/reference_writeback.rs": {
+        "required": ("eval_release_value(context, values, replaced)",),
+    },
+    "crates/elephc-magician/src/interpreter/expressions/calls/first_class.rs": {
+        "required": ("eval_owned_dynamic_class_name(",),
     },
     "src/codegen/eval_static_property_helpers.rs": {
         "required": ("symbol_owners::emit_replace_result_owner(",),

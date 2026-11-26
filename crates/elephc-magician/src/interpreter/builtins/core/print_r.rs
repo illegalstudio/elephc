@@ -73,7 +73,9 @@ impl EvalDebugObjectProperties {
 
     /// Transfers the collected property leases to a traversal that outlives the metadata rows.
     #[cfg(not(test))]
-    pub(in crate::interpreter) fn into_values(self) -> Vec<RuntimeCellHandle> {
+    pub(in crate::interpreter) fn into_values(
+        self,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
         self.owners.take_all()
     }
 }
@@ -160,10 +162,9 @@ fn eval_print_r_value_result(
     if return_output {
         Ok(output)
     } else {
-        let echoed = values.echo(output);
-        let released = eval_release_value(context, values, output);
-        echoed?;
-        released?;
+        with_eval_value_lease(output, context, values, |output, _, values| {
+            values.echo(output)
+        })?;
         values.bool_value(true)
     }
 }

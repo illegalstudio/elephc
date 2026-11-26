@@ -9,6 +9,9 @@
 //! - Embedders without native class capabilities keep their ordinary property behavior.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Applies a native read-modify-write after its RHS has been evaluated by the caller.
 pub(in crate::interpreter) fn update(
@@ -30,20 +33,26 @@ pub(in crate::interpreter) fn update(
         .and_then(|class| class.operators)
         .and_then(|operators| operators.property_method(elephc_builtin_contract::ObjectProperty::Update))
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let mut owners = Vec::new();
-    let result = (|| {
-        owners.push(values.string(property)?);
-        owners.push(values.int(operation as i64)?);
-        owners.push(values.bool_value(post)?);
-        values.operator_method_call(object.borrowed(), method,
-            vec![owners[0].borrowed(), right.borrowed(), owners[1].borrowed(), owners[2].borrowed()])
-    })();
-    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
-    finish_owner_cleanup(
-        result, owners.into_iter().rev(), CleanupErrorPolicy::First, values,
-        |values, owner| values.release(owner),
-        |values, value| { let _ = values.release(value); },
-    ).map(Some)
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+    let owners = StagedRuntimeOwners::default();
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &output), || {
+        let operation = (|| {
+            let name = owners.stage(values.string(property)?);
+            let operation = owners.stage(values.int(operation as i64)?);
+            let post = owners.stage(values.bool_value(post)?);
+            let result = values.operator_method_call(object.borrowed(), method,
+                vec![name.borrowed(), right.borrowed(), operation.borrowed(), post.borrowed()])?;
+            output.replace(Some(result));
+            Ok(())
+        })();
+        let cleanup = owners.take_all().release(
+            ReleaseOrder::Reverse,
+            CleanupErrorPolicy::First,
+            |owner| values.release(owner),
+        );
+        output.finish(operation.and(cleanup), |value| values.release(value)).map(Some)
+    })
 }
 
 /// Recognizes native XML properties without fetching or materializing a selection.
@@ -109,16 +118,15 @@ pub(in crate::interpreter) fn invoke(
     let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
         .and_then(|class| class.operators).and_then(|operators| operators.property_method(operation))
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let name = values.string(property)?;
-    let mut arguments = vec![name];
-    arguments.extend(assigned);
-    let result = values.operator_method_call(object, method, arguments);
-    let released = values.release(name);
-    match result {
-        Ok(value) => match released {
-            Ok(()) => Ok(Some(value)),
-            Err(status) => { let _ = values.release(value); Err(status) },
-        },
-        Err(status) => Err(status),
-    }
+    let name = RuntimeOwnerSlot::new(values.string(property)?);
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&name, &output), || {
+        let mut arguments = vec![name.borrowed()];
+        arguments.extend(assigned);
+        let operation = values.operator_method_call(object, method, arguments).map(|value| {
+            output.replace(Some(value));
+        });
+        let cleanup = values.release(name.take());
+        output.finish(operation.and(cleanup), |value| values.release(value)).map(Some)
+    })
 }

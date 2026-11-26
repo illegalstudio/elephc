@@ -158,14 +158,18 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         abi::emit_call_label(emitter, super::frame::EXTERN_CALLBACK_RELEASE_LABEL);
     }
 
-    // Clear every lazy enum case slot so request N+1 re-materializes its cases on
+    // Drain every lazy enum case slot so request N+1 re-materializes its cases on
     // demand instead of reusing request N's object. This keeps the pre-existing
     // per-request lifecycle: the handler prologue used to re-run the eager enum
     // initializers and overwrite each slot every request, so a case object never
     // spanned two requests. Carrying the pointer over instead would be a new
     // hazard, because the per-request local cleanup can release a case that
     // reached a top-level local.
-    super::enum_singletons::emit_enum_slot_resets(emitter, module);
+    super::enum_singletons::emit_enum_slot_cleanup(
+        emitter,
+        module,
+        "__rt_web_reset_enum_case",
+    );
 
     // Every root of the previous request is released above, so an object that only a
     // reference cycle keeps alive is garbage. PHP destructs it at request shutdown; a

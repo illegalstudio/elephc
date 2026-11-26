@@ -15,6 +15,32 @@ pub const PROTECTED: &str = "__rt_cleanup_invoke_protected";
 /// Label for the authenticated release of a value with no child ownership.
 pub const DIRECT: &str = "__rt_cleanup_invoke_direct";
 
+/// Selects direct or protected retirement for a statically valid local Mixed owner.
+pub fn emit_local_retirement_gate(
+    emitter: &mut impl Emitter,
+    value: &str,
+    tag: &str,
+    direct: &str,
+    protected: &str,
+    empty: &str,
+) {
+    crate::layout::emit_branch_if_null_container(emitter, value, tag, empty);
+    abi::emit_load_from_address(emitter, tag, value, 0);
+    for runtime_tag in [0, 1, 2, 3, 8] {
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {tag}, #{runtime_tag}"));     // classify one child-free boxed PHP value
+                emitter.instruction(&format!("b.eq {direct}"));
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {tag}, {runtime_tag}"));      // classify one child-free boxed PHP value
+                emitter.instruction(&format!("je {direct}"));
+            }
+        }
+    }
+    abi::emit_jump(emitter, protected);
+}
+
 /// Emits a conservative scalar gate, then resumes the existing protected path on rejection.
 pub fn emit_fast_path(emitter: &mut impl Emitter, scalar_tags: &[ValueTag]) {
     match emitter.arch() {

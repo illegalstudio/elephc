@@ -11,30 +11,33 @@
 
 use super::*;
 use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver, finish_dimension_unset_receiver, require_unset_array_access};
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// Captures nested keys before fetching live storage, preserving computed roots and quiet hops.
 pub(super) fn eval_nested_dimension_unset(
     array: &EvalExpr, index: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut owners = Vec::new();
-    let result = (|| {
-        let receiver = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
-        let index = eval_owned_expr(index, context, scope, values)?;
-        owners.push(index);
-        let array = finish_dimension_unset_receiver(receiver, &mut owners, context, scope, values)?;
-        owners.push(array);
-        if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-            return eval_throw_error(
-                "Unsupported unset(): erased array storage has no attached removal path", context, values,
-            );
-        }
-        // Objects mutate by identity; all other admitted values only produce scalar diagnostics.
-        let replacement = unset_value(array, index, context, values)?;
-        debug_assert!(replacement.is_none());
-        Ok(())
-    })();
-    result.and(release_receivers(owners, context, values))
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let receiver = prepare_property_write_receiver(array, &owners, context, scope, values)?;
+            let index = eval_owned_expr(index, context, scope, values)?;
+            owners.stage(index);
+            let array = finish_dimension_unset_receiver(receiver, &owners, context, scope, values)?;
+            owners.stage(array);
+            if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return eval_throw_error(
+                    "Unsupported unset(): erased array storage has no attached removal path", context, values,
+                );
+            }
+            // Objects mutate by identity; all other admitted values only produce scalar diagnostics.
+            let replacement = unset_value(array, index, context, values)?;
+            debug_assert!(replacement.is_none());
+            Ok(())
+        })();
+        result.and(release_receivers(&owners, context, values))
+    })
 }
 
 /// Captures operands once and resolves the current property only after the key has run.
@@ -43,22 +46,23 @@ pub(super) fn eval_property_dimension_unset(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut owners = Vec::new();
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
     let result = (|| {
-        let receiver = prepare_property_write_receiver(object, &mut owners, context, scope, values)?;
+        let receiver = prepare_property_write_receiver(object, &owners, context, scope, values)?;
         let property = match property {
             DimensionProperty::Literal(name) => PreparedPropertyName::Literal(name.to_string()),
             DimensionProperty::Dynamic(name) => PreparedPropertyName::Dynamic(
-                prepare_index(name, &mut owners, context, scope, values)?),
+                prepare_index(name, &owners, context, scope, values)?),
         };
         let index = eval_owned_expr(index, context, scope, values)?;
-        owners.push(index);
-        let object = finish_property_unset_receiver(receiver, &mut owners, context, scope, values)?;
-        owners.push(object);
+        owners.stage(index);
+        let object = finish_property_unset_receiver(receiver, &owners, context, scope, values)?;
+        owners.stage(object);
         if !matches!(values.type_tag(object)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return Ok(()); }
         let property = match property {
             PreparedPropertyName::Literal(name) => name,
-            PreparedPropertyName::Dynamic(name) => finish_name(name, &mut owners, context, scope, values)?,
+            PreparedPropertyName::Dynamic(name) => finish_name(name, &owners, context, scope, values)?,
         };
         let array = eval_unset_property_get_result(object, &property, context, values)?;
         // A reference-backed property may return a borrowed cell; acquire its own lease.
@@ -71,7 +75,8 @@ pub(super) fn eval_property_dimension_unset(
             Ok(())
         })
     })();
-    result.and(release_receivers(owners, context, values))
+        result.and(release_receivers(&owners, context, values))
+    })
 }
 
 /// Removes an already captured key without evaluating it again after a getter callback.

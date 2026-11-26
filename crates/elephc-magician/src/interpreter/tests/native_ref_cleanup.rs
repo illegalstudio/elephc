@@ -174,7 +174,14 @@ fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
         assert_eq!(values.get(read), before.map_or(FakeValue::Null, FakeValue::Int));
         values.release(read).unwrap();
         let replacement = match after { Some(value) => values.int(value).unwrap(), None => values.null().unwrap() };
-        write_back_invoker_slot_ref_target(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, replacement, &mut values).unwrap();
+        write_back_invoker_slot_ref_target(
+            address,
+            EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+            replacement,
+            &mut context,
+            &mut values,
+        )
+        .unwrap();
         values.release(replacement).unwrap();
         write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
         assert_eq!(values.get(scope.visible_cell("value").unwrap()), after.map_or(FakeValue::Null, FakeValue::Int));

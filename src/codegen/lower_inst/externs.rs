@@ -533,21 +533,19 @@ fn emit_stateful_extern_callback_trampoline(
     ctx.emitter
         .comment("extern callback: bind descriptor trampoline");
     callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_load_symbol_to_reg(
+    elephc_memoir::symbol_owners::emit_publish_owner(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &slot_label,
-        0,
+        |emitter, previous| abi::emit_load_symbol_to_reg(emitter, previous, &slot_label, 0),
+        |emitter| {
+            abi::emit_store_reg_to_symbol(
+                emitter,
+                abi::int_result_reg(emitter),
+                &slot_label,
+                0,
+            );
+        },
     );
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_store_reg_to_symbol(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &slot_label,
-        0,
-    );
     abi::emit_symbol_address(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),

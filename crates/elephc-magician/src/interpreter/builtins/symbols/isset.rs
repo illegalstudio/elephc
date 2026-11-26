@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
 pub(in crate::interpreter) fn eval_isset_declared_call(
@@ -120,7 +121,7 @@ pub(in crate::interpreter) fn eval_isset_arg(
     } = arg
     {
         let class_name = eval_expr(class_name, context, scope, values)?;
-        let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        let class_name = eval_owned_dynamic_class_name(class_name, context, values)?;
         return eval_static_property_isset_result(&class_name, property, context, values);
     }
     if let EvalExpr::DynamicStaticPropertyNameGet {
@@ -129,7 +130,7 @@ pub(in crate::interpreter) fn eval_isset_arg(
     } = arg
     {
         let class_name = eval_expr(class_name, context, scope, values)?;
-        let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        let class_name = eval_owned_dynamic_class_name(class_name, context, values)?;
         let property = eval_dynamic_member_name(property, context, scope, values)?;
         return eval_static_property_isset_result(&class_name, &property, context, values);
     }
@@ -142,18 +143,21 @@ pub(in crate::interpreter) fn eval_isset_arg(
                 if values.type_tag(array)? == EVAL_TAG_OBJECT {
                     exists = eval_array_access_isset_result(array, index, context, values)?;
                 } else {
-                    let value = values.array_get(array, index)?;
-                    let answer = values.is_null(value).map(|null| !null);
-                    let released = eval_release_value(context, values, value);
-                    exists = answer?;
-                    released?;
+                    let value = RuntimeOwnerSlot::new(values.array_get(array, index)?);
+                    with_runtime_owners(&value, || {
+                        let answer = values.is_null(value.borrowed()).map(|null| !null);
+                        let released = eval_release_value(context, values, value.take());
+                        exists = answer?;
+                        released
+                    })?;
                 }
                 Ok(())
             })?;
         return Ok(exists);
     }
-    let value = eval_expr(arg, context, scope, values)?;
-    Ok(!values.is_null(value)?)
+    with_eval_probe_operand(arg, context, scope, values, |value, _, _, values| {
+        values.is_null(value).map(|null| !null)
+    })
 }
 
 /// Evaluates `isset($object[$key])` while borrowing its caller-owned receiver and key.
@@ -175,9 +179,12 @@ pub(in crate::interpreter) fn eval_array_access_isset_result(
             eval_method_call_result(object.borrowed(), "offsetExists", vec![index.borrowed()], context, values)?
         }
     };
-    let exists = values.truthy(result);
-    let released = eval_release_value(context, values, result);
-    exists.and_then(|exists| released.map(|()| exists))
+    let result = RuntimeOwnerSlot::new(result);
+    with_runtime_owners(&result, || {
+        let exists = values.truthy(result.borrowed());
+        let released = eval_release_value(context, values, result.take());
+        exists.and_then(|exists| released.map(|()| exists))
+    })
 }
 
 /// Returns whether an object operand implements the eval-visible `ArrayAccess` contract.

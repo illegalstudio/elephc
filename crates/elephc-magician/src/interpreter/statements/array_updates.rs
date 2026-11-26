@@ -8,6 +8,7 @@
 //! - Object ArrayAccess and plain runtime arrays preserve reference and release semantics.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Applies member increment/decrement to a runtime value using PHP numeric semantics.
 pub(in crate::interpreter) fn eval_inc_dec_value(
@@ -86,16 +87,22 @@ pub(in crate::interpreter) fn eval_release_value(
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
 ) -> Result<(), EvalStatus> {
-    let destructor = values.final_object_identity_for_release(value).and_then(|identity| {
-        match identity {
-            Some(identity) => eval_dynamic_destructor_for_release(identity, value, context, values),
-            None => Ok(()),
-        }
-    });
-    // Native release collects any further child exceptions with the context's pending throw.
-    // Do not return early: the destructor consumes its receiver lease, not this final owner.
-    let released = values.release(value);
-    destructor.and(released)
+    let owner = RuntimeOwnerSlot::new(value);
+    with_runtime_owners(&owner, || {
+        let value = owner.borrowed();
+        let destructor = values
+            .final_object_identity_for_release(value)
+            .and_then(|identity| match identity {
+                Some(identity) => {
+                    eval_dynamic_destructor_for_release(identity, value, context, values)
+                }
+                None => Ok(()),
+            });
+        // Native release publishes the detached cell through its own Memoir batch. Do not
+        // return early: the destructor consumes its receiver lease, not this final owner.
+        let released = values.release(owner.take());
+        destructor.and(released)
+    })
 }
 
 /// Calls a dynamic eval `__destruct()` hook immediately before the runtime frees the object.
@@ -171,9 +178,12 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership, values)? {
-                    values.release(replaced)?;
-                }
+                let replaced = set_scope_cell(
+                    context, scope, name.clone(), array, ownership, values,
+                )?;
+                crate::interpreter::scope_cells::retire_replaced_scope_cells(
+                    replaced, context, values,
+                )?;
             }
             return Ok(());
         }
@@ -194,7 +204,7 @@ pub(super) fn eval_array_unset_element_stmt(
             property,
         } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let class_name = eval_owned_dynamic_class_name(class_name, context, values)?;
             return eval_static_array_unset_element(&class_name, property, index, context, scope, values);
         }
         EvalExpr::DynamicStaticPropertyNameGet {
@@ -202,7 +212,7 @@ pub(super) fn eval_array_unset_element_stmt(
             property,
         } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let class_name = eval_owned_dynamic_class_name(class_name, context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             return eval_static_array_unset_element(&class_name, &property, index, context, scope, values);
         }
@@ -249,22 +259,21 @@ pub(super) fn eval_array_unset_target_result(
     if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    let index = eval_owned_array_set_index(index, context, scope, values)?;
-    let result = (|| {
-        let key = eval_array_reference_key(index, values)?;
-        let replacement = eval_array_without_key_result(array, index, values)?;
-        context.clone_array_element_aliases(array, replacement, key.as_ref());
-        Ok(replacement)
-    })();
-    let released = eval_release_value(context, values, index);
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(result), Err(status)) => {
-            let _ = values.release(result);
-            Err(status)
-        }
-        (Ok(result), Ok(())) => Ok(Some(result)),
-    }
+    let index = RuntimeOwnerSlot::new(eval_owned_array_set_index(index, context, scope, values)?);
+    let result = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&index, &result), || {
+        let operation = (|| {
+            let key = eval_array_reference_key(index.borrowed(), values)?;
+            let replacement = eval_array_without_key_result(array, index.borrowed(), values)?;
+            result.replace(Some(replacement));
+            context.clone_array_element_aliases(array, replacement, key.as_ref());
+            Ok(())
+        })();
+        let released = eval_release_value(context, values, index.take());
+        result
+            .finish(operation.and(released), |result| values.release(result))
+            .map(Some)
+    })
 }
 
 /// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.

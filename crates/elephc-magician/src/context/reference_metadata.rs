@@ -9,7 +9,7 @@
 //! - Reference targets retain the exact caller-side storage and access scope needed for writeback.
 
 use super::*;
-use elephc_memoir::runtime_owners::RuntimeOwnerList;
+use elephc_memoir::runtime_owners::{RuntimeOwnerBatch, RuntimeOwnerList, RuntimeOwners};
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
 pub type NativeFunctionInvoker =
@@ -48,7 +48,7 @@ pub(crate) struct EvalBacktraceFrame {
 
 impl EvalBacktraceFrame {
     /// Transfers the activation's retained surplus cells to its exit cleanup.
-    pub(super) fn into_argument_cells(self) -> Vec<RuntimeCellHandle> {
+    pub(super) fn into_argument_cells(self) -> RuntimeOwnerBatch {
         self.arguments.surplus.into_owned()
     }
 
@@ -217,6 +217,27 @@ pub enum EvalReferenceTarget {
         slot: usize,
         source_tag: u64,
     },
+}
+
+impl RuntimeOwners for EvalReferenceTarget {
+    /// Publishes only independently owned handles embedded in reference-selection metadata.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        match self {
+            Self::ArrayElement { index, .. } => index.visit_owned_slots(visit),
+            Self::NestedArrayElement {
+                array_target,
+                index,
+            } => {
+                array_target.visit_owned_slots(visit);
+                index.visit_owned_slots(visit);
+            }
+            Self::ObjectProperty { object, .. } => object.visit_owned_slots(visit),
+            Self::Cell { cell } => cell.visit_owned_slots(visit),
+            Self::Variable { .. }
+            | Self::StaticProperty { .. }
+            | Self::InvokerSlot { .. } => {}
+        }
+    }
 }
 
 /// Normalized PHP array key used for eval-side reference metadata.

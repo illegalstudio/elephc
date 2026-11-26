@@ -10,6 +10,9 @@
 //! - Legacy reference getters can borrow storage and require an explicit retained read.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 
 /// Writes an independently owned expression and releases its source and string conversion on every path.
 pub(in crate::interpreter) fn eval_output_expr(
@@ -28,17 +31,22 @@ pub(in crate::interpreter) fn eval_output_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut converted = None;
-    let mut result = (|| {
-        let value = eval_string_context_value(original, context, values)?;
-        if value != original { converted = Some(value); }
-        values.echo(value)
-    })();
-    if let Some(value) = converted {
-        if let Err(status) = eval_release_value(context, values, value) { result = Err(status); }
-    }
-    if let Err(status) = eval_release_value(context, values, original) { result = Err(status); }
-    result
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+    let owners = StagedRuntimeOwners::default();
+    owners.stage(original);
+    with_runtime_owners(&owners, || {
+        let operation = (|| {
+            let value = eval_string_context_value(original, context, values)?;
+            if value != original { owners.stage(value); }
+            values.echo(value)
+        })();
+        let cleanup = owners.take_all().release(
+            ReleaseOrder::Reverse,
+            CleanupErrorPolicy::Last,
+            |value| eval_release_value(context, values, value),
+        );
+        operation.and(cleanup)
+    })
 }
 
 /// Keeps a copied receiver alive through a read or invocation, then releases it on every path.
@@ -51,16 +59,17 @@ pub(super) fn with_owned_receiver<V: RuntimeValueOps>(
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = eval_owned_expr(object, context, scope, values)?;
-    let result = read(object, context, scope, values);
-    let cleanup = eval_release_value(context, values, object);
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-    }
+    let object = RuntimeOwnerSlot::new(object);
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&object, &output), || {
+        let operation = read(object.borrowed(), context, scope, values).and_then(|value| {
+            let value = if value.is_borrowed() { values.retain(value)? } else { value };
+            output.replace(Some(value));
+            Ok(())
+        });
+        let cleanup = eval_release_value(context, values, object.take());
+        output.finish(operation.and(cleanup), |value| eval_release_value(context, values, value))
+    })
 }
 
 /// Copies a variable's value and preserves array side metadata.
@@ -118,25 +127,31 @@ pub(super) fn eval_static_property_get_with_result_ownership(
 fn eval_owned_read<V: RuntimeValueOps>(
     context: &mut ElephcEvalContext,
     values: &mut V,
-    read: impl FnOnce(&mut ElephcEvalContext, &mut V, &mut Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus>,
+    read: impl FnOnce(&mut ElephcEvalContext, &mut V, &StagedRuntimeOwners) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut owners = Vec::new();
-    let result = read(context, values, &mut owners).and_then(|value| {
-        // The getter owns a lease, but its boxed array can still be the property's box.
-        // Copy the box so a later COW write replaces only the by-value result's payload.
-        // Register the owner before probing, since a failed probe must release it too.
-        owners.push(value);
-        if values.is_reference(value)? || values.is_array_like(value)? {
-            copy_scope_value(value, context, values)
-        } else {
-            owners.pop();
-            Ok(value)
-        }
-    });
-    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
-    finish_owner_cleanup(
-        result, owners.into_iter().rev(), CleanupErrorPolicy::Last, &mut (context, values),
-        |(context, values), value| eval_release_value(context, &mut **values, value),
-        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
-    )
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+    let owners = StagedRuntimeOwners::default();
+    let output = RuntimeOwnerSlot::empty();
+    with_runtime_owners(&(&owners, &output), || {
+        let operation = read(context, values, &owners).and_then(|value| {
+            // The getter owns a lease, but its boxed array can still be the property's box.
+            // Copy the box so a later COW write replaces only the by-value result's payload.
+            // Register the owner before probing, since a failed probe must release it too.
+            let value = if value.is_borrowed() { values.retain(value)? } else { value };
+            owners.stage(value);
+            let value = if values.is_reference(value)? || values.is_array_like(value)? {
+                copy_scope_value(value, context, values)?
+            } else {
+                owners.take_last().ok_or(EvalStatus::RuntimeFatal)?
+            };
+            output.replace(Some(value));
+            Ok(())
+        });
+        let cleanup = owners.take_all().release(
+            ReleaseOrder::Reverse,
+            CleanupErrorPolicy::Last,
+            |value| eval_release_value(context, values, value),
+        );
+        output.finish(operation.and(cleanup), |value| eval_release_value(context, values, value))
+    })
 }

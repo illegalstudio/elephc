@@ -985,19 +985,8 @@ fn emit_exit_strict_status_error(ctx: &mut FunctionContext<'_>, actual: &str) {
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
-        let eval_shutdown = ctx.module.required_runtime_features.eval_bridge && !ctx.emitter.cdylib_boundary;
-        if eval_shutdown || ctx.shared.instrument.is_on() {
-            // Shutdown output handlers are PHP calls and must finish inside the
-            // still-open exact stack before the termination hook closes it.
-            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
-        }
-        if eval_shutdown {
-            emit_eval_pcntl_shutdown(ctx);
-        }
-        if ctx.shared.instrument.is_on() {
-            crate::codegen::frame::emit_instr_terminate(ctx);
-        }
-        abi::emit_exit(ctx.emitter, 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        emit_dynamic_exit(ctx);
         return Ok(());
     };
     let status_ty = ctx.value_php_type(status)?.codegen_repr();
@@ -1279,7 +1268,8 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
-            emit_eval_pcntl_shutdown(ctx);
+            ctx.emitter.instruction("mov x0, #0");                              // request cleanup of every active PHP activation
+            ctx.emitter.instruction("bl __rt_exception_cleanup_frames");        // detach frames and retire their owners before process termination
             if ctx.emitter.exit_hook.is_some() {
                 ctx.emitter.instruction("mov x0, x19");                         // the exit hook is told the exit status
             }
@@ -1292,7 +1282,8 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
-            emit_eval_pcntl_shutdown(ctx);
+            ctx.emitter.instruction("xor edi, edi");                            // request cleanup of every active PHP activation
+            ctx.emitter.instruction("call __rt_exception_cleanup_frames");      // detach frames and retire their owners before process termination
             if ctx.emitter.exit_hook.is_some() {
                 ctx.emitter.instruction("mov rdi, rbx");                        // the exit hook is told the exit status
             }
@@ -1308,14 +1299,6 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::Windows, _) => {
             panic!("Windows target is not yet supported (see issue #379)");
         }
-    }
-}
-
-/// Drains eval signal-context owners before native process termination.
-fn emit_eval_pcntl_shutdown(ctx: &mut FunctionContext<'_>) {
-    if ctx.module.required_runtime_features.eval_bridge {
-        let shutdown = ctx.emitter.target.extern_symbol("__elephc_eval_pcntl_shutdown");
-        abi::emit_call_label(ctx.emitter, &shutdown);
     }
 }
 

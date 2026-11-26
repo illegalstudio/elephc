@@ -12,6 +12,9 @@ use elephc_chopper::syntax::php_tokenizer;
 
 use super::super::*;
 use super::collection_builder::EvalArrayBuilder;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners,
+};
 mod arguments;
 mod location;
 mod token_get_all;
@@ -123,24 +126,43 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
         let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
         for (index, token) in tokens.iter().enumerate() {
             out.index(index, |values| {
-                let mut arguments = Vec::with_capacity(4);
+                use elephc_memoir::runtime_owners::{CleanupErrorPolicy, ReleaseOrder};
+                let arguments = StagedRuntimeOwners::default();
+                let output = RuntimeOwnerSlot::empty();
                 let mut scope = ElephcEvalScope::new();
-                let result = (|| {
-                    arguments.push(values.int(token.id)?);
-                    arguments.push(values.string_bytes_value(&code[token.pos..token.pos + token.len])?);
-                    arguments.push(values.int(token.line as i64)?);
-                    arguments.push(values.int(token.pos as i64)?);
-                    eval_dynamic_class_new_object(&class,
-                        positional_args(arguments.iter().map(|value| value.borrowed()).collect()),
-                        context, &mut scope, values)
-                })();
-                use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
-                let result = finish_owner_cleanup(
-                    result, arguments, CleanupErrorPolicy::First, &mut (&mut *context, &mut *values),
-                    |(context, values), value| release_expr_result(value, context, &mut **values),
-                    |(context, values), value| { let _ = release_expr_result(value, context, &mut **values); },
-                );
-                finish_activation_scope(&mut scope, result, context, values)
+                with_runtime_owners(&(&arguments, &output), || {
+                    let operation = (|| {
+                        let id = arguments.stage(values.int(token.id)?);
+                        let text = arguments.stage(values.string_bytes_value(
+                            &code[token.pos..token.pos + token.len],
+                        )?);
+                        let line = arguments.stage(values.int(token.line as i64)?);
+                        let position = arguments.stage(values.int(token.pos as i64)?);
+                        let result = eval_dynamic_class_new_object(
+                            &class,
+                            positional_args(vec![
+                                id.borrowed(),
+                                text.borrowed(),
+                                line.borrowed(),
+                                position.borrowed(),
+                            ]),
+                            context,
+                            &mut scope,
+                            values,
+                        )?;
+                        output.replace(Some(result));
+                        Ok(())
+                    })();
+                    let cleanup = arguments.take_all().release(
+                        ReleaseOrder::Forward,
+                        CleanupErrorPolicy::First,
+                        |value| release_expr_result(value, context, values),
+                    );
+                    let result = output.finish(operation.and(cleanup), |value| {
+                        release_expr_result(value, context, values)
+                    });
+                    finish_activation_scope(&mut scope, result, context, values)
+                })
             })?;
         }
         Ok(out.finish())

@@ -12,7 +12,10 @@
 use super::*;
 use super::property_dimension_writes::{stage_operands, write_attached_value, write_value};
 use super::property_dimension_guards::{DimensionFetchMode, selected_property};
-use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
+use super::property_write_receivers::{
+    PreparedWriteReceiver, finish_index, finish_name, release_receivers,
+};
+use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
 
 /// One traversal parent which can receive a copied child or terminate attached propagation.
 enum Parent {
@@ -34,60 +37,58 @@ pub(super) fn eval_dimension_write(
     array: &EvalExpr, index: Option<&EvalExpr>, op: Option<EvalBinOp>, value: &EvalExpr,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut owners = Vec::new();
-    let mut result = (|| {
-        let plan = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
-        let (key, assigned) = stage_operands(index, value, &mut owners, context, scope, values)?;
-        let mut parents = Vec::new();
-        let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
-        let current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
-        if values.type_tag(current.value)? != EVAL_TAG_OBJECT
-            && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
-            return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
-        }
-        let mut replacement = if current.published {
-            write_attached_value(current.value, key, op, assigned, &mut owners, context, values)?
-        } else {
-            write_value(current.value, key, op, assigned, &mut owners, context, values)?
-        };
-        while let Some(value) = replacement {
-            let Some(parent) = parents.pop() else { break; };
-            replacement = match parent {
-                Parent::Discard => None,
-                Parent::Variable(name) => {
-                    validate_generic_local_contracts(scope, &name, value, context, values)?;
-                    write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
-                    None
-                }
-                Parent::Static { class, property } => {
-                    eval_static_property_set_result(&class, &property, value, context, values)?;
-                    None
-                }
-                Parent::Property { object, property } => {
-                    eval_property_set_result(object, &property, value, context, values)?;
-                    None
-                }
-                Parent::Index { array, index, published } => if published {
-                    write_attached_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
-                } else {
-                    write_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
-                },
+    let owners = StagedRuntimeOwners::default();
+    with_runtime_owners(&owners, || {
+        let result = (|| {
+            let plan = prepare_property_write_receiver(array, &owners, context, scope, values)?;
+            let (key, assigned) = stage_operands(index, value, &owners, context, scope, values)?;
+            let mut parents = Vec::new();
+            let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
+            let current = resolve(plan, &mut parents, &owners, mode, true, context, scope, values)?;
+            if values.type_tag(current.value)? != EVAL_TAG_OBJECT
+                && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
+                return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
+            }
+            let mut replacement = if current.published {
+                write_attached_value(current.value, key, op, assigned, &owners, context, values)?
+            } else {
+                write_value(current.value, key, op, assigned, &owners, context, values)?
             };
-        }
-        Ok(())
-    })();
-    for owner in owners.into_iter().rev() {
-        let released = eval_release_value(context, values, owner);
-        if result.is_ok() { result = released; }
-    }
-    result
+            while let Some(value) = replacement {
+                let Some(parent) = parents.pop() else { break; };
+                replacement = match parent {
+                    Parent::Discard => None,
+                    Parent::Variable(name) => {
+                        validate_generic_local_contracts(scope, &name, value, context, values)?;
+                        write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
+                        None
+                    }
+                    Parent::Static { class, property } => {
+                        eval_static_property_set_result(&class, &property, value, context, values)?;
+                        None
+                    }
+                    Parent::Property { object, property } => {
+                        eval_property_set_result(object, &property, value, context, values)?;
+                        None
+                    }
+                    Parent::Index { array, index, published } => if published {
+                        write_attached_value(array, Some(index), None, value,
+                            &owners, context, values)?
+                    } else {
+                        write_value(array, Some(index), None, value,
+                            &owners, context, values)?
+                    },
+                };
+            }
+            Ok(())
+        })();
+        result.and(release_receivers(&owners, context, values))
+    })
 }
 
 /// Retains a traversal value and records the storage needed only if an array is replaced.
 fn resolve(
-    plan: PreparedWriteReceiver<'_>, parents: &mut Vec<Parent>, owners: &mut Vec<RuntimeCellHandle>,
+    plan: PreparedWriteReceiver<'_>, parents: &mut Vec<Parent>, owners: &StagedRuntimeOwners,
     mode: DimensionFetchMode, dimension_container: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<ResolvedValue, EvalStatus> {
@@ -153,7 +154,7 @@ fn resolve(
                 (None, _) => (quiet_child(array, index, owners, context, values)?, false),
             };
             let current = if current.is_borrowed() { values.retain(current)? } else { current };
-            owners.push(current);
+            owners.stage(current);
             if attached_spl {
                 // The protected fetch returned the cell already installed in internal SPL
                 // storage. Its later replacement is observable through that cell, so a
@@ -183,7 +184,7 @@ fn resolve(
         }
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
-    owners.push(current);
+    owners.stage(current);
     Ok(ResolvedValue { value: current, published: false })
 }
 
@@ -204,14 +205,14 @@ fn mark_attached_spl_root_changed(
 
 /// Autovivification reads absent array children without an undefined-key warning.
 fn quiet_child(
-    array: RuntimeCellHandle, index: RuntimeCellHandle, owners: &mut Vec<RuntimeCellHandle>,
+    array: RuntimeCellHandle, index: RuntimeCellHandle, owners: &StagedRuntimeOwners,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match values.type_tag(array)? {
         EVAL_TAG_OBJECT => eval_array_get_result(array, index, context, values),
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             let exists = values.array_key_exists(index, array)?;
-            owners.push(exists);
+            owners.stage(exists);
             if values.truthy(exists)? { eval_array_get_result(array, index, context, values) }
             else { values.null() }
         }

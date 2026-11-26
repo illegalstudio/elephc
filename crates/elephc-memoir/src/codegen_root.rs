@@ -55,6 +55,7 @@ pub mod heap_live_bases;
 pub mod heap_refcount;
 pub mod incref;
 pub mod memory;
+pub mod published_graph;
 pub mod symbol_owners;
 
 pub mod diagnostics;
@@ -69,6 +70,7 @@ pub mod callables;
 pub mod cleanup_preserve;
 
 pub mod temporary_owners;
+pub mod terminal_cleanup;
 pub mod identity_pin;
 pub mod object_handles;
 pub mod stacks;

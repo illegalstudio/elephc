@@ -44,6 +44,27 @@ impl Scope {
         self.call_with_address(emitter, target, c_input, true);
     }
 
+    /// Restores the enclosing suppression state so an explicit collector call can run.
+    pub fn allow_collection(self, emitter: &mut impl Emitter) {
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x10, [sp, #{}]", self.arm + 8)); // recover the cleanup scope's incoming suppression state
+                abi::emit_store_reg_to_symbol(emitter, "x10", "_gc_release_suppressed", 0);
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", self.x86 - 8)); // recover the cleanup scope's incoming suppression state
+                abi::emit_store_reg_to_symbol(emitter, "r10", "_gc_release_suppressed", 0);
+            }
+        }
+    }
+
+    /// Reinstates cleanup suppression after an explicit collector call returns.
+    pub fn suppress_collection(self, emitter: &mut impl Emitter) {
+        let result = abi::int_result_reg(emitter);
+        abi::emit_load_int_immediate(emitter, result, 1);
+        abi::emit_store_reg_to_symbol(emitter, result, "_gc_release_suppressed", 0);
+    }
+
     /// Materializes the selected target and invokes it through the shared protected boundary.
     fn call_with_address(
         self,

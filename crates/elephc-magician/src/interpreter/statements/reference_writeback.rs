@@ -72,9 +72,10 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             if bound_arg.ref_target.is_some() && values.supports_persistent_references() && !values.is_reference(bound_arg.value)? {
                 let reference = values.reference_new(bound_arg.value)?;
                 context.copy_array_metadata(bound_arg.value, reference);
-                for old in method_scope.set_respecting_references(name.clone(), reference, ScopeCellOwnership::Owned) {
-                    eval_release_value(context, values, old)?;
-                }
+                let replaced = method_scope.set_respecting_references(
+                    name.clone(), reference, ScopeCellOwnership::Owned,
+                );
+                retire_replaced_scope_cells(replaced, context, values)?;
             }
             if let Some(target) = bound_arg.ref_target.as_ref() {
                 if let Some(reference) = method_scope.visible_cell(name).filter(|_| values.supports_persistent_references()) {
@@ -325,16 +326,15 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 return Ok(());
             }
             let value = values.retain(value)?;
-            for replaced in set_scope_cell(
+            let replaced = set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
                 ScopeCellOwnership::Owned,
                 values,
-            )? {
-                values.release(replaced)?;
-            }
+            )?;
+            retire_replaced_scope_cells(replaced, context, values)?;
             Ok(())
         }
         EvalReferenceTarget::ArrayElement {
@@ -393,7 +393,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             Ok(())
         },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
-            write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
+            write_back_invoker_slot_ref_target(*slot, *source_tag, value, context, values)
         }
     }
 }
@@ -440,6 +440,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
     slot: usize,
     source_tag: u64,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match source_tag {
@@ -467,7 +468,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
             });
             if values.is_reference(current)? {
                 let previous = values.reference_replace(current, value)?;
-                return values.release(previous);
+                return eval_release_value(context, values, previous);
             }
             let retained = values.retain(value)?;
             let replaced = unsafe {
@@ -476,7 +477,7 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
                 *slot = retained.as_ptr();
                 replaced
             };
-            values.release(replaced)
+            eval_release_value(context, values, replaced)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }

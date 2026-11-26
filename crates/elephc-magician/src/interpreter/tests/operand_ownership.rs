@@ -73,7 +73,9 @@ fn program_return_retains_borrowed_scope_storage() {
     assert_eq!(returned, stored);
     assert!(!returned.is_borrowed());
     assert_eq!(values.cell_owners[&(stored.as_ptr() as usize)], 2);
-    for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(
+        scope.drain_owned_cells().transfer(), &mut context, &mut values,
+    ).unwrap();
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1);
     values.release(returned).unwrap();
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0);
@@ -123,7 +125,9 @@ fn pending_return_survives_finally_storage_mutations_and_overrides() {
         let EvalOutcome::Value(returned) = outcome else { panic!("expected return: {source}"); };
         assert_eq!(returned == original, kept, "{source}");
         assert!(!returned.is_borrowed(), "{source}");
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], usize::from(kept), "{source}");
         assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1, "{source}");
         values.release(returned).unwrap();
@@ -152,7 +156,9 @@ fn thrown_storage_values_keep_an_independent_control_owner() {
         let EvalOutcome::Throwable(thrown) = outcome else { panic!("expected throw: {source}"); };
         assert_eq!(thrown, original, "{source}");
         assert!(!thrown.is_borrowed(), "{source}");
-        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        crate::interpreter::scope_cells::retire_replaced_scope_cells(
+            scope.drain_owned_cells().transfer(), &mut context, &mut values,
+        ).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 1, "{source}");
         values.release(thrown).unwrap();
         assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 0, "{source}");
@@ -822,7 +828,10 @@ fn owned_assignments_balance_identical_reference_cells() {
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         assert_eq!(values.retains.iter().filter(|cell| **cell == source).count(), 2);
         assert_eq!(values.releases.iter().filter(|cell| **cell == source).count(), 2);
-        assert_eq!(scope.drain_owned_cells(), vec![source]);
+        assert_eq!(
+            scope.drain_owned_cells().iter().collect::<Vec<_>>(),
+            vec![source],
+        );
     }
 }
 

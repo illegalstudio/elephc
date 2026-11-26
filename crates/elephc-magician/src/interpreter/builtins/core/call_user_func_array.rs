@@ -11,6 +11,7 @@
 use super::super::super::*;
 use super::super::registry::eval_call_user_func_array_with_values_from_scope;
 use super::func_args::eval_literal_func_args_callback;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 eval_builtin! {
     contract: "call_user_func_array",
@@ -33,19 +34,26 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     if let Some(name) = eval_literal_func_args_callback(callback) {
         return eval_literal_func_args_array_call(name, arg_array, context, scope, values);
     }
-    let callback = eval_owned_expr(callback, context, scope, values)?;
-    if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
+    let callback = RuntimeOwnerSlot::new(eval_owned_expr(callback, context, scope, values)?);
+    let callback_name = with_runtime_owners(&callback, || {
+        eval_owned_argument_callback_name(callback.borrowed(), context, Some(scope), values)
+    })?;
+    if let Some(name) = callback_name {
         if eval_builtin_uses_owned_arguments(&name) {
-            let result = eval_builtin_call_array_expr(&name, arg_array, context, scope, values);
-            return finish_eval_argument_values(result, [callback], context, values);
+            let result = with_runtime_owners(&callback, || {
+                eval_builtin_call_array_expr(&name, arg_array, context, scope, values)
+            });
+            return finish_eval_argument_values(result, [callback.take()], context, values);
         }
     }
-    let result = with_eval_operands(&[arg_array], context, scope, values, |args, context, scope, values| {
-        eval_call_user_func_array_with_values_from_scope(
-            callback, args[0], Some(scope), context, values,
-        )
+    let result = with_runtime_owners(&callback, || {
+        with_eval_operands(&[arg_array], context, scope, values, |args, context, scope, values| {
+            eval_call_user_func_array_with_values_from_scope(
+                callback.borrowed(), args[0], Some(scope), context, values,
+            )
+        })
     });
-    finish_eval_argument_values(result, [callback], context, values)
+    finish_eval_argument_values(result, [callback.take()], context, values)
 }
 
 /// Invokes a literal `func_*` callback using one runtime `call_user_func_array` argument list.

@@ -126,10 +126,7 @@ fn eval_reflection_clear_lazy(
             | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
             | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
     ) {
-        let class_name = values.object_class_name(object)?;
-        let bytes = values.string_bytes(class_name);
-        values.release(class_name)?;
-        String::from_utf8_lossy(&bytes?).into_owned()
+        runtime_object_class_name(object, values)?
     } else {
         return Ok(());
     };
@@ -210,10 +207,7 @@ fn eval_reflection_lazy_source(
     if evaluated {
         return Ok(None);
     }
-    let class_name = values.object_class_name(object)?;
-    let bytes = values.string_bytes(class_name);
-    values.release(class_name)?;
-    let reflector_class = String::from_utf8_lossy(&bytes?).into_owned();
+    let reflector_class = runtime_object_class_name(object, values)?;
     let source = format!(
         "return static function (string $m) {{ $r = new \\{reflector_class}({quoted_holder}, {quoted_name}); \
          return $m === 'getBackingValue' ? $r->getBackingValue() : $r->getValue(); }};"
@@ -241,10 +235,18 @@ fn eval_reflection_attach_lazy(
     if let Some(target) = target {
         closure_scope.set("__target", target, crate::scope::ScopeCellOwnership::Borrowed);
     }
-    let closure = eval_expr(expr, context, &mut closure_scope, values)?;
-    let stored = crate::interpreter::statements::eval_set_reflector_slots(object, scope, &[(slot, closure)], context, values);
-    let released = if closure.is_borrowed() { Ok(()) } else { values.release(closure) };
-    stored.and(released)
+    let closure = RuntimeOwnerSlot::new(eval_expr(expr, context, &mut closure_scope, values)?);
+    with_runtime_owners(&closure, || {
+        let stored = crate::interpreter::statements::eval_set_reflector_slots(
+            object,
+            scope,
+            &[(slot, closure.borrowed())],
+            context,
+            values,
+        );
+        let released = release_expr_result(closure.take(), context, values);
+        stored.and(released)
+    })
 }
 
 /// Builds the owner object for [`eval_reflection_owner_object`] inside its silent evaluation.
@@ -533,11 +535,11 @@ fn eval_reflection_store_class_constants(
 ) -> Result<(), EvalStatus> {
     let constants = eval_reflection_constants_map(reflected_name, None, context, values)?;
     let scope = eval_reflection_class_owner_scope(owner_kind);
-    let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-        values.property_set(object, "__constants", constants)
-    });
-    let released = eval_release_value(context, values, constants);
-    stored.and(released)
+    with_eval_value_lease(constants, context, values, |constants, context, values| {
+        eval_reflection_with_declaring_class_scope(scope, context, |_| {
+            values.property_set(object, "__constants", constants)
+        })
+    })
 }
 
 /// Stores what the compiled `getDefaultProperties()` getter reads from a class reflector: the
@@ -569,19 +571,19 @@ fn eval_reflection_store_class_defaults(
     };
     match defaults {
         EvalReflectionDefaultProperties::Values(defaults) => {
-            let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-                values.property_set(object, "__default_properties", defaults)
-            });
-            let released = eval_release_value(context, values, defaults);
-            stored.and(released)
+            with_eval_value_lease(defaults, context, values, |defaults, context, values| {
+                eval_reflection_with_declaring_class_scope(scope, context, |_| {
+                    values.property_set(object, "__default_properties", defaults)
+                })
+            })
         }
         EvalReflectionDefaultProperties::DeferredError(message) => {
             let text = values.string(&message)?;
-            let stored = eval_reflection_with_declaring_class_scope(scope, context, |_| {
-                values.property_set(object, "__default_error", text)
-            });
-            let released = values.release(text);
-            stored.and(released)
+            with_eval_value_lease(text, context, values, |text, context, values| {
+                eval_reflection_with_declaring_class_scope(scope, context, |_| {
+                    values.property_set(object, "__default_error", text)
+                })
+            })
         }
     }
 }
@@ -601,22 +603,24 @@ fn eval_reflection_store_enum_backing(
     else {
         return Ok(());
     };
-    let is_backed = values.bool_value(true)?;
+    let is_backed = RuntimeOwnerSlot::new(values.bool_value(true)?);
     let metadata = eval_reflection_enum_backing_type_metadata(backing_type);
     let type_object = match eval_reflection_type_object_result(&metadata, values) {
-        Ok(type_object) => type_object,
+        Ok(type_object) => RuntimeOwnerSlot::new(type_object),
         Err(status) => {
-            let _ = values.release(is_backed);
+            let _ = values.release(is_backed.take());
             return Err(status);
         }
     };
-    let stored = eval_reflection_with_declaring_class_scope("ReflectionEnum", context, |_| {
-        values.property_set(object, "__is_backed", is_backed)?;
-        values.property_set(object, "__backing_type", type_object)
-    });
-    let is_backed_released = values.release(is_backed);
-    let type_object_released = values.release(type_object);
-    stored.and(is_backed_released).and(type_object_released)
+    with_runtime_owners(&(&is_backed, &type_object), || {
+        let stored = eval_reflection_with_declaring_class_scope("ReflectionEnum", context, |_| {
+            values.property_set(object, "__is_backed", is_backed.borrowed())?;
+            values.property_set(object, "__backing_type", type_object.borrowed())
+        });
+        let is_backed_released = values.release(is_backed.take());
+        let type_object_released = values.release(type_object.take());
+        stored.and(is_backed_released).and(type_object_released)
+    })
 }
 
 /// Stores a dump in the slot read by native casts, releasing the temporary on both paths.
@@ -624,12 +628,14 @@ fn eval_reflection_store_dump(
     object: RuntimeCellHandle, owner: &str, rendered: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let text = values.string(rendered)?;
-    let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
-        values.property_set(object, "__string", text)
-    });
-    let released = values.release(text);
-    result.and(released)
+    let text = RuntimeOwnerSlot::new(values.string(rendered)?);
+    with_runtime_owners(&text, || {
+        let result = eval_reflection_with_declaring_class_scope(owner, context, |_| {
+            values.property_set(object, "__string", text.borrowed())
+        });
+        let released = values.release(text.take());
+        result.and(released)
+    })
 }
 
 /// Builds the value stored in a class's parent slot or a member's declaring-class slot.

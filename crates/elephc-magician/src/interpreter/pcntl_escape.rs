@@ -11,6 +11,12 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, with_mutable_runtime_owners, with_runtime_owners,
+};
+use elephc_memoir::runtime_owners::{
+    CleanupErrorPolicy, ReleaseOrder, RuntimeOwnerBatch,
+};
 
 /// Returns whether a value graph contains a callable whose metadata belongs to another eval context.
 pub(crate) fn value_contains_foreign_pcntl_callable(
@@ -18,18 +24,20 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let mut pending = vec![(root, false)];
+    let mut pending = RuntimeOwnerBatch::empty();
+    let current = RuntimeOwnerSlot::new(root.borrowed());
     let mut visited = HashSet::new();
-    while let Some((value, owned)) = pending.pop() {
+    with_mutable_runtime_owners(&mut pending, |pending| with_runtime_owners(&current, || loop {
+        let value = current.borrowed();
         if context.pcntl_foreign_callable_owner(value).is_some() {
-            release_walk_values(value, owned, &mut pending, values);
-            return Ok(true);
+            release_walk_values(&current, pending, values);
+            return Ok(true)
         }
         let tag = match values.type_tag(value) {
             Ok(tag) => tag,
             Err(status) => {
-                release_walk_values(value, owned, &mut pending, values);
-                return Err(status);
+                release_walk_values(&current, pending, values);
+                return Err(status)
             }
         };
         match tag {
@@ -37,63 +45,65 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                 let identity = match values.raw_value_word(value) {
                     Ok(identity) => identity,
                     Err(status) => {
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
                 };
                 if !visited.insert((tag, identity)) {
-                    release_walk_value(value, owned, values);
-                    continue;
+                    release_walk_value(&current, values);
+                    if !advance_walk_value(&current, pending) { return Ok(false); }
+                    continue
                 }
                 let len = match values.array_len(value) {
                     Ok(len) => len,
                     Err(status) => {
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
                 };
                 for position in 0..len {
                     let key = match values.array_iter_key(value, position) {
                         Ok(key) => key,
                         Err(status) => {
-                            release_walk_values(value, owned, &mut pending, values);
-                            return Err(status);
+                            release_walk_values(&current, pending, values);
+                            return Err(status)
                         }
                     };
                     let nested = match array_walk_value(value, key, context, values) {
                         Ok(nested) => nested,
                         Err(status) => {
                             let _ = values.release(key);
-                            release_walk_values(value, owned, &mut pending, values);
-                            return Err(status);
+                            release_walk_values(&current, pending, values);
+                            return Err(status)
                         }
                     };
                     if let Err(status) = values.release(key) {
                         let _ = values.release(nested);
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
-                    pending.push((nested, true));
+                    pending.push(nested);
                 }
             }
             EVAL_TAG_OBJECT => {
                 let identity = match values.object_identity(value) {
                     Ok(identity) => identity,
                     Err(status) => {
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
                 };
                 if context
                     .closure_object_target(identity)
                     .is_some_and(|target| target.contains_foreign_context())
                 {
-                    release_walk_values(value, owned, &mut pending, values);
-                    return Ok(true);
+                    release_walk_values(&current, pending, values);
+                    return Ok(true)
                 }
                 if !visited.insert((tag, identity)) {
-                    release_walk_value(value, owned, values);
-                    continue;
+                    release_walk_value(&current, values);
+                    if !advance_walk_value(&current, pending) { return Ok(false); }
+                    continue
                 }
                 let class_name = match eval_debug_object_class_name(
                     value,
@@ -103,8 +113,8 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                 ) {
                     Ok(class_name) => class_name,
                     Err(status) => {
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
                 };
                 let properties = match eval_debug_object_properties(
@@ -116,17 +126,17 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                 ) {
                     Ok(properties) => properties,
                     Err(status) => {
-                        release_walk_values(value, owned, &mut pending, values);
-                        return Err(status);
+                        release_walk_values(&current, pending, values);
+                        return Err(status)
                     }
                 };
-                pending.extend(properties.into_values().into_iter().map(|value| (value, true)));
+                pending.append(properties.into_values());
             }
             _ => {}
         }
-        release_walk_value(value, owned, values);
-    }
-    Ok(false)
+        release_walk_value(&current, values);
+        if !advance_walk_value(&current, pending) { return Ok(false); }
+    }))
 }
 
 /// Reads the stored array cell when its pointer carries foreign-callable metadata.
@@ -164,24 +174,34 @@ fn array_walk_value(
 
 /// Releases one container-read result when the graph walker owns it.
 fn release_walk_value(
-    value: RuntimeCellHandle,
-    owned: bool,
+    value: &RuntimeOwnerSlot,
     values: &mut impl RuntimeValueOps,
 ) {
-    if owned {
+    let value = value.take();
+    if !value.is_borrowed() && !value.is_null() {
         let _ = values.release(value);
     }
 }
 
+/// Transfers the newest queued owner into the published current-value slot.
+fn advance_walk_value(current: &RuntimeOwnerSlot, pending: &mut RuntimeOwnerBatch) -> bool {
+    debug_assert!(current.replace(pending.pop()).is_none());
+    !current.is_empty()
+}
+
 /// Releases the current value and all queued container-read results after an early exit.
 fn release_walk_values(
-    value: RuntimeCellHandle,
-    owned: bool,
-    pending: &mut Vec<(RuntimeCellHandle, bool)>,
+    current: &RuntimeOwnerSlot,
+    pending: &RuntimeOwnerBatch,
     values: &mut impl RuntimeValueOps,
 ) {
-    release_walk_value(value, owned, values);
-    for (pending_value, pending_owned) in pending.drain(..) {
-        release_walk_value(pending_value, pending_owned, values);
-    }
+    release_walk_value(current, values);
+    let _: Result<(), std::convert::Infallible> = pending.release(
+        ReleaseOrder::Forward,
+        CleanupErrorPolicy::Ignore,
+        |value| {
+            if !value.is_borrowed() { let _ = values.release(value); }
+            Ok(())
+        },
+    );
 }

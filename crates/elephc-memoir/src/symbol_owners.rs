@@ -10,6 +10,50 @@
 
 use crate::{abi, Arch, Emitter};
 
+/// Stable stack snapshot of the owners displaced by a multi-word publication.
+#[derive(Clone, Copy)]
+pub struct DisplacedOwnerRecord {
+    words: usize,
+}
+
+impl DisplacedOwnerRecord {
+    /// Loads one displaced word after publication has made the complete replacement visible.
+    pub fn emit_load(
+        self,
+        emitter: &mut impl Emitter,
+        word: usize,
+        register: &str,
+    ) {
+        assert!(word < self.words, "displaced owner word is outside the record");
+        emitter.emit_load_temporary_stack_slot(register, word * 8);
+    }
+}
+
+/// Publishes every word of an owner record before retiring any displaced obligation.
+///
+/// `load_previous` writes one old word to the supplied register. Memoir snapshots
+/// those words, runs the complete publication, and exposes the stable snapshot to
+/// `retire` while its temporary stack remains live across reentrant callbacks.
+pub fn emit_replace_owner_record<E: Emitter>(
+    emitter: &mut E,
+    words: usize,
+    mut load_previous: impl FnMut(&mut E, usize, &str),
+    publish: impl FnOnce(&mut E),
+    retire: impl FnOnce(&mut E, DisplacedOwnerRecord),
+) {
+    assert!(words > 0, "an owner record must contain at least one word");
+    let bytes = (words * 8 + 15) & !15;
+    emitter.emit_reserve_temporary_stack(bytes);
+    let result = abi::int_result_reg(emitter);
+    for word in 0..words {
+        load_previous(emitter, word, result);
+        emitter.emit_store_to_sp(result, word * 8);
+    }
+    publish(emitter);
+    retire(emitter, DisplacedOwnerRecord { words });
+    emitter.emit_release_temporary_stack(bytes);
+}
+
 /// Stages the old owner, publishes the replacement, and returns the old owner in the result register.
 ///
 /// Publication may update multiple words and clobber scratch registers. It must
@@ -128,10 +172,8 @@ where
 pub enum PublishedDestructor {
     /// Release can run nested callbacks, but there is no direct object receiver.
     None,
-    /// The root directly owns an object pointer.
-    Object,
-    /// The root owns a Mixed cell which may contain an object.
-    Mixed,
+    /// The root owns a managed graph whose objects must run while the root stays visible.
+    Graph,
 }
 
 /// Drains one persistent root and all replacements published by its cleanup callbacks.
@@ -148,31 +190,54 @@ pub fn emit_drain_symbol_owner<E: Emitter>(
     mut clear: impl FnMut(&mut E),
     mut release: impl FnMut(&mut E),
 ) {
+    emit_drain_owner(
+        emitter,
+        label,
+        destructor,
+        |emitter, result| abi::emit_load_symbol_to_reg(emitter, result, symbol, 0),
+        |emitter, result, changed| {
+            abi::emit_cmp_reg_to_symbol(emitter, result, symbol);
+            match emitter.arch() {
+                Arch::AArch64 => emitter.instruction(&format!("b.ne {changed}")), // preserve a newer publication installed by a callback
+                Arch::X86_64 => emitter.instruction(&format!("jne {changed}")), // preserve a newer publication installed by a callback
+            }
+        },
+        &mut clear,
+        |_| {},
+        &mut release,
+    );
+}
+
+/// Drains one caller-addressed root while preserving a replacement published by cleanup.
+pub fn emit_drain_owner<E: Emitter>(
+    emitter: &mut E,
+    label: &str,
+    destructor: PublishedDestructor,
+    mut load: impl FnMut(&mut E, &str),
+    mut branch_if_changed: impl FnMut(&mut E, &str, &str),
+    mut clear: impl FnMut(&mut E),
+    mut after_clear: impl FnMut(&mut E),
+    mut release: impl FnMut(&mut E),
+) {
     let done = format!("{label}_empty");
     let release_pin = format!("{label}_release_pin");
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.label(label);
-    abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+    load(emitter, result);
     crate::layout::emit_branch_if_null_container(emitter, result, scratch, &done);
     if matches!(destructor, PublishedDestructor::None) {
         clear(emitter);
+        after_clear(emitter);
     } else {
         abi::emit_push_reg(emitter, result);
         abi::emit_call_label(emitter, "__rt_incref");
         emitter.emit_load_temporary_stack_slot(result, 0);
         emit_published_destructor(emitter, destructor, label);
         emitter.emit_load_temporary_stack_slot(result, 0);
-        abi::emit_cmp_reg_to_symbol(emitter, result, symbol);
-        match emitter.arch() {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("b.ne {release_pin}"));            // keep a newer publication installed by the destructor
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("jne {release_pin}"));             // keep a newer publication installed by the destructor
-            }
-        }
+        branch_if_changed(emitter, result, &release_pin);
         clear(emitter);
+        after_clear(emitter);
         release(emitter);
         emitter.label(&release_pin);
         abi::emit_pop_reg(emitter, result);
@@ -183,44 +248,17 @@ pub fn emit_drain_symbol_owner<E: Emitter>(
     clear(emitter);
 }
 
-/// Calls a direct object destructor at most once while the published owner is pinned.
+/// Repeats graph-wide protected destruction until callbacks add no unfinished reachable object.
 fn emit_published_destructor(
     emitter: &mut impl Emitter, destructor: PublishedDestructor, label: &str,
 ) {
-    let skip = format!("{label}_skip_destructor");
+    debug_assert!(matches!(destructor, PublishedDestructor::Graph));
+    let repeat = format!("{label}_destruct_graph");
     let result = abi::int_result_reg(emitter);
     let receiver = abi::int_arg_reg_name(emitter, 0);
-    if matches!(destructor, PublishedDestructor::Mixed) {
-        abi::emit_call_label(emitter, "__rt_mixed_unbox");
-        match emitter.arch() {
-            Arch::AArch64 => {
-                emitter.instruction("cmp x0, #6");                              // run a destructor only for the boxed object tag
-                emitter.instruction(&format!("b.ne {skip}"));                   // leave other payloads to their normal release
-                emitter.instruction("mov x0, x1");                              // use the borrowed raw object owned by the pinned box
-            }
-            Arch::X86_64 => {
-                emitter.instruction("cmp rax, 6");                              // run a destructor only for the boxed object tag
-                emitter.instruction(&format!("jne {skip}"));                    // leave other payloads to their normal release
-            }
-        }
-    } else {
-        abi::emit_reg_move(emitter, receiver, result);
-    }
-    crate::layout::emit_branch_if_null_container(
-        emitter, receiver, abi::secondary_scratch_reg(emitter), &skip,
-    );
-    crate::values::destructor_header::emit_skip_running(emitter, &skip);
-    abi::emit_push_reg(emitter, receiver);
-    abi::emit_reg_move(emitter, result, receiver);
-    abi::emit_call_label(emitter, "__rt_incref");
-    emitter.emit_load_temporary_stack_slot(receiver, 0);
-    crate::cleanup_preserve::emit_unary_cleanup_preserving_exception(
-        emitter, "__rt_call_object_destructor", receiver,
-    );
-    abi::emit_pop_reg(emitter, receiver);
-    crate::values::destructor_header::emit_clear_running(emitter);
-    crate::cleanup_preserve::emit_unary_cleanup_preserving_exception(
-        emitter, "__rt_decref_object", receiver,
-    );
-    emitter.label(&skip);
+    emitter.label(&repeat);
+    emitter.emit_load_temporary_stack_slot(result, 0);
+    abi::emit_reg_move(emitter, receiver, result);
+    abi::emit_call_label(emitter, "__rt_shutdown_destruct_graph");
+    emitter.emit_branch_if_int_result_nonzero(&repeat);
 }

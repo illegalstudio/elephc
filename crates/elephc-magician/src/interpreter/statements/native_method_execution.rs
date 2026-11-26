@@ -8,7 +8,7 @@
 //! - Checked and unchecked entry points share binding, bridge scope, and reference-mode handling.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Calls one generated/AOT method from positional values and a prevalidated bridge scope.
 pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecked_bridge_scope(
@@ -256,10 +256,13 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             let _native_context = push_native_frame_context(context);
             values.method_call(object, method_name, native_bound_arg_values(&bound_args))
         };
-        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        let result = result.map(RuntimeOwnerSlot::new);
+        let writeback = with_runtime_owners(&result.as_ref().ok(), || {
+            write_back_native_callable_ref_args(&bound_args, context, values)
+        });
         let result = match (result, writeback) {
             (Ok(result), Err(status)) => {
-                let _ = release_expr_result(result, context, values);
+                let _ = release_expr_result(result.take(), context, values);
                 Err(status)
             }
             (Err(status), _) => Err(status),
@@ -268,7 +271,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
                 return_type.as_ref(),
                 Some(signature_owner),
                 called_class_scope.or(Some(class_name)),
-                result,
+                result.take(),
                 context,
                 values,
             ),
@@ -465,10 +468,13 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
                 values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
             }
         })();
-        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        let result = result.map(RuntimeOwnerSlot::new);
+        let writeback = with_runtime_owners(&result.as_ref().ok(), || {
+            write_back_native_callable_ref_args(&bound_args, context, values)
+        });
         let result = match (result, writeback) {
             (Ok(result), Err(status)) => {
-                let _ = release_expr_result(result, context, values);
+                let _ = release_expr_result(result.take(), context, values);
                 Err(status)
             }
             (Err(status), _) => Err(status),
@@ -477,7 +483,7 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
                 return_type.as_ref(),
                 Some(signature_owner),
                 called_class_scope.or(Some(class_name)),
-                result,
+                result.take(),
                 context,
                 values,
             ),

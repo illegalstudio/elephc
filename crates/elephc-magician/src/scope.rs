@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
-use elephc_memoir::runtime_owners::{RuntimeOwnerSlot, RuntimeOwners};
+use elephc_memoir::runtime_owners::{RuntimeOwnerBatch, RuntimeOwnerSlot, RuntimeOwners};
 pub use elephc_memoir::runtime_owners::RuntimeCellOwnership as ScopeCellOwnership;
 
 /// Tracks the observable PHP state associated with one named scope cell.
@@ -392,7 +392,7 @@ impl ElephcEvalScope {
         });
         let mut replaced = self.set_respecting_references(name, cell, ScopeCellOwnership::Owned);
         if same_owner {
-            replaced.push(cell);
+            replaced.push(cell.for_ownership(ScopeCellOwnership::Owned));
         }
         replaced
     }
@@ -626,13 +626,14 @@ impl ElephcEvalScope {
     }
 
     /// Removes every entry and returns runtime cells owned by the scope.
-    pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+    pub fn drain_owned_cells(&mut self) -> RuntimeOwnerBatch {
         self.aot_visible_names.clear();
         self.reference_targets.clear();
-        self.entries
-            .drain()
-            .filter_map(|(_, entry)| entry.into_owned_cell())
-            .collect()
+        RuntimeOwnerBatch::new(
+            self.entries
+                .drain()
+                .filter_map(|(_, entry)| entry.into_owned_cell()),
+        )
     }
 
     /// Advances the generation counter for a scope mutation.

@@ -144,6 +144,7 @@ mod gc_control;
 mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
+mod published_graph;
 #[cfg(test)]
 mod gc_exceptions;
 mod gc_eval_object_children;
@@ -482,6 +483,8 @@ pub use gc_control::emit_gc_control;
 pub use memory::emit_memory;
 /// Emits pinned destructor snapshots for both cycle collectors.
 pub use gc_destructors::emit_gc_destructors;
+/// Emits graph-wide persistent-root destructor snapshots.
+pub use published_graph::emit_published_graph_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.
 pub use gc_eval_object_children::emit_gc_eval_object_children;
 pub use gc_callable_children::emit_gc_callable_children;

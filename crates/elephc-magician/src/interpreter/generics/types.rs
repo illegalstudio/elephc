@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::eval_ir::parameter_type;
+use crate::interpreter::builtins::collection_builder::with_collection_cells;
 
 /// Infers concrete types from runtime cells without retaining values in template metadata.
 pub(in crate::interpreter) fn runtime_generic_type(value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps, depth: usize) -> Result<Type, EvalStatus> {
@@ -23,15 +24,15 @@ pub(in crate::interpreter) fn runtime_generic_type(value: RuntimeCellHandle, con
             let mut key_type = None;
             let mut element_type = None;
             for index in 0..values.array_len(value)? {
-                let key = values.array_iter_key(value, index)?;
-                let key_result = runtime_generic_type(key, context, values, depth + 1);
-                let key_release = values.release(key);
-                let ty = key_result.and_then(|ty| key_release.map(|()| ty))?;
+                let ty = with_collection_cells(values, |values, owners| {
+                    let key = owners.stage(values.array_iter_key(value, index)?);
+                    runtime_generic_type(key.borrowed(), context, values, depth + 1)
+                })?;
                 merge_type(&mut key_type, ty);
-                let element = values.array_iter_value(value, index)?;
-                let result = runtime_generic_type(element, context, values, depth + 1);
-                let release = values.release(element);
-                let ty = result.and_then(|ty| release.map(|()| ty))?;
+                let ty = with_collection_cells(values, |values, owners| {
+                    let element = owners.stage(values.array_iter_value(value, index)?);
+                    runtime_generic_type(element.borrowed(), context, values, depth + 1)
+                })?;
                 merge_type(&mut element_type, ty);
             }
             let elem = element_type.unwrap_or_else(|| Type::atom("mixed"));
@@ -51,10 +52,12 @@ pub(in crate::interpreter) fn runtime_generic_type(value: RuntimeCellHandle, con
                     return crate::parser::generics::parse_type_string(&name).map_err(|_| EvalStatus::ParseError);
                 }
             }
-            let class = values.object_class_name(value)?;
-            let result = values.string_bytes(class).map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-            let release = values.release(class);
-            let name = result.and_then(|name| release.map(|()| name))?;
+            let name = with_collection_cells(values, |values, owners| {
+                let class = owners.stage(values.object_class_name(value)?);
+                values
+                    .string_bytes(class.borrowed())
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            })?;
             crate::parser::generics::parse_type_string(&name).unwrap_or_else(|_| Type::atom(name))
         }
         _ => Type::atom("mixed"),
@@ -76,15 +79,17 @@ pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCel
             let Some(element_type) = args.last() else { return Ok(false); };
             for index in 0..values.array_len(value)? {
                 if args.len() == 2 {
-                    let key = values.array_iter_key(value, index)?;
-                    let accepted = generic_value_accepts(&args[0], key, context, values);
-                    let released = values.release(key);
-                    if !accepted.and_then(|ok| released.map(|()| ok))? { return Ok(false); }
+                    let accepted = with_collection_cells(values, |values, owners| {
+                        let key = owners.stage(values.array_iter_key(value, index)?);
+                        generic_value_accepts(&args[0], key.borrowed(), context, values)
+                    })?;
+                    if !accepted { return Ok(false); }
                 }
-                let element = values.array_iter_value(value, index)?;
-                let accepted = generic_value_accepts(element_type, element, context, values);
-                let released = values.release(element);
-                if !accepted.and_then(|ok| released.map(|()| ok))? { return Ok(false); }
+                let accepted = with_collection_cells(values, |values, owners| {
+                    let element = owners.stage(values.array_iter_value(value, index)?);
+                    generic_value_accepts(element_type, element.borrowed(), context, values)
+                })?;
+                if !accepted { return Ok(false); }
             }
             Ok(true)
         }

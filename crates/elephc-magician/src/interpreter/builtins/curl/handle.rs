@@ -64,9 +64,7 @@ pub(in crate::interpreter) fn eval_curl_given_type_name(
         if let Some(name) = context.dynamic_object_class_name(identity) {
             return Ok(name);
         }
-        let class_name = values.object_class_name(value)?;
-        let bytes = values.string_bytes(class_name)?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        return runtime_object_class_name(value, values);
     }
     Ok(eval_gettype_name(tag).to_string())
 }
@@ -452,11 +450,12 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
             let (stored, detached) = context
                 .stream_resources_mut()
                 .replace_curl_easy_private(table_id, retained);
-            elephc_memoir::runtime_owners::release_all(
+            crate::interpreter::scope_cells::retire_eval_owner_batch(
                 detached,
                 elephc_memoir::runtime_owners::ReleaseOrder::Forward,
                 elephc_memoir::runtime_owners::CleanupErrorPolicy::First,
-                |owner| eval_release_value(context, values, owner),
+                context,
+                values,
             )?;
             return values.bool_value(stored);
         }

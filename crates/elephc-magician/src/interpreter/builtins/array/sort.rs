@@ -283,9 +283,14 @@ fn eval_array_value_sort_cmp(
     if matches!(left.sort_key, EvalArraySortKey::Object)
         || matches!(right.sort_key, EvalArraySortKey::Object)
     {
-        let result = values.spaceship(left.value, right.value)?;
-        let comparison = values.raw_value_word(result)? as i64;
-        values.release(result)?;
+        let result = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+            values.spaceship(left.value, right.value)?,
+        );
+        let comparison = crate::runtime_hooks::owner_frames::with_runtime_owners(&result, || {
+            values.raw_value_word(result.borrowed()).map(|word| word as i64)
+        });
+        let cleanup = values.release(result.take());
+        let comparison = comparison.and_then(|comparison| cleanup.map(|()| comparison))?;
         return Ok(comparison);
     }
     Ok(match eval_array_sort_key_cmp(&left.sort_key, &right.sort_key) {

@@ -12,6 +12,9 @@
 
 use super::*;
 use crate::context::EvalFunctionArgsFrame;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwnerSlot, with_mutable_runtime_owners, with_runtime_owners,
+};
 
 /// Bound arguments plus the activation metadata needed by PHP's `func_*` family.
 pub(in crate::interpreter) struct BoundEvalFunctionArgs {
@@ -38,6 +41,11 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundEvalFunctionArgs, EvalStatus> {
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::{
+        CleanupErrorPolicy, ReleaseOrder, StagedRuntimeOwners,
+    };
+
     let source_variadic_index = parameter_is_variadic
         .iter()
         .position(|is_variadic| *is_variadic);
@@ -51,60 +59,75 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
 
     // Surplus arguments are activation metadata, never synthetic PHP parameters.
     // Retain their snapshot before binding can coerce or alias the source arguments.
-    let mut surplus = Vec::with_capacity(positional_surplus_count);
-    for arg in evaluated_args.iter().filter(|arg| source_variadic_index.is_none() && arg.name.is_none()).skip(regular_count) {
-        match values.retain(arg.value) {
-            Ok(value) => surplus.push(value),
-            Err(status) => {
-                for cell in surplus { let _ = eval_release_value(context, values, cell); }
-                return Err(status);
+    let surplus = StagedRuntimeOwners::default();
+    with_runtime_owners(&surplus, || {
+        let result = (|| {
+            for arg in evaluated_args
+                .iter()
+                .filter(|arg| source_variadic_index.is_none() && arg.name.is_none())
+                .skip(regular_count)
+            {
+                surplus.stage(values.retain(arg.value)?);
             }
-        }
-    }
-    let args = match bind_evaluated_method_args_with_ref_mode(
-        callee,
-        default_site,
-        params,
-        parameter_types,
-        parameter_defaults,
-        parameter_is_by_ref,
-        parameter_is_variadic,
-        evaluated_args,
-        by_ref_mode,
-        context,
-        values,
-    ) {
-        Ok(args) => args,
-        Err(status) => {
-            for cell in surplus { let _ = eval_release_value(context, values, cell); }
-            return Err(status);
-        }
-    };
-    if let Some(index) = source_variadic_index {
-        let snapshot = (|| {
-            for position in 0..positional_surplus_count {
-                let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-                let value = values.array_get(args[index].value, key);
-                let released = values.release(key);
-                // Keep any successfully read owner in the cleanup list before propagating errors.
-                if let Ok(value) = value { surplus.push(value); }
-                value?;
-                released?;
+            let args = bind_evaluated_method_args_with_ref_mode(
+                callee,
+                default_site,
+                params,
+                parameter_types,
+                parameter_defaults,
+                parameter_is_by_ref,
+                parameter_is_variadic,
+                evaluated_args,
+                by_ref_mode,
+                context,
+                values,
+            )?;
+            if let Some(index) = source_variadic_index {
+                let snapshot = with_runtime_owners(&args, || {
+                    (|| {
+                        for position in 0..positional_surplus_count {
+                            let key = values.int(
+                                i64::try_from(position)
+                                    .map_err(|_| EvalStatus::RuntimeFatal)?,
+                            )?;
+                            let value = values.array_get(args[index].value, key);
+                            let released = values.release(key);
+                            if let Ok(value) = value {
+                                surplus.stage(value);
+                            }
+                            value?;
+                            released?;
+                        }
+                        Ok(())
+                    })()
+                });
+                if let Err(status) = snapshot {
+                    let _ = release_native_bound_args(&args, context, values);
+                    return Err(status);
+                }
             }
-            Ok(())
-        })();
-        if let Err(status) = snapshot {
-            for cell in surplus { let _ = eval_release_value(context, values, cell); }
-            let _ = release_native_bound_args(&args, context, values);
-            return Err(status);
-        }
-    }
 
-    Ok(BoundEvalFunctionArgs {
-        params: params.to_vec(),
-        parameter_is_by_ref: parameter_is_by_ref.to_vec(),
-        args,
-        frame: EvalFunctionArgsFrame::new(regular_params, actual_count, surplus),
+            Ok(BoundEvalFunctionArgs {
+                params: params.to_vec(),
+                parameter_is_by_ref: parameter_is_by_ref.to_vec(),
+                args,
+                frame: EvalFunctionArgsFrame::new(
+                    regular_params,
+                    actual_count,
+                    surplus.take_all().transfer(),
+                ),
+            })
+        })();
+        if result.is_err() {
+            let _ = crate::interpreter::scope_cells::retire_eval_owner_batch(
+                surplus.take_all(),
+                ReleaseOrder::Forward,
+                CleanupErrorPolicy::Ignore,
+                context,
+                values,
+            );
+        }
+        result
     })
 }
 
@@ -170,7 +193,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     let mut evaluated_args = evaluated_args;
     for arg in &mut evaluated_args { arg.value = arg.value.borrowed(); }
     let mut bound_args = vec![None; params.len()];
-    let binding_result = (|| {
+    let binding_result = with_mutable_runtime_owners(&mut bound_args, |bound_args| (|| {
         let variadic_index = parameter_is_variadic
             .iter()
             .position(|is_variadic| *is_variadic);
@@ -207,7 +230,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     parameter_is_by_ref,
                     variadic_index,
                     next_variadic_index,
-                    &mut bound_args,
+                    bound_args,
                     &mut staged_variadic,
                     &name,
                     arg.value,
@@ -219,7 +242,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             } else {
                 bind_dynamic_positional_method_arg(
                     params,
-                    &mut bound_args,
+                    bound_args,
                     &mut staged_variadic,
                     parameter_is_by_ref,
                     variadic_index,
@@ -233,11 +256,11 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             }
         }
 
-        for (position, value) in bound_args.iter_mut().enumerate() {
+        for position in 0..bound_args.len() {
             if Some(position) == variadic_index {
                 continue;
             }
-            if value.is_none() {
+            if bound_args[position].is_none() {
                 if position < required_count {
                     let message = missing_argument_message(
                         callee,
@@ -251,23 +274,26 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 let Some(Some(default)) = parameter_defaults.get(position) else {
                     return Err(EvalStatus::RuntimeFatal);
                 };
-                *value = Some(BoundMethodArg {
-                    value: eval_method_parameter_default_at(
-                        default,
-                        &format!("{default_site}#{position}"),
-                        context,
-                        values,
-                    )?,
+                let default_value = eval_method_parameter_default_at(
+                    default,
+                    &format!("{default_site}#{position}"),
+                    context,
+                    values,
+                )?;
+                bound_args[position] = Some(BoundMethodArg {
+                    value: default_value,
                     ref_target: None,
                     variadic_ref_targets: Vec::new(),
                 });
             }
             if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
-                let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-                let previous = bound.value;
+                let previous = bound_args[position]
+                    .as_ref()
+                    .ok_or(EvalStatus::RuntimeFatal)?
+                    .value;
                 eval_reject_null_object_argument(callee, position + 1, Some(&params[position]),
                     param_type, previous, context, values)?;
-                bound.value = eval_method_parameter_value_or_throw(
+                let replacement = eval_method_parameter_value_or_throw(
                     callee,
                     position + 1,
                     Some(&params[position]),
@@ -276,14 +302,18 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     context,
                     values,
                 )?;
-                if bound.value != previous { release_expr_result(previous, context, values)?; }
+                bound_args[position]
+                    .as_mut()
+                    .ok_or(EvalStatus::RuntimeFatal)?
+                    .value = replacement;
+                if replacement != previous { release_expr_result(previous, context, values)?; }
             }
         }
         bind_dynamic_variadic_args(callee, parameter_types, variadic_index, staged_variadic,
-            &mut bound_args, context, values)?;
+            bound_args, context, values)?;
 
         Ok(())
-    })();
+    })());
     if let Err(status) = binding_result {
         let prepared = bound_args.into_iter().flatten().collect::<Vec<_>>();
         let _ = release_native_bound_args(&prepared, context, values);
@@ -548,16 +578,36 @@ fn bind_dynamic_variadic_args(
                 callee, number, None, param_type, original, context, values,
             )?
         } else { original };
-        let inserted = (|| {
-            let key = match arg.name {
-                Some(name) => values.string(&name)?,
-                None => values.int(i64::try_from(number.checked_sub(index + 1)
-                    .ok_or(EvalStatus::RuntimeFatal)?).map_err(|_| EvalStatus::RuntimeFatal)?)?,
+        let value_owner = RuntimeOwnerSlot::new(if value != original {
+            value
+        } else {
+            value.borrowed()
+        });
+        with_runtime_owners(&value_owner, || {
+            let inserted = (|| {
+                let key = match arg.name {
+                    Some(name) => values.string(&name)?,
+                    None => values.int(i64::try_from(
+                        number.checked_sub(index + 1).ok_or(EvalStatus::RuntimeFatal)?,
+                    )
+                    .map_err(|_| EvalStatus::RuntimeFatal)?)?,
+                };
+                bind_dynamic_variadic_arg(
+                    bound_args,
+                    variadic_index,
+                    key,
+                    value.borrowed(),
+                    arg.ref_target,
+                    values,
+                )
+            })();
+            let released = if value != original {
+                release_expr_result(value_owner.take(), context, values)
+            } else {
+                Ok(())
             };
-            bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, arg.ref_target, values)
-        })();
-        let released = if value != original { release_expr_result(value, context, values) } else { Ok(()) };
-        inserted.and(released)?;
+            inserted.and(released)
+        })?;
     }
     Ok(())
 }
@@ -584,14 +634,21 @@ fn bind_dynamic_variadic_arg(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
-    let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-    let inserted = values.array_set(bound.value, key, value);
-    if ref_target.is_none() || inserted.is_err() { values.release(key)?; }
-    bound.value = inserted?;
-    if let Some(ref_target) = ref_target {
-        bound.variadic_ref_targets.push((key, ref_target));
-    }
-    Ok(())
+    let array = bound_args[index].as_ref().ok_or(EvalStatus::RuntimeFatal)?.value;
+    let key = RuntimeOwnerSlot::new(key);
+    with_runtime_owners(&key, || {
+        let inserted = values.array_set(array, key.borrowed(), value);
+        if ref_target.is_none() || inserted.is_err() {
+            values.release(key.take())?;
+        }
+        let array = inserted?;
+        let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
+        bound.value = array;
+        if let Some(ref_target) = ref_target {
+            bound.variadic_ref_targets.push((key.take(), ref_target));
+        }
+        Ok(())
+    })
 }
 
 /// Applies one eval method parameter type to a bound runtime value.

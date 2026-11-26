@@ -27,7 +27,10 @@ use crate::interpreter::{
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
     warn_eval_discarded_function_call,
 };
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{
+    RuntimeOwners, with_mutable_runtime_owners, with_runtime_owners,
+    with_runtime_scope_owners,
+};
 use crate::scope::ElephcEvalScope;
 use crate::value::RuntimeCellHandle;
 
@@ -92,6 +95,17 @@ impl Vm {
     }
 }
 
+impl RuntimeOwners for Vm {
+    /// Publishes the operand stack, owned scopes and an escaping control value as one VM frame.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut crate::value::RuntimeCell)) {
+        self.stack.visit_owned_slots(visit);
+        for scope in &self.scopes {
+            scope.visit_owned_cell_slots(&mut *visit);
+        }
+        self.result.visit_owned_slots(visit);
+    }
+}
+
 /// Reports whether the latest program entry on this thread used the slice.
 #[cfg(test)]
 pub(in crate::interpreter) fn last_execution_used_vm() -> bool {
@@ -121,7 +135,11 @@ pub(in crate::interpreter) fn execute_module(
         scope_slot: None,
         pushed_activation: false,
     });
-    let control = run_until_baseline(&mut vm, 0, context, scope, values)?;
+    let control = with_mutable_runtime_owners(&mut vm, |vm| {
+        with_runtime_scope_owners(scope, |scope| {
+            run_until_baseline(vm, 0, context, scope, values)
+        })
+    })?;
     Ok((control, VmStats { max_frames: vm.max_frames }))
 }
 
@@ -141,7 +159,11 @@ pub(in crate::interpreter) fn execute_bound_body(
         pushed_activation: false,
     });
     // Nested entry from the walker. Further compiled calls stay on `vm.frames`.
-    run_until_baseline(&mut vm, 0, context, scope, values)
+    with_mutable_runtime_owners(&mut vm, |vm| {
+        with_runtime_scope_owners(scope, |scope| {
+            run_until_baseline(vm, 0, context, scope, values)
+        })
+    })
 }
 
 /// Runs every frame above `baseline`, then returns that activation's control.
@@ -209,11 +231,14 @@ fn step(
         Op::PopDiscardedCall(index) => {
             let body = current_body(vm)?;
             let site = body.calls.get(index as usize).ok_or(EvalStatus::RuntimeFatal)?;
-            let value = pop(&mut vm.stack)?;
-            let warned = warn_eval_discarded_function_call(&site.name, context, values);
-            let released = eval_release_value(context, values, value);
-            warned?;
-            released?;
+            let value = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(pop(
+                &mut vm.stack,
+            )?);
+            crate::runtime_hooks::owner_frames::with_runtime_owners(&value, || {
+                let warned = warn_eval_discarded_function_call(&site.name, context, values);
+                let released = eval_release_value(context, values, value.take());
+                warned.and(released)
+            })?;
         }
         Op::Dup => {
             let top = *vm.stack.last().ok_or(EvalStatus::RuntimeFatal)?;
@@ -293,14 +318,8 @@ fn release_span(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut status = Ok(());
-    while stack.len() > from {
-        let cell = stack.pop().unwrap();
-        if let Err(error) = eval_release_value(context, values, cell) {
-            status = Err(error);
-        }
-    }
-    status
+    let cells = stack.split_off(from);
+    release_owner_batch(cells, elephc_memoir::runtime_owners::ReleaseOrder::Reverse, context, values)
 }
 
 /// Releases cells and keeps the first release error.
@@ -309,13 +328,28 @@ fn release_cells(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut status = Ok(());
-    for cell in cells {
-        if let Err(error) = eval_release_value(context, values, *cell) {
-            status = Err(error);
-        }
-    }
-    status
+    release_owner_batch(
+        cells.iter().copied(),
+        elephc_memoir::runtime_owners::ReleaseOrder::Forward,
+        context,
+        values,
+    )
+}
+
+/// Keeps the unreleased VM cells rooted and preserves the first cleanup failure.
+fn release_owner_batch(
+    cells: impl IntoIterator<Item = RuntimeCellHandle>,
+    order: elephc_memoir::runtime_owners::ReleaseOrder,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, RuntimeOwnerBatch};
+    let owners = RuntimeOwnerBatch::new(cells);
+    with_runtime_owners(&owners, || {
+        owners.release(order, CleanupErrorPolicy::First, |cell| {
+            eval_release_value(context, values, cell)
+        })
+    })
 }
 
 /// Pops one owned operand.

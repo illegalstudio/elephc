@@ -8,6 +8,7 @@
 //! - Bound `$this`, class scope, reference captures, and static locals survive execution.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{with_runtime_owners, with_runtime_scope_owners};
 
 /// Evaluates an eval-declared function after its positional arguments are prepared.
 pub(in crate::interpreter) fn eval_dynamic_function_with_values(
@@ -122,38 +123,53 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // on. The body and its return coercion run under the declaring fragment's mode.
     let caller_strict_types = context.strict_types();
     context.set_strict_types(function.strict_types());
-    let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
-            super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
-        } else {
-            execute_statements(function.body(), context, &mut function_scope, values)
-        }
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut function_scope, |scope| {
+            binding_result.and_then(|()| {
+                if let Some(body) = function.bytecode().cloned() {
+                    super::super::bytecode::execute_bound_body(body, context, scope, values)
+                } else {
+                    execute_statements(function.body(), context, scope, values)
+                }
+            })
+        })
     });
-    let persist_result = persist_static_locals(
-        context,
-        function.name(),
-        &static_names,
-        &function_scope,
-        values,
-    );
-    let writeback_result = write_back_method_ref_args(
-        function.params(),
-        &evaluated_args,
-        &function_scope,
-        context,
-        values,
-    );
+    let (persist_result, writeback_result) = with_runtime_owners(
+        &(&evaluated_args, result.as_ref().ok()),
+        || {
+        with_runtime_scope_owners(&mut function_scope, |scope| {
+            let persist_result = persist_static_locals(
+                context,
+                function.name(),
+                &static_names,
+                scope,
+                values,
+            );
+            let writeback_result = write_back_method_ref_args(
+                function.params(),
+                &evaluated_args,
+                scope,
+                context,
+                values,
+            );
+            (persist_result, writeback_result)
+        })
+    });
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
-            function.name(),
-            function.return_type(),
-            None,
-            None,
-            control,
-            context,
-            values,
-        ),
+        (Ok(()), Ok(()), Ok(control)) => {
+            with_runtime_scope_owners(&mut function_scope, |_scope| {
+                eval_declared_return_control_value(
+                    function.name(),
+                    function.return_type(),
+                    None,
+                    None,
+                    control,
+                    context,
+                    values,
+                )
+            })
+        }
     };
     context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
@@ -491,29 +507,44 @@ fn eval_closure_with_optional_binding(
     // the mode of the fragment that declared this closure.
     let caller_strict_types = context.strict_types();
     context.set_strict_types(function.strict_types());
-    let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
-            super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
-        } else {
-            execute_statements(function.body(), context, &mut function_scope, values)
-        }
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut function_scope, |scope| {
+            binding_result.and_then(|()| {
+                if let Some(body) = function.bytecode().cloned() {
+                    super::super::bytecode::execute_bound_body(body, context, scope, values)
+                } else {
+                    execute_statements(function.body(), context, scope, values)
+                }
+            })
+        })
     });
-    let persist_result = persist_static_locals(
-        context,
-        function.name(),
-        &static_names,
-        &function_scope,
-        values,
-    );
-    let capture_writeback_result =
-        write_back_closure_ref_captures(closure.captures(), &function_scope, context, values);
-    let arg_writeback_result = write_back_method_ref_args(
-        function.params(),
-        &evaluated_args,
-        &function_scope,
-        context,
-        values,
-    );
+    let (persist_result, capture_writeback_result, arg_writeback_result) = with_runtime_owners(
+        &(&evaluated_args, result.as_ref().ok()),
+        || {
+        with_runtime_scope_owners(&mut function_scope, |scope| {
+            let persist_result = persist_static_locals(
+                context,
+                function.name(),
+                &static_names,
+                scope,
+                values,
+            );
+            let capture_writeback_result =
+                write_back_closure_ref_captures(closure.captures(), scope, context, values);
+            let arg_writeback_result = write_back_method_ref_args(
+                function.params(),
+                &evaluated_args,
+                scope,
+                context,
+                values,
+            );
+            (
+                persist_result,
+                capture_writeback_result,
+                arg_writeback_result,
+            )
+        })
+    });
     let return_result = match (
         persist_result,
         capture_writeback_result,
@@ -524,15 +555,19 @@ fn eval_closure_with_optional_binding(
         | (_, Err(status), _, _)
         | (_, _, Err(status), _)
         | (_, _, _, Err(status)) => Err(status),
-        (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
-            &eval_closure_display_name(function, context),
-            function.return_type(),
-            None,
-            None,
-            control,
-            context,
-            values,
-        ),
+        (Ok(()), Ok(()), Ok(()), Ok(control)) => {
+            with_runtime_scope_owners(&mut function_scope, |_scope| {
+                eval_declared_return_control_value(
+                    &eval_closure_display_name(function, context),
+                    function.return_type(),
+                    None,
+                    None,
+                    control,
+                    context,
+                    values,
+                )
+            })
+        }
     };
     context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
@@ -630,7 +665,7 @@ pub(in crate::interpreter) fn persist_static_locals(
             if let Some(replaced) =
                 context.set_static_local(function_name.to_string(), name.clone(), cell)
             {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
         }
     }

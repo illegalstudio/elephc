@@ -116,8 +116,18 @@ impl ElephcEvalContext {
             || !self.instance_defaults.is_empty()
     }
 
+    /// Reports whether terminal ownership convergence still has a context-owned PHP cell.
+    pub(crate) fn has_context_cell_owners(&self) -> bool {
+        self.has_pcntl_request_cells()
+            || !self.error_handlers.is_empty()
+            || !self.exception_handlers.is_empty()
+            || self.streams.has_php_cell_owners()
+    }
+
     /// Detaches persistent value owners before native releases can reenter the context.
-    pub(crate) fn take_context_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
+    pub(crate) fn take_context_cell_owners(
+        &mut self,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
         let mut owners = self.enum_cases.take_all();
         owners.extend(self.enum_case_values.take_all());
         owners.extend(self.constants.take_all());
@@ -480,7 +490,9 @@ impl ElephcEvalContext {
     }
 
     /// Pops activation metadata and transfers its retained snapshot cells for release.
-    pub(crate) fn pop_function_args(&mut self) -> Vec<RuntimeCellHandle> {
+    pub(crate) fn pop_function_args(
+        &mut self,
+    ) -> elephc_memoir::runtime_owners::RuntimeOwnerBatch {
         self.function_args_stack.pop()
             .map(EvalBacktraceFrame::into_argument_cells).unwrap_or_default()
     }
@@ -838,14 +850,20 @@ mod persistent_owner_tests {
         context.set_static_property("Owner", "value", first);
         context.set_class_constant_cell("Owner", "TOKEN", second);
         let cells = context.take_context_cell_owners();
-        assert_eq!(cells.iter().filter(|cell| **cell == first).count(), 2);
-        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 1);
+        assert_eq!(cells.iter().filter(|cell| *cell == first).count(), 2);
+        assert_eq!(cells.iter().filter(|cell| *cell == second).count(), 1);
         assert!(context.static_local("function", "local").is_none());
         assert!(context.static_property("Owner", "value").is_none());
         assert!(context.class_constant_cell("Owner", "TOKEN").is_none());
         assert!(context.take_context_cell_owners().is_empty());
         context.set_static_property("Owner", "replacement", second);
-        assert_eq!(context.take_context_cell_owners(), vec![second]);
+        assert_eq!(
+            context
+                .take_context_cell_owners()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![second],
+        );
     }
 
     /// Dynamic declarations and local handler stacks participate in the same owner drain.
@@ -867,11 +885,14 @@ mod persistent_owner_tests {
         context.push_exception_handler(Some(cells[6]));
         context.push_exception_handler(Some(cells[5]));
 
+        assert!(context.has_context_cell_owners());
+
         let drained = context.take_context_cell_owners();
         for cell in cells {
-            assert_eq!(drained.iter().filter(|owner| **owner == cell).count(), 1);
+            assert_eq!(drained.iter().filter(|owner| *owner == cell).count(), 1);
         }
         assert!(context.take_context_cell_owners().is_empty());
+        assert!(!context.has_context_cell_owners());
     }
 
     /// A newly allocated cell cannot inherit the cursor of a retired cell at the same address.

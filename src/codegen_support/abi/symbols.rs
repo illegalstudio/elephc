@@ -36,10 +36,10 @@ pub(crate) fn emit_drain_static_owner(
     } else {
         return;
     };
-    let destructor = match ty {
-        PhpType::Mixed | PhpType::Union(_) => PublishedDestructor::Mixed,
-        PhpType::Object(_) => PublishedDestructor::Object,
-        _ => PublishedDestructor::None,
+    let destructor = if *ty == PhpType::Str {
+        PublishedDestructor::None
+    } else {
+        PublishedDestructor::Graph
     };
     emit_drain_symbol_owner(
         emitter, symbol, label, destructor,
