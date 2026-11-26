@@ -1368,6 +1368,10 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 `DateTimeZone` introspection (`getLocation()`, `getTransitions()`, `listAbbreviations()`) is backed by the bundled **`elephc-tz`** workspace crate, which bakes PHP timelib's IANA timezone tables into committed data files and exposes them through the `elephc_tz_location` / `elephc_tz_transitions` / `elephc_tz_abbreviations` ABI symbols. Like the `elephc-tls` and `elephc-phar` bridges it is linked only into programs that use it. The offset/DST resolution used by `date()`/`gmdate()` themselves is delegated to libc (`localtime`/`gmtime`/`tzset`).
 
+### TLS session backend foundation
+
+`crates/elephc-tls-openssl` is the libssl-backed client foundation for the PHP 8.6 TLS session work. It owns an `SSL`/`SSL_CTX` pair plus the connected `TcpStream`, can import and export a PEM `SSL_SESSION`, and installs that session before the handshake; its TLS 1.2 round-trip test proves that the exported session resumes on a second connection (`SSL_session_reused() == 1` on both peers). The default `https://` wrapper still selects the rustls `elephc-tls` bridge: the remaining `.13` work is to let the AOT context-option path choose the libssl bridge when `ssl.session_data` is present, extract the PEM from the `Openssl\Session` value, and add the PSK/early-data context options.
+
 ### JSON routines
 
 **Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_integer_tree/`, `system/json_pretty.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.

@@ -1,0 +1,15 @@
+[package]
+name = "elephc-tls-openssl"
+version = "0.1.0"
+edition = "2021"
+description = "libssl-backed TLS client stream backend for elephc's PHP 8.6 session resumption options"
+license = "MIT"
+publish = false
+
+# Built as a C-callable staticlib for compiled programs that select the
+# OpenSSL-backed TLS stream path, and as an rlib so the libssl session
+# resumption path is unit-testable with a pinned ELEPHC_OPENSSL_LIB_DIR.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

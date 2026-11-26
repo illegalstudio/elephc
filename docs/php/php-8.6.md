@@ -71,7 +71,7 @@ instead of during production.
 
 | Item | Why it is deferred |
 |---|---|
-| OpenSSL TLS stream integration | The `session_data` / `session_new_cb` / `session_get_cb` / `session_remove_cb` / `session_id_context`, `psk_*` and `early_data` stream-context options. `Openssl\Session` itself imports, exports and inspects sessions through libssl; `elephc-tls` is still a rustls client with no `SSL_CTX` callback or early-data plumbing, so these options remain deferred. Tracked by `elephc-a66b.13`. |
+| OpenSSL TLS stream integration | The `session_data` / `session_new_cb` / `session_get_cb` / `session_remove_cb` / `session_id_context`, `psk_*` and `early_data` stream-context options. `Openssl\Session` itself imports, exports and inspects sessions through libssl, and the new `crates/elephc-tls-openssl` foundation proves PEM session export/import and TLS resumption against a local server. The default `https://` wrapper still selects rustls, so the context options remain deferred until the AOT path chooses the libssl bridge; tracked by `elephc-a66b.13`. |
 | Direction-aware property resolution, const object property writes, function-argument error display, closure optimizations, SNMP updates | Smaller upstream changes with no standalone user-visible surface in elephc yet. |
 
 ## Known deviations
