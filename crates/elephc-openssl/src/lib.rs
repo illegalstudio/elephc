@@ -1,22 +1,26 @@
 //! Purpose:
-//! libcrypto-backed OpenSSL cipher bridge staticlib for elephc: the PHP-visible
-//! 135-method default-provider catalog plus raw EVP encrypt/decrypt operations.
+//! libcrypto/libssl-backed OpenSSL bridge staticlib for elephc: the PHP-visible
+//! 135-method default-provider catalog, raw EVP encrypt/decrypt operations, and the
+//! PHP 8.6 `Openssl\Session` import/export metadata surface.
 //!
 //! Called from:
-//! - Compiled PHP programs through the `__rt_openssl_*` runtime helpers.
+//! - Compiled PHP programs through the `__rt_openssl_*` runtime helpers and the
+//!   `Openssl\Session` prelude externs.
 //! - `cargo test -p elephc-openssl` with a pinned `ELEPHC_OPENSSL_LIB_DIR`.
 //!
 //! Key details:
-//! - The bridge never links libcrypto itself; the compiler resolves the managed
-//!   `openssl-crypto` package and places its `libcrypto.a` after this archive.
+//! - The bridge never links libssl/libcrypto itself; the compiler resolves the managed
+//!   `openssl-crypto` package and places its archives after this one.
 //! - PHP's base64/raw output selection and tag by-reference plumbing stay in the
 //!   AOT runtime helpers; this ABI always moves raw bytes.
-//! - Every public entry point catches Rust panics and maps them to `-8`.
+//! - Every public entry point catches Rust panics and maps them to a failure value.
 
 mod abi;
 mod catalog;
 mod engine;
 mod ffi;
+#[cfg(any(not(test), elephc_openssl_ssl_native))]
+mod session;
 
 pub use abi::{
     elephc_openssl_cipher_count, elephc_openssl_cipher_iv_length, elephc_openssl_cipher_methods,

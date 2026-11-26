@@ -1,13 +1,16 @@
 //! Purpose:
-//! Builds static OpenSSL 3.5.8 `libssl`/`libcrypto` archives used only as libcurl's TLS backend.
+//! Builds static OpenSSL `libssl`/`libcrypto` archives for two catalog packages: curl's
+//! 3.5.8 TLS backend and the cipher/session bridge's 3.6.4 build.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for openssl recipe revision 1.
+//! - `crate::native_deps::recipe::CuratedRecipes` for `openssl` revision 1 and
+//!   `openssl-crypto` revision 2.
 //!
 //! Key details:
 //! - Runs OpenSSL's documented out-of-tree `Configure` + `make build_libs`, static only
 //!   (`no-shared`), and retains only the two archives plus the exact catalog-declared header set;
-//!   never a system OpenSSL. PHP `openssl_encrypt`/`hash()` stay on `elephc-crypto` (RustCrypto).
+//!   never a system OpenSSL. `openssl-crypto` adds libssl for `Openssl\Session`; PHP
+//!   `openssl_encrypt`/`hash()` stay on `elephc-crypto` (RustCrypto).
 
 use std::fs;
 use std::path::Path;
@@ -22,11 +25,6 @@ use super::util::{copy_regular, require_regular};
 /// Builds OpenSSL into the catalog-declared staging prefix.
 pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     build_variant(request, true)
-}
-
-/// Builds only the OpenSSL `libcrypto` archive for the cipher bridge.
-pub(super) fn build_crypto_only(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
-    build_variant(request, false)
 }
 
 /// Builds OpenSSL with or without the TLS archive into the staging prefix.

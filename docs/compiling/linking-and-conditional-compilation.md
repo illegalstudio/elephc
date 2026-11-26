@@ -36,7 +36,7 @@ requirements against the nearest project's `elephc.toml`, deterministic
 static archive paths to the linker; compilation never downloads or builds them.
 
 The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, the
-libcrypto-only `openssl-crypto` 3.6.4 package, nghttp2 1.70.0, libssh2 1.11.1,
+`openssl-crypto` 3.6.4 package (libssl and libcrypto), nghttp2 1.70.0, libssh2 1.11.1,
 curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, GMP 6.3.0, and libmagic 5.46.
 Regex use links PCRE2's
 managed archives in the fixed shim/POSIX/8-bit order and has no production
@@ -77,7 +77,7 @@ elephc build app.php --with-xml
 ```
 
 Symmetric `openssl_*` calls use the separate `openssl` bridge and managed
-`openssl-crypto` 3.6.4 package. Its libcrypto archive is distinct from curl's
+`openssl-crypto` 3.6.4 package. Its libssl/libcrypto archives are distinct from curl's
 OpenSSL 3.5.8 dependency; `hash()` remains on the `crypto` bridge.
 
 See [Native dependencies](native-dependencies.md) for the full workflow.

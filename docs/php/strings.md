@@ -567,7 +567,7 @@ Known divergences:
 elephc implements `openssl_encrypt()`, `openssl_decrypt()`,
 `openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()` on both compiled
 and `eval()` paths. The compiled AOT path links the managed `openssl-crypto`
-package — a libcrypto-only OpenSSL 3.6.4 build — through the `elephc-openssl`
+package — an OpenSSL 3.6.4 build with libssl and libcrypto — through the `elephc-openssl`
 bridge and reports PHP's exact 135-name default-provider catalog. It does not use
 a system OpenSSL, and programs that do not use cipher builtins do not link
 libcrypto. Declare the package in the project manifest:

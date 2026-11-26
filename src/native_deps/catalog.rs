@@ -253,11 +253,13 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
 }];
-/// The libcrypto-only OpenSSL build used by the cipher bridge. It is deliberately
+/// The OpenSSL build used by the cipher and session bridges. It is deliberately
 /// separate from curl's 3.5.8 TLS pin: PHP 8.5's 135-cipher default-provider list
 /// gained nine AES-CBC-HMAC-ETM entries in 3.6.4, and curl's TLS link must not be
-/// forced onto that newer ABI by an unrelated cipher feature.
-const OPENSSL_CRYPTO_ARCHIVES: &[&str] = &["lib/libcrypto.a"];
+/// forced onto that newer ABI by an unrelated cipher feature. `libssl.a` backs the
+/// PHP 8.6 `Openssl\Session` import/export surface; unused archive members are not
+/// pulled into programs that only use the cipher catalog.
+const OPENSSL_CRYPTO_ARCHIVES: &[&str] = &["lib/libssl.a", "lib/libcrypto.a"];
 const OPENSSL_CRYPTO_HEADERS: &[&str] = &[
     "include/openssl/core_dispatch.h",
     "include/openssl/core_names.h",
@@ -278,7 +280,7 @@ const OPENSSL_CRYPTO_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 55_003_802,
         body_limit: 128 * 1024 * 1024,
     },
-    recipe_revision: 1,
+    recipe_revision: 2,
     dependencies: &["zlib"],
     supported_targets: TARGETS,
     ordered_link_outputs: OPENSSL_CRYPTO_ARCHIVES,
@@ -652,20 +654,22 @@ mod tests {
         assert_eq!(version.supported_targets, TARGETS);
     }
 
-    /// Verifies the libcrypto-only OpenSSL 3.6.4 source identity and its exact
-    /// `libcrypto.a` contract, including the zlib dependency used by its
-    /// compression BIO paths.
+    /// Verifies the OpenSSL 3.6.4 source identity and its exact `libssl.a`/`libcrypto.a`
+    /// contract, including the zlib dependency used by its compression and TLS paths.
     #[test]
     fn openssl_crypto_catalog_snapshot_is_exact() {
         let version = version("openssl-crypto", None).expect("catalogue entry");
         assert_eq!(version.version, "3.6.4");
-        assert_eq!(version.recipe_revision, 1);
+        assert_eq!(version.recipe_revision, 2);
         assert_eq!(version.source.exact_size, 55_003_802);
         assert_eq!(
             version.source.sha256,
             "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef"
         );
-        assert_eq!(version.ordered_link_outputs, &["lib/libcrypto.a"]);
+        assert_eq!(
+            version.ordered_link_outputs,
+            &["lib/libssl.a", "lib/libcrypto.a"]
+        );
         assert_eq!(version.retained_headers, OPENSSL_CRYPTO_HEADERS);
         assert_eq!(version.dependencies, &["zlib"]);
         assert_eq!(version.supported_targets, TARGETS);

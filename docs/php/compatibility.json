@@ -183,7 +183,7 @@
       "total": 329
     },
     "constants": {
-      "have": 1617,
+      "have": 1620,
       "total": 3181
     },
     "functions": {
@@ -1062,8 +1062,8 @@
         "total": 3
       },
       "constants": {
-        "eval": 3,
-        "have": 3,
+        "eval": 6,
+        "have": 6,
         "total": 70
       },
       "docs": null,
@@ -1747,6 +1747,10 @@
       },
       {
         "name": "Openssl\\Psk",
+        "since": "8.6"
+      },
+      {
+        "name": "Openssl\\Session",
         "since": "8.6"
       },
       {

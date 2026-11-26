@@ -1,7 +1,7 @@
 //! Purpose:
 //! Locates this machine's managed native `openssl-crypto` and `zlib` artifacts so a
-//! codegen fixture that links the `elephc_openssl` cipher bridge can resolve
-//! libcrypto's EVP/provider symbols and the zlib archive libcrypto references.
+//! codegen fixture that links the `elephc_openssl` bridge can resolve libssl/libcrypto
+//! session and EVP/provider symbols plus the zlib archive they reference.
 //!
 //! Called from:
 //! - `super::runner::test_link_plan` when a fixture's link plan names `elephc_openssl`.
@@ -11,7 +11,8 @@
 //! - This is a test provider, not a fallback: it reads the same durable cache the
 //!   production resolver writes and never consults a system or Homebrew OpenSSL.
 //! - The `openssl-crypto` package is deliberately separate from curl's 3.5.8
-//!   `openssl` pin: the cipher bridge needs 3.6.4's extra AES-CBC-HMAC-ETM methods.
+//!   `openssl` pin: the cipher bridge needs 3.6.4's extra AES-CBC-HMAC-ETM methods,
+//!   and libssl backs the PHP 8.6 `Openssl\Session` surface.
 //! - Missing artifacts skip visibly by default; `ELEPHC_TEST_REQUIRE_OPENSSL_NATIVE`
 //!   turns that into a panic in CI jobs that materialize the package first.
 
@@ -23,7 +24,7 @@ use super::target;
 
 /// The packages a linked `elephc_openssl` needs, in link order.
 pub(crate) const OPENSSL_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
-    ("openssl-crypto", &["libcrypto.a"]),
+    ("openssl-crypto", &["libssl.a", "libcrypto.a"]),
     ("zlib", &["libz.a"]),
 ];
 

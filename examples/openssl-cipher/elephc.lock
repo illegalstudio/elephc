@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "openssl-crypto"
 version = "3.6.4"
-recipe = 1
+recipe = 2
 dependencies = ["zlib"]
 provides = ["openssl-crypto"]
 
@@ -15,31 +15,31 @@ size = 55003802
 
 [[package.target]]
 name = "macos-aarch64"
-archives = ["lib/libcrypto.a"]
+archives = ["lib/libssl.a", "lib/libcrypto.a"]
 system_libraries = []
 frameworks = []
 
 [[package.target]]
 name = "ios-arm64"
-archives = ["lib/libcrypto.a"]
+archives = ["lib/libssl.a", "lib/libcrypto.a"]
 system_libraries = []
 frameworks = []
 
 [[package.target]]
 name = "ios-sim-arm64"
-archives = ["lib/libcrypto.a"]
+archives = ["lib/libssl.a", "lib/libcrypto.a"]
 system_libraries = []
 frameworks = []
 
 [[package.target]]
 name = "linux-aarch64"
-archives = ["lib/libcrypto.a"]
+archives = ["lib/libssl.a", "lib/libcrypto.a"]
 system_libraries = []
 frameworks = []
 
 [[package.target]]
 name = "linux-x86_64"
-archives = ["lib/libcrypto.a"]
+archives = ["lib/libssl.a", "lib/libcrypto.a"]
 system_libraries = []
 frameworks = []
 

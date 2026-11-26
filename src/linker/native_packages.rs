@@ -15,7 +15,7 @@
 //!   prepared by the packaged-artifact probe without a second list to update.
 //! - Table order is link order. The resolver links packages in the order it
 //!   receives them, and `curl` (whose catalog chain carries OpenSSL 3.5.8 for
-//!   TLS) stays ahead of `openssl-crypto` (a separate libcrypto 3.6.4 build).
+//!   TLS) stays ahead of `openssl-crypto` (a separate libssl/libcrypto 3.6.4 build).
 //! - None of these packages has a system-library fallback.
 
 /// Bridge library names paired with the managed native packages they link against.

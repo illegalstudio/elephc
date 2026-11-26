@@ -664,7 +664,7 @@ crates/
 ├── elephc-magician/           Optional EvalIR parser, guarded bytecode consumer, and interpreter staticlib for dynamic eval
 ├── elephc-mbstring/           Shared mbstring engine and native bridge with managed Oniguruma-backed mbregex
 ├── elephc-monitoring-contract/ Typed monitoring policy shared by the compiler and every bridge
-├── elephc-openssl/            Symmetric-cipher bridge over the managed openssl-crypto default provider
+├── elephc-openssl/            Symmetric-cipher and Openssl\Session bridge over managed OpenSSL 3.6.4
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
