@@ -111,6 +111,9 @@ impl OpensslPskServer {
                     "-psk_identity",
                     identity,
                     "-nocert",
+                    "-max_early_data",
+                    "1024",
+                    "-early_data",
                     "-www",
                     "-state",
                 ])
@@ -248,6 +251,24 @@ impl OpensslSessionServer {
     /// Starts a TLS 1.2 `s_server -www -state -no_ticket` listener for the given
     /// self-signed certificate and key PEM contents.
     pub(crate) fn start(cert_pem: &str, key_pem: &str) -> Option<Self> {
+        Self::start_with_protocol_args(cert_pem, key_pem, &["-tls1_2", "-no_ticket"])
+    }
+
+    /// Starts a TLS 1.3 `s_server` that advertises and accepts 0-RTT early data.
+    pub(crate) fn start_tls13_early(cert_pem: &str, key_pem: &str) -> Option<Self> {
+        Self::start_with_protocol_args(
+            cert_pem,
+            key_pem,
+            &["-tls1_3", "-max_early_data", "1024", "-early_data"],
+        )
+    }
+
+    /// Starts `s_server` with the supplied protocol-specific arguments.
+    fn start_with_protocol_args(
+        cert_pem: &str,
+        key_pem: &str,
+        protocol_args: &[&str],
+    ) -> Option<Self> {
         let binary = openssl_cli()?;
         let mut last_log = String::new();
         for _ in 0..5 {
@@ -268,20 +289,26 @@ impl OpensslSessionServer {
             let port = reserve_port();
             let log = std::fs::File::create(&log_path).expect("openssl TLS server: create log");
             let stderr = log.try_clone().expect("openssl TLS server: clone log");
+            let mut args: Vec<String> = vec![
+                "s_server".to_string(),
+                "-accept".to_string(),
+                port.to_string(),
+                "-cert".to_string(),
+                cert_path
+                    .to_str()
+                    .expect("openssl TLS server: UTF-8 cert path")
+                    .to_string(),
+                "-key".to_string(),
+                key_path
+                    .to_str()
+                    .expect("openssl TLS server: UTF-8 key path")
+                    .to_string(),
+                "-www".to_string(),
+            ];
+            args.extend(protocol_args.iter().map(|arg| (*arg).to_string()));
+            args.push("-state".to_string());
             let child = Command::new(binary)
-                .args([
-                    "s_server",
-                    "-accept",
-                    &port.to_string(),
-                    "-cert",
-                    cert_path.to_str().expect("openssl TLS server: UTF-8 cert path"),
-                    "-key",
-                    key_path.to_str().expect("openssl TLS server: UTF-8 key path"),
-                    "-www",
-                    "-tls1_2",
-                    "-no_ticket",
-                    "-state",
-                ])
+                .args(&args)
                 .current_dir(&directory)
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(log))
@@ -337,6 +364,53 @@ impl OpensslSessionServer {
             stdin
                 .write_all(b"GET / HTTP/1.0\r\n\r\n")
                 .expect("openssl TLS session fixture: write request");
+        }
+        let output = child
+            .wait_with_output()
+            .expect("openssl TLS session fixture: wait for s_client");
+        assert!(
+            output.status.success(),
+            "openssl TLS session fixture: s_client failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::read_to_string(&self.session_path)
+            .expect("openssl TLS session fixture: read exported session")
+    }
+
+    /// Performs a TLS 1.3 first handshake with `s_client -sess_out -ign_eof`,
+    /// keeping stdin open briefly so the post-handshake ticket is processed.
+    pub(crate) fn seed_session_tls13(&self) -> String {
+        let binary = openssl_cli().expect("openssl TLS session fixture requires the CLI");
+        let mut child = Command::new(binary)
+            .args([
+                "s_client",
+                "-connect",
+                &format!("127.0.0.1:{}", self.port),
+                "-tls1_3",
+                "-ign_eof",
+                "-sess_out",
+                self.session_path
+                    .to_str()
+                    .expect("openssl TLS session fixture: UTF-8 session path"),
+            ])
+            .current_dir(&self.directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("openssl TLS session fixture: spawn s_client");
+        {
+            use std::io::Write;
+            let mut stdin = child
+                .stdin
+                .take()
+                .expect("openssl TLS session fixture: s_client stdin");
+            stdin
+                .write_all(b"GET / HTTP/1.0\r\n\r\n")
+                .expect("openssl TLS session fixture: write request");
+            std::thread::sleep(Duration::from_millis(500));
+            // Dropping stdin closes it; -ign_eof keeps s_client alive long enough
+            // for the server ticket above to be written to the session file.
         }
         let output = child
             .wait_with_output()

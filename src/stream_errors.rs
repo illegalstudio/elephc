@@ -158,6 +158,7 @@ impl Pass for Rewriter {
                 | "__elephc_stream_context_create"
                 | "__elephc_stream_context_get_options"
                 | "__elephc_stream_context_set_option"
+                | "__elephc_fopen_https"
                 | "__elephc_stream_failure"
                 | "__elephc_stream_apply_errors"
                 | "__elephc_stream_read_flush"

@@ -1322,6 +1322,16 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_tls_connect_psk_fn", 8, target));
     out.push_str(&comm_directive("_tls_psk_client_descriptor", 8, target));
     out.push_str(&comm_directive("_tls_psk_client_adapter", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_early_data_status_fn", 8, target));
+    out.push_str(&comm_directive("_https_early_data_attempted", 8, target));
+    out.push_str(&comm_directive("_https_early_data_status", 8, target));
+    out.push_str(&comm_directive("_https_early_data_ptr", 8, target));
+    out.push_str(&comm_directive("_https_early_data_len", 8, target));
+    out.push_str(&comm_directive(
+        "_https_early_data_flags",
+        crate::codegen_support::runtime::FD_TABLE_SLOTS,
+        target,
+    ));
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
@@ -1543,6 +1553,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // stream-context wrapper when the caller passes an Openssl\Session.
     out.push_str(
         ".globl _ssl_session_data_key_str\n_ssl_session_data_key_str:\n    .ascii \"session_data\"\n",
+    );
+    // PHP 8.6 client 0-RTT payload.
+    out.push_str(
+        ".globl _ssl_early_data_key_str\n_ssl_early_data_key_str:\n    .ascii \"early_data\"\n",
     );
     out.push_str(
         ".globl _ssl_verify_peer_key_str\n_ssl_verify_peer_key_str:\n    .ascii \"verify_peer\"\n",
@@ -2092,6 +2106,21 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_key_mode\n_meta_key_mode:\n    .ascii \"mode\"\n");
     out.push_str(".globl _meta_key_seekable\n_meta_key_seekable:\n    .ascii \"seekable\"\n");
     out.push_str(".globl _meta_key_uri\n_meta_key_uri:\n    .ascii \"uri\"\n");
+    // PHP 8.6 TLS 1.3 early-data status exposed through the response stream's
+    // `crypto` metadata hash.
+    out.push_str(".globl _meta_key_crypto\n_meta_key_crypto:\n    .ascii \"crypto\"\n");
+    out.push_str(
+        ".globl _meta_key_early_data\n_meta_key_early_data:\n    .ascii \"early_data\"\n",
+    );
+    out.push_str(
+        ".globl _meta_early_not_sent\n_meta_early_not_sent:\n    .ascii \"not_sent\"\n",
+    );
+    out.push_str(
+        ".globl _meta_early_accepted\n_meta_early_accepted:\n    .ascii \"accepted\"\n",
+    );
+    out.push_str(
+        ".globl _meta_early_rejected\n_meta_early_rejected:\n    .ascii \"rejected\"\n",
+    );
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     out.push_str(".globl _meta_stype_user_space\n_meta_stype_user_space:\n    .ascii \"user-space\"\n");

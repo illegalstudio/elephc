@@ -54,6 +54,55 @@ pub(crate) fn lower_tls_set_psk_client(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_tls_mark_early_data($stream)` by copying the last HTTPS
+/// early-data flag onto the supplied stream descriptor.
+pub(crate) fn lower_tls_mark_early_data(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_tls_mark_early_data", 1)?;
+    let stream = expect_operand(inst, 0)?;
+    crate::codegen::lower_inst::builtins::io::load_stream_fd_to_result(
+        ctx,
+        stream,
+        "__elephc_tls_mark_early_data",
+    )?;
+    let fd = abi::int_result_reg(ctx.emitter);
+    let skip = "__rt_tls_mark_early_data_done";
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_https_early_data_attempted", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {skip}"));                // no 0-RTT attempt: leave the stream unmarked
+            ctx.emitter.instruction(&format!(
+                "mov x10, #{}",
+                crate::codegen_support::runtime::FD_TABLE_SLOTS
+            ));                                                                 // fd table capacity
+            ctx.emitter.instruction(&format!("cmp {fd}, x10"));                // is the stream fd inside the flag table?
+            ctx.emitter.instruction(&format!("b.hs {skip}"));                  // out of range: leave it unmarked
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x11", "_https_early_data_status", 0);
+            abi::emit_symbol_address(ctx.emitter, "x12", "_https_early_data_flags");
+            ctx.emitter.instruction(&format!("strb w11, [x12, {fd}]"));        // publish the early-data status for this stream
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_https_early_data_attempted", 0);
+            ctx.emitter.instruction(&format!("test r10, r10"));                // no 0-RTT attempt: leave the stream unmarked
+            ctx.emitter.instruction(&format!("jz {skip}"));                    // skip the status publication
+            ctx.emitter.instruction(&format!(
+                "mov r11, {}",
+                crate::codegen_support::runtime::FD_TABLE_SLOTS
+            ));                                                                 // fd table capacity
+            ctx.emitter.instruction(&format!("cmp {fd}, r11"));                // is the stream fd inside the flag table?
+            ctx.emitter.instruction(&format!("jae {skip}"));                   // out of range: leave it unmarked
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_https_early_data_status", 0);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_https_early_data_flags");
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r10 + {fd}], r11b")); // publish the early-data status for this stream
+        }
+    }
+    ctx.emitter.label(skip);
+    abi::emit_load_int_immediate(ctx.emitter, fd, 0x7fff_ffff_ffff_fffe);
+    store_if_result(ctx, inst)
+}
+
 /// Rejects an unexpected operand count with a codegen IR error.
 fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<()> {
     if inst.operands.len() == expected {

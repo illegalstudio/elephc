@@ -256,6 +256,55 @@ echo is_string($body) && strpos($body, "Cipher") !== false ? "psk-ok\n" : "psk-f
     );
 }
 
+/// A TLS 1.3 session resumption sends `ssl.early_data` as 0-RTT; the local
+/// OpenSSL server reports `read end of early data` for the connection.
+#[test]
+fn test_openssl_tls13_session_early_data_php86() {
+    if skip_without_openssl_native("test_openssl_tls13_session_early_data_php86") {
+        return;
+    }
+    if skip_without_openssl_cli("test_openssl_tls13_session_early_data_php86") {
+        return;
+    }
+    let server = OpensslSessionServer::start_tls13_early(
+        crate::codegen::io::streams::TEST_HTTPS_CERT_PEM,
+        crate::codegen::io::streams::TEST_HTTPS_KEY_PEM,
+    )
+    .expect("openssl CLI is available after its skip gate");
+    let session_pem = server.seed_session_tls13();
+    assert!(
+        session_pem.contains("BEGIN SSL SESSION PARAMETERS"),
+        "s_client did not export a TLS 1.3 session"
+    );
+    let source = r#"<?php
+$pem = <<<'PEM'
+__SESSION_PEM__PEM;
+$session = Openssl\Session::import($pem);
+$context = stream_context_get_default();
+stream_context_set_option($context, "ssl", "verify_peer", "0");
+stream_context_set_option($context, "ssl", "session_data", $session);
+stream_context_set_option($context, "ssl", "early_data", "hello-0rtt");
+$stream = fopen("https://127.0.0.1:PHP_TEST_PORT/", "r");
+$meta = stream_get_meta_data($stream);
+echo $meta["crypto"]["early_data"] ?? "missing", "\n";
+echo stream_get_contents($stream) !== "" ? "body\n" : "empty\n";
+fclose($stream);
+"#
+    .replace("__SESSION_PEM__", &session_pem)
+    .replace("PHP_TEST_PORT", &server.port().to_string());
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "accepted\nbody\n");
+    assert!(
+        server.wait_for_state(
+            "TLSv1.3 read end of early data",
+            1,
+            std::time::Duration::from_secs(5)
+        ),
+        "server did not read TLS 1.3 early data: {}",
+        server.state_log()
+    );
+}
+
 /// The production `elephc build` pipeline selects the libssl TLS bridge for a
 /// program that names `ssl.psk_client_cb` and completes a TLS 1.3 external-PSK
 /// handshake against a local OpenSSL server.

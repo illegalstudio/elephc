@@ -155,12 +155,113 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
     emit_set_str_const(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);
+    emit_crypto_early_data_aarch64(emitter);
 
     // -- return the completed hash --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the final hash pointer
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the metadata frame
     emitter.instruction("ret");                                                 // return the metadata hash pointer
+}
+
+/// Adds `crypto => ["early_data" => status]` when this fd is an HTTPS response
+/// whose client attempted TLS 1.3 early data.
+fn emit_crypto_early_data_aarch64(emitter: &mut Emitter) {
+    let done = "__rt_sgmd_no_crypto";
+    let accepted = "__rt_sgmd_early_accepted";
+    let rejected = "__rt_sgmd_early_rejected";
+    let selected = "__rt_sgmd_early_selected";
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream descriptor
+    emitter.instruction(&format!("mov x9, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // fd table capacity
+    emitter.instruction("cmp x0, x9");                                          // is this fd inside the early-data table?
+    emitter.instruction(&format!("b.hs {done}"));                               // no: no crypto metadata
+    abi::emit_symbol_address(emitter, "x9", "_https_early_data_flags");         // early-data status table
+    emitter.instruction("ldrb w10, [x9, x0]");                                  // 1=not_sent, 2=accepted, 3=rejected
+    emitter.instruction(&format!("cbz w10, {done}"));                           // no 0-RTT attempt: no crypto metadata
+    emitter.instruction("cmp w10, #2");                                         // rejected?
+    emitter.instruction(&format!("b.eq {rejected}"));                           // select "rejected"
+    emitter.instruction("cmp w10, #3");                                         // accepted?
+    emitter.instruction(&format!("b.eq {accepted}"));                           // select "accepted"
+    abi::emit_symbol_address(emitter, "x11", "_meta_early_not_sent");           // default status string
+    emitter.instruction(&format!("b {selected}"));                              // continue with the selected string
+    emitter.label(accepted);
+    abi::emit_symbol_address(emitter, "x11", "_meta_early_accepted");           // accepted status string
+    emitter.instruction(&format!("b {selected}"));                              // continue with the selected string
+    emitter.label(rejected);
+    abi::emit_symbol_address(emitter, "x11", "_meta_early_rejected");           // rejected status string
+    emitter.label(selected);
+    emitter.instruction("str x11, [sp, #16]");                                  // value pointer (seekable slot is free)
+    emitter.instruction("mov x0, #4");                                          // crypto sub-hash capacity
+    emitter.instruction("mov x1, #7");                                          // mixed values
+    emitter.instruction("bl __rt_hash_new");                                    // x0 = crypto sub-hash
+    emitter.instruction("str x0, [sp, #72]");                                   // save the sub-hash
+    emitter.instruction("ldr x0, [sp, #72]");                                   // sub-hash for the early_data entry
+    abi::emit_symbol_address(emitter, "x1", "_meta_key_early_data");            // "early_data"
+    emitter.instruction("mov x2, #10");                                         // key length
+    emitter.instruction("ldr x3, [sp, #16]");                                   // status string pointer
+    emitter.instruction("mov x4, #8");                                          // "not_sent"/"accepted" length
+    emitter.instruction("mov x5, #1");                                          // string tag
+    emitter.instruction("bl __rt_hash_set");                                    // insert early_data
+    emitter.instruction("str x0, [sp, #72]");                                   // retain any grown sub-hash
+    emitter.instruction("ldr x0, [sp, #8]");                                    // top metadata hash
+    abi::emit_symbol_address(emitter, "x1", "_meta_key_crypto");                // "crypto"
+    emitter.instruction("mov x2, #6");                                          // key length
+    emitter.instruction("ldr x3, [sp, #72]");                                   // crypto sub-hash
+    emitter.instruction("mov x4, #0");                                          // assoc arrays use no high word
+    emitter.instruction("mov x5, #5");                                          // assoc-array tag
+    emitter.instruction("bl __rt_hash_set");                                    // insert crypto
+    emitter.instruction("str x0, [sp, #8]");                                    // retain any grown top hash
+    emitter.label(&done);
+}
+
+/// x86_64 counterpart of [`emit_crypto_early_data_aarch64`].
+fn emit_crypto_early_data_x86(emitter: &mut Emitter) {
+    let done = "__rt_sgmd_no_crypto_x86";
+    let accepted = "__rt_sgmd_early_accepted_x86";
+    let rejected = "__rt_sgmd_early_rejected_x86";
+    let selected = "__rt_sgmd_early_selected_x86";
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream descriptor
+    emitter.instruction(&format!("mov r11, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // fd table capacity
+    emitter.instruction("cmp rdi, r11");                                        // is this fd inside the early-data table?
+    emitter.instruction(&format!("jae {done}"));                                // no: no crypto metadata
+    abi::emit_symbol_address(emitter, "r10", "_https_early_data_flags");        // early-data status table
+    emitter.instruction("movzx r11d, BYTE PTR [r10 + rdi]");                    // 1=not_sent, 2=accepted, 3=rejected
+    emitter.instruction("test r11, r11");                                       // no 0-RTT attempt?
+    emitter.instruction(&format!("jz {done}"));                                 // no crypto metadata
+    emitter.instruction("cmp r11, 2");                                          // rejected?
+    emitter.instruction(&format!("je {rejected}"));                             // select "rejected"
+    emitter.instruction("cmp r11, 3");                                          // accepted?
+    emitter.instruction(&format!("je {accepted}"));                             // select "accepted"
+    abi::emit_symbol_address(emitter, "r10", "_meta_early_not_sent");           // default status string
+    emitter.instruction(&format!("jmp {selected}"));                            // continue with the selected string
+    emitter.label(accepted);
+    abi::emit_symbol_address(emitter, "r10", "_meta_early_accepted");           // accepted status string
+    emitter.instruction(&format!("jmp {selected}"));                            // continue with the selected string
+    emitter.label(rejected);
+    abi::emit_symbol_address(emitter, "r10", "_meta_early_rejected");           // rejected status string
+    emitter.label(selected);
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // value pointer (seekable slot is free)
+    emitter.instruction("mov edi, 4");                                          // crypto sub-hash capacity
+    emitter.instruction("mov esi, 7");                                          // mixed values
+    emitter.instruction("call __rt_hash_new");                                  // rax = crypto sub-hash
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the sub-hash
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 88]");                       // sub-hash for the early_data entry
+    abi::emit_symbol_address(emitter, "rsi", "_meta_key_early_data");           // "early_data"
+    emitter.instruction("mov rdx, 10");                                         // key length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // status string pointer
+    emitter.instruction("mov r8, 8");                                           // "not_sent"/"accepted" length
+    emitter.instruction("mov r9, 1");                                           // string tag
+    emitter.instruction("call __rt_hash_set");                                  // insert early_data
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // retain any grown sub-hash
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // top metadata hash
+    abi::emit_symbol_address(emitter, "rsi", "_meta_key_crypto");               // "crypto"
+    emitter.instruction("mov rdx, 6");                                          // key length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 88]");                       // crypto sub-hash
+    emitter.instruction("xor r8d, r8d");                                        // assoc arrays use no high word
+    emitter.instruction("mov r9, 5");                                           // assoc-array tag
+    emitter.instruction("call __rt_hash_set");                                  // insert crypto
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain any grown top hash
+    emitter.label(&done);
 }
 
 /// Emit one `__rt_hash_set` with the value already staged in x3/x4/x5.
@@ -226,7 +327,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     //                       [-64]=stype_ptr [-72]=stype_len
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 80");                                         // reserve the metadata spill slots
+    emitter.instruction("sub rsp, 96");                                         // reserve the metadata spill slots plus the crypto sub-hash
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the stream descriptor
 
     // -- a synthetic user-wrapper fd is not an OS descriptor: do not lseek/fcntl
@@ -338,10 +439,11 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
     emit_set_str_const_x86(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);
+    emit_crypto_early_data_x86(emitter);
 
     // -- return the completed hash --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the final hash pointer
-    emitter.instruction("add rsp, 80");                                         // release the metadata spill slots
+    emitter.instruction("add rsp, 96");                                         // release the metadata spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the metadata hash pointer
 }

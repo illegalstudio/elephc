@@ -44,6 +44,9 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         if path.starts_with("http://") {
             return lower_literal_http_fopen(ctx, inst, path);
         }
+        if path.starts_with("https://") {
+            return lower_literal_https_fopen(ctx, inst, path);
+        }
         if path.starts_with("compress.zlib://") {
             return lower_literal_compress_zlib_fopen(ctx, inst, path);
         }

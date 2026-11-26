@@ -139,16 +139,97 @@ pub(super) fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path
     Ok(())
 }
 
+/// Lowers a literal `fopen("https://...", ...)` through the HTTPS runtime wrapper.
+pub(super) fn lower_literal_https_fopen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: &str,
+) -> Result<()> {
+    emit_literal_https_fopen_result(ctx, path)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the boxed result for a literal `https://` stream open.
+pub(super) fn emit_literal_https_fopen_result(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+) -> Result<()> {
+    match parse_https_url_for_fopen(path) {
+        Some(parsed) => {
+            let (host_sym, host_len) = ctx.data.add_string(parsed.connect_host.as_bytes());
+            let (host_header_sym, host_header_len) =
+                ctx.data.add_string(parsed.host.as_bytes());
+            let (path_sym, path_len) = ctx.data.add_string(parsed.path.as_bytes());
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x0", &host_header_sym);
+                    ctx.emitter.instruction(&format!("mov x1, #{}", host_header_len)); // pass the HTTPS Host header byte length
+                    abi::emit_symbol_address(ctx.emitter, "x2", &path_sym);
+                    ctx.emitter.instruction(&format!("mov x3, #{}", path_len)); // pass the request path byte length
+                    abi::emit_call_label(ctx.emitter, "__rt_http_build_request");
+                    abi::emit_push_reg(ctx.emitter, "x0");
+                    abi::emit_symbol_address(ctx.emitter, "x0", &host_sym);
+                    ctx.emitter.instruction(&format!("mov x1, #{}", host_len)); // pass the TCP host byte length
+                    ctx.emitter.instruction(&format!("mov x2, #{}", parsed.port)); // pass the TLS port
+                    abi::emit_symbol_address(ctx.emitter, "x3", "_http_req_scratch");
+                    abi::emit_pop_reg(ctx.emitter, "x4");
+                    abi::emit_call_label(ctx.emitter, "__rt_https_open");
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rdi", &host_header_sym);
+                    ctx.emitter.instruction(&format!("mov rsi, {}", host_header_len)); // pass the HTTPS Host header byte length
+                    abi::emit_symbol_address(ctx.emitter, "rdx", &path_sym);
+                    ctx.emitter.instruction(&format!("mov rcx, {}", path_len)); // pass the request path byte length
+                    abi::emit_call_label(ctx.emitter, "__rt_http_build_request");
+                    abi::emit_push_reg(ctx.emitter, "rax");
+                    abi::emit_symbol_address(ctx.emitter, "rdi", &host_sym);
+                    ctx.emitter.instruction(&format!("mov rsi, {}", host_len)); // pass the TCP host byte length
+                    ctx.emitter.instruction(&format!("mov rdx, {}", parsed.port)); // pass the TLS port
+                    abi::emit_symbol_address(ctx.emitter, "rcx", "_http_req_scratch");
+                    abi::emit_pop_reg(ctx.emitter, "r8");
+                    abi::emit_call_label(ctx.emitter, "__rt_https_open");
+                }
+            }
+        }
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #-1");                         // unparseable https:// URL lowers to PHP false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, -1");                         // unparseable https:// URL lowers to PHP false
+            }
+        },
+    }
+    box_stream_fd_or_false_result(ctx, "fopen_https");
+    Ok(())
+}
+
 /// Parsed pieces needed by the HTTP runtime open helper.
 pub(super) struct ParsedHttpFopenUrl {
     addr: String,
     host: String,
     path: String,
+    connect_host: String,
+    port: u16,
 }
 
 /// Parses a literal `http://[user@]host[:port]/path` URL for EIR `fopen`.
 pub(super) fn parse_http_url_for_fopen(url: &str) -> Option<ParsedHttpFopenUrl> {
-    let rest = url.strip_prefix("http://")?;
+    parse_url_for_fopen(url, "http://", 80)
+}
+
+/// Parses a literal `https://[user@]host[:port]/path` URL for EIR `fopen`.
+pub(super) fn parse_https_url_for_fopen(url: &str) -> Option<ParsedHttpFopenUrl> {
+    parse_url_for_fopen(url, "https://", 443)
+}
+
+/// Parses a literal `scheme://[user@]host[:port]/path` URL.
+fn parse_url_for_fopen(
+    url: &str,
+    scheme: &str,
+    default_port: u16,
+) -> Option<ParsedHttpFopenUrl> {
+    let rest = url.strip_prefix(scheme)?;
     let after_userinfo = match rest.find('@') {
         Some(at) => &rest[at + 1..],
         None => rest,
@@ -162,19 +243,26 @@ pub(super) fn parse_http_url_for_fopen(url: &str) -> Option<ParsedHttpFopenUrl> 
     }
     let (host, port) = match authority.rfind(':') {
         Some(colon) => (&authority[..colon], &authority[colon + 1..]),
-        None => (authority, "80"),
+        None => (authority, ""),
     };
-    if host.is_empty() || port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+    if host.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
+    let port = if port.is_empty() {
+        default_port
+    } else {
+        port.parse::<u16>().ok()?
+    };
     Some(ParsedHttpFopenUrl {
         addr: format!("tcp://{}:{}", host, port),
-        host: if port == "80" {
+        host: if port == default_port {
             host.to_string()
         } else {
             format!("{}:{}", host, port)
         },
         path: path.to_string(),
+        connect_host: host.to_string(),
+        port,
     })
 }
 

@@ -52,6 +52,8 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("stp x21, x22, [sp, #64]");                             // save the session/insecure flags
     emitter.instruction("mov x21, #0");                                         // no ssl.session_data yet
     emitter.instruction("mov x22, #0");                                         // secure TLS by default
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_attempted", 0, 0); // no 0-RTT payload yet
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_status", 0, 0);    // no early-data status yet
     emitter.instruction("str x3, [sp, #8]");                                    // save the HTTP request pointer
     emitter.instruction("str x4, [sp, #16]");                                   // save the HTTP request length
 
@@ -62,6 +64,29 @@ pub fn emit_https(emitter: &mut Emitter) {
     //    variants ignore them, so one call site serves all three.
     emitter.instruction("stp x0, x1, [sp, #-16]!");                             // save host_ptr/host_len across the context lookups
     emitter.instruction("str x2, [sp, #-16]!");                                 // save port (16 bytes for stack alignment)
+    // -- PHP 8.6 ssl.early_data lookup: shared by the PSK and session connect paths --
+    let early_enabled = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
+    if early_enabled {
+        emitter.instruction("sub sp, sp, #16");                                 // early-data lookup out slots
+        emitter.instruction("str xzr, [sp, #0]");                               // out ptr default
+        emitter.instruction("str xzr, [sp, #8]");                               // out len default
+        abi::emit_symbol_address(emitter, "x0", "_ssl_key_str");
+        emitter.instruction("mov x1, #3");                                      // strlen("ssl")
+        abi::emit_symbol_address(emitter, "x2", "_ssl_early_data_key_str");
+        emitter.instruction("mov x3, #10");                                     // strlen("early_data")
+        emitter.instruction("mov x4, sp");                                      // out_ptr_addr
+        emitter.instruction("add x5, sp, #8");                                  // out_len_addr
+        emitter.instruction("bl __rt_get_string_context_option");               // x0 = 1 on hit
+        emitter.instruction("cbz x0, __rt_https_open_no_early_option_aarch64"); // no early-data payload
+        emitter.instruction("ldr x9, [sp, #0]");                                // early-data pointer
+        abi::emit_store_reg_to_symbol(emitter, "x9", "_https_early_data_ptr", 0); // publish the payload pointer
+        emitter.instruction("ldr x9, [sp, #8]");                                // early-data length
+        abi::emit_store_reg_to_symbol(emitter, "x9", "_https_early_data_len", 0); // publish the payload length
+        abi::emit_store_imm_to_symbol(emitter, "_https_early_data_attempted", 0, 1); // remember that 0-RTT was attempted
+        emitter.label("__rt_https_open_no_early_option_aarch64");
+        emitter.instruction("add sp, sp, #16");                                 // discard the early-data lookup slots
+    }
     // -- PHP 8.6 external PSK: a registered callback bypasses certificate/session options --
     abi::emit_symbol_address(emitter, "x9", "_tls_psk_client_descriptor");
     emitter.instruction("ldr x9, [x9]");                                        // normalized psk_client_cb descriptor
@@ -69,6 +94,10 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #0]");                                    // port
     emitter.instruction("ldr x0, [sp, #16]");                                   // host pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // host length
+    abi::emit_load_symbol_to_reg(emitter, "x6", "_https_early_data_ptr", 0);    // early-data pointer
+    abi::emit_load_symbol_to_reg(emitter, "x7", "_https_early_data_len", 0);    // early-data length
+    abi::emit_symbol_address(emitter, "x9", "_tls_psk_client_descriptor");      // early loads used x9 as scratch
+    emitter.instruction("ldr x9, [x9]");                                        // reload the normalized descriptor
     emitter.instruction("mov x3, x9");                                          // descriptor → connect arg 3
     abi::emit_symbol_address(emitter, "x4", "_tls_psk_client_adapter");
     emitter.instruction("ldr x4, [x4]");                                        // adapter → connect arg 4
@@ -230,11 +259,22 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp], #16");                                   // restore port
     emitter.instruction("ldp x0, x1, [sp], #16");                               // restore host_ptr/host_len
     emitter.instruction("cbz x9, __rt_https_open_fail");                        // missing elephc-tls runtime means HTTPS open fails closed
+    emitter.instruction("str x9, [sp, #40]");                                  // preserve the selected connect target across early loads
+    abi::emit_load_symbol_to_reg(emitter, "x5", "_https_early_data_ptr", 0);    // early-data pointer (session variants)
+    abi::emit_load_symbol_to_reg(emitter, "x6", "_https_early_data_len", 0);    // early-data length (session variants)
+    emitter.instruction("ldr x9, [sp, #40]");                                  // restore the connect target (the loads used x9 as scratch)
     emitter.instruction("blr x9");                                              // open the TLS session, x0 = handle
     emitter.instruction("cmp x0, #0");                                          // did the TLS handshake fail?
     emitter.instruction("b.lt __rt_https_open_fail");                           // negative handle means TLS connect failed
     emitter.label("__rt_https_open_connected_aarch64");
     emitter.instruction("str x0, [sp, #0]");                                    // save the TLS session handle
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_elephc_tls_early_data_status_fn", 0); // status entry
+    emitter.instruction("cbz x9, __rt_https_open_no_early_status_aarch64");     // no status backend
+    emitter.instruction("blr x9");                                              // x0 = SSL_get_early_data_status
+    emitter.instruction("add x0, x0, #1");                                      // map 0/1/2 to the 1/2/3 flag encoding
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_https_early_data_status", 0); // remember the status for metadata
+    emitter.label("__rt_https_open_no_early_status_aarch64");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the TLS handle for the request write
 
     // -- elephc_tls_write(handle, req_ptr, req_len) --
     emitter.instruction("ldr x1, [sp, #8]");                                    // request pointer for the TLS write
@@ -311,6 +351,16 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // did tmpfile fail?
     emitter.instruction("b.lt __rt_https_open_fail");                           // propagate the failure
     emitter.instruction("str x0, [sp, #40]");                                   // save the temp-file descriptor
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_https_early_data_attempted", 0); // was 0-RTT attempted?
+    emitter.instruction("cbz x9, __rt_https_open_no_early_flag_aarch64");       // no: leave the fd unmarked
+    emitter.instruction(&format!("mov x10, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // fd table capacity
+    emitter.instruction("cmp x0, x10");                                         // is the temp fd inside the table?
+    emitter.instruction("b.hs __rt_https_open_no_early_flag_aarch64");          // out of range: leave it unmarked
+    abi::emit_symbol_address(emitter, "x11", "_https_early_data_flags");
+    abi::emit_load_symbol_to_reg(emitter, "x12", "_https_early_data_status", 0);
+    emitter.instruction("strb w12, [x11, x0]");                                 // publish the early-data status for this fd
+    emitter.label("__rt_https_open_no_early_flag_aarch64");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the temp-file descriptor for the write
 
     // -- write(temp, body, body length) --
     abi::emit_symbol_address(emitter, "x1", "_https_resp_buf");
@@ -353,6 +403,8 @@ pub fn emit_https(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 stream runtime helper for https.
 fn emit_https_linux_x86_64(emitter: &mut Emitter) {
+    let early_enabled = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
     emitter.blank();
     emitter.comment("--- runtime: https_open ---");
     emitter.label_global("__rt_https_open");
@@ -371,20 +423,49 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the port number
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the request pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the request length
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_attempted", 0, 0); // no 0-RTT payload yet
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_status", 0, 0);    // no early-data status yet
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_ptr", 0, 0);       // no early-data payload
+    abi::emit_store_imm_to_symbol(emitter, "_https_early_data_len", 0, 0);       // no early-data length
+    if early_enabled {
+        emitter.instruction("mov QWORD PTR [rbp - 80], 0");                     // early-data out ptr default
+        emitter.instruction("mov QWORD PTR [rbp - 88], 0");                     // early-data out len default
+        abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");               // wrapper key
+        emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
+        abi::emit_symbol_address(emitter, "rdx", "_ssl_early_data_key_str");    // option key
+        emitter.instruction("mov rcx, 10");                                     // strlen("early_data")
+        emitter.instruction("lea r8, [rbp - 80]");                              // out_ptr_addr
+        emitter.instruction("lea r9, [rbp - 88]");                              // out_len_addr
+        emitter.instruction("call __rt_get_string_context_option");             // rax = 1 on hit
+        emitter.instruction("test rax, rax");                                   // early-data payload present?
+        emitter.instruction("jz __rt_https_open_no_early_option_x");            // no 0-RTT payload
+        emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // early-data pointer
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_https_early_data_ptr", 0); // publish the payload pointer
+        emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                   // early-data length
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_https_early_data_len", 0); // publish the payload length
+        abi::emit_store_imm_to_symbol(emitter, "_https_early_data_attempted", 0, 1); // remember that 0-RTT was attempted
+        emitter.label("__rt_https_open_no_early_option_x");
+    }
     // -- PHP 8.6 external PSK: a registered callback bypasses certificate/session options --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_tls_psk_client_descriptor", 0); // normalized psk_client_cb descriptor
     emitter.instruction("test r10, r10");                                       // callback registered?
     emitter.instruction("jz __rt_https_open_no_psk_x");                         // no PSK callback → normal TLS option chain
-    emitter.instruction("mov rcx, r10");                                        // descriptor → connect arg 4
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_tls_psk_client_adapter", 0);  // adapter → connect arg 5
-    emitter.instruction("mov r9, 1");                                           // PSK authenticates; no certificate to verify
+    emitter.instruction("mov QWORD PTR [rbp - 112], r10");                      // preserve the descriptor
     abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_psk_fn", 0); // PSK connect entry
     emitter.instruction("test r10, r10");                                       // backend present?
     emitter.instruction("jz __rt_https_open_fail_x86");                         // missing backend → fail closed
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                      // descriptor → connect arg 4
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_tls_psk_client_adapter", 0);  // adapter → connect arg 5
+    emitter.instruction("mov r9, 1");                                           // PSK authenticates; no certificate to verify
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // host pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // port
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_https_early_data_len", 0);   // early-data length
+    emitter.instruction("push r11");                                            // arg 8 = early-data length
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_https_early_data_ptr", 0);   // early-data pointer
+    emitter.instruction("push r11");                                            // arg 7 = early-data pointer
     emitter.instruction("call r10");                                            // open the PSK session
+    emitter.instruction("add rsp, 16");                                         // drop the two stack arguments
     emitter.instruction("jmp __rt_https_open_connected_check_x86");             // continue at the shared connected path
     emitter.label("__rt_https_open_no_psk_x");
     emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // no ssl.session_data yet
@@ -428,7 +509,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_https_open_no_cafile_x");                      // no cafile → verify_peer dispatch
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_cafile_fn", 0); // cafile connect variant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_cafile_fn", 0); // cafile connect variant
     emitter.instruction("mov rcx, QWORD PTR [rbp - 80]");                       // cafile path ptr → connect arg rcx
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // cafile path len → connect arg r8
     emitter.instruction("jmp __rt_https_open_have_fn_x");                       // continue at target label
@@ -445,7 +526,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_https_open_no_capath_x");                      // no capath → verify_peer dispatch
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_capath_fn", 0); // capath connect variant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_capath_fn", 0); // capath connect variant
     emitter.instruction("mov rcx, QWORD PTR [rbp - 80]");                       // capath dir ptr → connect arg rcx
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // capath dir len → connect arg r8
     emitter.instruction("jmp __rt_https_open_have_fn_x");                       // continue at target label
@@ -507,18 +588,18 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_https_open_secure_x");                         // no peer_name → secure default
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_peer_name_fn", 0); // peer_name connect variant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_peer_name_fn", 0); // peer_name connect variant
     emitter.instruction("mov rcx, QWORD PTR [rbp - 80]");                       // peer_name ptr → connect arg rcx
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // peer_name len → connect arg r8
     emitter.instruction("jmp __rt_https_open_have_fn_x");                       // rcx/r8 already hold the peer_name path
     emitter.label("__rt_https_open_insecure_x");
     emitter.instruction("mov QWORD PTR [rbp - 104], 1");                        // remember the insecure TLS policy
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_insecure_fn", 0); // relaxed (insecure) variant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_insecure_fn", 0); // relaxed (insecure) variant
     emitter.instruction("xor ecx, ecx");                                        // no cafile/capath/peer_name path
     emitter.instruction("xor r8d, r8d");                                        // no cafile/capath/peer_name path
     emitter.instruction("jmp __rt_https_open_have_fn_x");                       // continue at target label
     emitter.label("__rt_https_open_secure_x");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_fn", 0);   // secure default variant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_fn", 0);   // secure default variant
     emitter.instruction("xor ecx, ecx");                                        // no cafile/capath/peer_name path
     emitter.instruction("xor r8d, r8d");                                        // no cafile/capath/peer_name path
     emitter.label("__rt_https_open_have_fn_x");
@@ -528,27 +609,40 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 120]");                       // session PEM length → connect arg r8
     emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                        // insecure policy?
     emitter.instruction("je __rt_https_open_session_secure_x");                 // secure session variant
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_session_insecure_fn", 0); // insecure session connect
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_session_insecure_fn", 0); // insecure session connect
     emitter.instruction("jmp __rt_https_open_session_selected_x");              // continue with the selected session target
     emitter.label("__rt_https_open_session_secure_x");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_session_fn", 0); // secure session connect
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_session_fn", 0); // secure session connect
     emitter.label("__rt_https_open_session_selected_x");
     emitter.label("__rt_https_open_no_session_x");
 
     // -- connect(host, host_len, port, cafile_ptr, cafile_len) — through r9 --
-    emitter.instruction("test r9, r9");                                         // missing elephc-tls runtime means HTTPS open fails closed
+    emitter.instruction("test r10, r10");                                       // missing elephc-tls runtime means HTTPS open fails closed
     emitter.instruction("jz __rt_https_open_fail_x86");                         // return a failed HTTPS stream when no TLS entry is available
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = host pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // arg 1 = host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // arg 2 = port (rcx/r8 hold cafile args)
-    emitter.instruction("call r9");                                             // open the TLS session, rax = handle
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_https_early_data_len", 0);   // early-data length
+    emitter.instruction("push 0");                                              // padding keeps the stack 16-byte aligned
+    emitter.instruction("push r11");                                            // arg 7 = early-data length
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_https_early_data_ptr", 0);    // early-data pointer
+    emitter.instruction("call r10");                                            // open the TLS session, rax = handle
+    emitter.instruction("add rsp, 16");                                         // drop the extra stack arguments
     emitter.label("__rt_https_open_connected_check_x86");
     emitter.instruction("cmp rax, 0");                                          // did the TLS handshake fail?
     emitter.instruction("jl __rt_https_open_fail_x86");                         // negative handle means TLS connect failed
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the TLS session handle
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_early_data_status_fn", 0); // status entry
+    emitter.instruction("test r10, r10");                                       // status backend present?
+    emitter.instruction("jz __rt_https_open_no_early_status_x");                // no: leave the status at 0
+    emitter.instruction("mov rdi, rax");                                        // TLS handle for SSL_get_early_data_status
+    emitter.instruction("call r10");                                            // rax = 0/1/2
+    emitter.instruction("add rax, 1");                                          // map to the 1/2/3 flag encoding
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_https_early_data_status", 0); // remember the status for metadata
+    emitter.label("__rt_https_open_no_early_status_x");
 
     // -- elephc_tls_write(handle, req_ptr, req_len) --
-    emitter.instruction("mov rdi, rax");                                        // arg 0 = TLS handle for the write
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg 0 = TLS handle for the write
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg 1 = request pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // arg 2 = request length
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_write_fn", 0);     // load the elephc_tls_write entry pointer
@@ -620,9 +714,19 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // did tmpfile fail?
     emitter.instruction("jl __rt_https_open_fail_x86");                         // propagate the failure
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the temp-file descriptor
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_https_early_data_attempted", 0); // was 0-RTT attempted?
+    emitter.instruction("test r10, r10");                                       // no: leave the fd unmarked
+    emitter.instruction("jz __rt_https_open_no_early_flag_x");                  // skip the status publication
+    emitter.instruction(&format!("mov r11, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // fd table capacity
+    emitter.instruction("cmp rax, r11");                                        // is the temp fd inside the table?
+    emitter.instruction("jae __rt_https_open_no_early_flag_x");                 // out of range: leave it unmarked
+    abi::emit_symbol_address(emitter, "r10", "_https_early_data_flags");        // status table base
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_https_early_data_status", 0); // 1/2/3 status
+    emitter.instruction("mov BYTE PTR [r10 + rax], r11b");                      // publish the status for this fd
+    emitter.label("__rt_https_open_no_early_flag_x");
 
     // -- write(temp, body, body length) --
-    emitter.instruction("mov rdi, rax");                                        // temp-file descriptor for the write
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // temp-file descriptor for the write
     abi::emit_symbol_address(emitter, "rsi", "_https_resp_buf");                // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 64]");                       // body pointer = buffer + body start
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // response length

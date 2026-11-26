@@ -201,8 +201,17 @@ extern "C" {
     ) -> c_int;
     fn SSL_SESSION_set_cipher(session: *mut SSL_SESSION, cipher: *const SSL_CIPHER) -> c_int;
     fn SSL_SESSION_set_protocol_version(session: *mut SSL_SESSION, version: c_int) -> c_int;
+    fn SSL_SESSION_set_max_early_data(session: *mut SSL_SESSION, max_early_data: u32) -> c_int;
+    fn SSL_SESSION_get_max_early_data(session: *const SSL_SESSION) -> u32;
     fn SSL_CIPHER_find(ssl: *mut SSL, cipher_id: *const u8) -> *const SSL_CIPHER;
     fn SSL_CIPHER_get_handshake_digest(cipher: *const SSL_CIPHER) -> *const EVP_MD;
+    fn SSL_write_early_data(
+        ssl: *mut SSL,
+        buffer: *const c_void,
+        length: usize,
+        written: *mut usize,
+    ) -> c_int;
+    fn SSL_get_early_data_status(ssl: *const SSL) -> c_int;
 }
 
 #[cfg(all(test, elephc_tls_openssl_native))]
@@ -214,6 +223,14 @@ extern "C" {
         sid_ctx_len: u32,
     ) -> c_int;
     fn SSL_accept(ssl: *mut SSL) -> c_int;
+    fn SSL_CTX_set_max_early_data(ctx: *mut SSL_CTX, max_early_data: u32) -> c_int;
+    fn SSL_CTX_set_recv_max_early_data(ctx: *mut SSL_CTX, max_early_data: u32) -> c_int;
+    fn SSL_read_early_data(
+        ssl: *mut SSL,
+        buffer: *mut c_void,
+        length: usize,
+        readbytes: *mut usize,
+    ) -> c_int;
     fn SSL_CTX_set_psk_find_session_callback(
         ctx: *mut SSL_CTX,
         callback: Option<unsafe extern "C" fn(
@@ -231,6 +248,9 @@ struct Entry {
     ssl: usize,
     ctx: usize,
     stream: TcpStream,
+    /// `SSL_get_early_data_status` captured before the handshake handle is
+    /// published: 0 = not sent, 1 = rejected, 2 = accepted.
+    early_data_status: i64,
 }
 
 // The raw pointers are only dereferenced while the handle-table mutex is held;
@@ -248,6 +268,9 @@ thread_local! {
     /// Keeps the last identity advertised by the callback alive until the
     /// handshake has consumed it.
     static PSK_IDENTITY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// Maximum early data advertised by the PSK session built for this
+    /// connection; 0 disables 0-RTT.
+    static PSK_MAX_EARLY_DATA: RefCell<u32> = const { RefCell::new(0) };
 }
 
 /// One PHP-supplied external-PSK callback, decomposed at the PHP layer.
@@ -501,6 +524,11 @@ unsafe fn build_psk_session(
         SSL_SESSION_free(session);
         return None;
     }
+    let max_early_data = PSK_MAX_EARLY_DATA.with(|slot| *slot.borrow());
+    if max_early_data > 0 && SSL_SESSION_set_max_early_data(session, max_early_data) != 1 {
+        SSL_SESSION_free(session);
+        return None;
+    }
     Some(session)
 }
 
@@ -573,6 +601,7 @@ unsafe fn connect_inner(
     session: Option<&[u8]>,
     max_version: Option<c_long>,
     psk: Option<PskCallback>,
+    mut early_data: Option<&[u8]>,
 ) -> i64 {
     init_ssl();
     clear_error();
@@ -639,6 +668,9 @@ unsafe fn connect_inner(
             SSL_CTX_free(ctx);
             return -1;
         }
+        if SSL_SESSION_get_max_early_data(session) == 0 {
+            early_data = None;
+        }
         SSL_SESSION_free(session);
     }
     let previous_psk = if psk.is_some() {
@@ -646,10 +678,39 @@ unsafe fn connect_inner(
     } else {
         None
     };
+    let previous_max_early = PSK_MAX_EARLY_DATA.with(|slot| {
+        slot.replace(early_data.map_or(0, |data| data.len() as u32))
+    });
+    if let Some(data) = early_data {
+        let mut written = 0usize;
+        while written < data.len() {
+            let mut chunk = 0usize;
+            let sent = SSL_write_early_data(
+                ssl,
+                data[written..].as_ptr() as *const c_void,
+                data.len() - written,
+                &mut chunk,
+            );
+            if sent != 1 {
+                record_ssl_error("Failed to send TLS early data");
+                PSK_CALLBACK.with(|slot| *slot.borrow_mut() = previous_psk.unwrap_or(None));
+                PSK_MAX_EARLY_DATA.with(|slot| *slot.borrow_mut() = previous_max_early);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                return -1;
+            }
+            if chunk == 0 {
+                break;
+            }
+            written += chunk;
+        }
+    }
     let rc = SSL_connect(ssl);
+    let early_status = SSL_get_early_data_status(ssl);
     if let Some(previous) = previous_psk {
         PSK_CALLBACK.with(|slot| *slot.borrow_mut() = previous);
     }
+    PSK_MAX_EARLY_DATA.with(|slot| *slot.borrow_mut() = previous_max_early);
     if rc != 1 {
         let error = SSL_get_error(ssl, rc);
         if error == SSL_ERROR_SYSCALL {
@@ -671,6 +732,7 @@ unsafe fn connect_inner(
             ssl: ssl as usize,
             ctx: ctx as usize,
             stream,
+            early_data_status: early_status as i64,
         },
     );
     id
@@ -698,7 +760,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, None, None, None, None, None)
+        connect_inner(host, port, false, None, None, None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -719,7 +781,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_insecure(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, true, None, None, None, None, None)
+        connect_inner(host, port, true, None, None, None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -746,7 +808,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_cafile(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, Some(cafile), None, None, None, None)
+        connect_inner(host, port, false, Some(cafile), None, None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -762,6 +824,8 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session(
     port: u16,
     session: *const u8,
     session_len: usize,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
     let host = std::slice::from_raw_parts(host, host_len);
     let session = std::slice::from_raw_parts(session, session_len);
@@ -769,8 +833,13 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session(
         record_error("TLS host is not UTF-8");
         return -1;
     };
+    let early = if early_ptr.is_null() || early_len == 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(early_ptr, early_len))
+    };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, None, None, Some(session), None, None)
+        connect_inner(host, port, false, None, None, Some(session), None, None, early)
     }))
     .unwrap_or(-1)
 }
@@ -789,6 +858,8 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session_insecure(
     port: u16,
     session: *const u8,
     session_len: usize,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
     let host = std::slice::from_raw_parts(host, host_len);
     let session = std::slice::from_raw_parts(session, session_len);
@@ -796,8 +867,13 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session_insecure(
         record_error("TLS host is not UTF-8");
         return -1;
     };
+    let early = if early_ptr.is_null() || early_len == 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(early_ptr, early_len))
+    };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, true, None, None, Some(session), None, None)
+        connect_inner(host, port, true, None, None, Some(session), None, None, early)
     }))
     .unwrap_or(-1)
 }
@@ -819,6 +895,8 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_psk(
     descriptor: *mut c_void,
     adapter: *const c_void,
     insecure: c_int,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
     let host = std::slice::from_raw_parts(host, host_len);
     let Ok(host) = std::str::from_utf8(host) else {
@@ -831,6 +909,11 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_psk(
     }
     let adapter: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut PskCallSpec) -> i64 =
         std::mem::transmute(adapter);
+    let early_data = if early_ptr.is_null() || early_len == 0 {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(early_ptr, early_len))
+    };
     catch_unwind(AssertUnwindSafe(|| {
         connect_inner(
             host,
@@ -844,6 +927,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_psk(
                 descriptor,
                 adapter,
             }),
+            early_data,
         )
     }))
     .unwrap_or(-1)
@@ -987,6 +1071,20 @@ pub extern "C" fn elephc_tls_openssl_session_reused(handle_id: i64) -> i64 {
     .unwrap_or(-1)
 }
 
+/// C ABI: reports the TLS 1.3 early-data status of a live handle.
+///
+/// `0` = not sent, `1` = rejected, `2` = accepted; `-1` for an unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_tls_openssl_early_data_status(handle_id: i64) -> i64 {
+    catch_unwind(AssertUnwindSafe(|| {
+        lock_handles()
+            .get(&handle_id)
+            .map(|entry| entry.early_data_status)
+            .unwrap_or(-1)
+    }))
+    .unwrap_or(-1)
+}
+
 /// C ABI: sends close_notify and releases the connection handle.
 #[no_mangle]
 pub extern "C" fn elephc_tls_openssl_close(handle_id: i64) {
@@ -1102,8 +1200,18 @@ pub unsafe extern "C" fn elephc_tls_connect_session(
     port: u16,
     session: *const u8,
     session_len: usize,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
-    elephc_tls_openssl_connect_session(host, host_len, port, session, session_len)
+    elephc_tls_openssl_connect_session(
+        host,
+        host_len,
+        port,
+        session,
+        session_len,
+        early_ptr,
+        early_len,
+    )
 }
 
 /// C ABI: imports a PEM session and connects without certificate checks.
@@ -1114,8 +1222,18 @@ pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
     port: u16,
     session: *const u8,
     session_len: usize,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
-    elephc_tls_openssl_connect_session_insecure(host, host_len, port, session, session_len)
+    elephc_tls_openssl_connect_session_insecure(
+        host,
+        host_len,
+        port,
+        session,
+        session_len,
+        early_ptr,
+        early_len,
+    )
 }
 
 /// C ABI: connects with an external PSK supplied by a PHP callback.
@@ -1127,8 +1245,25 @@ pub unsafe extern "C" fn elephc_tls_connect_psk(
     descriptor: *mut c_void,
     adapter: *const c_void,
     insecure: c_int,
+    early_ptr: *const u8,
+    early_len: usize,
 ) -> i64 {
-    elephc_tls_openssl_connect_psk(host, host_len, port, descriptor, adapter, insecure)
+    elephc_tls_openssl_connect_psk(
+        host,
+        host_len,
+        port,
+        descriptor,
+        adapter,
+        insecure,
+        early_ptr,
+        early_len,
+    )
+}
+
+/// C ABI: reports the TLS 1.3 early-data status of a live handle.
+#[no_mangle]
+pub extern "C" fn elephc_tls_early_data_status(handle_id: i64) -> i64 {
+    elephc_tls_openssl_early_data_status(handle_id)
 }
 
 /// C ABI: reads plaintext from a libssl handle.
@@ -1393,6 +1528,7 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
                             ssl: ssl as usize,
                             ctx: ctx as usize,
                             stream,
+                            early_data_status: 0,
                         },
                     );
                     let _ = host_ptr;
@@ -1413,6 +1549,7 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
                             ssl: ssl as usize,
                             ctx: ctx as usize,
                             stream,
+                            early_data_status: 0,
                         },
                     );
                     let _ = host_ptr;
@@ -1424,6 +1561,9 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
 
     /// The PSK the loopback server accepts.
     static SERVER_PSK: OnceLock<Vec<u8>> = OnceLock::new();
+
+    /// Early data the loopback server advertises and accepts.
+    const SERVER_MAX_EARLY_DATA: u32 = 1024;
 
     /// TLS 1.3 server callback: accepts the `client` identity and returns the
     /// session carrying the configured external PSK.
@@ -1443,6 +1583,10 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
         let Some(session) = build_psk_session(ssl, psk, ptr::null()) else {
             return 0;
         };
+        if SSL_SESSION_set_max_early_data(session, SERVER_MAX_EARLY_DATA) != 1 {
+            SSL_SESSION_free(session);
+            return 0;
+        }
         *session_out = session;
         1
     }
@@ -1460,6 +1604,14 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
             1
         );
         assert_eq!(
+            SSL_CTX_set_max_early_data(ctx, SERVER_MAX_EARLY_DATA),
+            1
+        );
+        assert_eq!(
+            SSL_CTX_set_recv_max_early_data(ctx, SERVER_MAX_EARLY_DATA),
+            1
+        );
+        assert_eq!(
             SSL_CTX_ctrl(
                 ctx,
                 SSL_CTRL_SET_MAX_PROTO_VERSION,
@@ -1471,22 +1623,43 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
         ctx
     }
 
-    /// Runs a one-connection TLS 1.3 PSK server and reports whether it accepted.
+    /// Runs a one-connection TLS 1.3 PSK server and reports whether it accepted
+    /// plus the early data it read.
     fn serve_psk(
         port_tx: mpsc::Sender<u16>,
-        done_tx: mpsc::Sender<bool>,
+        done_tx: mpsc::Sender<(bool, Vec<u8>)>,
         psk: Vec<u8>,
     ) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind PSK server");
         port_tx
             .send(listener.local_addr().expect("PSK server address").port())
             .expect("send PSK server port");
-        let accepted = unsafe {
+        let result = unsafe {
             let ctx = server_context_psk(&psk);
             let (stream, _) = listener.accept().expect("accept PSK client");
             let ssl = SSL_new(ctx);
             assert!(!ssl.is_null());
             assert_eq!(SSL_set_fd(ssl, stream.as_raw_fd()), 1);
+            let mut early = Vec::new();
+            let mut buffer = [0u8; SERVER_MAX_EARLY_DATA as usize];
+            loop {
+                let mut readbytes = 0usize;
+                let state = SSL_read_early_data(
+                    ssl,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    buffer.len(),
+                    &mut readbytes,
+                );
+                if state == 1 {
+                    early.extend_from_slice(&buffer[..readbytes]);
+                    continue;
+                }
+                if state == 2 {
+                    break;
+                }
+                eprintln!("PSK server early-data read failed: {:?}", last_error());
+                break;
+            }
             let handshake = SSL_accept(ssl) == 1;
             if !handshake {
                 eprintln!("PSK server handshake failed: {:?}", last_error());
@@ -1502,9 +1675,9 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
             SSL_shutdown(ssl);
             SSL_free(ssl);
             SSL_CTX_free(ctx);
-            handshake
+            (handshake, early)
         };
-        done_tx.send(accepted).expect("send PSK server result");
+        done_tx.send(result).expect("send PSK server result");
     }
 
     /// Test adapter: returns `identity_len | identity | psk` exactly as the PHP
@@ -1532,6 +1705,7 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
         let (done_tx, done_rx) = mpsc::channel();
         let server = thread::spawn(move || serve_psk(port_tx, done_tx, b"secret".to_vec()));
         let port = port_rx.recv().expect("PSK server port");
+        let early: &[u8] = b"early request";
 
         let handle = unsafe {
             elephc_tls_openssl_connect_psk(
@@ -1541,9 +1715,12 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
                 1 as *mut c_void,
                 psk_test_adapter as *const c_void,
                 1,
+                early.as_ptr(),
+                early.len(),
             )
         };
         assert!(handle > 0, "PSK connect: {:?}", last_error());
+        assert_eq!(elephc_tls_openssl_early_data_status(handle), 2);
         assert_eq!(
             unsafe { elephc_tls_openssl_write(handle, b"a".as_ptr(), 1) },
             1
@@ -1551,7 +1728,9 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
         assert_eq!(read_exact_tls(handle, 3), b"psk");
         elephc_tls_openssl_close(handle);
 
-        assert!(done_rx.recv().expect("PSK server result"));
+        let (accepted, received) = done_rx.recv().expect("PSK server result");
+        assert!(accepted, "server handshake failed");
+        assert_eq!(received, early);
         server.join().expect("PSK server thread");
     }
 

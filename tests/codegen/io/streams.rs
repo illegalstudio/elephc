@@ -4869,6 +4869,26 @@ echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
     assert_eq!(out, "[fgc over local https]");
 }
 
+/// PHP 8.6's `fopen("https://...")` wrapper buffers the response into a
+/// readable temporary stream and returns it as a resource.
+#[test]
+fn test_fopen_over_https_local_server_php86() {
+    let (_server, port) = spawn_https_server(b"fgc over local https");
+    let out = compile_and_run_with_php_version(
+        &format!(
+            r#"<?php
+$ctx = stream_context_get_default();
+stream_context_set_option($ctx, "ssl", "verify_peer", "0");
+$f = fopen("https://127.0.0.1:{port}/page.txt", "r");
+echo "[" . stream_get_contents($f) . "]";
+fclose($f);
+"#
+        ),
+        elephc::php_version::PhpVersion::Php86,
+    );
+    assert_eq!(out, "[fgc over local https]");
+}
+
 /// `file_get_contents($url)` also succeeds when the runtime string uses
 /// `https://`, covering the non-literal dynamic URL dispatcher.
 #[test]

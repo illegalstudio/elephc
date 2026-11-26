@@ -100,6 +100,9 @@ pub(super) fn lower(
         RuntimeFnId::TlsSetPskClient => Some({
             crate::codegen::lower_inst::builtins::tls::lower_tls_set_psk_client(ctx, inst)
         }),
+        RuntimeFnId::TlsMarkEarlyData => Some({
+            crate::codegen::lower_inst::builtins::tls::lower_tls_mark_early_data(ctx, inst)
+        }),
         RuntimeFnId::CurlEasySetoptLong => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_long(ctx, inst)
         }),

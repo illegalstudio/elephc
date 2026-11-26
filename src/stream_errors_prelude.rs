@@ -103,6 +103,21 @@ function __elephc_tls_apply_psk_client($options) {
     }
     \__elephc_tls_set_psk_client_cb($callback);
 }
+
+function __elephc_fopen_https($filename, $use_include_path, $context) {
+    $body = \__elephc_file_get_contents($filename, $use_include_path, $context);
+    if ($body === false) {
+        return false;
+    }
+    $stream = \fopen("php://temp", "w+b");
+    if ($stream === false) {
+        return false;
+    }
+    \fwrite($stream, $body);
+    \rewind($stream);
+    \__elephc_tls_mark_early_data($stream);
+    return $stream;
+}
 "#;
 
 /// Parses [`TLS_PSK_HELPERS_SRC`] into the stream-error prelude's declarations.
@@ -519,6 +534,38 @@ fn fopen_wrapper() -> Stmt {
         .param_default("context", t_mixed(), e_null())
         .returns(t_mixed())
         .body(vec![
+            s_if(
+                e_binop(
+                    e_call(
+                        "substr",
+                        vec![e_var("filename"), e_int(0), e_int(8)],
+                    ),
+                    BinOp::StrictEq,
+                    e_str("https://"),
+                ),
+                vec![s_if(
+                    e_binop(
+                        e_call(
+                            "substr",
+                            vec![e_var("mode"), e_int(0), e_int(1)],
+                        ),
+                        BinOp::StrictEq,
+                        e_str("r"),
+                    ),
+                    vec![s_return(e_call(
+                        "__elephc_fopen_https",
+                        vec![
+                            e_var("filename"),
+                            e_var("use_include_path"),
+                            e_var("context"),
+                        ],
+                    ))],
+                    Vec::new(),
+                    None,
+                )],
+                Vec::new(),
+                None,
+            ),
             s_assign("stream", e_null()),
             s_if(
                 e_call("is_null", vec![e_var("context")]),

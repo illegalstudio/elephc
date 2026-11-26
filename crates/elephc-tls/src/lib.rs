@@ -680,6 +680,8 @@ pub unsafe extern "C" fn elephc_tls_connect_session(
     _port: u16,
     _session: *const u8,
     _session_len: usize,
+    _early_ptr: *const u8,
+    _early_len: usize,
 ) -> i64 {
     crate::error::record("TLS session resumption requires the libssl backend");
     -1
@@ -693,9 +695,17 @@ pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
     _port: u16,
     _session: *const u8,
     _session_len: usize,
+    _early_ptr: *const u8,
+    _early_len: usize,
 ) -> i64 {
     crate::error::record("TLS session resumption requires the libssl backend");
     -1
+}
+
+/// Rustls has no TLS 1.3 early-data path in this build.
+#[no_mangle]
+pub extern "C" fn elephc_tls_early_data_status(_handle_id: i64) -> i64 {
+    0
 }
 
 /// Rustls cannot use an external PSK. The libssl-backed
@@ -710,6 +720,8 @@ pub unsafe extern "C" fn elephc_tls_connect_psk(
     _descriptor: *mut std::ffi::c_void,
     _adapter: *const std::ffi::c_void,
     _insecure: std::ffi::c_int,
+    _early_ptr: *const u8,
+    _early_len: usize,
 ) -> i64 {
     crate::error::record("TLS external PSK requires the libssl backend");
     -1

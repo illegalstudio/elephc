@@ -11,4 +11,5 @@
 //!   source literal is what selects the libssl TLS stream bridge.
 
 pub mod __elephc_tls_adapter_addr;
+pub mod __elephc_tls_mark_early_data;
 pub mod __elephc_tls_set_psk_client;

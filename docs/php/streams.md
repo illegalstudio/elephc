@@ -250,7 +250,16 @@ during the TLS handshake through the shared callable adapter; TLS 1.3 uses
 `SSL_CTX_set_psk_client_callback`. elephc passes `null` as the callback's
 `$stream` argument because the TLS socket has no PHP stream resource before the
 handshake completes. `ssl.psk_server_cb` is accepted but unused for client
-streams. The early-data and session-callback options remain deferred.
+streams.
+
+`ssl.early_data` sends a client 0-RTT payload with `SSL_write_early_data` when
+the resumed session or external PSK advertises early-data support. The
+`stream_get_meta_data()` result of an `fopen('https://...')` stream exposes
+`crypto.early_data` as `accepted`, `rejected`, or `not_sent`. The HTTPS wrapper
+buffers the response body into a temporary stream, so the PHP-visible resource
+is a buffered body stream rather than the live TLS socket. `max_early_data` and
+`early_data_cb` are server-side options and remain deferred, as do the session
+cache callbacks.
 
 ## Stream contexts
 

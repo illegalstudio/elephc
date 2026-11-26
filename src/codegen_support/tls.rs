@@ -27,6 +27,10 @@ pub(crate) fn publish_tls_function_pointers(emitter: &mut Emitter) {
             "_elephc_tls_connect_session_insecure_fn",
         ),
         ("elephc_tls_connect_psk", "_elephc_tls_connect_psk_fn"),
+        (
+            "elephc_tls_early_data_status",
+            "_elephc_tls_early_data_status_fn",
+        ),
         ("elephc_tls_write", "_elephc_tls_write_fn"),
         ("elephc_tls_read", "_elephc_tls_read_fn"),
         ("elephc_tls_close", "_elephc_tls_close_fn"),
