@@ -303,6 +303,9 @@ pub(crate) struct Checker {
     /// Abstract methods each trait-using class owes to its traits, by class name
     /// ([`schema::collect_trait_method_requirements`]).
     pub trait_method_requirements: HashMap<String, schema::TraitMethodRequirements>,
+    /// The first abstract trait binding failure of each class beside an abstract `as final`
+    /// import ([`crate::types::traits::final_abstract_import_overrides`]).
+    pub final_abstract_binding_failures: crate::types::traits::FinalAbstractBindingFailures,
     /// Own property order and trait-collision defaults of classes that use traits.
     pub trait_property_origins: schema::TraitPropertyOrigins,
     /// Name of the class currently being type-checked (used for `$this` resolution).
@@ -812,6 +815,17 @@ pub(crate) struct Checker {
     /// True only when every visit to an indexed-read span used native buffer storage.
     /// Intersecting observations also fails closed when included files share a span.
     pub buffer_read_observations: HashMap<Span, bool>,
+    /// Argument spans binding a `mixed`/union value to a declared scalar
+    /// parameter, and returned-expression spans reaching a declared `string`/`float`/`bool`
+    /// return, where EIR lowering emits the runtime `TypeError` check.
+    pub scalar_guard_arg_sites: HashSet<Span>,
+    /// The subset of `scalar_guard_arg_sites` recorded inside a function, method, closure or
+    /// class body: the only ones a callee exception summary can see (see
+    /// `driver::check_types_impl`).
+    pub summary_scalar_guard_arg_sites: HashSet<Span>,
+    /// Whether this pass opened a `try` region, the only place callee exception summaries
+    /// change the checker's flow (see `driver::check_types_impl`).
+    pub entered_exception_region: bool,
     /// The warnings that BELONG to a local-binding decision, keyed by that decision's
     /// `(span, local name)` instead of being pushed straight into `warnings`.
     ///
@@ -1753,6 +1767,7 @@ fn check_types_on_compiler_stack(
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
+        scalar_guard_arg_sites: checker.scalar_guard_arg_sites,
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,

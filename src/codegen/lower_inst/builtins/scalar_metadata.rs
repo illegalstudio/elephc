@@ -78,6 +78,30 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if ty == PhpType::Callable {
+        // An implicit callable is the string or array it came from; a Closure or an invokable
+        // object is an object.
+        let string_case = ctx.next_label("gettype_callable_string");
+        let array_case = ctx.next_label("gettype_callable_array");
+        let null_case = ctx.next_label("gettype_callable_null");
+        let done = ctx.next_label("gettype_callable_done");
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_reg(value, result)?;
+        // A missed read leaves null in the slot, not a descriptor.
+        crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+            ctx.emitter, result, &null_case,
+        );
+        crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
+            ctx.emitter, result, &string_case, &array_case,
+        );
+        emit_type_name_result(ctx, b"object");
+        abi::emit_jump(ctx.emitter, &done);
+        emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+        emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+        emit_mixed_gettype_case(ctx, &null_case, b"NULL", &done);
+        ctx.emitter.label(&done);
+        return store_if_result(ctx, inst);
+    }
     if matches!(ty, PhpType::Resource(_)) {
         emit_static_gettype_resource(ctx, value)?;
         return store_if_result(ctx, inst);
@@ -142,8 +166,9 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_gettype(ctx: &mut FunctionConte
     emit_branch_on_gettype_mixed_tag(ctx, 3, &boolean_case);
     emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
     emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    let callable_case = ctx.next_label("gettype_mixed_callable");
     emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
-    emit_branch_on_gettype_mixed_tag(ctx, 10, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 10, &callable_case);
     emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
     abi::emit_jump(ctx.emitter, &null_case);
 
@@ -156,6 +181,20 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_gettype(ctx: &mut FunctionConte
     emit_mixed_gettype_case(ctx, &object_case, b"object", &done);
     ctx.emitter.label(&resource_case);
     emit_gettype_resource_case(ctx, &done);
+    // -- a callable descriptor: an implicit callable is the string or array it came from --
+    ctx.emitter.label(&callable_case);
+    let payload = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    // A missed read boxed into the Mixed leaves no descriptor behind the tag.
+    crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+        ctx.emitter, payload, &null_case,
+    );
+    crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
+        ctx.emitter, payload, &string_case, &array_case,
+    );
+    abi::emit_jump(ctx.emitter, &object_case);
     ctx.emitter.label(&done);
     Ok(())
 }

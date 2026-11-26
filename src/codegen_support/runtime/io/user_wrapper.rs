@@ -101,12 +101,13 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #1");                                          // fclose() succeeds unless the flush reports otherwise
     emitter.instruction("str x9, [sp, #8]");                                    // reuse the consumed policy slot for the fclose result
     emitter.instruction("cbnz x10, __rt_uwfclose_release");                     // skip PHP callbacks while unwinding a native-extension exception
-    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_FLUSH);
+    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_no_flush", VTABLE_SLOT_FLUSH);
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver for stream_flush()
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "flush");         // stream_flush() reports 0 when PHP returns false
     if reports_failed_flush() {
         emitter.instruction("str x0, [sp, #8]");                                // PHP 8.6: a failed flush makes fclose() report failure
     }
+    emitter.label("__rt_uwfclose_no_flush");                                   // no stream_flush: still run the optional close
 
     // -- invoke an optional close method with exceptional object cleanup active --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver for stream_close()
@@ -165,12 +166,13 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 1");                         // fclose() succeeds unless the flush reports otherwise
     emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
     emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without PHP callbacks during native-extension unwinding
-    emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_FLUSH);
+    emit_x86_method_lookup(emitter, "__rt_uwfclose_no_flush_x86", VTABLE_SLOT_FLUSH);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the wrapper receiver for stream_flush()
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "flush");             // stream_flush() reports 0 when PHP returns false
     if reports_failed_flush() {
         emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // PHP 8.6: a failed flush makes fclose() report failure
     }
+    emitter.label("__rt_uwfclose_no_flush_x86");                               // no stream_flush: still run the optional close
 
     // -- protect the wrapper while its optional close method executes --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver for stream_close()

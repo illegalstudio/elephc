@@ -153,7 +153,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             // Numeric/string/mixed conversions.
             | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
+            | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt | ScalarParamGuard
             | PropertyBoundaryCheckedToInt
             // A Mixed clone loads its operand and copies the dereferenced value into a new cell
             // (or retains a shared resource cell); it never takes the source slot's address.

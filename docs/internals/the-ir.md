@@ -871,6 +871,7 @@ preserves PHP exponentiation result rules.
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
 | `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
+| `ScalarParamGuard` | `Heap(Mixed)` bound to a declared `int`/`float`/`string`/`bool` | converted `I64`/`F64` for `int`/`float`, none otherwise | `reads_heap`, `alloc_heap`, `may_throw` |
 
 A boxed operand written as a container element is first projected to the type
 the checker proved for it. A hash `foreach` binding, a guard-narrowed `mixed`
@@ -1235,7 +1236,7 @@ Builtin calls use the checker's result recorded for their call span.
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |
 | `ExprCall` | runtime callee expression, args | return type | conservative dynamic callable effects |
 | `FirstClassCallableNew` | target metadata, optional object receiver | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
-| `CallableArrayNew` | receiver/class/function parts | callable descriptor or array | `alloc_heap`, `refcount_op` |
+| `CallableArrayNew` | target metadata, optional object receiver | `I64` callable descriptor flagged as an array callable | `alloc_heap`, `refcount_op` |
 | `CallableDescriptorInvoke` | descriptor, normalized mixed args | `Heap(Mixed)` or typed value | descriptor effect summary |
 | `PipeCall` | value, callable | callable return | evaluates value before callable invocation |
 
@@ -1248,6 +1249,97 @@ observable order:
 3. Store required hidden temporaries before ABI materialization.
 4. Materialize ABI parameters in callee signature order in the backend.
 5. Avoid temp preevaluation for ref-like and mutating parameters.
+
+#### Runtime scalar parameter checks
+
+A value the checker types as `mixed` (or as a union a scalar parameter can
+refuse) that reaches a declared non-nullable `int`, `float`, `string` or `bool`
+parameter of a user callable is checked at run time, so `null`, arrays and
+non-`Stringable` objects throw PHP's `TypeError` instead of being coerced. The
+pieces must stay in agreement:
+
+1. **One rule.** `types::param_binding::runtime_scalar_guard_param` picks the
+   qualifying parameters (declared, by value, not variadic, exactly one of the
+   four scalars, no `= null` default) and `runtime_scalar_guard_needed` decides
+   whether an argument type can hold a refused value in coercive or
+   `strict_types` mode. The checker, the optimizer, EIR lowering and the
+   callable invoker all call these two predicates.
+2. **Checker-recorded sites.** `require_strict_types_param_binding` records the
+   span of each such argument in `CheckResult::scalar_guard_arg_sites`.
+   Lowering only guards recorded arguments (spread elements, which have no
+   record of their own, are guarded from their value type), so a local the
+   checker proves scalar emits nothing even when its storage is a boxed cell.
+3. **Optimizer.** `optimize::install_scalar_guard_arg_sites` installs the spans
+   for the post-typecheck passes: a call with a recorded argument stays
+   `may_throw` and keeps a reachable `catch (TypeError)`, even when the callee is
+   pure. A pass that opens a `try` reruns the checker once its callees'
+   summaries gained new guarded sites, so a guard inside a callee reaches the
+   caller's `catch`.
+4. **One instruction.** `ir_lower::expr::scalar_param_guards` emits one
+   `ScalarParamGuard` per checked operand, with no new basic block. The data
+   immediate encodes `"<mode><r>\u{1f}<prefix>\u{1f}<suffix>"`: `s`/`i`/`f`/`b`
+   select the coercive rule and their upper-case letter the strict one; an `r`
+   flag means the operands after the first are released when the check refuses
+   (the refused owned value and the call's other unpublished owned operands), so
+   the `TypeError` leaks nothing while the accepting path keeps its ordinary
+   ownership flow. For `int`/`float` the result is the converted scalar and an
+   owned temporary box is released after it.
+5. **Order.** PHP evaluates every argument before it checks parameters in
+   order. Positional lowering keeps a guarded `mixed` boxed and
+   `call_arg_coercion::coerce_operands_to_params_guarded` runs the checks during
+   operand normalization, after the last argument. When an omitted default can
+   throw, `named_args::check_supplied_scalar_params_before_defaults` runs the
+   checks of the supplied named arguments before the trailing defaults; an
+   omitted parameter declared before the last supplied one is filled first (a
+   by-reference one only when its default can throw, pinned until the trailing
+   defaults ran, its record retired in owner-stack order), as
+   PHP fills it before the callee checks anything (`f(b: $null)` for
+   `f(int $a = 1 % 0, string $b)` throws `DivisionByZeroError`). Both raise the
+   pending by-reference property checks of earlier parameters first
+   (`emit_property_type_guards_before`), and an accepted `Stringable` is
+   converted before the next parameter is checked. The call's owned operands
+   are published before the checks; a checked box is moved into its unwind
+   slot without a retain (`move_evaluated_call_argument_into_root`) and retires
+   after the call. A string converted after the last check that can throw stays
+   the call's own owned operand, so an accepted check persists it once, like
+   the unchecked conversion; an earlier one is published for the later checks.
+6. **Codegen** (`codegen::lower_inst::scalar_param_guard`). The hot path is a
+   tag load and one compare-and-branch; the refusal (peeling a nested cell,
+   the `Stringable` test, the class name lookup, building the message and
+   throwing) lives in the function's cold section (`emit_cold_path`).
+7. **Calls through a callable value** bind their arguments in the shared
+   per-signature descriptor invoker, which has no lowering context.
+   `runtime_callable_invoker::scalar_param_args` checks the boxed arguments
+   bound to guarded parameters, taking strictness from the invocation profile
+   word. Whether an invoker checks is part of its cache key, next to the
+   signature and the `{closure:file:line}` callee label a closure needs. A
+   callable the compiler resolves statically (`$f = $o->m(...); $f($v)`,
+   `call_user_func_array([$o, "m"], [$v])`, `$f = "f"; $f($v)`) does not reach
+   the invoker: lowering emits the direct call with `scalar_guards_unrecorded`
+   set, so its arguments are checked from their value types.
+8. **Exemptions.** Builtins (`declared_params: false`) and `extern` calls (their
+   `call_description` is cleared) are never checked. The methods of the
+   internal `ext/uri` prelude classes, called directly or through an invoker
+   whose declaring class is one of them, are checked only under
+   `strict_types=1` (without the "called in" suffix): in coercive mode PHP only
+   deprecates a `null` bound to an internal function's scalar parameter. A
+   method is not checked when an override in a subclass or implementor declares
+   a different parameter, since lowering only knows the receiver's static class
+   and PHP binds the method selected at run time.
+
+9. **Declared return values** reuse the same instruction. A `return` from a
+   function declaring `string`, `float` or `bool` whose expression the checker
+   types as `mixed` (or a refusable union) is recorded in the same site set
+   (`stmt_check`, through `optimize::active_scalar_return_needs_guard`), and
+   `return_boundaries` makes such a return `may_throw` with `TypeError`.
+   `ir_lower::stmt::return_coercions::guard_declared_scalar_return` checks only
+   recorded returns, through the shared `scalar_param_guards::emit_scalar_guard`
+   with the message `"<callable>(): Return value must be of type T, "` +
+   type name + `" returned"`. A returned owned temporary is pinned over the
+   check, so a refusal throws first and the unwinder releases the value (a
+   throwing destructor then chains the `TypeError`); the release flag is not
+   used. A checked value bound to `bool` converts by PHP truthiness. `int`
+   keeps its own `ReturnBoundaryMixedToInt`.
 
 ### Eval and Dynamic Symbols
 

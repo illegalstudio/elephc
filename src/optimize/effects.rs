@@ -294,6 +294,45 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
     expr_effect(expr).is_observable() || !active_expr_thrown_types(expr).is_empty()
 }
 
+/// The effect of the runtime scalar-parameter checks the checker recorded for a call's
+/// arguments: besides throwing `TypeError`, an `int` binding can raise the precision
+/// deprecation, which runs the user error handler, and a `string` binding converts a
+/// `Stringable` through `__toString()`, so the binding itself can write globals before the
+/// callee runs, even when the callee is pure.
+pub(super) fn scalar_guard_effect(args: &[Expr]) -> Effect {
+    if super::binding_decisions::call_has_scalar_guard_arg(args) {
+        scalar_binding_guard_effect()
+    } else {
+        Effect::PURE
+    }
+}
+
+/// What a runtime scalar-parameter check can do while it binds one value: throw `TypeError`,
+/// run the user error handler (the `int` precision deprecation) or a `Stringable`'s
+/// `__toString()`, either of which can write globals. Shared by direct calls, calls through
+/// a callable value and the callbacks a builtin invokes.
+pub(super) fn scalar_binding_guard_effect() -> Effect {
+    Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+}
+
+/// The binding effect of calling `callable` with arguments: the runtime callable invoker
+/// checks a value bound to a declared scalar parameter (see [`scalar_binding_guard_effect`]).
+/// A scalar literal is no exception: a callable selected at run time receives it boxed, so
+/// `$f(1.5)` for `fn(int $n)` raises the precision deprecation (whose handler can write
+/// globals or throw), and under `strict_types=1` `$f(1)` for `fn(string $s)` throws.
+///
+/// A variable that holds a tracked callable alias already carries its targets' binding effect
+/// (`aliases::callable_alias_from_expr`); an untracked one binds conservatively.
+pub(super) fn callable_value_binding_effect(callable: &Expr, args: &[Expr]) -> Effect {
+    let tracked_alias = matches!(callable.kind, ExprKind::Variable(_))
+        && aliases::callable_alias_from_expr(callable).is_some();
+    if !args.is_empty() && !tracked_alias && calls::callback_binding_may_throw(callable) {
+        scalar_binding_guard_effect()
+    } else {
+        Effect::PURE
+    }
+}
+
 /// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.
 /// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
@@ -370,7 +409,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Pipe { value, callable } => expr_effect(value)
             .combine(expr_effect(callable))
-            .combine(expr_call_effect(callable)),
+            .combine(expr_call_effect(callable))
+            .combine(callable_value_binding_effect(callable, std::slice::from_ref(value.as_ref()))),
         ExprKind::Assignment {
             target,
             value,
@@ -400,12 +440,17 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             } else { effect }
         }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
-            .combine(function_call_effect(name.as_str(), args)),
+            .combine(function_call_effect(name.as_str(), args))
+            .combine(scalar_guard_effect(args)),
         ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))
-            .combine(callable_alias_effect(var)),
+            .combine(callable_alias_effect(var))
+            .combine(scalar_guard_effect(args))
+            .combine(callable_value_binding_effect(&Expr::var(var), args)),
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(expr_call_effect(callee)),
+            .combine(expr_call_effect(callee))
+            .combine(scalar_guard_effect(args))
+            .combine(callable_value_binding_effect(callee, args)),
         ExprKind::NullsafeDynamicMethodCall {
             object,
             method,
@@ -439,20 +484,23 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(instance_method_call_effect(object, method)),
+            .combine(instance_method_call_effect(object, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::NullsafeMethodCall {
             object,
             method,
             args,
         } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(instance_method_call_effect(object, method)),
+            .combine(instance_method_call_effect(object, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::StaticMethodCall {
             receiver,
             method,
             args,
         } => combine_effects(args.iter().map(expr_effect))
-            .combine(static_method_call_effect(receiver, method)),
+            .combine(static_method_call_effect(receiver, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::ArrayLiteral(items) => combine_effects(items.iter().map(expr_effect)),
         ExprKind::ArrayLiteralAssoc(items) => combine_effects(
             items
@@ -528,9 +576,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
         }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
-        // A nullable or `mixed` receiver raises PHP's `Cannot use "::class" on null`
-        // TypeError at run time, so this expression can throw even though the operand
-        // itself is only read.
+        // `$value::class` throws a TypeError for a non-object: `Cannot use "::class" on null`
+        // for a nullable or `mixed` receiver, and an implicit string or array callable held in
+        // a `callable` slot.
         ExprKind::ObjectClassName { object } => expr_effect(object).with_may_throw(),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()

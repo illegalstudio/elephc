@@ -456,7 +456,7 @@ fn lower_planned_builtin_call_args(
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
-                ctx, sig, args, Some(name), false, None,
+                ctx, sig, args, Some(name), false, None, false,
             ) {
                 for (name, ty) in output_locals {
                     ctx.set_local_logical_type(&name, ty);

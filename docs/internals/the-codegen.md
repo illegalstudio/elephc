@@ -101,9 +101,11 @@ the complete equality table then compares it with the updated operand. This also
 handles new strings, arrays, objects and Closure descriptors, including a second
 conversion warning or throw. Scalar conversion keeps the structural recursion depth.
 Closure descriptors use the shared warning helper's fixed class spelling in both
-the generic table and specialized Mixed/number comparisons. Implicit string and
-array callables use `CallableValueNew` instead of `FirstClassCallableNew`, retaining
-the same invocation descriptor and captures without PHP object identity. Numeric
+the generic table and specialized Mixed/number comparisons. Implicit string
+callables use `CallableValueNew` and implicit array callables `CallableArrayNew`
+instead of `FirstClassCallableNew`, retaining the same invocation descriptor and
+captures without PHP object identity; each also records its origin flag in the
+descriptor kind word (see "Callable descriptors and invokers"). Numeric
 comparison checks the descriptor's object handle before selecting Closure conversion;
 invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
 entry explicitly branches to its shared body so linker section collection retains it.
@@ -829,7 +831,20 @@ loaded before invoking native code. Descriptors record the callable kind
 (closure, first-class callable, callback adapter, object invoke, plain
 function, builtin, extern, static method, instance method) plus
 signature/default/by-ref/variadic metadata and capture/receiver environment,
-without changing the one-word callable ABI. The optional invoker slot points at
+without changing the one-word callable ABI. The kind sits in the low 8 bits of
+the descriptor's first word, so runtime readers mask it with
+`CALLABLE_DESC_KIND_MASK`. The bits above it carry origin flags for an implicit
+callable that PHP still sees as another value: `CALLABLE_DESC_ORIGIN_STRING`
+(bit 8, `'strlen'`, `'Cls::m'`) and `CALLABLE_DESC_ORIGIN_ARRAY` (bit 9,
+`[$obj, 'm']`, `['Cls', 'm']`). `gettype()`, `get_class()` and `::class` branch
+on them (`emit_branch_on_descriptor_origin`). `CallableValueNew` and
+`CallableArrayNew` set the flag on their private runtime copy
+(`emit_mark_runtime_descriptor_origin`). A string or array converted to a
+callable at runtime selects a static descriptor variant that carries the flag
+(`static_descriptor_with_origin`), or gets a flagged runtime copy when no static
+variant exists. Code that rebuilds or overwrites a kind word must keep these
+flags, and an invokable object's copy of a shared `[$obj, '__invoke']` template
+stores the plain object-invoke kind. The optional invoker slot points at
 a generated uniform adapter (`src/codegen/runtime_callable_invoker.rs`) with
 the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and

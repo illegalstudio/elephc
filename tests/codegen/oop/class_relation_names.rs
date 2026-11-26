@@ -28,11 +28,14 @@
 //!   but `"0.0"` and `" "` are true, and a hand-rolled test gets that wrong.
 //! - A name that resolves to nothing answers `false`, INCLUDING against itself: PHP looks the
 //!   subject up before comparing, so `is_a("Ghost", "Ghost", true)` is false.
-//! - Still `false`, and deliberately: a NON-LITERAL name. That needs a name-keyed table the
-//!   emitted program can consult at runtime, which is the second half of #1113 and what
-//!   `ReflectionAttribute::IS_INSTANCEOF` actually needs.
+//! - A NON-LITERAL target (`is_a($name, $name, true)`) used to answer `false` for every
+//!   subject: the static walk needs a literal target. The subject now selects the ancestor list
+//!   of one compiled class or interface (by name, or by an object's runtime class id), and the
+//!   target is compared with it at runtime.
+//! - A class only an autoloader could load, and that the program never names, is not compiled,
+//!   so a runtime name cannot reach it: the same AOT limit as `class_exists($name)`.
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_files_per_argv, compile_and_run_per_argv};
 
 /// Boxed subjects use runtime class and interface metadata without requiring an eval context.
 #[test]
@@ -257,4 +260,371 @@ echo is_subclass_of("Derived", "Base", pick(200, "1")) ? "y" : "n";
     );
 
     assert_eq!(out, "nyyny");
+}
+
+/// A target class name known only at runtime: `is_a($name, $name, true)` was `false` for every
+/// subject. Covers a name against itself, parents, interfaces through an interface parent,
+/// builtin exceptions, case-insensitive and backslash-rooted names, unknown names, and the
+/// `$allow_string` flag, in a namespace. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_name() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+namespace App;
+interface Root {}
+interface Leaf extends Root {}
+class Base implements Leaf {}
+class Child extends Base {}
+class Failure extends \RuntimeException {}
+function rel(string $sub, string $target, bool $flag): string {
+    return (is_a($sub, $target, true) ? "y" : "n") . (is_subclass_of($sub, $target) ? "y" : "n")
+        . (is_a($sub, $target, $flag) ? "y" : "n") . (is_subclass_of($sub, $target, $flag) ? "y" : "n");
+}
+$sub = $argv[1] ?? "App\\Child";
+$target = $argv[2] ?? "App\\Base";
+echo rel($sub, $sub, true), " ", rel($sub, $target, true), " ", rel($sub, $target, false), " ", rel($target, $sub, true), "\n";
+foreach ([["app\\child", "\\APP\\ROOT"], ["\\App\\Leaf", "App\\Root"], ["App\\Root", "App\\Root"], ["Ghost", "Ghost"],
+          ["App\\Failure", "Exception"], ["App\\Failure", "Throwable"], ["RuntimeException", "App\\Failure"]] as [$s, $t]) {
+    echo rel($s, $t, true), " ";
+}
+echo "\n";
+"#,
+        &[&[], &["App\\Base", "App\\Child"], &["App\\Root", "App\\Leaf"], &["Nope", "App\\Base"]],
+    );
+    let catalog = "yyyy yyyy ynyn nnnn yyyy yyyy nnnn \n";
+    assert_eq!(out, [
+        format!("ynyn yyyy yynn nnnn\n{catalog}"),
+        format!("ynyn nnnn nnnn yyyy\n{catalog}"),
+        format!("ynyn nnnn nnnn yyyy\n{catalog}"),
+        format!("nnnn nnnn nnnn nnnn\n{catalog}"),
+    ]);
+}
+
+/// An object subject with a runtime target answers from the object's runtime class, not its
+/// static type (`Square $o` holding a `Cube`), and ignores `$allow_string`. A Mixed subject is
+/// matched as an object or as a class name by its runtime tag, and any other value is `false`.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_object_and_mixed_subject_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface Shape {}
+class Square implements Shape {}
+class Cube extends Square {}
+function probe(Square $o, string $target): string {
+    return (is_a($o, $target) ? "y" : "n") . (is_subclass_of($o, $target) ? "y" : "n") . (is_a($o, $target, false) ? "y" : "n");
+}
+$target = $argv[1] ?? "Square";
+echo probe(new Cube(), $target), " ", probe(new Square(), $target), " ", probe(new Cube(), "shape"), " ", probe(new Square(), "Nope"), "\n";
+$values = [$argc > 9 ? 1 : new Cube(), "Cube", 7, null];
+foreach ($values as $value) {
+    echo is_a($value, $target, true) ? "y" : "n", is_subclass_of($value, $target) ? "y" : "n", is_a($value, $target) ? "y" : "n";
+}
+echo "\n";
+"#,
+        &[&[], &["Cube"], &["Shape"], &["stdClass"]],
+    );
+    assert_eq!(out, [
+        "yyy yny yyy nnn\nyyyyynnnnnnn\n",
+        "yny nnn yyy nnn\nynyynnnnnnnn\n",
+        "yyy yyy yyy nnn\nyyyyynnnnnnn\n",
+        "nnn nnn yyy nnn\nnnnnnnnnnnnn\n",
+    ]);
+}
+
+/// Classes loaded through a PSR-4 autoloader relate to a runtime name once the program names
+/// them. Expected output measured with php 8.5.12 and an equivalent `spl_autoload_register`.
+#[test]
+fn test_is_a_runtime_target_name_autoloaded_classes() {
+    let out = compile_and_run_files_per_argv(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            ("src/Shapes/Shape.php", "<?php\nnamespace App\\Shapes;\ninterface Shape {}\n"),
+            ("src/Shapes/Square.php", "<?php\nnamespace App\\Shapes;\nclass Square implements Shape {}\n"),
+            ("src/Shapes/Cube.php", "<?php\nnamespace App\\Shapes;\nclass Cube extends Square {}\n"),
+            ("main.php", r#"<?php
+$known = [App\Shapes\Cube::class];
+$n = $argv[1] ?? "App\\Shapes\\Cube";
+$t = $argv[2] ?? "App\\Shapes\\Shape";
+var_dump(is_a($n, $n, true), is_a($n, $t, true), is_subclass_of($n, $t), is_subclass_of($t, $n));
+"#),
+        ],
+        "main.php",
+        &[&[], &["App\\Shapes\\Square", "App\\Shapes\\Cube"]],
+    );
+    assert_eq!(out, [
+        "bool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+        "bool(true)\nbool(false)\nbool(false)\nbool(true)\n",
+    ]);
+}
+
+/// With eval in the program, a compiled subject still answers from compiled metadata, and an
+/// eval-declared class (by name, as an object, or boxed in a Mixed) asks the eval bridge, which
+/// knows the eval class itself. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_name_with_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {}');
+$n = $argv[1] ?? 'Foo';
+$o = $argc > 9 ? 1 : new Dyn();
+echo is_a('Bar', $n, true) ? "y" : "n", is_a($argv[2] ?? 'Bar', $n, true) ? "y" : "n", is_subclass_of(new Bar(), $n) ? "y" : "n";
+echo is_a('Dyn', $n, true) ? "y" : "n", is_subclass_of('Dyn', $n) ? "y" : "n", is_a(new Dyn(), $n) ? "y" : "n", is_a($o, $n) ? "y" : "n", is_subclass_of($o, $n) ? "y" : "n", "\n";
+"#,
+        &[&[], &["Dyn"], &["Bar"]],
+    );
+    assert_eq!(out, ["yyyyyyyy\n", "nnnynyyn\n", "yynyyyyy\n"]);
+}
+
+/// An eval-declared class that extends or implements a compiled class-like inherits that
+/// class-like's own ancestors: `Dyn extends Bar` is an `I` through compiled `Foo implements J`.
+/// The eval bridge only walks eval classes, so it needs the compiled class-likes related to a
+/// runtime target, as the literal-target probe passes them; with the target alone it answered
+/// `false`. A Mixed subject with a literal target takes the same path. Expected output measured
+/// with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_eval_class_inherits_compiled_ancestors() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface I {}
+interface J extends I {}
+class Foo implements J {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {} class Dj implements J {}');
+function m(mixed $s): string { return (is_a($s, 'I', true) ? "y" : "n") . (is_subclass_of($s, 'Foo') ? "y" : "n"); }
+$t = $argv[1] ?? 'I';
+$d = $argv[2] ?? 'Dyn';
+echo is_a($d, $t, true) ? "y" : "n", is_subclass_of($d, $t) ? "y" : "n", is_a($d, strtoupper($t), true) ? "y" : "n", is_a($d, "\\$t", true) ? "y" : "n", " ", m($d), "\n";
+"#,
+        &[&[], &["J", "Dj"], &["Foo"], &["Bar"], &["I", "Dj"], &["Foo", "Dj"], &["Ghost"], &["Dyn"]],
+    );
+    assert_eq!(out, [
+        "yyyy yy\n", "yyyy yn\n", "yyyy yy\n", "yyyy yy\n",
+        "yyyy yn\n", "nnnn yn\n", "nnnn yy\n", "ynyy yy\n",
+    ]);
+}
+
+/// A missed read from an array of objects leaves the in-band null sentinel in an object slot.
+/// The runtime-target path read it as an object header and crashed; it is null, related to no
+/// class, held in the object slot or passed into a Mixed.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_missing_object_element_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $v, string $t): string { return yn(is_a($v, $t)) . yn(is_subclass_of($v, $t)) . yn(is_a($v, 'Foo')) . yn($v instanceof Closure); }
+$objects = [new Bar()];
+$k = (int) ($argv[2] ?? 9);
+$t = $argv[1] ?? 'Foo';
+echo yn(is_a(@$objects[$k], $t)), yn(is_subclass_of(@$objects[$k], $t)), yn(@$objects[$k] instanceof Closure), " ", m(@$objects[$k], $t), "\n";
+"#,
+        &[&[], &["Foo", "0"], &["Bar", "0"]],
+    );
+    assert_eq!(out, ["nnn nnnn\n", "yyn yyyn\n", "ynn ynyn\n"]);
+}
+
+/// A closure is an instance of `Closure`, whether held as a callable or boxed in a Mixed, so a
+/// runtime `Closure` target (any case, backslash-rooted or not) matches it. `Closure` is final
+/// and implements nothing, so `is_subclass_of()` and every other target answer `false`.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_closure_subject_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function probe(mixed $v, string $t): string {
+    return (is_a($v, $t) ? "y" : "n") . (is_subclass_of($v, $t) ? "y" : "n") . (is_a($v, $t, true) ? "y" : "n");
+}
+function typed(callable $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_subclass_of($f, $t) ? "y" : "n"); }
+$t = $argv[1] ?? "Closure";
+$c = function () { return 1; };
+$a = fn() => 2;
+echo probe($c, $t), " ", probe($a, $t), " ", probe(strlen(...), $t), " ", typed($c, $t), " ", is_a($c, $t) ? "y" : "n", "\n";
+"#,
+        &[&[], &["closure"], &["\\Closure"], &["Other"], &["stdClass"]],
+    );
+    let closure = "yny yny yny yn y\n";
+    let other = "nnn nnn nnn nn n\n";
+    assert_eq!(out, [closure, closure, closure, other, other]);
+}
+
+/// A runtime target holding a NUL byte names no class, even with eval in the program, whose
+/// bridge reads its candidate list as NUL-separated names. A closure subject still matches
+/// `Closure` there. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_with_nul_byte_and_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+eval('class Dyn extends Foo {}');
+$nul = chr($argc > 9 ? 1 : 0);
+$t = $argv[1] ?? "Dyn";
+$m = $argc > 9 ? 1 : fn() => 0;
+echo is_a('Dyn', $t, true) ? "y" : "n", is_a('Dyn', "Ghost" . $nul . $t, true) ? "y" : "n", is_a('Dyn', $t . $nul, true) ? "y" : "n";
+echo is_subclass_of('Dyn', $t . $nul . "Ghost") ? "y" : "n", is_a('Dyn', $nul . $t, true) ? "y" : "n";
+echo " ", is_a($m, $argv[2] ?? "Closure") ? "y" : "n", "\n";
+"#,
+        &[&[], &["Foo", "closure"], &["Foo", "Foo"]],
+    );
+    assert_eq!(out, ["ynnnn y\n", "ynnnn y\n", "ynnnn n\n"]);
+}
+
+/// Only a Closure is an instance of `Closure`: a function name or a method array passed as a
+/// `callable` is an implicit callable without object identity, so a runtime `Closure` target
+/// does not match it, held as a callable or forwarded into a Mixed. A first-class callable
+/// (`strlen(...)`, `$o->m(...)`) is a Closure and matches. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_is_a_implicit_callable_is_not_a_closure() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+function m(mixed $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_a($f, $t, true) ? "y" : "n"); }
+function c(callable $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_a($f, $t, true) ? "y" : "n") . m($f, $t); }
+$t = $argv[1] ?? "Closure";
+$o = new Cls();
+echo c('strlen', $t), " ", c([$o, 'm'], $t), " ", c('Cls::sm', $t), " ", c(['Cls', 'sm'], $t), " ";
+echo c(strlen(...), $t), " ", c($o->m(...), $t), " ", c(fn() => 1, $t), "\n";
+"#,
+        &[&[], &["Cls"]],
+    );
+    assert_eq!(out, ["nnnn nnnn nnnn nnnn yyyy yyyy yyyy\n", "nnnn nnnn nnnn nnnn nnnn nnnn nnnn\n"]);
+}
+
+/// A LITERAL `Closure` target matches a Closure (any case, backslash-rooted or not), held as a
+/// callable, typed `Closure`, boxed in a Mixed or in a local. `Closure` has no class-info entry,
+/// so the static walk answered `false` for every closure. `is_subclass_of()` never matches, and a
+/// function name passed as a `callable` is no Closure. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_closure_subject_literal_closure_target() {
+    let out = compile_and_run(r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $v): string { return yn(is_a($v, 'Closure')) . yn(is_a($v, '\closure', true)) . yn(is_subclass_of($v, 'Closure')); }
+function c(callable $f): string { return yn(is_a($f, 'Closure')) . yn(is_a($f, 'CLOSURE')) . yn(is_subclass_of($f, 'Closure')) . m($f); }
+function k(Closure $f): string { return yn(is_a($f, 'Closure')) . yn(is_subclass_of($f, '\Closure')); }
+$a = fn() => 1;
+$m = $argc > 9 ? 1 : function () {};
+echo c($a), " ", c(strlen(...)), " ", c('strlen'), " ", k($a), " ", m($m), " ", m(new stdClass()), " ";
+echo yn(is_a($a, 'Closure')), yn(is_a($a, 'Closur')), yn(is_subclass_of($a, 'Closure')), "\n";
+"#);
+    assert_eq!(out, "yynyyn yynyyn nnnnnn yn yyn nnn ynn\n");
+}
+
+/// A LITERAL target holding a NUL byte names no class either. With eval in the program, a name
+/// subject that no compiled class matches goes to the eval bridge, whose candidate list is
+/// NUL-separated, so `"Ghost\0Dyn"` matched the eval class `Dyn`. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_is_a_literal_target_with_nul_byte_and_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+eval('class Dyn extends Foo {}');
+function probe(string $n): string {
+    $r = (is_a($n, 'Foo', true) ? "y" : "n") . (is_subclass_of($n, 'Foo') ? "y" : "n") . " ";
+    $r .= (is_a($n, "Ghost\0Dyn", true) ? "y" : "n") . (is_a($n, "Dyn\0", true) ? "y" : "n") . (is_a($n, "\0Dyn", true) ? "y" : "n");
+    $r .= (is_a($n, "Foo\0Dyn", true) ? "y" : "n") . (is_subclass_of($n, "Foo\0Ghost") ? "y" : "n") . (is_subclass_of($n, "Ghost\0Foo") ? "y" : "n");
+    return $r . "\n";
+}
+echo probe($argv[1] ?? 'Dyn');
+"#,
+        &[&[], &["Foo"]],
+    );
+    assert_eq!(out, ["yy nnnnnn\n", "yn nnnnnn\n"]);
+}
+
+/// A closure created inside `eval()` is a Closure too: boxed in a Mixed it is an eval object
+/// (runtime tag 6) that only the eval bridge knows as a `Closure`, and a runtime call into a
+/// `callable` parameter wraps it in an eval callback adapter. An eval invokable object is an
+/// object but no Closure, and a function name is neither. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_eval_closure_keeps_its_closure_identity() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function c(callable $f, string $t): string { return yn(is_a($f, 'Closure')) . yn($f instanceof Closure) . yn(is_object($f)) . yn(is_a($f, $t)); }
+function cm(callable $f, string $t): string { return m($f, $t); }
+function m(mixed $v, string $t): string { return yn(is_a($v, 'Closure')) . yn($v instanceof Closure) . yn(is_object($v)) . yn(is_a($v, $t)); }
+$t = $argv[1] ?? 'Closure';
+$e = eval('return function () { return 1; };');
+$i = eval('class EvInv { public function __invoke() { return 2; } } return new EvInv();');
+$cn = $argv[2] ?? "c"; $cmn = $argv[3] ?? "cm";
+echo $cn($e, $t), " ", $cmn($e, $t), " ", m($e, $t), " | ", $cn($i, $t), " ", $cmn($i, $t), " ", m($i, $t), " | ", $cn('strlen', $t), " ", $cmn('strlen', $t), "\n";
+"#,
+        &[&[], &["Other"]],
+    );
+    assert_eq!(out, [
+        "yyyy yyyy yyyy | nnyn nnyn nnyn | nnnn nnnn\n",
+        "yyyn yyyn yyyn | nnyn nnyn nnyn | nnnn nnnn\n",
+    ]);
+}
+
+/// A `mixed` value holding a class NAME is matched by name against a literal target, like a
+/// string subject, and `is_subclass_of()` on a `mixed` object excludes only the class itself.
+/// The object-only paths answered `false` for every name and for every is_subclass_of() call.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_mixed_name_subject_literal_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface I {}
+class Foo implements I {}
+class Bar extends Foo {}
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$n = $argv[1] ?? 'Bar';
+$f = $argv[2] ?? '1';
+echo yn(is_a(m($n), 'Foo', true)), yn(is_a(m($n), 'Foo')), yn(is_subclass_of(m($n), 'Foo')), yn(is_subclass_of(m($n), 'Foo', false)), yn(is_a(m($n), 'I', true)), yn(is_a(m('\bar'), 'foo', true)), yn(is_a(m('Ghost'), 'Foo', true)), yn(is_a(m($n), 'Foo', (bool)$f)), " ";
+echo yn(is_subclass_of(m(new Bar()), 'Foo')), yn(is_subclass_of(m(new Foo()), 'Foo')), yn(is_a(m(new Bar()), 'I')), yn(is_subclass_of(m(1), 'Foo')), "\n";
+"#,
+        &[&[], &["Foo", "0"], &["Other"]],
+    );
+    assert_eq!(out, ["ynynyyny ynyn\n", "ynnnyynn ynyn\n", "nnnnnynn ynyn\n"]);
+}
+
+/// With eval() in the program a top-level local is `mixed`, so `is_a($n, 'Foo', true)` on a
+/// class name took the eval object path, which answered `false` for any string. Names, compiled
+/// or eval-declared, now go through the ancestor table and the eval bridge. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_mixed_name_subject_literal_target_with_eval() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {}');
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$n = $argv[1] ?? 'Dyn';
+echo yn(is_a($n, 'Foo', true)), yn(is_subclass_of($n, 'Bar')), yn(is_a($n, 'Foo')), yn(is_a(m('Bar'), 'Foo', true)), yn(is_a(m('Ghost'), 'Foo', true)), yn(is_subclass_of(m(new Dyn()), 'Bar')), yn(is_a(m(new Bar()), 'Dyn')), "\n";
+"#,
+        &[&[], &["Bar"], &["Other"]],
+    );
+    assert_eq!(out, ["yynynyn\n", "ynnynyn\n", "nnnynyn\n"]);
+}
+
+/// `Closure` is a class name too: `is_a('Closure', 'Closure', true)` is true for a literal, a
+/// runtime string, a `mixed` holding it, and a runtime target. `Closure` has no class-info entry,
+/// so every one of those answered `false`. is_subclass_of() still never matches. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_closure_class_name_subject() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$s = $argv[1] ?? 'Closure';
+$t = $argv[2] ?? 'Closure';
+echo yn(is_a(m($s), 'Closure', true)), yn(is_a(m('\closure'), 'Closure', true)), yn(is_a(m($s), 'Closure')), yn(is_subclass_of(m($s), 'Closure')), " ";
+echo yn(is_a('Closure', 'Closure', true)), yn(is_a($s, 'closure', true)), yn(is_subclass_of($s, 'Closure')), " ";
+echo yn(is_a($s, $t, true)), yn(is_a(m($s), $t, true)), yn(is_subclass_of($s, $t)), yn(is_a(fn() => 1, $t)), "\n";
+"#,
+        &[&[], &["Other"], &["Closure", "Other"]],
+    );
+    assert_eq!(out, ["yynn yyn yyny\n", "nynn ynn nnny\n", "yynn yyn nnnn\n"]);
 }

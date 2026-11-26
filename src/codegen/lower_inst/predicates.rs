@@ -413,6 +413,167 @@ pub(super) fn emit_mixed_tag_membership(
     Ok(())
 }
 
+/// Emits a boolean result that is 1 when a callable or boxed Mixed value is a PHP `Closure`
+/// object, and, with `accept_objects`, when it is any object.
+///
+/// A callable descriptor (a `callable` value, or Mixed runtime tag 10) is a Closure when it
+/// carries an object handle. A function name or method array passed as a `callable` (`'strlen'`,
+/// `[$obj, 'm']`, `'Cls::m'`) becomes an implicit descriptor without one: PHP still sees a string
+/// or an array there, which is neither an object nor an instance of `Closure`. An eval callback
+/// adapter wraps the original boxed value, so an eval closure keeps its identity through it. An
+/// invokable object converted to a callable (descriptor kind `ObjectInvoke`) is an object, but
+/// no Closure.
+/// A boxed object (tag 6) is an object; whether it is a Closure is decided by the caller.
+pub(super) fn emit_closure_identity(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+    accept_objects: bool,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let true_label = ctx.next_label("closure_identity_true");
+    let false_label = ctx.next_label("closure_identity_false");
+    let done_label = ctx.next_label("closure_identity_done");
+    match value_ty {
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, result)?;
+            emit_descriptor_identity(ctx, result, accept_objects, &true_label, &false_label);
+        }
+        PhpType::Mixed | PhpType::Union(_) if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+            ctx.load_value_to_reg(value, result)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let payload = match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    if accept_objects {
+                        ctx.emitter.instruction("cmp x0, #6");                  // runtime tag 6 is an object payload
+                        ctx.emitter.instruction(&format!("b.eq {true_label}")); // accept any object
+                    }
+                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 is a callable descriptor payload
+                    ctx.emitter.instruction(&format!("b.ne {false_label}"));    // any other value is no Closure
+                    "x1"
+                }
+                Arch::X86_64 => {
+                    if accept_objects {
+                        ctx.emitter.instruction("cmp rax, 6");                  // runtime tag 6 is an object payload
+                        ctx.emitter.instruction(&format!("je {true_label}"));   // accept any object
+                    }
+                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 is a callable descriptor payload
+                    ctx.emitter.instruction(&format!("jne {false_label}"));     // any other value is no Closure
+                    "rdi"
+                }
+            };
+            emit_descriptor_identity(ctx, payload, accept_objects, &true_label, &false_label);
+        }
+        _ => abi::emit_jump(ctx.emitter, &false_label),
+    }
+    ctx.emitter.label(&true_label);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Branches to `is_closure` when the callable descriptor in `payload` is a Closure object, else
+/// to `not_closure`. The integer result and argument registers are clobbered.
+pub(super) fn emit_descriptor_closure_branch(
+    ctx: &mut FunctionContext<'_>,
+    payload: &str,
+    is_closure: &str,
+    not_closure: &str,
+) {
+    emit_descriptor_identity(ctx, payload, false, is_closure, not_closure);
+}
+
+/// Branches to `true_label` when the callable descriptor in `payload` is a Closure object (or,
+/// with `accept_objects`, any object), else to `false_label`.
+fn emit_descriptor_identity(
+    ctx: &mut FunctionContext<'_>,
+    payload: &str,
+    accept_objects: bool,
+    true_label: &str,
+    false_label: &str,
+) {
+    use crate::codegen_support::callable_descriptor as desc;
+    // A missed read leaves no descriptor to inspect: it is null, neither an object nor a Closure.
+    desc::emit_branch_if_missing_descriptor(ctx.emitter, payload, false_label);
+    let eval = ctx.module.required_runtime_features.eval_bridge;
+    if !accept_objects && !eval {
+        desc::emit_require_object_handle(ctx.emitter, payload, false_label);
+        abi::emit_jump(ctx.emitter, true_label);
+        return;
+    }
+    let no_handle = ctx.next_label("closure_identity_no_handle");
+    desc::emit_require_object_handle(ctx.emitter, payload, &no_handle);
+    abi::emit_jump(ctx.emitter, true_label);
+    ctx.emitter.label(&no_handle);
+    let (kind, wrapped) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    abi::emit_load_from_address(ctx.emitter, kind, payload, 0);
+    if accept_objects {
+        // -- an invokable object converted to a callable keeps its receiver, which is an object --
+        let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {kind}, #{invoke}"));     // an invokable object's descriptor wraps that object
+                ctx.emitter.instruction(&format!("b.eq {true_label}"));         // the callable is the object itself
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {kind}, {invoke}"));      // an invokable object's descriptor wraps that object
+                ctx.emitter.instruction(&format!("je {true_label}"));           // the callable is the object itself
+            }
+        }
+    }
+    if !eval {
+        abi::emit_jump(ctx.emitter, false_label);
+        return;
+    }
+    // -- an eval callback adapter: ask about the boxed value it wraps --
+    let (context_offset, value_offset) = crate::codegen::eval_callable_helpers::eval_callback_adapter_capture_offsets();
+    let adapter = desc::CALLABLE_DESC_KIND_CALLBACK_ADAPTER;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {kind}, #{adapter}"));        // only an eval callback adapter wraps another value
+            ctx.emitter.instruction(&format!("b.ne {false_label}"));            // any other descriptor without a handle is no object
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {kind}, {adapter}"));         // only an eval callback adapter wraps another value
+            ctx.emitter.instruction(&format!("jne {false_label}"));             // any other descriptor without a handle is no object
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, wrapped, payload, value_offset);
+    if accept_objects {
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), wrapped);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #6");                          // the wrapped eval callback is an object
+                ctx.emitter.instruction(&format!("b.eq {true_label}"));         // an eval closure or invokable object is an object
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 6");                          // the wrapped eval callback is an object
+                ctx.emitter.instruction(&format!("je {true_label}"));           // an eval closure or invokable object is an object
+            }
+        }
+        abi::emit_jump(ctx.emitter, false_label);
+        return;
+    }
+    let target = ctx.emitter.target;
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), payload, context_offset);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 1), wrapped);
+    let (label, len) = ctx.data.add_string(b"Closure");
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 2), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), len as i64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    let symbol = target.extern_symbol("__elephc_eval_object_is_a");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, true_label);
+    abi::emit_jump(ctx.emitter, false_label);
+}
+
 /// Emits an integer nonzero check into the canonical integer result register.
 pub(in crate::codegen::lower_inst) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {

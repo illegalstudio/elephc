@@ -50,13 +50,17 @@ pub(super) fn emit_static_closure_descriptor(
     let captures = closure_capture_params_from_eir(closure, capture_count);
     let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(closure);
     let default_scope = closure.lexical_class.clone();
+    // Invokers are shared per signature: a scalar-parameter `TypeError` reads the callee name
+    // from the descriptor, so the descriptor carries the closure's PHP label
+    // (`{closure:file:line}`) rather than its internal function name.
     let invoker_label = emit_runtime_callable_invoker_in_class(
         ctx, &signature, &captures, owns_string_return, true, default_scope.as_deref(),
     );
+    let php_name = closure.display_name.as_deref().unwrap_or("{closure}");
     callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
-        Some(&closure.name),
+        Some(php_name),
         callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
         Some(&signature),
         &captures,

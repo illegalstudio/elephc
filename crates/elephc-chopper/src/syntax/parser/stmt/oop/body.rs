@@ -283,19 +283,9 @@ fn parse_class_like_members(
             ));
         }
 
+        modifiers.validate_for(ModifierTarget::of_member(tokens.get(*pos).map(|(t, _)| t)))?;
+
         if tokens[*pos].0 == Token::Const {
-            if modifiers.is_static {
-                return Err(CompileError::new(
-                    member_span,
-                    "Class constants cannot be declared static",
-                ));
-            }
-            if modifiers.is_readonly || modifiers.is_abstract {
-                return Err(CompileError::new(
-                    member_span,
-                    "Class constants cannot be declared readonly or abstract",
-                ));
-            }
             parse_constant_declarator_list(
                 tokens,
                 pos,
@@ -309,15 +299,6 @@ fn parse_class_like_members(
         }
 
         if tokens[*pos].0 == Token::Function {
-            if crate::syntax::parser::runtime_fragment() && modifiers.set_visibility.is_some() {
-                return Err(CompileError::runtime_unsupported(member_span, "Set visibility is only valid on properties"));
-            }
-            if modifiers.is_readonly {
-                return Err(CompileError::new(
-                    member_span,
-                    "Readonly methods are not supported",
-                ));
-            }
             let (mut method, promoted_properties) = parse_class_like_method(
                 tokens,
                 pos,
@@ -450,12 +431,6 @@ fn parse_class_like_members(
                             return Err(CompileError::new(
                                 member_span,
                                 "Abstract static properties are not supported",
-                            ));
-                        }
-                        if modifiers.is_final {
-                            return Err(CompileError::runtime_unsupported(
-                                member_span,
-                                "Cannot use the final modifier on an abstract property",
                             ));
                         }
                         if modifiers.visibility == Visibility::Private {
@@ -624,12 +599,81 @@ fn parse_optional_class_const_type(
     }
 }
 
+/// The member kind a modifier list applies to, mirroring php-src's `zend_modifier_target`.
+/// PHP only knows it once the token after the modifiers is read (`const`, `function`, or a
+/// property type or name), so the modifiers are validated against it afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModifierTarget {
+    Constant,
+    Method,
+    Property,
+}
+
+impl ModifierTarget {
+    /// Classifies the member whose first token after the modifiers is `token`.
+    fn of_member(token: Option<&Token>) -> Self {
+        match token {
+            Some(Token::Const) => Self::Constant,
+            Some(Token::Function) => Self::Method,
+            _ => Self::Property,
+        }
+    }
+
+    /// Returns the member name PHP uses in "Cannot use the X modifier on a <member>".
+    fn member_name(self) -> &'static str {
+        match self {
+            Self::Constant => "class constant",
+            Self::Method => "method",
+            Self::Property => "property",
+        }
+    }
+}
+
+/// One member modifier keyword as written, in source order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModifierKeyword {
+    /// `public`, `protected` or `private`.
+    Access,
+    /// `public(set)`, `protected(set)` or `private(set)`, with its PHP spelling.
+    SetAccess(&'static str),
+    Static,
+    Readonly,
+    Abstract,
+    Final,
+}
+
+impl ModifierKeyword {
+    /// Returns the PHP spelling of a non-access modifier, as php-src's
+    /// `zend_modifier_token_to_string` prints it.
+    fn spelling(self) -> &'static str {
+        match self {
+            Self::Access => "access",
+            Self::SetAccess(spelling) => spelling,
+            Self::Static => "static",
+            Self::Readonly => "readonly",
+            Self::Abstract => "abstract",
+            Self::Final => "final",
+        }
+    }
+
+    /// Reports whether PHP accepts this modifier on `target` (`zend_modifier_token_to_flag`).
+    fn applies_to(self, target: ModifierTarget) -> bool {
+        match self {
+            Self::Access | Self::Final => true,
+            Self::SetAccess(_) | Self::Readonly => target == ModifierTarget::Property,
+            Self::Static | Self::Abstract => target != ModifierTarget::Constant,
+        }
+    }
+}
+
 /// Holds parsed member modifiers for class-like members: visibility, static, readonly, abstract, final.
 /// Used internally during class-like body parsing to collect modifiers before processing a member declaration.
 pub(super) struct MemberModifiers {
     /// Whether any modifier token was written. PHP's grammar requires at least one on a
     /// property declaration; a bare `$x;` member is a parse error.
     saw_modifier: bool,
+    /// Every modifier keyword in source order, with its span, for `validate_for`.
+    written: Vec<(ModifierKeyword, Span)>,
     visibility: Visibility,
     /// PHP 8.4 asymmetric visibility: the write (`set`) visibility from a `private(set)` /
     /// `protected(set)` modifier, when present. Only meaningful for properties.
@@ -640,12 +684,74 @@ pub(super) struct MemberModifiers {
     is_final: bool,
 }
 
+impl MemberModifiers {
+    /// Rejects the modifiers PHP refuses on a `target` member, in source order and with
+    /// php-src's messages (`zend_modifier_list_to_flags`): a modifier the member kind cannot
+    /// take (`static const`, `readonly function`), a second read or write visibility, a
+    /// repeated `static`, `readonly`, `abstract` or `final`, and `abstract` together with `final`
+    /// (`zend_add_member_modifier`). PHP's parser raises these, so
+    /// TOKEN_PARSE validation refuses them too. An eval fragment keeps reporting them as an
+    /// unsupported runtime construct, the status eval used for `static static` before.
+    fn validate_for(&self, target: ModifierTarget) -> Result<(), CompileError> {
+        let error = |span: Span, message: &str| {
+            if crate::syntax::parser::runtime_fragment() {
+                CompileError::runtime_unsupported(span, message)
+            } else {
+                CompileError::new(span, message)
+            }
+        };
+        let mut seen = Vec::with_capacity(self.written.len());
+        for &(keyword, span) in &self.written {
+            if !keyword.applies_to(target) {
+                return Err(error(
+                    span,
+                    &format!(
+                        "Cannot use the {} modifier on a {}",
+                        keyword.spelling(),
+                        target.member_name()
+                    ),
+                ));
+            }
+            let repeated = seen.iter().any(|previous: &ModifierKeyword| match keyword {
+                ModifierKeyword::SetAccess(_) => matches!(previous, ModifierKeyword::SetAccess(_)),
+                _ => *previous == keyword,
+            });
+            if repeated {
+                let message = match keyword {
+                    ModifierKeyword::Access | ModifierKeyword::SetAccess(_) => {
+                        "Multiple access type modifiers are not allowed".to_string()
+                    }
+                    _ => format!("Multiple {} modifiers are not allowed", keyword.spelling()),
+                };
+                return Err(error(span, &message));
+            }
+            seen.push(keyword);
+            if matches!(keyword, ModifierKeyword::Abstract | ModifierKeyword::Final)
+                && seen.contains(&ModifierKeyword::Abstract)
+                && seen.contains(&ModifierKeyword::Final)
+            {
+                return Err(error(
+                    span,
+                    &format!(
+                        "Cannot use the final modifier on an abstract {}",
+                        target.member_name()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Scans tokens to collect member modifiers (visibility, static, readonly, abstract, final).
 /// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
-/// Default visibility is `Public` if no visibility modifier is present.
+/// Default visibility is `Public` if no visibility modifier is present. Repeated and
+/// misplaced modifiers are reported later by `MemberModifiers::validate_for`, once the member
+/// kind is known.
 fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<MemberModifiers, CompileError> {
     let modifier_start = *pos;
     let mut var_modifier = None;
+    let mut written = Vec::new();
     let mut visibility = Visibility::Public;
     let mut set_visibility = None;
     let mut is_static = false;
@@ -676,37 +782,40 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
             let modifier_span = tokens[*pos].1.span;
             *pos += 1;
             if consume_set_marker(tokens, pos, modifier_span) {
-                if set_visibility.is_some() {
-                    return Err(CompileError::new(modifier_span, "Multiple set visibility modifiers"));
-                }
+                let spelling = match keyword {
+                    Visibility::Public => "public(set)",
+                    Visibility::Protected => "protected(set)",
+                    Visibility::Private => "private(set)",
+                };
+                written.push((ModifierKeyword::SetAccess(spelling), modifier_span));
                 set_visibility = Some(keyword);
             } else {
+                written.push((ModifierKeyword::Access, modifier_span));
                 visibility = keyword;
             }
             continue;
         }
-        match tokens.get(*pos).map(|(t, _)| t) {
+        let keyword = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Static) => {
-                if is_static && crate::syntax::parser::runtime_fragment() {
-                    return Err(CompileError::runtime_unsupported(tokens[*pos].1.span, "Multiple static modifiers"));
-                }
                 is_static = true;
-                *pos += 1;
+                ModifierKeyword::Static
             }
             Some(Token::ReadOnly) => {
                 is_readonly = true;
-                *pos += 1;
+                ModifierKeyword::Readonly
             }
             Some(Token::Abstract) => {
                 is_abstract = true;
-                *pos += 1;
+                ModifierKeyword::Abstract
             }
             Some(Token::Final) => {
                 is_final = true;
-                *pos += 1;
+                ModifierKeyword::Final
             }
             _ => break,
-        }
+        };
+        written.push((keyword, tokens[*pos].1.span));
+        *pos += 1;
     }
 
     if let Some(span) = var_modifier {
@@ -716,6 +825,7 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
     }
     Ok(MemberModifiers {
         saw_modifier: *pos != modifier_start,
+        written,
         visibility,
         set_visibility,
         is_static,
@@ -917,6 +1027,7 @@ fn parse_interface_members(
                 "Unexpected end of interface body",
             ));
         }
+        modifiers.validate_for(ModifierTarget::of_member(tokens.get(*pos).map(|(t, _)| t)))?;
         if tokens[*pos].0 == Token::Const {
             parse_constant_declarator_list(
                 tokens,
@@ -1036,9 +1147,6 @@ fn parse_interface_members(
                 member_span,
                 "Interfaces may only contain method, property, or constant declarations",
             ));
-        }
-        if crate::syntax::parser::runtime_fragment() && modifiers.set_visibility.is_some() {
-            return Err(CompileError::runtime_unsupported(member_span, "Set visibility is only valid on properties"));
         }
         let (mut method, promoted_properties) = parse_class_like_method(
             tokens,

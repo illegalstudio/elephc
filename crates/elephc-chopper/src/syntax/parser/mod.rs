@@ -237,7 +237,11 @@ pub fn parse_test_source(source: &str) -> Result<Program, CompileError> {
 
 /// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
 pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
-    parse_with_mode(tokens, crate::syntax::source::SourceMode::Internal)
+    // Helper and prelude sources share the entry file's source identity: see
+    // `stmt::params::without_recording_param_lines`.
+    stmt::params::without_recording_param_lines(|| {
+        parse_with_mode(tokens, crate::syntax::source::SourceMode::Internal)
+    })
 }
 
 /// Parses tokens under an explicit physical-file source mode.

@@ -527,6 +527,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // `?Uri\...` types.
     elephc::uri_prelude::apply_reflection_signatures(&mut check_result);
     set_fixture_linked_extensions(&check_result.required_libraries);
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        elephc::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -541,6 +545,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         optimized,
         check_result.local_binding_decision_spans(),
     );
+    drop(scalar_guard_sites);
     let empty_roots = HashSet::new();
     // Mirrors `pipeline::compile`: a generic instantiation is reachable by construction but no
     // call site NAMES it in the AST — lowering resolves that from the checker's answer — so the

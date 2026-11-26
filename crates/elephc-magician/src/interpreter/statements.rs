@@ -23,6 +23,7 @@ mod dispatch;
 mod early_binding;
 mod dimension_writes;
 mod dynamic_method_execution;
+mod const_declarations;
 mod constant_evaluation;
 mod enum_declarations;
 mod exceptions;

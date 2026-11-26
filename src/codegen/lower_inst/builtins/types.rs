@@ -498,11 +498,14 @@ pub(crate) fn lower_class_name_lookup(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, name, 0, 1)?;
+    // `$value::class` lowers to get_class() with a hidden literal `true` second operand, so a
+    // non-object reports `Cannot use "::class" on <type>` rather than get_class()'s message.
+    super::ensure_arg_count_between(inst, name, 0, 2)?;
     if inst.operands.is_empty() {
         emit_no_arg_class_name_lookup(ctx, name);
         return store_if_result(ctx, inst);
     }
+    let class_constant = name == "get_class" && inst.operands.len() == 2;
 
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -518,19 +521,72 @@ pub(crate) fn lower_class_name_lookup(
             emit_dynamic_object_class_name(ctx, name);
         }
         PhpType::Callable => {
+            // An invokable object converted to a callable is that object, not a Closure.
+            let invokable = ctx.next_label("get_class_callable_invokable");
+            let done = ctx.next_label("get_class_callable_done");
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(value, result_reg)?;
+            emit_implicit_callable_class_lookup_errors(ctx, name, result_reg, class_constant);
+            emit_branch_to_invokable_receiver(ctx, result_reg, &invokable);
             let result = if name == "get_class" {
                 b"Closure".as_slice()
             } else {
                 b"".as_slice()
             };
             emit_string_result(ctx, result);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&invokable);
+            abi::emit_reg_move(ctx.emitter, result_reg, match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            });
+            emit_dynamic_object_class_name(ctx, name);
+            ctx.emitter.label(&done);
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
-            return super::lower_eval_object_class_name(ctx, inst, value, name);
+            // The eval bridge names an object (tag 6, which an eval-declared class or closure is)
+            // and answers "" for anything else. Every other value takes the native lookup: it
+            // names a callable descriptor's Closure or invokable class, and get_class() and
+            // `::class` reject any other non-object (a declared callable keeps its string or
+            // array) with PHP's TypeError. get_parent_class() accepts a class name, which may
+            // name an eval-declared class, so only a callable descriptor leaves the bridge there.
+            let eval_object = ctx.next_label("get_class_mixed_eval_object");
+            let done = ctx.next_label("get_class_mixed_eval_done");
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 is an object, native or eval-declared
+                    ctx.emitter.instruction(&format!("b.eq {eval_object}"));    // the eval bridge knows every object's class
+                    if name != "get_class" {
+                        ctx.emitter.instruction("cmp x0, #10");                 // runtime tag 10 is a callable descriptor
+                        ctx.emitter.instruction(&format!("b.ne {eval_object}")); // a class name may name an eval-declared class
+                    }
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 is an object, native or eval-declared
+                    ctx.emitter.instruction(&format!("je {eval_object}"));      // the eval bridge knows every object's class
+                    if name != "get_class" {
+                        ctx.emitter.instruction("cmp rax, 10");                 // runtime tag 10 is a callable descriptor
+                        ctx.emitter.instruction(&format!("jne {eval_object}")); // a class name may name an eval-declared class
+                    }
+                }
+            }
+            ctx.load_value_to_result(value)?;
+            emit_mixed_object_class_name(ctx, name, class_constant);
+            if inst.result_php_type.codegen_repr() == PhpType::Mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            }
+            store_if_result(ctx, inst)?;
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&eval_object);
+            super::lower_eval_object_class_name(ctx, inst, value, name)?;
+            ctx.emitter.label(&done);
+            return Ok(());
         }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
-            emit_mixed_object_class_name(ctx, name);
+            emit_mixed_object_class_name(ctx, name, class_constant);
         }
         PhpType::Str if name == "get_parent_class" => {
             let class_name = const_string_operand(ctx, value)?;
@@ -699,11 +755,54 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
-    if matches!(ctx.value_php_type(object)?, PhpType::Str)
-        && optional_const_string_operand(ctx, object)?.is_none()
+    if matches!(ctx.value_php_type(object)?, PhpType::Str) {
+        match optional_const_string_operand(ctx, target)? {
+            // `Closure` has no class-info entry for the static walk, so even a literal name
+            // takes the runtime comparison (`is_a('Closure', 'Closure', true)`).
+            Some(target_class) if optional_const_string_operand(ctx, object)?.is_none()
+                || super::super::objects::is_closure_class_name(&target_class) =>
+            {
+                return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+            }
+            _ => {}
+        }
+    }
+    // A target known only at runtime (`is_a($name, $name, true)`) cannot be folded: the static
+    // walk below needs a literal target and answered `false` for every such call.
+    if matches!(ctx.value_php_type(target)?, PhpType::Str)
+        && optional_const_string_operand(ctx, target)?.is_none()
     {
+        if matches!(
+            ctx.value_php_type(object)?,
+            PhpType::Str | PhpType::Object(_) | PhpType::Callable | PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
+        }
+    }
+    // A boxed subject with a literal target can hold an object, a closure or a class NAME, so it
+    // takes the runtime-target path, which dispatches on the runtime tag; the literal target
+    // prunes its ancestor table to the related class-likes. The object-only paths below
+    // answered `false` for a name (`is_a($mixed, 'Foo', true)`) and for is_subclass_of().
+    let object_ty = ctx.value_php_type(object)?;
+    if matches!(object_ty, PhpType::Mixed | PhpType::Union(_))
+        && matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(ctx.value_php_type(target)?, PhpType::Str)
+        && optional_const_string_operand(ctx, target)?.is_some()
+    {
+        return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
+    }
+    // `Closure` has no class-info entry, so the walks below answered `false` for every closure.
+    // It is final and implements nothing: is_a() matches exactly a Closure object (a native
+    // closure, or an eval closure through the eval bridge), and is_subclass_of() never matches.
+    if matches!(object_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+            if super::super::objects::is_closure_class_name(&target_class) {
+                if exclude_self {
+                    emit_bool_result(ctx, false);
+                    return store_if_result(ctx, inst);
+                }
+                return super::super::objects::lower_closure_class_check(ctx, inst, object);
+            }
         }
     }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
@@ -1109,8 +1208,77 @@ fn emit_dynamic_object_class_name_from_table(
     }
 }
 
+/// Throws PHP's TypeError when the callable descriptor in `descriptor_reg` is an implicit
+/// callable, which PHP still sees as the string or array it came from: get_class() rejects it
+/// (`get_class(): Argument #1 ($object) must be of type object, string given`), and so does
+/// `::class` (`Cannot use "::class" on string`). Falls through for a Closure or an invokable
+/// object. get_parent_class() keeps its existing answer.
+fn emit_implicit_callable_class_lookup_errors(
+    ctx: &mut FunctionContext<'_>, name: &str, descriptor_reg: &str, class_constant: bool,
+) {
+    if name != "get_class" {
+        return;
+    }
+    let string_error = ctx.next_label("get_class_callable_string");
+    let array_error = ctx.next_label("get_class_callable_array");
+    let null_error = ctx.next_label("get_class_callable_null");
+    let object = ctx.next_label("get_class_callable_object");
+    // A missed read leaves null in the slot, not a descriptor whose words could be read.
+    crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+        ctx.emitter, descriptor_reg, &null_error,
+    );
+    crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
+        ctx.emitter, descriptor_reg, &string_error, &array_error,
+    );
+    abi::emit_jump(ctx.emitter, &object);
+    for (label, type_name) in [(&string_error, "string"), (&array_error, "array"), (&null_error, "null")] {
+        ctx.emitter.label(label);
+        if class_constant {
+            super::super::exceptions::emit_type_error(
+                ctx, &format!("Cannot use \"::class\" on {type_name}"),
+            );
+        } else {
+            emit_class_lookup_type_error(ctx, name, type_name);
+        }
+        abi::emit_jump(ctx.emitter, &object);
+    }
+    ctx.emitter.label(&object);
+}
+
+/// Branches to `receiver_label` with the receiver object in the second payload register (`x1` /
+/// `rdi`) when the callable descriptor in `descriptor_reg` is an invokable object converted to a
+/// callable (kind `ObjectInvoke`); falls through otherwise.
+fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, receiver_label: &str) {
+    use crate::codegen_support::callable_descriptor as desc;
+    let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
+    let receiver = desc::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
+    let skip = ctx.next_label("get_class_not_invokable");
+    // A missed read leaves no descriptor whose kind could be read.
+    desc::emit_branch_if_missing_descriptor(ctx.emitter, descriptor_reg, &skip);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));    // load the callable descriptor kind
+            ctx.emitter.instruction(&format!("cmp x9, #{invoke}"));             // is this an invokable object's descriptor?
+            ctx.emitter.instruction(&format!("b.ne {skip}"));                   // any other callable reports Closure
+            ctx.emitter.instruction(&format!("ldr x1, [{descriptor_reg}, #{receiver}]")); // load the captured receiver object
+            ctx.emitter.instruction(&format!("b {receiver_label}"));            // report the receiver object's class
+            ctx.emitter.label(&skip);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{descriptor_reg}], {invoke}")); // is this an invokable object's descriptor?
+            ctx.emitter.instruction(&format!("jne {skip}"));                    // any other callable reports Closure
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{descriptor_reg} + {receiver}]")); // load the captured receiver object
+            ctx.emitter.instruction(&format!("jmp {receiver_label}"));          // report the receiver object's class
+            ctx.emitter.label(&skip);
+        }
+    }
+}
+
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
-fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+///
+/// With `class_constant` (`$value::class`), a non-object throws `Cannot use "::class" on <type>`
+/// rather than get_class()'s argument TypeError.
+fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str, class_constant: bool) {
     let object_label = ctx.next_label("get_class_mixed_object");
     let closure_label = ctx.next_label("get_class_mixed_closure");
     let string_label = ctx.next_label("get_parent_class_mixed_string");
@@ -1181,6 +1349,13 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&closure_label);
+    // An invokable object converted to a callable is that object: report its receiver's class.
+    let payload = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    emit_implicit_callable_class_lookup_errors(ctx, name, payload, class_constant);
+    emit_branch_to_invokable_receiver(ctx, payload, &object_label);
     if name == "get_class" {
         emit_string_result(ctx, b"Closure");
     } else {
@@ -1206,17 +1381,30 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
         }
     }
     ctx.emitter.label(&false_label);
-    emit_class_lookup_type_error(ctx, name, "false");
+    emit_mixed_class_lookup_type_error(ctx, name, "false", class_constant);
     ctx.emitter.label(&true_label);
-    emit_class_lookup_type_error(ctx, name, "true");
+    emit_mixed_class_lookup_type_error(ctx, name, "true", class_constant);
     for (_, type_name, label) in &error_labels {
         ctx.emitter.label(label);
-        emit_class_lookup_type_error(ctx, name, type_name);
+        emit_mixed_class_lookup_type_error(ctx, name, type_name, class_constant);
     }
     ctx.emitter.label(&fallback_error_label);
-    emit_class_lookup_type_error(ctx, name, "unknown");
+    emit_mixed_class_lookup_type_error(ctx, name, "unknown", class_constant);
 
     ctx.emitter.label(&done_label);
+}
+
+/// Throws the TypeError for a non-object `Mixed` payload: get_class()'s argument error, or, for
+/// `$value::class`, `Cannot use "::class" on <type>`, where PHP names a boolean `bool`.
+fn emit_mixed_class_lookup_type_error(
+    ctx: &mut FunctionContext<'_>, name: &str, type_name: &str, class_constant: bool,
+) {
+    if class_constant {
+        let type_name = if matches!(type_name, "true" | "false") { "bool" } else { type_name };
+        super::super::exceptions::emit_type_error(ctx, &format!("Cannot use \"::class\" on {type_name}"));
+    } else {
+        emit_class_lookup_type_error(ctx, name, type_name);
+    }
 }
 
 /// Resolves an unboxed dynamic class-name string for `get_parent_class()`.

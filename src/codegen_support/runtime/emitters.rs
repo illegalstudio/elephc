@@ -179,6 +179,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_throw_unknown_named_parameter(emitter);
     callables::emit_throw_positional_after_named(emitter);
     callables::emit_closure_bind(emitter);
+    callables::emit_callable_closure_copy(emitter);
+    callables::emit_callable_closure_from_owned(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);

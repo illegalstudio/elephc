@@ -569,7 +569,8 @@ pub(super) fn eval_trait_abstract_properties_are_compatible(
         && existing.default() == incoming.default()
 }
 
-/// Appends trait methods unless the class provides a same-name method.
+/// Appends trait methods unless the class provides a same-name method, which may not replace
+/// an abstract trait method made `as final`.
 pub(in crate::interpreter) fn append_eval_trait_methods(
     trait_decl: &EvalTrait,
     trait_adaptations: &[EvalTraitAdaptation],
@@ -578,14 +579,9 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
     methods: &mut Vec<EvalClassMethod>,
 ) -> Result<(), EvalStatus> {
     for method in trait_decl.methods() {
-        if trait_method_suppressed_by_insteadof(trait_decl.name(), method.name(), trait_adaptations)
-        {
-            continue;
-        }
         let key = method.name().to_ascii_lowercase();
-        if class_method_names.contains(&key) {
-            continue;
-        }
+        let suppressed =
+            trait_method_suppressed_by_insteadof(trait_decl.name(), method.name(), trait_adaptations);
         let method = method
             .clone()
             .with_trait_origin(trait_decl.name().to_string());
@@ -594,7 +590,30 @@ pub(in crate::interpreter) fn append_eval_trait_methods(
             &method,
             trait_adaptations,
         );
-        if !trait_method_names.insert(key) {
+        // An abstract method made `as final` stays a requirement after `insteadof`, so the
+        // method kept in its place overrides it, as in PHP.
+        if suppressed && !(method.is_abstract() && method.is_final()) {
+            continue;
+        }
+        if class_method_names.contains(&key) {
+            reject_override_of_final_abstract_import(&method)?;
+            continue;
+        }
+        if !trait_method_names.insert(key.clone()) {
+            // A compatible plain abstract redeclaration after an abstract `as final` import keeps
+            // the final one, as in PHP; any other second method of the name is a collision, an
+            // override, a kind change or an incompatible declaration.
+            let keeps_final_requirement = method.is_abstract()
+                && !method.is_final()
+                && methods.iter().any(|stored| {
+                    stored.name().eq_ignore_ascii_case(&key)
+                        && stored.is_abstract()
+                        && stored.is_final()
+                        && same_abstract_signature(stored, &method)
+                });
+            if keeps_final_requirement {
+                continue;
+            }
             return Err(EvalStatus::RuntimeFatal);
         }
         methods.push(method);
@@ -622,6 +641,7 @@ pub(super) fn append_eval_trait_method_aliases(
             method,
             alias: Some(alias),
             visibility,
+            is_final,
         } = adaptation
         else {
             continue;
@@ -651,8 +671,12 @@ pub(super) fn append_eval_trait_method_aliases(
         if let Some(visibility) = visibility {
             alias_method = alias_method.with_visibility_override(*visibility);
         }
+        if *is_final {
+            alias_method = alias_method.with_final_override();
+        }
         let key = alias_method.name().to_ascii_lowercase();
         if class_method_names.contains(&key) {
+            reject_override_of_final_abstract_import(&alias_method)?;
             continue;
         }
         if trait_method_names.contains(&key)
@@ -667,6 +691,37 @@ pub(super) fn append_eval_trait_method_aliases(
         methods.push(alias_method);
     }
     Ok(())
+}
+
+/// Returns whether two abstract trait methods declare one signature: the same kind (static or
+/// instance), parameter types, by-reference and variadic flags, optionality, and return type.
+fn same_abstract_signature(left: &EvalClassMethod, right: &EvalClassMethod) -> bool {
+    let optional = |method: &EvalClassMethod| {
+        method
+            .parameter_defaults()
+            .iter()
+            .map(Option::is_some)
+            .collect::<Vec<_>>()
+    };
+    left.is_static() == right.is_static()
+        && left.params().len() == right.params().len()
+        && left.parameter_types() == right.parameter_types()
+        && left.parameter_is_by_ref() == right.parameter_is_by_ref()
+        && left.parameter_is_variadic() == right.parameter_is_variadic()
+        && optional(left) == optional(right)
+        && left.return_type() == right.return_type()
+        && left.returns_by_ref() == right.returns_by_ref()
+}
+
+/// Rejects a receiver method that replaces `imported`, an adapted trait method, when the import
+/// is abstract and made final with `as final`: Zend checks the receiver's method against an
+/// abstract trait method as an override. A concrete trait method stays replaceable.
+fn reject_override_of_final_abstract_import(imported: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if imported.is_abstract() && imported.is_final() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
 }
 
 /// Returns whether an `insteadof` adaptation suppresses this trait method import.
@@ -694,7 +749,9 @@ pub(super) fn trait_method_suppressed_by_insteadof(
     })
 }
 
-/// Applies visibility-only `as` adaptations to an imported trait method.
+/// Applies the `as` adaptations without an alias (a visibility change or `as final`) to an
+/// imported trait method. `foo as final foo` names the method itself, so PHP makes it final
+/// like `foo as final`.
 pub(super) fn apply_trait_visibility_adaptations(
     trait_name: &str,
     method: &EvalClassMethod,
@@ -705,19 +762,33 @@ pub(super) fn apply_trait_visibility_adaptations(
         let EvalTraitAdaptation::Alias {
             trait_name: target_trait,
             method: target_method,
-            alias: None,
-            visibility: Some(visibility),
+            alias,
+            visibility,
+            is_final,
         } = adaptation
         else {
             continue;
         };
+        let same_name_final = *is_final
+            && visibility.is_none()
+            && alias
+                .as_deref()
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(target_method));
+        if alias.is_some() && !same_name_final {
+            continue;
+        }
         if trait_adaptation_target_matches(
             target_trait.as_deref(),
             target_method,
             trait_name,
             method.name(),
         ) {
-            method = method.with_visibility_override(*visibility);
+            if let Some(visibility) = visibility {
+                method = method.with_visibility_override(*visibility);
+            }
+            if *is_final {
+                method = method.with_final_override();
+            }
         }
     }
     method
@@ -791,7 +862,9 @@ pub(super) fn validate_eval_class_modifiers(
         validate_eval_method_attribute_targets(method.attributes())?;
         for attributes in method.parameter_attributes() { validate_eval_core_attribute_targets(attributes, 32)?; }
         validate_eval_magic_method(method)?;
-        if method.is_abstract() && method.is_final() {
+        // A written `abstract final` is a parse error; a trait method made final `as final`
+        // may stay abstract in an abstract class.
+        if method.is_abstract() && method.is_final() && method.trait_origin().is_none() {
             return Err(EvalStatus::RuntimeFatal);
         }
         if method.is_abstract() && method.visibility() == EvalVisibility::Private {

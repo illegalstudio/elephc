@@ -1012,6 +1012,9 @@ impl RuntimeFnId {
             return Some((0, None));
         }
         match self {
+            // `$value::class` lowers to get_class() with a hidden literal second operand that
+            // selects the `::class` TypeError message; PHP callers still pass at most one.
+            RuntimeFnId::GetClass => Some((0, Some(2))),
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             // `stream_filter_append`/`prepend` lower their static `$params` array into four
             // trailing operands (level, blocks, work, write_seek_mode) beside the 2..4 PHP

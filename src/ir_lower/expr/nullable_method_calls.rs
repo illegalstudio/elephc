@@ -252,10 +252,10 @@ fn lower_method_call_with_binding(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    let receiver_class = match ctx.builder.value_php_type(object.value).codegen_repr() {
-        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
-        _ => None,
-    };
+    // A nullable receiver (`?C`, as `C::parse()` returns) still names `C` in the scalar
+    // parameter guard's `TypeError`, as PHP does.
+    let receiver_class =
+        crate::types::checker::single_object_class_name(&ctx.builder.value_php_type(object.value));
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
@@ -275,9 +275,10 @@ fn lower_method_call_with_binding(
                     ctx, signature, args, &class, dispatch_method, expr.span,
                 )).flatten())));
     let call_description = receiver_class
-        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .map(|class_name| super::scalar_param_guards::method_guard_description(ctx, &class_name, dispatch_method, false))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = if enum_args.is_none() {
         sig.as_ref().and_then(|signature| {
             super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
@@ -291,6 +292,7 @@ fn lower_method_call_with_binding(
     let arg_values =
         enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(

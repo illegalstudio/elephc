@@ -507,6 +507,10 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        elephc::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -521,6 +525,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         optimized,
         check_result.local_binding_decision_spans(),
     );
+    drop(scalar_guard_sites);
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -627,6 +632,10 @@ fn compile_and_run_files_with_defines_per_argv(
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        elephc::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -641,6 +650,7 @@ fn compile_and_run_files_with_defines_per_argv(
         optimized,
         check_result.local_binding_decision_spans(),
     );
+    drop(scalar_guard_sites);
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -906,6 +916,10 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        elephc::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
@@ -920,6 +934,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         optimized,
         check_result.local_binding_decision_spans(),
     );
+    drop(scalar_guard_sites);
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()

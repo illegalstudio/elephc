@@ -27,7 +27,7 @@ use super::*;
 /// unchanged when nothing matches, which is how a compiler-injected class-like (SPL,
 /// `Exception`, the reflection classes themselves) is reported: there is no user source to take
 /// a spelling from.
-pub(super) fn reflection_declared_method_name(
+pub(in crate::codegen) fn reflection_declared_method_name(
     ctx: &FunctionContext<'_>,
     owners: &[&str],
     method_key: &str,

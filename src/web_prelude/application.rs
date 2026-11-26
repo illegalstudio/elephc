@@ -34,7 +34,11 @@ pub(crate) fn declarations() -> Program {
     let mut program = Vec::new();
     for source in [CONTRACT_SOURCE, ADAPTER_SOURCE] {
         let tokens = crate::lexer::tokenize(source).expect("valid application prelude tokens");
-        program.extend(crate::parser::parse(&tokens).expect("valid application prelude"));
+        // A repository-owned prelude: it must not record parameter lines over the entry's.
+        let parsed = crate::parser::stmt::params::without_recording_param_lines(|| {
+            crate::parser::parse(&tokens)
+        });
+        program.extend(parsed.expect("valid application prelude"));
     }
     program
 }

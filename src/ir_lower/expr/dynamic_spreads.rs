@@ -101,6 +101,16 @@ pub(super) fn lower_boxed_spread_args(
         let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
         require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
     }
+    // A fixed user signature binds its parameters in PHP's order: a parameter skipped before a
+    // bound one fails first ("not passed"), then each parameter is either missing (too few
+    // arguments) or checked against its declared scalar type, so a `TypeError` for an earlier
+    // parameter precedes the `ArgumentCountError` for a later missing one.
+    let check_in_order = !hidden && !preserve_values;
+    let mut converted: Vec<Option<ValueId>> = vec![None; state.slots.len()];
+    let mut guarded = vec![false; state.slots.len()];
+    let mut object_checked = vec![false; state.slots.len()];
+    let mut string_slots: Vec<Option<String>> = vec![None; state.slots.len()];
+    let bound = check_in_order.then(|| emit_unpassed_parameter_checks(ctx, sig, &state, span));
     for (index, filled) in state.filled.iter().enumerate() {
         if hidden {
             if let Some(Some(default)) = sig.defaults.get(index) {
@@ -119,11 +129,91 @@ pub(super) fn lower_boxed_spread_args(
             continue;
         }
         let ready = ctx.load_local(filled, Some(span));
-        require(ctx, ready, "ArgumentCountError", "Too few arguments for unpacked call", span);
+        match (&bound, ctx.call_description.clone()) {
+            (Some(bound), Some(callee)) => {
+                // PHP's arity message: every earlier parameter is bound, so the count of bound
+                // parameters is the count passed.
+                let ok = ctx.builder.create_named_block("spread.arity.ok", Vec::new());
+                let missing = ctx.builder.create_named_block("spread.arity.missing", Vec::new());
+                conditional(ctx, ready.value, ok, missing);
+                ctx.builder.position_at_end(missing);
+                let line = ctx.call_site_span.unwrap_or(span).line;
+                let file = ctx.source_path().unwrap_or("unknown").to_string();
+                let text = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+                let concat = |left: Expr, right: Expr| Expr::new(ExprKind::BinaryOp {
+                    left: Box::new(left), op: BinOp::Concat, right: Box::new(right),
+                }, span);
+                let message = concat(
+                    concat(
+                        text(format!("Too few arguments to function {callee}(), ")),
+                        Expr::new(ExprKind::Variable(bound.clone()), span),
+                    ),
+                    text(format!(
+                        " passed in {file} on line {line} and exactly {} expected",
+                        state.slots.len(),
+                    )),
+                );
+                throw_expression(ctx, "ArgumentCountError", message, span);
+                ctx.builder.position_at_end(ok);
+            }
+            _ => require(ctx, ready, "ArgumentCountError", "Too few arguments for unpacked call", span),
+        }
+        if check_in_order {
+            // The rooted slot keeps the value alive if the check throws; the check borrows it.
+            let value = ctx.load_local(&state.slots[index], Some(span));
+            // A class-like parameter is checked at its turn too, so an earlier scalar
+            // parameter's refusal (or `Stringable` conversion) comes first, as in PHP.
+            if super::call_arg_coercion::boxed_slot_object_param(sig, index) {
+                super::call_arg_coercion::check_boxed_slot_object_param(ctx, sig, index, value, span);
+                object_checked[index] = true;
+            }
+            let source = super::scalar_param_guards::GuardSource::Unrecorded;
+            if super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, value.value, source).is_some() {
+                guarded[index] = true;
+                let guard_span = ctx.call_site_span.unwrap_or(span);
+                converted[index] = super::scalar_param_guards::guard_scalar_param(
+                    ctx, sig, index, value, source, guard_span, false, &[],
+                ).map(|value| value.value);
+                if converted[index].is_none() && sig.params[index].1.codegen_repr() == PhpType::Str {
+                    // PHP converts an accepted argument while binding it, before the next
+                    // parameter is checked: a `Stringable`'s `__toString()` runs (and may throw)
+                    // ahead of a later parameter's TypeError. The string is rooted in its own
+                    // slot, so a later throw releases it.
+                    let string = coerce_to_string_at_span(ctx, value, Some(guard_span));
+                    let string_slot = ctx.declare_hidden_temp(PhpType::Str);
+                    store_value_into_temp(ctx, &string_slot, PhpType::Str, string, span);
+                    register_owned_call_operand(ctx, ctx.local_slots[&string_slot], span);
+                    string_slots[index] = Some(string_slot);
+                }
+            }
+        }
+    }
+    if string_slots.iter().any(Option::is_some) {
+        // A converted `Stringable` is no longer an operand, so releasing it (or the spread
+        // source holding its last reference) can run a destructor that throws. Release them
+        // here, while every slot is still published: the release clears each slot first, so the
+        // unwinder still owns the converted strings and the bound values, and the retirements
+        // below release nothing that can throw before the operands are published.
+        for (index, string_slot) in string_slots.iter().enumerate() {
+            if string_slot.is_some() {
+                release_slot_keeping_owner(ctx, &state.slots[index], span);
+            }
+        }
+        for arg in staged.iter().rev() {
+            let (StagedSpreadArgument::Spread(source)
+            | StagedSpreadArgument::Named(_, source)
+            | StagedSpreadArgument::Positional(source)) = arg;
+            release_slot_keeping_owner(ctx, source, span);
+        }
     }
     let mut operands = Vec::with_capacity(state.slots.len());
-    for slot in &state.slots {
-        let value = ctx.load_local(&slot, Some(span));
+    for (index, slot) in state.slots.iter().enumerate() {
+        if let Some(value) = converted[index] {
+            operands.push(value);
+            continue;
+        }
+        let slot = string_slots[index].as_ref().unwrap_or(slot);
+        let value = ctx.load_local(slot, Some(span));
         let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
         ctx.builder.set_value_ownership(owned.value, Ownership::Owned);
         operands.push(owned.value);
@@ -146,6 +236,9 @@ pub(super) fn lower_boxed_spread_args(
     for slot in state.slots.into_iter().rev() {
         retire_slot(ctx, &slot, span);
     }
+    for slot in string_slots.into_iter().flatten().rev() {
+        retire_slot(ctx, &slot, span);
+    }
     for arg in staged.into_iter().rev() {
         let source = match arg {
             StagedSpreadArgument::Spread(source)
@@ -154,7 +247,62 @@ pub(super) fn lower_boxed_spread_args(
         };
         retire_slot(ctx, &source, span);
     }
-    Some(if preserve_values { operands } else { coerce_boxed_operands_to_params(ctx, sig, operands, span) })
+    Some(if preserve_values { operands } else { {
+        // Parameters checked in order above only keep their ordinary conversion here.
+        let sources = (0..operands.len())
+            .map(|index| if guarded.get(index).copied().unwrap_or(false) {
+                super::scalar_param_guards::GuardSource::Skip
+            } else {
+                super::scalar_param_guards::GuardSource::Unrecorded
+            })
+            .collect::<Vec<_>>();
+        coerce_boxed_operands_to_params(ctx, sig, operands, span, &sources, &object_checked)
+    } })
+}
+
+/// Throws PHP's "not passed" `ArgumentCountError` for a parameter the unpacked arguments
+/// skipped while binding a later one (`f(...['t' => $x])` leaves `$s` unpassed), before any
+/// parameter is checked. A missing TRAILING parameter is reported later, in parameter order.
+///
+/// Returns the slot holding one past the last bound parameter, which is also the number of
+/// arguments passed once no parameter before it was skipped.
+fn emit_unpassed_parameter_checks(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    state: &SpreadBindings,
+    span: Span,
+) -> String {
+    let count = state.filled.len();
+    let bound = initialize_slot(ctx, PhpType::Int, &Expr::new(ExprKind::IntLiteral(0), span));
+    for index in 0..count {
+        let filled = ctx.load_local(&state.filled[index], Some(span));
+        let set = ctx.builder.create_named_block("spread.bound.set", Vec::new());
+        let next = ctx.builder.create_named_block("spread.bound.next", Vec::new());
+        conditional(ctx, filled.value, set, next);
+        ctx.builder.position_at_end(set);
+        let extent = emit_i64_at_span(ctx, index as i64 + 1, span);
+        ctx.store_local(&bound, extent, PhpType::Int, Some(span));
+        branch(ctx, next);
+        ctx.builder.position_at_end(next);
+    }
+    for index in 0..count.saturating_sub(1) {
+        let filled = ctx.load_local(&state.filled[index], Some(span));
+        let check = ctx.builder.create_named_block("spread.unpassed.check", Vec::new());
+        let ok = ctx.builder.create_named_block("spread.unpassed.ok", Vec::new());
+        conditional(ctx, filled.value, ok, check);
+        ctx.builder.position_at_end(check);
+        let position = emit_i64_at_span(ctx, index as i64, span);
+        let last = ctx.load_local(&bound, Some(span));
+        let trailing = compare_ints(ctx, position.value, last.value, CmpPredicate::Sge, span);
+        let message = match &ctx.call_description {
+            Some(callee) => format!("{callee}(): Argument #{} (${}) not passed", index + 1, sig.params[index].0),
+            None => "Too few arguments for unpacked call".to_string(),
+        };
+        require(ctx, trailing, "ArgumentCountError", &message, span);
+        branch(ctx, ok);
+        ctx.builder.position_at_end(ok);
+    }
+    bound
 }
 
 /// Returns true for an unpack source that is a keyed literal carrying a nested `...$source`.
@@ -194,6 +342,17 @@ fn initialize_slot(ctx: &mut LoweringContext<'_, '_>, ty: PhpType, expr: &Expr) 
 /// Retires one published temporary after all consumers have acquired their own references.
 fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
     retire_owned_call_operand(ctx, ctx.local_slots[slot], span);
+}
+
+/// Releases a published temporary early, leaving its (now empty) owner record for `retire_slot`.
+fn release_slot_keeping_owner(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(ctx.local_slots[slot])),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(span),
+    );
 }
 
 /// Iterates a boxed source with the normal runtime iterator, preserving sparse and named keys.

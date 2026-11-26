@@ -104,6 +104,7 @@ pub(super) fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext)
         parameter_is_by_ref,
         parameter_is_variadic,
         return_type,
+        returns_by_ref,
         body,
     } = stmt
     else {
@@ -121,6 +122,7 @@ pub(super) fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext)
         .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
         .with_parameter_variadic_flags(parameter_is_variadic.clone())
         .with_return_type(return_type.clone())
+        .with_returns_by_ref(*returns_by_ref)
         .with_strict_types(context.strict_types());
     if let Some(source_location) = source_location {
         function = function.with_source_location(*source_location);
@@ -438,15 +440,13 @@ pub(in crate::interpreter) fn execute_stmt(
         EvalStmt::Switch { expr, cases } => {
             execute_switch_stmt(expr, cases, context, scope, values)
         }
+        EvalStmt::ConstDecl { name, value } => {
+            super::const_declarations::eval_const_decl_stmt(name, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Throw(expr) => {
             let thrown = eval_owned_expr(expr, context, scope, values)?;
-            let tag = values.type_tag(thrown);
-            if tag != Ok(EVAL_TAG_OBJECT) {
-                let _ = eval_release_value(context, values, thrown);
-                tag?;
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            Ok(EvalControl::Throw(thrown))
+            Ok(EvalControl::Throw(eval_throwable_operand(thrown, context, values)?))
         }
         EvalStmt::Try {
             body,

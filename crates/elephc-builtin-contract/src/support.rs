@@ -383,7 +383,8 @@ mod tests {
         // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes. So do
         // the PHP 8.6 pack/unpack endianness surface, `url_percent_encode`,
         // `stream_socket_get_crypto_status`, and the two GMP 8.6 functions.
-        assert_eq!(eval_registry, 800 + curl_surface);
+        // The seven ext/posix bindings join the eval registry too.
+        assert_eq!(eval_registry, 807 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -433,7 +434,8 @@ mod tests {
         // PHAR validity probe.
         // +6: `get_debug_type`, `stream_context_set_options`,
         // `stream_socket_get_crypto_status`, `url_percent_encode`, `pack`, and `unpack`.
-        assert_eq!(aot_registry, 855);
+        // +7: the seven ext/posix bridge builtins.
+        assert_eq!(aot_registry, 862);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -492,7 +494,8 @@ mod tests {
         // forwarding homes, the PHP 8.6 pack and url_percent_encode adapters, plus the
         // `preg_grep` / `preg_last_error*` eval homes, plus
         // `stream_socket_get_crypto_status` and the two GMP 8.6 functions.
-        assert_eq!(interpreter_adapter, 705 + curl_surface);
+        // The seven ext/posix bindings are served by the PCNTL adapter.
+        assert_eq!(interpreter_adapter, 712 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,

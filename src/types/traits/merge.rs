@@ -89,7 +89,8 @@ pub(super) fn merge_property_into(
 
 /// Merges `imported` trait methods with `local` class/trait methods.
 /// Validates that `local` has no duplicate method keys (name + is_static).
-/// Imported methods with the same key as local are skipped (local wins).
+/// Imported methods with the same key as local are skipped (local wins); an abstract import
+/// made `as final` that a local method overrides is reported by `reject_overridden_final_imports`.
 /// Duplicate imported methods (same key from multiple traits) are resolved by
 /// `resolve_duplicate_imported_method`; `resolve_trait_uses` has already merged them, so a
 /// collision here is reported without trait names.
@@ -229,8 +230,8 @@ fn resolve_duplicate_imported_method(
 /// accepted: the same parameter types, by-reference flags, optionality and variadic, and the
 /// same return type and by-reference return. Visibility is not compared, as PHP does not. A
 /// CONCRETE method that implements a requirement is not checked here:
-/// `validate_class_trait_requirements` and `validate_enum_trait_requirements` run PHP's
-/// compatibility rules on it once the class schema is known.
+/// `validate_trait_requirements` runs PHP's compatibility rules on it once the class schema is
+/// known.
 pub(super) fn check_abstract_redeclaration(
     required: &ClassMethod,
     other: &ClassMethod,
@@ -281,7 +282,8 @@ pub(super) fn is_same_trait_method(
 }
 
 /// PHP's error for two different trait methods with one name: `rejected` is the later one,
-/// which is not applied.
+/// which is not applied, named by its method in its trait and then by the name it would take
+/// (`Trait method B::bar has not been applied as C::baz` for `B::bar as baz`).
 pub(super) fn trait_method_collision(
     span: Span,
     owner_label: &str,
@@ -296,7 +298,7 @@ pub(super) fn trait_method_collision(
         &format!(
             "Trait method {}::{} has not been applied as {}::{}, because of collision with {}::{}",
             rejected.source_trait,
-            rejected.decl.name,
+            rejected.method_name,
             owner,
             rejected.decl.name,
             applied.source_trait,

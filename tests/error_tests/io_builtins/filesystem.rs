@@ -153,7 +153,7 @@ fn test_error_getcwd_wrong_args() {
 /// Verifies `scandir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+    expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.

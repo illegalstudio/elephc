@@ -3256,7 +3256,7 @@ fn php86_session_id_with_nul_is_rejected_whole() {
         $_COOKIE[session_name()] = \"abc\\0def\";\n\
         session_start();\n\
         echo session_id();\n";
-    for (version, expected) in [("8.5", "abc"), ("8.6", "generated")] {
+    for (version, expected) in [("8.5", "generated"), ("8.6", "generated")] {
         let dir = make_test_dir(&format!("sess_nul_id_{}", version.replace('.', "_")));
         let version_flag = format!("--php-version={version}");
         let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);

@@ -426,6 +426,24 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
 - **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
 
+#### Runtime-typed arguments
+
+A `mixed` value, or a ternary/`match` that merges types into one, reaches a declared non-nullable `int`, `float`, `string` or `bool` parameter of a user function, method, static method, constructor or closure with a runtime check, as in PHP. In coercive mode any scalar passes and is converted as above; `null`, arrays, resources and objects throw `TypeError` (a `Stringable` object still binds to `string`). Under `strict_types=1` only the exact scalar passes, plus an `int` for `float`:
+
+```php
+function t(string $s): string { return $s; }
+function f(mixed $v): string { return t($v); }
+
+echo f("ok");  // ok
+echo f(null);  // TypeError: t(): Argument #1 ($s) must be of type string, null given, called in … on line 2
+```
+
+`?string`, unions containing `null`, `mixed`, and a parameter whose default is `null` keep accepting `null`. Statically typed arguments carry no check. Builtins keep their own argument rules. Spread arguments (`f(...$args)`, `f(...[$x])`, `f(...['s' => $x])`) are checked element by element. Calls dispatched at run time through a callable value (`call_user_func_array()`, an array callable in `call_user_func()`, a callable held in a variable, or a callback invoked by a builtin such as `array_map()` or `usort()`) are checked too; their message names the callee but, unlike PHP for a call made from user code, omits the `called in … on line …` suffix (PHP omits it as well for callbacks a builtin invokes). As in PHP, every argument is evaluated before the parameters are checked in order, and the message reports the line where the call starts. For `int` and `float` the check also converts as PHP does: a string must be numeric as a whole (surrounding whitespace is allowed), so `"12abc"`, `"0x1A"`, `"INF"` and `""` throw `TypeError`; a lossy float or float-string bound to `int` emits PHP's `Implicit conversion from float … to int loses precision` deprecation, reported at the parameter's declaration line as in PHP (at the call's line when the call goes through a callable value); a float or integer string outside the int range throws.
+
+#### Runtime-typed return values
+
+The same check runs when a `mixed` or merged-union value is returned from a function, method or closure declared `: string`, `: float` or `: bool`: `null`, arrays, resources and objects throw `f(): Return value must be of type T, U returned` (a `Stringable` object still converts to `string`), a numeric string converts to `float`, and a value returned as `bool` converts by truthiness. Under `strict_types=1` (of the file that declares the function) only the exact scalar passes, plus an `int` for `float`. A declared `int` return keeps its existing check, and `?T`, unions, `mixed`, `void`, `never`, class and generator return types are unchanged.
+
 ### Class-typed boundaries
 
 A `mixed` value, or an `object|null` value, can reach a return, parameter or typed property declared as a class, an interface, `object`, or a nullable or union of those (`?Timer`, `A|B|null`). Array element reads, `WeakMap` lookups and other untyped containers produce such values. PHP checks the value's class at run time, and elephc emits the same check:
@@ -499,15 +517,15 @@ echo fromLooseFile();       // 1 — the call above lives in a coercive file
 echo coerceHere(true);      // compile error — this call lives in a strict file
 ```
 
-**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict.
+**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, positional spread arguments (`f(...$args)`: a statically typed element is checked at compile time, a runtime-typed one when the call runs), and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict.
 
 **What it does not cover.**
 
 - **Callbacks invoked by other internal functions** (`array_map`, `usort`, `array_walk`, `preg_replace_callback`, …) keep coercive binding, matching PHP: the engine calls them from its own frame, which never carries the directive. `array_map('g', [true])` still passes `1` to `g(int $i)` in a strict file.
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
-- **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
-- **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative. A `mixed` or `object|null` value at a class-typed parameter is checked the same way; see [Class-typed boundaries](#class-typed-boundaries).
+- **Typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those. Declared scalar return types follow it for runtime-typed values (see [Runtime-typed return values](#runtime-typed-return-values)).
+- **Variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
+- **Values whose type is only known at run time** (`mixed` and merged-union values) are checked when the call runs, not at compile time. Bound to a declared non-nullable `int`, `float`, `string` or `bool` parameter, the value must hold the exact scalar (or an `int` for `float`), otherwise the call throws PHP's `f(): Argument #N ($name) must be of type T, U given, called in … on line …`; see [Runtime-typed arguments](#runtime-typed-arguments). An **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor is accepted with a runtime `instanceof` guard that throws `TypeError` for the other alternative. A `mixed` or `object|null` value at a class-typed parameter is checked the same way; see [Class-typed boundaries](#class-typed-boundaries).
 
 ### Callable strings
 
@@ -613,11 +631,19 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   unless told otherwise, `is_a` only when told to). The flag itself may be computed at runtime and
   need not be a `bool`: coercive mode admits any scalar there, and an `int`, `string` or `float`
   is converted with PHP's own truthiness, so `"0"` is false while `"0.0"` and `" "` are true.
-  The name must be a compile-time **literal**: a
-  name only known at runtime still answers `false` rather than walking the hierarchy, because the
-  emitted program has no name-keyed class table to consult. The same restriction is louder in
-  `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
-  compile time instead of answering. One gap of its own: an enum declared in the compiled
+  Either name may be known only at runtime (`is_a($name, $name, true)`): the subject (a class
+  name, an object's runtime class, or a `mixed` value holding either) selects the ancestor list
+  of one compiled class or interface, and the target is compared with it. A `mixed` subject
+  is dispatched the same way against a literal target, so a `mixed` value holding a class name
+  matches by name there too. `Closure` is a class name like any other there
+  (`is_a('Closure', 'Closure', true)` is `true`). A closure's only
+  ancestor is `Closure`, whether the target is a literal or a runtime name and whether the
+  closure was compiled or created inside `eval()` (a function name or method array passed as
+  a `callable` is no closure, so it matches no class), and a target holding a NUL byte,
+  literal or runtime, names no class. A class
+  that only an autoloader could load and that the program never names is not compiled, so a
+  runtime name cannot reach it. `class_parents()`, `class_implements()` and `class_exists()` still reject a
+  non-literal name at compile time. One gap of its own: an enum declared in the compiled
   program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
   `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation also
   affects compiled `is_a()` and `is_subclass_of()` calls with a class-name string for an enum

@@ -108,9 +108,10 @@ pub(super) fn lower_new_object(
         .last_mut()
         .expect("call argument scope")
         .live_property_reference_arguments = !args.iter().any(is_spread_arg);
-    let previous_description = ctx
-        .call_description
-        .replace(format!("{}::__construct", class_name.as_str()));
+    let previous_description = ctx.call_description.replace(
+        super::scalar_param_guards::method_guard_description(ctx, class_name.as_str(), "__construct", false),
+    );
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
     });
@@ -119,6 +120,7 @@ pub(super) fn lower_new_object(
         .map_or(args, |rewrite| rewrite.args.as_slice());
     let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     // Publish AFTER argument evaluation: a nested construction executed by an argument
     // (possibly from an included weak file) must not leave its own strictness behind for
