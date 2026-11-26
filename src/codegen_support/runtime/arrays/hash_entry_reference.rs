@@ -261,6 +261,7 @@ mod tests {
             let asm = emit_for(name);
             for symbol in [
                 "__rt_hash_entry_make_reference",
+                "__rt_hash_entry_bind_reference",
                 "__rt_hash_entry_deref",
                 "__rt_hash_iter_next_value",
                 "__rt_hash_iter_resync",

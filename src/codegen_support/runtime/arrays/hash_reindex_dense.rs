@@ -12,6 +12,7 @@ pub use elephc_memoir::values::hash_reindex_dense::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::emit::Emitter;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     /// The helper walks the source chain, moves entries under dense keys, clears the moved

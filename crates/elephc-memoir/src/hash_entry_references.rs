@@ -176,7 +176,7 @@ fn emit_make_reference<E: AssemblyEmitter + TargetAbi>(emitter: &mut E) {
     }
 }
 
-+/// Emits `__rt_hash_entry_bind_reference`, which points an existing reference entry at one
+/// Emits `__rt_hash_entry_bind_reference`, which points an existing reference entry at one
 /// already-live managed reference cell.
 ///
 /// The caller has just inserted the source value and may address its value word. A
@@ -260,7 +260,6 @@ fn emit_bind_reference<E: AssemblyEmitter + TargetAbi>(emitter: &mut E) {
         }
     }
 }
-
 
 /// Emits `__rt_hash_entry_deref`, the allocation-free borrowed value view of a hash payload.
 ///
