@@ -145,6 +145,9 @@ pub(super) fn lower_const_dynamic_prop_set(
         // Keep runtime class, magic and dynamic-hash precedence while pruning declared slots
         // whose names cannot match this literal. The named fast path cannot stage a guarded
         // `__set` call or preserve existing-entry-before-magic precedence on its own.
+        if let Some(label) = crate::codegen::shared_literal_property_write::helper_label(ctx, inst, property) {
+            return crate::codegen::shared_literal_property_write::emit_call(ctx, object, value, inst, &label);
+        }
         return lower_runtime_mixed_prop_set(ctx, object, property_value, value, Some(property), inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
@@ -353,6 +356,9 @@ pub(super) fn lower_mixed_named_prop_set(
     property: &str,
     inst: &Instruction,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_literal_property_write::helper_label(ctx, inst, property) {
+        return crate::codegen::shared_literal_property_write::emit_call(ctx, object, value, inst, &label);
+    }
     let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
     if candidates.is_empty() {
         return lower_mixed_prop_set(ctx, object, value, property);
@@ -372,7 +378,7 @@ pub(super) fn lower_mixed_named_prop_set(
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    emit_branch_if_receiver_not_object(ctx, value, &done_label)?;
     push_mixed_unboxed_object_payload(ctx);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -385,6 +391,7 @@ pub(super) fn lower_mixed_named_prop_set(
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
+                release_unstored_adopted_value(ctx, value)?;
                 super::super::exceptions::emit_error(ctx, message);
             }
             MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
@@ -571,7 +578,8 @@ fn emit_runtime_name_stacked_write_arm(
                 "runtime property write resolved to a value read",
             )),
             PropertyRuntimeAction::MagicIsset { .. }
-            | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+            | PropertyRuntimeAction::MagicEmpty { .. }
+            | PropertyRuntimeAction::MagicProbe { .. } => Err(CodegenIrError::invalid_module(
                 "runtime property write resolved to a read probe",
             )),
             PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
@@ -630,7 +638,11 @@ fn declared_mixed_named_property_set_candidates(
             .properties
             .iter()
             .any(|(declared, _)| declared == property);
-        if !declares && dynamic_property_hash_offset_for_class(ctx, class_name, property)?.is_none()
+        // A readonly class or an enum declares no hash either, but php still answers the write:
+        // it raises `Cannot create dynamic property`, so the class keeps its refusal arm.
+        if !declares
+            && dynamic_property_hash_offset_for_class(ctx, class_name, property)?.is_none()
+            && !class_forbids_dynamic_properties(ctx, class_name)
         {
             continue;
         }
@@ -739,7 +751,8 @@ fn mixed_property_write_candidate(
         PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => return Ok(None),
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
         class_id,
@@ -901,12 +914,14 @@ fn emit_refined_untyped_tag_guarded_store(
 ) -> Result<()> {
     if refined_untyped_store_tags(slot).is_empty() {
         abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+        release_unstored_adopted_value(ctx, value)?;
         super::super::exceptions::emit_error(ctx, message);
         return Ok(());
     }
     let store_label = ctx.next_label("refined_untyped_mixed_store");
     emit_refined_untyped_tag_guard(ctx, value, slot, &store_label)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+    release_unstored_adopted_value(ctx, value)?;
     super::super::exceptions::emit_error(ctx, message);
     ctx.emitter.label(&store_label);
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -1101,6 +1116,7 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
+    release_unstored_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&caught_label);
@@ -1110,12 +1126,14 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
+    release_unstored_adopted_value(ctx, value)?;
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);
     if let Some(message) = recursive_refusal {
         abi::emit_release_temporary_stack(ctx.emitter, staged_stack_bytes);
+        release_unstored_adopted_value(ctx, value)?;
         super::super::exceptions::emit_error(ctx, message);
     } else {
         if let Some(hash_offset) = hash_offset {
@@ -1137,6 +1155,7 @@ fn emit_runtime_magic_set_call(
             )?;
             abi::emit_jump(ctx.emitter, &done_label);
         } else {
+            release_unstored_adopted_value(ctx, value)?;
             emit_readonly_runtime_dynamic_property_error(
                 ctx,
                 class_name,
@@ -1158,6 +1177,47 @@ fn emit_runtime_magic_set_call(
         }
     }
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Branches to `done_label` when the unboxed receiver is not an object.
+///
+/// An adopted value box takes a separate exit that retires it first; the object path keeps the
+/// unboxed payload registers intact.
+fn emit_branch_if_receiver_not_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    done_label: &str,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !dynamic_property_mixed_value_adopts_source(ctx, value, &value_ty)? {
+        emit_branch_if_mixed_unboxed_not_object(ctx, done_label);
+        return Ok(());
+    }
+    let object_label = ctx.next_label("mixed_prop_set_object_receiver");
+    let not_object_label = ctx.next_label("mixed_prop_set_not_object_receiver");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &not_object_label);
+    abi::emit_jump(ctx.emitter, &object_label);
+    ctx.emitter.label(&not_object_label);
+    release_unstored_adopted_value(ctx, value)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&object_label);
+    Ok(())
+}
+
+/// Retires an owned Mixed box this write was to adopt on a path that does not store it.
+///
+/// EIR emits no cleanup for a box the store adopts, so every exit that keeps no pointer to it ends
+/// that ownership itself: a magic `__set` that only borrowed the argument (once it returned or
+/// threw, after the local handler and guard node are gone), a non-object receiver, a dispatch miss
+/// and a refusal error.
+fn release_unstored_adopted_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !dynamic_property_mixed_value_adopts_source(ctx, value, &value_ty)? {
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &value_ty);
     Ok(())
 }
 
@@ -1391,10 +1451,33 @@ pub(super) fn lower_runtime_mixed_prop_set(
             ))
         })
         .collect::<Vec<_>>();
+    // A readonly class or an enum has no hash, and php refuses to create any name there. A
+    // runtime name the class does not declare reaches this per-CLASS arm, which raises php's
+    // Error with that name instead of falling into the miss path and dropping the write.
+    let mut refusal_arms = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| {
+            !crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+                && class_forbids_dynamic_properties(ctx, class_name)
+        })
+        .map(|(class_name, class_info)| (class_info.class_id, class_name.clone()))
+        .collect::<Vec<_>>();
+    refusal_arms.sort_by_key(|(class_id, _)| *class_id);
+    let refusal_labels = refusal_arms
+        .iter()
+        .map(|(_, class_name)| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_set_refuse_{}",
+                label_fragment(class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    emit_branch_if_receiver_not_object(ctx, value, &done_label)?;
     push_mixed_unboxed_object_payload(ctx);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
@@ -1422,8 +1505,17 @@ pub(super) fn lower_runtime_mixed_prop_set(
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
+    for ((class_id, _), label) in refusal_arms.iter().zip(refusal_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, *class_id, 16, label);
+    }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for ((_, class_name), label) in refusal_arms.iter().zip(refusal_labels.iter()) {
+        ctx.emitter.label(label);
+        release_unstored_adopted_value(ctx, value)?;
+        emit_readonly_runtime_dynamic_property_error(ctx, class_name, property_value, 32);
+    }
 
     for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
         ctx.emitter.label(label);
@@ -1465,6 +1557,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
+                release_unstored_adopted_value(ctx, value)?;
                 super::super::exceptions::emit_error(ctx, message);
             }
             MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
@@ -1532,6 +1625,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    release_unstored_adopted_value(ctx, value)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -1729,6 +1823,7 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
     let handled = ctx.next_label("eval_prop_set_handled");
     let raise = ctx.next_label("eval_prop_set_raise");
     let done = ctx.next_label("eval_prop_set_done");
+    let adopted = dynamic_property_mixed_value_adopts_source(ctx, value, value_ty)?;
     materialize_dynamic_property_mixed_value(ctx, value, value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     // Frame from here: [sp] Throwable out slot, [sp+16] value cell, then the caller's block.
@@ -1795,8 +1890,13 @@ fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
 
     ctx.emitter.label(&plain);
     if native_done_label.is_some() {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        // The native arms below box the value again. A cell that adopted the source's owned box
+        // hands it to their store untouched: releasing it here freed the box the store then
+        // adopted. Any other cell holds its own reference.
+        if !adopted {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         ctx.emitter.label(&done);
         return Ok(());
@@ -1979,7 +2079,8 @@ pub(super) fn emit_dynamic_plan_unset(
         PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => Ok(()),
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => Ok(()),
         PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
             "unset() resolved to a runtime-name refusal",
         )),
@@ -2317,7 +2418,8 @@ fn emit_mixed_runtime_name_unset_arm(
         | PropertyRuntimeAction::MagicDeferred
         | PropertyRuntimeAction::MagicRead { .. }
         | PropertyRuntimeAction::MagicIsset { .. }
-        | PropertyRuntimeAction::MagicEmpty { .. } => {
+        | PropertyRuntimeAction::MagicEmpty { .. }
+        | PropertyRuntimeAction::MagicProbe { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }

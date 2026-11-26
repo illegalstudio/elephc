@@ -10,6 +10,8 @@
 //!   comparing candidates, then reuses direct-call ABI materialization.
 //! - Callable descriptors use a uniform invoker ABI with Mixed argument arrays;
 //!   signature-dependent direct dispatch stays on explicit guarded paths.
+//! - Callable-array selectors join before argument normalization and invocation,
+//!   retaining separate owned-instance and persistent-static descriptor paths.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
@@ -1332,28 +1334,38 @@ fn runtime_user_function_descriptor_cases(
     candidate_names: Option<&[String]>,
     strict_php: bool,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
-    let mut functions = ctx
-        .module
-        .functions
-        .iter()
+    let concrete_functions = ctx.module.functions.iter()
         .filter(|function| {
             function.has_source_identity()
                 && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .collect::<Vec<_>>();
-    functions.sort_by(|left, right| left.name.cmp(&right.name));
+    let by_name = concrete_functions.iter()
+        .map(|function| (php_symbol_key(function.name.trim_start_matches('\\')), *function))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut functions = concrete_functions.into_iter()
+        .map(|function| (function.name.clone(), function))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    // The public include name dispatches through its active variant, just like a direct call.
+    for group in crate::ir::function_variants::collect_dispatch_groups(ctx.module) {
+        if let Some(function) = group.variants.iter().find_map(|variant| {
+            by_name.get(&php_symbol_key(variant.trim_start_matches('\\')))
+        }) {
+            functions.entry(group.name).or_insert(*function);
+        }
+    }
 
     let mut cases = Vec::new();
-    for function in functions {
+    for (name, function) in functions {
         if !strict_php
             && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
-                &php_symbol_key(&function.name),
+                &php_symbol_key(&name),
                 true,
             )
         {
             continue;
         }
-        if !runtime_callable_name_is_reachable(&function.name, candidate_names) {
+        if !runtime_callable_name_is_reachable(&name, candidate_names) {
             continue;
         }
         let wrapper_sig =
@@ -1363,22 +1375,22 @@ fn runtime_user_function_descriptor_cases(
         let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return, true);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
-            &function_symbol(&function.name),
-            Some(&function.name),
+            &function_symbol(&name),
+            Some(&name),
             callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             Some(&case_sig),
             &[],
             &[],
             callable_descriptor::CallableDescriptorInvocation::named(
                 callable_descriptor::CallableDescriptorShape::Function,
-                &function.name,
+                &name,
             ),
             Some(&invoker_label),
         );
         cases.push(callable_dispatch::RuntimeCallableCase {
-            label: function_symbol(&function.name),
+            label: function_symbol(&name),
             descriptor_label,
-            php_name: Some(function.name.clone()),
+            php_name: Some(name.clone()),
         });
     }
     cases
@@ -1909,24 +1921,21 @@ fn emit_mixed_callable_array_descriptor_dispatch(
 ) -> Result<()> {
     let done_label = ctx.next_label("callable_array_runtime_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    let instance_ready = ctx.next_label("callable_array_instance_selected");
+    let static_ready = ctx.next_label("callable_array_static_selected");
     for target in instance_targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_invoke(
-            ctx,
-            inst,
-            arg_mixed,
-            target,
-            MIXED_RECEIVER_PAYLOAD_OFFSET,
-        )?;
-        abi::emit_jump(ctx.emitter, &done_label);
+        emit_runtime_array_instance_descriptor_value(ctx, target, false)?;
+        abi::emit_jump(ctx.emitter, &instance_ready);
         ctx.emitter.label(&next_label);
     }
     for case in static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-        emit_static_descriptor_case_invoke(ctx, inst, arg_mixed, &case.case.descriptor_label)?;
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_symbol_address(ctx.emitter, abi::nested_call_reg(ctx.emitter),
+            &case.case.descriptor_label);
+        abi::emit_jump(ctx.emitter, &static_ready);
         ctx.emitter.label(&next_label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
@@ -1938,6 +1947,16 @@ fn emit_mixed_callable_array_descriptor_dispatch(
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }
+
+    // Selection preserves the existing descriptor lifetime. Only receiver-bound descriptors
+    // transfer an owner; persistent static headers must remain borrowed by the invoker.
+    ctx.emitter.label(&instance_ready);
+    emit_descriptor_reg_invoker_call_with_mixed_arg(ctx, inst,
+        abi::nested_call_reg(ctx.emitter), arg_mixed, op_name, true)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&static_ready);
+    emit_descriptor_reg_invoker_call_with_mixed_arg(ctx, inst,
+        abi::nested_call_reg(ctx.emitter), arg_mixed, op_name, false)?;
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
@@ -1962,17 +1981,23 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     emit_string_callable_array_selector_slots(ctx, callable)?;
     let done_label = ctx.next_label("callable_array_runtime_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    let selected_label = ctx.next_label("callable_array_static_selected");
     for case in &static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_string_static_case_mismatch(ctx, case, &next_label);
-        emit_static_descriptor_case_invoke(ctx, inst, arg_mixed, &case.case.descriptor_label)?;
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_symbol_address(ctx.emitter, abi::nested_call_reg(ctx.emitter),
+            &case.case.descriptor_label);
+        abi::emit_jump(ctx.emitter, &selected_label);
         ctx.emitter.label(&next_label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
     emit_runtime_callable_array_no_match_abort(ctx);
+
+    ctx.emitter.label(&selected_label);
+    emit_descriptor_reg_invoker_call_with_mixed_arg(ctx, inst,
+        abi::nested_call_reg(ctx.emitter), arg_mixed, op_name, false)?;
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, STRING_SELECTOR_BYTES);
@@ -4078,5 +4103,57 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod array_dispatch_join_tests {
+    use crate::codegen_support::platform::Target;
+
+    /// Returns one emitted source function, excluding later functions and helpers.
+    fn body<'a>(assembly: &'a str, name: &str) -> &'a str {
+        assembly.split_once(&format!("@fn name={name} symbol=")).unwrap().1
+            .split("@fn name=").next().unwrap()
+    }
+
+    /// Keeps target selection separate from the two original descriptor ownership policies.
+    fn verify_joined_invocation(string_only: bool) {
+        let receiver = if string_only { "string" } else { "mixed" };
+        let source = format!("<?php \
+            class ArrayJoinBase {{ \
+                public function first(mixed $value): mixed {{return $value;}} \
+                public function second(mixed $value): mixed {{return $value;}} \
+                public static function staticFirst(mixed $value): mixed {{return $value;}} \
+                public static function staticSecond(mixed $value): mixed {{return $value;}} \
+            }} \
+            class ArrayJoinChild extends ArrayJoinBase {{}} \
+            function invokeArrayJoin({receiver} $receiver,string $method,array $args): mixed {{ \
+                return call_user_func_array(array($receiver,$method),$args); \
+            }}");
+        for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                &source, std::path::Path::new("main.php"), std::path::Path::new("."),
+                Target::parse(target).unwrap(),
+            );
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            let function = body(&assembly, "invokeArrayJoin");
+            assert_eq!(function.matches("__rt_callable_invoke_owned_args").count(), 1,
+                "{target}: persistent static descriptors share one borrowed invocation path");
+            assert_eq!(function.matches("__rt_callable_invoke_owned_descriptor_args").count(),
+                usize::from(!string_only),
+                "{target}: receiver-captured descriptors share one owning invocation path");
+        }
+    }
+
+    /// Raw mixed arrays retain inherited targets while outlining repeated argument handling.
+    #[test]
+    fn mixed_array_targets_join_before_owned_argument_invocation_on_every_target() {
+        verify_joined_invocation(false);
+    }
+
+    /// String-only arrays never transfer ownership of their persistent static descriptor.
+    #[test]
+    fn string_array_targets_join_before_borrowed_argument_invocation_on_every_target() {
+        verify_joined_invocation(true);
     }
 }

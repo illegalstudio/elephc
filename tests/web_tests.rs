@@ -1393,6 +1393,100 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// Boxed replacements retain native request-global storage and independent previous aliases.
+#[test]
+fn web_boxed_array_reassignment_keeps_request_superglobals_native() {
+    let source = r#"<?php
+function request_value(mixed $value): mixed { return $value; }
+function install_request_values(mixed $value): void { $_REQUEST = $value; }
+function empty_request_array(): array { return array(); }
+function request_array_input(mixed $value): array {
+    if (!is_array($value)) return array();
+    return (array) $value;
+}
+function merge_request_arrays(array $arrays): array {
+    $result = empty_request_array();
+    foreach ($arrays as $value) {
+        $source = request_array_input($value);
+        foreach ($source as $key => $item) {
+            if (is_int($key)) $result[] = $item;
+            else $result[(string) $key] = $item;
+        }
+    }
+    return $result;
+}
+function normalize_request_values(mixed $value): mixed {
+    foreach ((array) $value as $key => $item) {
+        if (is_array($item)) $value[$key] = normalize_request_values($item);
+        elseif (is_string($item)) $value[$key] = addslashes($item);
+    }
+    return $value;
+}
+function replace_request_values(): void {
+    $previous = $_GET;
+    install_request_values(merge_request_arrays(array($_GET, $_POST)));
+    $merged_count = count($_REQUEST);
+    $merged_before = $_REQUEST['before'] ?? 'missing';
+    $_GET = request_value(json_decode('{"changed":"cafés","0":"zero","nested":{"ok":true}}', true));
+    $_GET = normalize_request_values($_GET);
+    $_SERVER = normalize_request_values($_SERVER);
+    echo $_SERVER['REQUEST_URI'], "\n", $merged_count, "\n", $merged_before, "\n",
+        json_encode($_GET, JSON_UNESCAPED_UNICODE), "\n", ($previous['before'] ?? 'missing');
+}
+replace_request_values();
+"#;
+    for optimization in ["on", "off"] {
+        let dir = make_test_dir("web_boxed_request_globals");
+        let option = format!("--ir-opt={optimization}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&option, "--web-isolation=request"]);
+        let addr = format!("127.0.0.1:{}", free_port());
+        let mut server = spawn_server(&bin, &addr, "1");
+        for (path, count, merged, previous) in [
+            ("/probe", 0, "missing", "missing"),
+            ("/probe?before=one", 1, "one", "one"),
+            ("/probe?before=two", 1, "two", "two"),
+            ("/probe?before=one", 1, "one", "one"),
+        ] {
+            let response = http_get(&addr, path);
+            let json = r#"{"changed":"cafés","0":"zero","nested":{"ok":true}}"#;
+            assert_eq!(
+                raw_response_body(&response),
+                format!("{path}\n{count}\n{merged}\n{json}\n{previous}"),
+                "IR {optimization}",
+            );
+        }
+        let _ = server.kill();
+        let _ = server.wait();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Top-level `define()` constants keep their values inside functions under the `--web` catch-all.
+#[test]
+fn web_top_level_define_constants_keep_their_type_in_functions() {
+    let source = r#"<?php
+define('WEB_BASE_DIR', __DIR__ . '/site/');
+define('WEB_PLUGIN_DIR', WEB_BASE_DIR . 'plugins');
+define('WEB_PLUGIN_LABEL', 'plugins');
+function plugin_folder(string $folder): string {
+    return ltrim(substr($folder, strlen(WEB_PLUGIN_DIR)), '/');
+}
+function plugin_label(): string { return gettype(WEB_PLUGIN_LABEL) . ':' . WEB_PLUGIN_LABEL; }
+echo plugin_folder(WEB_PLUGIN_DIR . '/akismet/akismet.php'), "\n", plugin_label();
+"#;
+    let dir = make_test_dir("web_define_constants");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--web-isolation=request"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&bin, &addr, "1");
+    for _ in 0..2 {
+        let response = http_get(&addr, "/");
+        assert_eq!(raw_response_body(&response), "akismet/akismet.php\nstring:plugins");
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {

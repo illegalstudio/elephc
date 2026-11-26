@@ -56,6 +56,10 @@ pub(super) fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_literal_property_read::helper_label(ctx, inst, property) {
+        crate::codegen::shared_literal_property_read::emit_call(ctx, object, &label)?;
+        return store_if_result(ctx, inst);
+    }
     let mode = property_fetch_mode(inst);
     let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
     // A user class may answer this name exclusively from its per-instance property hash. Such
@@ -252,7 +256,7 @@ pub(super) fn lower_declared_mixed_prop_get(
 }
 
 /// Reads a real dynamic entry first, then uses magic accessors only when that key is absent.
-fn emit_hash_property_read(
+pub(super) fn emit_hash_property_read(
     ctx: &mut FunctionContext<'_>, class: &str, property: &str, object_reg: &str,
     hash_offset: usize, mode: PropertyFetchMode, done_label: &str,
 ) -> Result<()> {
@@ -335,6 +339,18 @@ pub(super) fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCal
     }
 }
 
+/// Leaves `__isset`'s answer as a 0/1 bool in the integer result register.
+///
+/// A `bool` return (or a by-reference bool cell, already unwrapped by the caller) is used as is;
+/// any other boxable return, which an `__isset` without a declared return type may produce, is
+/// boxed and converted with php's truthiness so a `1`, `"x"` or non-empty array still counts.
+pub(super) fn emit_magic_isset_answer(ctx: &mut FunctionContext<'_>, isset: &MethodCallTarget) {
+    if isset.by_ref_return || isset.return_ty.codegen_repr() == PhpType::Bool {
+        return;
+    }
+    super::known_property_reads::emit_magic_isset_result_bool(ctx, isset);
+}
+
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
 /// none this ladder can call.
 pub(super) fn magic_property_arm(
@@ -357,9 +373,18 @@ pub(super) fn magic_property_arm(
     };
     let isset = if has_isset && !mode.uses_magic_get() {
         let target = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
-        // A probe php answers from `__isset` must never call `__get` in its place: a class whose
-        // `__isset` result this arm cannot read (not a `bool`) gets no arm at all.
-        if target.return_ty.codegen_repr() != PhpType::Bool {
+        // A probe php answers from `__isset` must never call `__get` in its place. An undeclared
+        // return type keeps php's truthiness: `emit_magic_isset_answer` coerces any boxable answer
+        // to bool. A by-reference answer is only read as a bool cell, so anything else gets no arm.
+        // An untyped `__isset` that returns null or nothing is inferred `void`: it boxes as null,
+        // which is falsy, so it still answers the probe.
+        let readable = if target.by_ref_return {
+            target.return_ty.codegen_repr() == PhpType::Bool
+        } else {
+            magic_result_boxes_cleanly(&target.return_ty)
+                || target.return_ty.codegen_repr() == PhpType::Void
+        };
+        if !readable {
             return Ok(None);
         }
         Some(target)
@@ -436,7 +461,7 @@ fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, property: &str) {
 /// Answers a `Mixed` property read from the receiver's magic accessors, leaving an owned Mixed
 /// cell in the result register: a probe asks `__isset` first and answers null when it says no,
 /// then reads through `__get` (or answers `true` when the class has no `__get`).
-fn emit_magic_property_arm(
+pub(super) fn emit_magic_property_arm(
     ctx: &mut FunctionContext<'_>,
     arm: &MixedMagicArm,
     property: &str,
@@ -463,6 +488,7 @@ fn emit_magic_property_arm(
             abi::emit_pop_reg(ctx.emitter, result);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
         }
+        emit_magic_isset_answer(ctx, isset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("cmp x0, #0");                          // did __isset() report the name as set?

@@ -18,6 +18,8 @@ Releases are listed newest first.
 - Unified PHP scanning and parsing for the compiler, `eval()`, the REPL and `TOKEN_PARSE`. Improved tokenizer throughput and matched PHP more closely on delimiter warnings, `__halt_compiler()` and variable-variable expressions.
 - Reduced generated binary size by sharing callable dispatch and compacting mbstring's codec tables. Eligible literal UTF-8 checks with `mb_check_encoding()` no longer pull in the mbstring bridge.
 - Reused cached runtime objects when their emitted assembly is identical across compiler builds.
+- Reduced compiler memory use for large PHP applications such as the WordPress port. On Linux, large assembly files are assembled in chunks. The compiler also shares repeated property and callable dispatch.
+- Added `#[ReturnTypeWillChange]` handling for `Iterator` and `ArrayAccess`. ArrayAccess appends now pass a null offset, and `spl_object_id()` and `spl_object_hash()` accept runtime-typed objects and closures.
 - Fixed class-typed parameters, returns and properties to check runtime-typed values at the boundary and raise a catchable `TypeError` for incompatible values.
 - Fixed runtime-typed values passed to declared scalar parameters or returned as `string`, `float` or `bool` to follow PHP's strict and weak coercion rules, including catchable `TypeError` for invalid values. Fixed out-of-range float array reads returning stale data.
 - Fixed guarded assignments and `elseif` chains losing a narrowed union type. Array builders now preserve checked element storage for boxed values proven to have the declared element type.
@@ -30,6 +32,9 @@ Releases are listed newest first.
 - Fixed `setlocale()` candidate validation and environment-locale fallback. Corrected weak and strict `exit()` and `die()` status handling, including string output and nullable values.
 - Fixed x86_64 eval bridge calls to preserve the host's callee-saved registers.
 - Fixed APM wrapper temporaries leaking into PHP variable introspection.
+- Fixed property access through runtime-typed receivers to preserve PHP's magic accessor order, raise errors on invalid writes, and release temporary values.
+- Fixed shared `include_once` and `require_once` declarations and callable lookup by public name. Fixed references to named globals, initialized null locals missing from `get_defined_vars()`, and top-level `define()` calls after conditionals losing their type information.
+- Fixed array assignments to request superglobals in `--web` builds, method adapters dropping surplus arguments, and untyped parameters losing closure values.
 - Security: hardened PHAR signature verification, session upload-progress settings and session ID validation, mbstring encoding names and regex replacements, URI serialization limits and `DateTime` hydration. Executable PHARs require a signature under the default `phar.require_hash` setting. Added PHAR OpenSSL SHA-256 and SHA-512 signing.
 - Security: updated the `url` dependency to 2.5.9 for RUSTSEC-2026-0592.
 

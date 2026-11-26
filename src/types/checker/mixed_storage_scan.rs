@@ -1399,13 +1399,19 @@ fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
 /// `?ptr<T>` parameter, by reference or by value, needs the local's own null/pointer storage);
 /// every other position is disqualified plainly. A method no class declares keeps the generic
 /// by-reference handling, and named or spread arguments fall back to the whole-call rule.
+/// Class maps already use normalized PHP method keys, so each class needs only two lookups.
 fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mut Facts, args: &[Expr]) {
+    if args.is_empty() {
+        return;
+    }
+    let method_key = crate::names::php_symbol_key(method);
     let sigs: Vec<&crate::types::FunctionSig> = checker
         .classes
         .values()
-        .flat_map(|class| class.methods.iter().chain(class.static_methods.iter()))
-        .filter(|(name, _)| name.eq_ignore_ascii_case(method))
-        .map(|(_, sig)| sig)
+        .flat_map(|class| {
+            class.methods.get(&method_key).into_iter()
+                .chain(class.static_methods.get(&method_key))
+        })
         .collect();
     if sigs.is_empty() {
         disqualify_call_arguments(facts, args);

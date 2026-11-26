@@ -261,6 +261,7 @@ struct GraphState {
     internal_callable_methods: HashSet<(String, String, bool)>,
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
+    checker_methods_by_class: HashMap<String, HashMap<(String, bool), String>>,
     vtable_slots: HashSet<(String, String, bool)>,
     /// Injected prelude groups, rooted whole whenever a literal eval fragment runs except XML,
     /// whose forwarding builtins and parsed fragment supply explicit declaration edges. The
@@ -298,7 +299,7 @@ impl GraphState {
                 (php_symbol_key(name), methods)
             })
             .collect();
-        let checker_method_implementations = check_result
+        let checker_method_implementations: HashMap<(String, String, bool), String> = check_result
             .classes
             .iter()
             .flat_map(|(class, info)| {
@@ -325,6 +326,11 @@ impl GraphState {
                     }))
             })
             .collect();
+        let mut checker_methods_by_class: HashMap<String, HashMap<(String, bool), String>> = HashMap::new();
+        for ((class, method, is_static), owner) in &checker_method_implementations {
+            checker_methods_by_class.entry(class.clone()).or_default()
+                .insert((method.clone(), *is_static), owner.clone());
+        }
         let vtable_slots = check_result
             .classes
             .iter()
@@ -365,6 +371,7 @@ impl GraphState {
             internal_callable_methods,
             checker_interface_methods,
             checker_method_implementations,
+            checker_methods_by_class,
             vtable_slots,
             literal_eval_baseline,
         }
@@ -591,26 +598,41 @@ impl GraphState {
 
     /// Keeps shared virtual slots on every live class in a lineage once any occupant survives.
     fn seed_vtable_slot_families(&mut self) {
-        let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
-        let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
-        for (class, method, is_static) in kept_methods {
-            if !self.has_vtable_slot(&class, &method, is_static) {
+        // The declaration hierarchy is fixed during this pass. Build each live
+        // class's lineage once instead of walking it for every occupied method.
+        let mut descendants: HashMap<String, Vec<String>> = HashMap::new();
+        for class in &self.reach.classes {
+            let mut current = Some(class.clone());
+            let mut seen = HashSet::new();
+            while let Some(ancestor) = current {
+                if !seen.insert(ancestor.clone()) {
+                    break;
+                }
+                descendants.entry(ancestor.clone()).or_default().push(class.clone());
+                current = self.index.classes.get(&ancestor).and_then(|node| node.parent.clone());
+            }
+        }
+
+        // Every occupant of a shared slot induces the same lineage edges.
+        // A behavioral occupant makes the whole family behavioral.
+        let mut families: HashMap<(String, String, bool), bool> = HashMap::new();
+        for (class, method, is_static) in &self.reach.methods {
+            if !self.has_vtable_slot(class, method, *is_static) {
                 continue;
             }
-            let lineage_root = self.vtable_lineage_root(&class, &method, is_static);
+            let root = self.vtable_lineage_root(class, method, *is_static);
             let behavioral = self.behavioral.methods.contains(&(
-                class.clone(),
-                method.clone(),
-                is_static,
+                class.clone(), method.clone(), *is_static,
             ));
-            for candidate in &live_classes {
-                if !self.class_is_or_descends_from(candidate, &lineage_root) {
-                    continue;
-                }
-                let visible_method = (candidate.clone(), method.clone(), is_static);
+            *families.entry((root, method.clone(), *is_static)).or_default() |= behavioral;
+        }
+
+        for ((root, method, is_static), behavioral) in families {
+            for candidate in descendants.get(&root).into_iter().flatten() {
                 if !self.has_vtable_slot(candidate, &method, is_static) {
                     continue;
                 }
+                let visible_method = (candidate.clone(), method.clone(), is_static);
                 self.reach.methods.insert(visible_method.clone());
                 if behavioral {
                     self.behavioral.methods.insert(visible_method);
@@ -660,18 +682,14 @@ impl GraphState {
         let instantiated: Vec<_> = self.instantiated_classes.iter().cloned().collect();
         for class in instantiated {
             let behavioral = self.behavioral.instantiated_classes.contains(&class);
-            let checker_magic: Vec<_> = self
-                .checker_method_implementations
-                .iter()
-                .filter_map(|((visible_class, method, is_static), owner)| {
-                    (visible_class == &class && is_magic_method(method)).then(|| {
-                        (
-                            (visible_class.clone(), method.clone(), *is_static),
-                            (owner.clone(), method.clone(), *is_static),
-                        )
-                    })
-                })
-                .collect();
+            let checker_magic: Vec<_> = self.checker_methods_by_class.get(&class)
+                .into_iter().flatten()
+                .filter_map(|((method, is_static), owner)| {
+                    is_magic_method(method).then(|| (
+                        (class.clone(), method.clone(), *is_static),
+                        (owner.clone(), method.clone(), *is_static),
+                    ))
+                }).collect();
             for (visible_method, owner_method) in checker_magic {
                 self.reach.methods.insert(visible_method.clone());
                 self.reach.methods.insert(owner_method.clone());
@@ -710,57 +728,36 @@ impl GraphState {
     /// Keeps parent implementations and descendant vtable entries for every referenced method.
     fn seed_inherited_implementations(&mut self) {
         let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
-        let referenced: Vec<_> = self
-            .structural_referenced_methods
-            .iter()
-            .cloned()
-            .map(|method| (method, false))
-            .chain(
-                self.behavioral
-                    .referenced_methods
-                    .iter()
-                    .cloned()
-                    .map(|method| (method, true)),
-            )
-            .collect();
         for class in live_classes {
-            for ((method, is_static), behavioral) in &referenced {
-                let visible_method = (class.clone(), method.clone(), *is_static);
-                if let Some(owner) = self
-                    .checker_method_implementations
-                    .get(&visible_method)
-                    .cloned()
-                {
-                    let owner_method = (owner, method.clone(), *is_static);
-                    self.reach.methods.insert(owner_method.clone());
-                    self.reach.methods.insert(visible_method.clone());
-                    if *behavioral {
-                        self.behavioral.methods.insert(owner_method);
-                        self.behavioral.methods.insert(visible_method);
-                    }
+            // Checker-selected owners take priority over source ancestry fallback.
+            let mut implementations = self.checker_methods_by_class.get(&class)
+                .cloned().unwrap_or_default();
+            let mut current = Some(class.clone());
+            let mut seen = HashSet::new();
+            while let Some(owner) = current {
+                if !seen.insert(owner.clone()) { break; }
+                let Some(node) = self.index.classes.get(&owner) else { break; };
+                for (method, is_static) in node.methods.keys() {
+                    implementations.entry((method.clone(), *is_static))
+                        .or_insert_with(|| owner.clone());
+                }
+                current = node.parent.clone();
+            }
+            // Query only methods available on this class, rather than every name
+            // referenced anywhere in the program for every live class.
+            for ((method, is_static), owner) in implementations {
+                let reference = (method.clone(), is_static);
+                let behavioral = self.behavioral.referenced_methods.contains(&reference);
+                if !behavioral && !self.structural_referenced_methods.contains(&reference) {
                     continue;
                 }
-                let mut current = Some(class.clone());
-                let mut seen = HashSet::new();
-                while let Some(owner) = current {
-                    if !seen.insert(owner.clone()) {
-                        break;
-                    }
-                    let Some(node) = self.index.classes.get(&owner) else {
-                        break;
-                    };
-                    if node.methods.contains_key(&(method.clone(), *is_static)) {
-                        let owner_method = (owner.clone(), method.clone(), *is_static);
-                        let visible_method = (class.clone(), method.clone(), *is_static);
-                        self.reach.methods.insert(owner_method.clone());
-                        self.reach.methods.insert(visible_method.clone());
-                        if *behavioral {
-                            self.behavioral.methods.insert(owner_method);
-                            self.behavioral.methods.insert(visible_method);
-                        }
-                        break;
-                    }
-                    current = node.parent.clone();
+                let owner_method = (owner, method.clone(), is_static);
+                let visible_method = (class.clone(), method, is_static);
+                self.reach.methods.insert(owner_method.clone());
+                self.reach.methods.insert(visible_method.clone());
+                if behavioral {
+                    self.behavioral.methods.insert(owner_method);
+                    self.behavioral.methods.insert(visible_method);
                 }
             }
         }

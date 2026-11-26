@@ -160,6 +160,88 @@ unset($capability);
 
 supported_target_cases!(dynamic_property_hook_updates, verify_dynamic_property_hook_updates);
 
+/// A successful class guard reaches its getter through the selected object's real ABI.
+fn verify_runtime_property_getter_receivers(target: &str) {
+    let source = r#"<?php
+class GetterViewBase {
+    public string $text = 'base' { get { return $this->text; } }
+}
+class GetterViewChild extends GetterViewBase {
+    public string $text = 'child' { get { return $this->text; } }
+}
+class GetterViewNoise {
+    public function __call(string $name, array $args): mixed { throw new LogicException('foreign call'); }
+}
+function runtimeHookRead(mixed $object): mixed { return $object->text; }
+function runtimeDynamicHookRead(mixed $object, string $name): mixed { return $object->{$name}; }
+echo runtimeHookRead(new GetterViewChild());
+echo runtimeDynamicHookRead(new GetterViewBase(), 'text');
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    for name in ["runtimeHookRead", "runtimeDynamicHookRead"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let calls = function.instructions.iter().filter(|instruction| instruction.op == Op::MethodCall
+            && matches!(instruction.immediate, Some(Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "__propget_text")).collect::<Vec<_>>();
+        assert!(!calls.is_empty(), "{target}: {name}: getter dispatch must remain present");
+        for call in calls {
+            let receiver = function.value(call.operands[0]).unwrap();
+            assert!(matches!(&receiver.php_type, PhpType::Object(class)
+                if class == "GetterViewBase" || class == "GetterViewChild"),
+                "{target}: {name}: guarded getter receiver must be concrete: {:?}", receiver.php_type);
+            assert!(function.instructions.iter().any(|instruction| instruction.op == Op::MixedUnbox
+                && instruction.result.is_some_and(|value| function.value(value).unwrap().php_type == receiver.php_type)),
+                "{target}: {name}: boxed storage needs real extraction, not metadata relabeling");
+        }
+    }
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+supported_target_cases!(runtime_property_getter_receivers, verify_runtime_property_getter_receivers);
+
+/// A selected XML write-fetch keeps its boxed ABI without another global magic ladder.
+fn verify_guarded_native_property_write_fetch(target: &str) {
+    let source = r#"<?php
+class WriteFetchCell { public mixed $items = []; }
+class WriteFetchNoise {
+    public function __call(string $name, array $args): mixed { return 'magic:' . $name; }
+}
+function guardedWriteFetch(mixed $object): void {
+    $object->items['next'] = 'value';
+    $object->items[] = 'tail';
+}
+function ordinaryWriteFetchName(mixed $object): mixed {
+    return $object->__elephc_property_write_fetch('items');
+}
+$capability = new SimpleXMLElement('<root/>');
+guardedWriteFetch(new WriteFetchCell());
+echo ordinaryWriteFetchName(new WriteFetchNoise());
+unset($capability);
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "guardedWriteFetch").unwrap();
+    let calls = function.instructions.iter().filter(|instruction| instruction.op == Op::MethodCall
+        && matches!(instruction.immediate, Some(Immediate::Data(id))
+            if module.data.strings[id.as_raw() as usize] == "__elephc_property_write_fetch")).collect::<Vec<_>>();
+    assert!(!calls.is_empty(), "{target}: the native write-fetch must remain present");
+    assert!(calls.iter().all(|call| function.value(call.operands[0]).unwrap().php_type.codegen_repr() == PhpType::Mixed),
+        "{target}: selected XML calls retain their physical boxed receiver");
+    assert!(!crate::ir::print_function(function).contains("method.selected.select"),
+        "{target}: a guarded XML operation must not repeat global argument planning");
+    let ordinary = module.functions.iter().find(|function| function.name == "ordinaryWriteFetchName").unwrap();
+    assert!(crate::ir::print_function(ordinary).contains("method.selected.select"),
+        "{target}: an ordinary same-name call still needs magic dispatch");
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+supported_target_cases!(guarded_native_property_write_fetch, verify_guarded_native_property_write_fetch);
+
 /// Literal names prune unrelated declared slots while computed names retain every valid arm.
 fn verify_literal_mixed_property_write_candidates(target: &str) {
     let source = r#"<?php
@@ -184,3 +266,43 @@ writeUnknownMixedProperty(new LiteralWriteOther(), 'unrelatedWriteSlot');
 }
 
 supported_target_cases!(literal_mixed_property_write_candidates, verify_literal_mixed_property_write_candidates);
+
+/// Shared dynamic child probes retain raw-object storage and leave declared slots separate.
+fn verify_shared_dynamic_property_children(target: &str) {
+    let source = r#"<?php
+#[AllowDynamicProperties] class ChildSharingOne { public int $padding = 41; }
+#[AllowDynamicProperties] class ChildSharingTwo { private string $padding = 'base'; public bool $flag = true; }
+#[AllowDynamicProperties] class ChildSharingThree { public function __debugInfo(): array { return ['visible' => true]; } }
+class ChildSharingDeclared { public mixed $items = []; }
+function childSharingKeep(mixed $object): mixed { return $object; }
+function childSharingProbe(mixed $object): void {
+    childSharingKeep($object)->items['next'] = 'value';
+}
+$capability = new SimpleXMLElement('<root/>');
+childSharingProbe(new ChildSharingOne());childSharingProbe(new ChildSharingTwo());
+childSharingProbe(new ChildSharingThree());childSharingProbe(new ChildSharingDeclared());
+unset($capability);
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "childSharingProbe").unwrap();
+    let reads = function.instructions.iter().filter(|inst| inst.immediate == Some(Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::PropertyHashRead)) && function.value(inst.operands[0])
+            .is_some_and(|value| value.php_type == PhpType::Object(String::new()))).collect::<Vec<_>>();
+    assert_eq!(reads.len(), 1, "{target}: all eligible dynamic hashes share one owned child read");
+    let object = function.value(reads[0].operands[0]).unwrap();
+    assert_eq!(object.php_type, PhpType::Object(String::new()), "{target}: hash protocols require a raw object");
+    assert_eq!(object.ownership, crate::ir::Ownership::Borrowed);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedUnbox && inst.result == Some(reads[0].operands[0])),
+        "{target}: the boxed receiver must be physically extracted");
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+        "{target}: declared fields retain independent initialization checks");
+    assert_eq!(crate::ir::print_function(function).matches("xml.property_child.dynamic_shared:").count(), 1);
+    crate::ir::validate_module(&module).unwrap();
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    assert!(asm.contains("_class_object_dynamic_prop_flags"));
+    assert!(asm.contains("_class_object_payload_sizes"));
+}
+
+supported_target_cases!(shared_dynamic_property_children, verify_shared_dynamic_property_children);

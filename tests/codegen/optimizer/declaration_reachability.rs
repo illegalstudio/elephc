@@ -920,3 +920,6 @@ fn test_user_assembly_respects_linker_dead_strip_boundaries() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[path = "declaration_reachability_families.rs"]
+mod declaration_reachability_families;

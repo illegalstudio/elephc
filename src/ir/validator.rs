@@ -1010,6 +1010,7 @@ fn validate_opcode_rules(
         | LoadLocalRefCellPtr
         | LoadRefCell
         | LoadGlobal
+        | LoadGlobalRefCell
         | LoadStaticLocal
         | StaticLocalUninitialized
         | LoadStaticProperty

@@ -36,6 +36,11 @@ pub(super) fn fetch(
     }).collect::<Vec<_>>();
     classes.sort_by(|left, right| left.0.cmp(&right.0));
     if classes.is_empty() { return None; }
+    // Existing dynamic hashes use the same raw-object protocol in every class. Keep the
+    // exact-class membership checks, then fetch and classify their child in one shared arm.
+    let dynamic_classes = classes.iter().filter_map(|(class, storage)|
+        matches!(storage, Storage::Dynamic).then(|| class.clone())).collect::<Vec<_>>();
+    classes.retain(|(_, storage)| !matches!(storage, Storage::Dynamic));
     let result = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let name = ctx.declare_owned_hidden_temp(PhpType::Str);
     let name_slot = ctx.local_slots[&name];
@@ -94,6 +99,37 @@ pub(super) fn fetch(
         }
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
+    }
+    if !dynamic_classes.is_empty() {
+        let shared = ctx.builder.create_named_block("xml.property_child.dynamic_shared", vec![]);
+        let shared_initial = ctx.initialized_slots_snapshot();
+        for class in dynamic_classes {
+            let next = ctx.builder.create_named_block("xml.property_child.dynamic_next", vec![]);
+            let current = ctx.load_local(&name, Some(span));
+            ctx.builder.set_value_ownership(current.value, Ownership::Borrowed);
+            let data = ctx.intern_string(class.trim_start_matches('\\'));
+            let expected = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+                Op::ConstStr.default_effects(), Some(span));
+            let condition = ctx.emit_value(Op::StrictEq, vec![current.value, expected.value], None,
+                PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+            ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+                then_target: shared, then_args: vec![], else_target: next, else_args: vec![] });
+            ctx.builder.position_at_end(next);
+        }
+        jump(ctx, missing);
+        ctx.builder.position_at_end(shared);
+        ctx.restore_initialized_slots(shared_initial);
+        let opaque = PhpType::Object(String::new());
+        let receiver = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            ctx.emit_value(Op::MixedUnbox, vec![object.value], None, opaque.clone(),
+                Op::mixed_unbox_effects(&opaque), Some(span))
+        } else {
+            ctx.emit_value(Op::Borrow, vec![object.value], None, opaque,
+                Op::Borrow.default_effects(), Some(span))
+        };
+        ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+        select_child(ctx, receiver, expression, property, Storage::Dynamic,
+            missing, missing, &result, done, &mut merged, span);
     }
     jump(ctx, missing);
     ctx.builder.position_at_end(missing);

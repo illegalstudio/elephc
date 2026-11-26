@@ -38,6 +38,8 @@ mod recursive;
 mod regex;
 #[path = "spl/storage.rs"]
 mod storage;
+#[path = "spl/object_identity.rs"]
+mod object_identity;
 
 /// Large offset TypeError message ownership regressions.
 mod offset_errors;

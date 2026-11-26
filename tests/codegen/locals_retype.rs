@@ -2741,3 +2741,29 @@ fn test_promoted_param_retype_leaves_the_property_alone() {
     );
     assert_eq!(out, "1");
 }
+
+/// Normalized method lookup preserves null reference storage for instance, inherited and static calls.
+#[test]
+fn test_mixed_storage_method_candidate_lookup_case_insensitive() {
+    let out = compile_and_run(r#"<?php
+class StorageInstanceTarget {
+    public function MuTaTe(&$value) { $value = 'instance'; }
+}
+class StorageInheritedTarget extends StorageInstanceTarget {}
+class StorageStaticTarget {
+    public static function MuTaTe(&$value) { $value = 'static'; }
+}
+function scan_instance_storage($receiver) {
+    $value = null;
+    $receiver->mUtAtE($value);
+    return $value;
+}
+function scan_static_storage() {
+    $value = null;
+    StorageStaticTarget::mUtAtE($value);
+    return $value;
+}
+echo scan_instance_storage(new StorageInheritedTarget()), '|', scan_static_storage();
+"#);
+    assert_eq!(out, "instance|static");
+}

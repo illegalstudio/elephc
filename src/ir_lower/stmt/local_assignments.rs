@@ -235,7 +235,11 @@ pub(super) fn contextualize_local_assignment(
     if let Some(storage) = union_local_storage_type(ctx, name, value, &source_ty) {
         return (lowered, storage);
     }
-    if contextual_ty.is_php_array() {
+    // HTTP request globals use raw hash storage, including when a declared array
+    // or mixed return supplies the replacement through a boxed container.
+    if contextual_ty.is_php_array()
+        || (ctx.web && crate::superglobals::is_superglobal(name))
+    {
         let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
         return (converted, contextual_ty);
     }

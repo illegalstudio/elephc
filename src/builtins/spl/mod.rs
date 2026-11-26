@@ -27,3 +27,4 @@ pub mod spl_autoload_unregister;
 pub mod spl_classes;
 pub mod spl_object_hash;
 pub mod spl_object_id;
+mod object_argument;

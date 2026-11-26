@@ -14,6 +14,12 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Final symbol-visibility processing consumes the owned user assembly buffer and
+appends its directives in place. ELF hidden symbols and Mach-O private externs
+retain their first-declaration order, export allowlists and linker-supplied
+internals. Reusing reserved capacity avoids allocating another copy of the
+complete assembly body during executable and library finalization.
+
 Dynamic operators with boxed operands share a synthetic EIR function per operator
 when internal object handlers are available. Scalar counterparts use the ordinary
 boxing conversion; source expressions are evaluated before the call and their
@@ -33,6 +39,63 @@ Wrapper construction extends their literal pools while preserving the source
 functions and class metadata. An active snapshot stays outside the reusable pool
 until its wrapper has finished emitting, so nested wrappers have independent data
 IDs. This avoids cloning all source EIR bodies for every builtin wrapper.
+The same module-scoped state caches source-body PCNTL signal flags and backtrace
+requirements. Function contexts and frame setup reuse those immutable facts instead
+of rescanning every source instruction for each emitted function. Literal-only
+wrapper snapshots preserve the cached body graph; generated runtime requirements
+remain tracked separately during emission.
+
+Callable declaration lookup shares a per-emission index for functions, closures,
+externs and public include groups. Emitted class-method membership uses the same
+immutable source inventory, keyed by exact class spelling, normalized PHP method
+name and static or instance kind. The lookup retains the previous scanner's
+answers without rescanning all method bodies. Literal-only wrapper snapshots
+reuse these tables; a separate module emission starts with an empty index.
+
+Repeated literal-name property reads from boxed `Mixed` receivers share one
+synthetic EIR body per lexical class scope, exact property spelling and fetch
+mode. The helper borrows the already evaluated receiver and returns the ordinary
+owned Mixed result through normal frame and exception cleanup. It lowers the
+original literal `DynamicPropGet`, preserving declared slots, visibility, magic
+accessors, dynamic hashes and typed initialization. Single sites, quiet reads,
+property hook bodies and other input or result representations retain inline
+lowering. The helper inventory is prepared once per module emission, avoiding
+repeated large class-dispatch ladders in the assembly buffer.
+
+Repeated literal-name property writes on boxed receivers share helpers the same
+way, also keyed by the original value type. Borrowed, persistent and scalar
+values are retained by the inner store. An owned Mixed box that the inline store
+would adopt (no EIR release and no scoped cleanup) gets its own body whose
+parameter is owned, so the inner store adopts it exactly as inline, on every
+path. A magic `__set` only borrows its value, so the runtime write retires an
+adopted box once `__set` returns or throws. When the eval bridge is linked, the
+eval-object probe that runs before the native arms hands an adopted box back to
+them untouched.
+
+Literal property reads on known object receivers resolve the runtime class before
+selecting storage or magic accessors. For a dynamic name, the class-specific hash
+entry wins, including a stored null: the `MagicRead`, `MagicIsset`, `MagicEmpty`
+and `MagicProbe` runtime actions carry that class's hash offset and probe it
+first, so a lazy getter that caches its result as a property runs once. A miss
+follows PHP's accessor order. `isset()` and `empty()` consult `__isset`, while
+`??` (`MagicProbe`) asks `__isset` only when declared and then reads `__get`,
+reusing the boxed receiver's accessor arm and retiring its owned cell after the
+concrete result cast.
+
+Function-local references to named globals borrow the process symbol address through
+`LoadGlobalRefCell`, rather than promoting an uninitialized GlobalAlias frame slot.
+The boxed symbol owns its payload. A per-emission inventory over all function tables
+selects the existing persistent Mixed publisher for ordinary writes to referenced
+globals, keeping captured wrapper identity and publishing before payload retirement.
+This corrects local alias values, global rebinding, snapshots and destructor ordering;
+it does not implement the general `$GLOBALS` symbol-table view or indexed unset.
+
+Finite string-callable analysis keeps CFG local states sparse. An absent slot
+means unknown; joins retain a finite fact only when both predecessors have it,
+union their names and drop the fact when the finite-name budget is exceeded.
+Reference and opaque scope writes remove the affected facts. Exception-handler
+roots start unknown. This avoids allocating a locals-sized vector for every
+block while preserving open runtime callable dispatch.
 
 Runtime-selected native methods that need distinct argument plans select their
 concrete class in EIR before evaluating the arguments. This includes variadic
@@ -880,6 +943,14 @@ run time. A `Closure|null` value (`?Closure`) can only hold a descriptor, so its
 invocation calls the descriptor directly and links no selector at all, unless
 the program has eval support, whose closures are objects.
 
+Callable-array dispatch selects its target before normalizing arguments and
+invoking the descriptor. Instance targets converge on one owning invocation
+path, while static targets converge on one borrowed invocation path. This keeps
+the original candidate order, selector storage, eval fallback and cleanup policy
+without copying argument conversion and invocation for every candidate. The
+string-only callable-array form uses the same borrowed join. The argument
+container remains owned by its original EIR lifetime guards.
+
 The EIR module fixed point can specialize an already-direct numeric closure
 call when every actual argument, including captures, is exactly `int` or
 `float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded
@@ -1059,9 +1130,19 @@ header's first word:
 | `$o->name = $v` | `lower_mixed_static_prop_set` | one compare per class in the build that declares `name` and can hold this value |
 | `$o->{$expr} = $v` | `lower_runtime_mixed_prop_set` | the same compare, then a name comparison per candidate |
 
-A match stores straight into that class's declared slot. A **stdClass** payload and a **non-object**
-payload both fall through to `__rt_mixed_property_set`, which writes a dynamic property for the
-first and drops the write for the second — PHP's *attempt to assign property on non-object*.
+A match stores straight into that class's declared slot. A class that keeps the name in its own
+per-instance hash gets a hash arm, and a `readonly` class or an enum gets an arm that raises PHP's
+`Cannot create dynamic property C::$p`, since neither may hold a dynamic property. A **stdClass**
+payload falls through to `__rt_mixed_property_set`, which writes a dynamic property.
+
+Receivers that are not property-bearing objects never reach the dispatch. EIR lowering
+(`property_write_receiver.rs`) tests the boxed receiver after the right-hand side runs and raises
+PHP's Error: `Attempt to assign property "p" on int` (or `on true`, `on array`, and so on, with
+`modify` for an intermediate hop) for a non-object, and `Cannot create dynamic property
+Closure::$p` for a Closure, which elephc keeps in callable storage rather than as an object with a
+property table. `__rt_mixed_property_set` owns one reference to the value cell it is handed and
+releases it when it stores nothing, which now happens only for a builtin whose compiler-owned
+layout reserves no property hash (`ArrayObject`, for example).
 
 Until issue #1094 only the runtime-name spelling dispatched. The static-name spelling went straight
 to `__rt_mixed_property_set`, whose class-id check only admits stdClass, so `$o->n = 9` through a
@@ -1163,6 +1244,23 @@ defaults, `ReflectionClass::getConstant()` / `getConstants()`,
 
 ## Backend Contract
 
+Under `--web`, request superglobals use native string-keyed hashes in every
+scope. Plain assignments from `mixed` values or unrestricted PHP `array`
+returns must coerce their boxed container into that hash layout before
+`StoreGlobal`. Otherwise a later `LoadGlobal` passes the boxed cell to a hash
+reader. Assignment coercion retains the replacement independently of previous
+array aliases. A boxed PHP array is first unboxed through an indexed view, then
+`ArrayToHash` inspects its runtime heap kind and either passes a hash through or
+rebuilds an indexed array. Ordinary CLI global storage remains boxed.
+
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
 - Shared runtime, ABI, platform, and metadata helpers belong in
   `src/codegen_support/`.
+
+Compiler-generated surplus-argument collectors can pass unchanged through a
+contravariant method adapter when both signatures have the same trailing
+`array<mixed>` collector, reference shape and optional-count protocol. The
+adapter boxes only the fixed prefix and keeps the original tail alive through
+the call. It does not append an empty collector or infer an unknown source
+variadic count. User-declared variadics and hidden actual-count slots retain
+their existing checks.

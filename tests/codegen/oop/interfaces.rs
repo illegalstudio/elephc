@@ -908,3 +908,58 @@ echo $tags->dump();
     );
     assert_eq!(out, "Greeter=English;Logger=Stderr;");
 }
+
+/// Generated argument snapshots survive contravariant interface and constructor wrappers.
+#[test]
+fn test_interface_generated_collectors_preserve_arguments_and_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+
+// Backtraces require generated argument snapshots on every source frame.
+$ignored_trace = debug_backtrace();
+unset($ignored_trace);
+
+interface GeneratedCollectorCache {
+    public function __construct(string $location, string $name, $type);
+    public function inspect(string $label, float $number);
+}
+
+class GeneratedCollectorCacheValue implements GeneratedCollectorCache {
+    public array $constructor_args = array();
+    public function __construct(mixed $location, mixed $name, mixed $type) {
+        $this->constructor_args = func_get_args();
+    }
+    public function inspect(mixed $label, mixed $number): mixed {
+        return array($label, $number, func_num_args(), func_get_args());
+    }
+}
+
+function generated_collector_read(GeneratedCollectorCache $cache, string $label, float $number): mixed {
+    return $cache->inspect($label, $number);
+}
+
+function generated_collector_extra(GeneratedCollectorCache $cache): mixed {
+    return $cache->inspect('extra', 2.5, 'tail', array('nested' => 7));
+}
+
+$cache = new GeneratedCollectorCacheValue('memory', 'cafés', 'spc', 'ctor-tail');
+$results = array($cache->constructor_args, generated_collector_read($cache, 'plain', 1.5),
+    generated_collector_extra($cache));
+$read = $cache->inspect(...);
+$results[] = $read('captured', 3.5, null, 9);
+unset($read, $cache);
+$cache = new GeneratedCollectorCacheValue(null, 7, array('type' => 'spi'));
+$results[] = $cache->constructor_args;
+unset($cache);
+echo json_encode($results, JSON_THROW_ON_ERROR), "\n";
+unset($results);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[\"memory\",\"caf\\u00e9s\",\"spc\",\"ctor-tail\"],[\"plain\",1.5,2,[\"plain\",1.5]],[\"extra\",2.5,4,[\"extra\",2.5,\"tail\",{\"nested\":7}]],[\"captured\",3.5,4,[\"captured\",3.5,null,9]],[null,7,{\"type\":\"spi\"}]]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Collector forwarding and temporary retirement also hold without EIR optimization.
+#[test]
+fn test_interface_generated_collectors_preserve_arguments_and_owners_no_ir_opt() {
+    without_ir_opt(test_interface_generated_collectors_preserve_arguments_and_owners);
+}

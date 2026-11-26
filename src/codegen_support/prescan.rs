@@ -7,13 +7,16 @@
 //!
 //! Key details:
 //! - The scan must not evaluate PHP side effects; it only recognizes declarations and literal `define()` calls.
+//! - The `--web` catch-all `try` around the top level is transparent to the scan.
+//! - AST tail sinking keeps the statements `stmt_declares_scanned_constant` names singular, so
+//!   an optimized top level still holds them.
 
 use std::collections::HashMap;
 
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
 use crate::codegen_support::platform::{Platform, Target};
-use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
 use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
@@ -120,7 +123,7 @@ pub(crate) fn collect_constants(
 /// Visits `const` declarations and `define()` function calls, inserting each
 /// constant's name, expression, and inferred type into `constants`. Skips nested
 /// functions/classes; only processes statement bodies at the top level and within
-/// `IncludeOnceGuard` or synthetic bodies.
+/// `IncludeOnceGuard`, synthetic bodies, or the `--web` catch-all `try`.
 fn collect_constant_decls(
     stmts: &[Stmt],
     constants: &mut HashMap<String, (ExprKind, PhpType)>,
@@ -155,24 +158,47 @@ fn collect_constant_decls(
                 };
                 constants.entry(name.clone()).or_insert(resolved);
             }
-            StmtKind::ExprStmt(expr) => {
-                if let ExprKind::FunctionCall { name, args } = &expr.kind {
-                    if name.as_str() == "define" && args.len() == 2 {
-                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                            constants.entry(const_name.clone()).or_insert((
-                                args[1].kind.clone(),
-                                constant_expr_type(&args[1].kind),
-                            ));
-                        }
-                    }
+            StmtKind::ExprStmt(_) => {
+                if let Some((const_name, value)) = literal_define(stmt) {
+                    constants.entry(const_name.to_string()).or_insert((
+                        value.kind.clone(),
+                        constant_expr_type(&value.kind),
+                    ));
                 }
             }
             StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
                 collect_constant_decls(body, constants);
             }
+            // `--web` runs the whole top level inside this catch-all, which must not hide its
+            // `define()` calls: they stay top-level statements, exactly as without `--web`.
+            StmtKind::Try { try_body, catches, .. }
+                if catches.iter().any(|clause| crate::web_prelude::answers_uncaught(&clause.body)) =>
+            {
+                collect_constant_decls(try_body, constants);
+            }
             _ => {}
         }
     }
+}
+
+/// Returns the name and value of a `define("NAME", value)` statement the scan registers.
+fn literal_define(stmt: &Stmt) -> Option<(&str, &Expr)> {
+    let StmtKind::ExprStmt(expr) = &stmt.kind else { return None };
+    let ExprKind::FunctionCall { name, args } = &expr.kind else { return None };
+    if name.as_str() != "define" || args.len() != 2 {
+        return None;
+    }
+    let ExprKind::StringLiteral(const_name) = &args[0].kind else { return None };
+    Some((const_name, &args[1]))
+}
+
+/// Returns whether `stmt` declares a constant the scan reads only where it stands.
+///
+/// A `const` declaration or a literal `define()` call is registered at the top level and in
+/// the bodies the scan enters. A pass that moves one into an `if` branch, as AST tail sinking
+/// would, hides it: reads in functions then lower without its value or type.
+pub(crate) fn stmt_declares_scanned_constant(stmt: &Stmt) -> bool {
+    matches!(stmt.kind, StmtKind::ConstDecl { .. }) || literal_define(stmt).is_some()
 }
 
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.
@@ -272,5 +298,28 @@ mod tests {
         );
         assert!(!ios.contains_key("SIGCHLD"));
         assert!(!ios.contains_key("PCNTL_EAGAIN"));
+    }
+
+    /// Verifies the `--web` catch-all keeps top-level `define()` calls visible to the scan,
+    /// while an ordinary `try` still hides the ones it guards.
+    #[test]
+    fn test_web_catch_all_keeps_top_level_defines() {
+        use crate::codegen_support::platform::Arch;
+        use crate::synthetic_class::{e_call, e_str, s_expr};
+
+        let define = |name: &str, value: &str| s_expr(e_call("define", vec![e_str(name), e_str(value)]));
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let web = crate::web_prelude::wrap_resolved_catch_all(vec![define("WEB_PLUGIN_DIR", "/x/plugins")]);
+        assert!(matches!(web.first().map(|stmt| &stmt.kind), Some(StmtKind::Try { .. })));
+        let constants = collect_constants(&web, target);
+        assert!(matches!(&constants["WEB_PLUGIN_DIR"], (ExprKind::StringLiteral(value), PhpType::Str)
+            if value == "/x/plugins"));
+
+        let user_try = vec![Stmt::new(
+            StmtKind::Try { try_body: vec![define("GUARDED_DIR", "/y")], catches: Vec::new(),
+                finally_body: Some(Vec::new()) },
+            crate::span::Span::dummy(),
+        )];
+        assert!(!collect_constants(&user_try, target).contains_key("GUARDED_DIR"));
     }
 }

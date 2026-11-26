@@ -3952,3 +3952,18 @@ fn test_error_enum_duplicate_value_names_both_cases() {
         "Duplicate value in enum F for cases A and B",
     );
 }
+
+/// A source interface redeclaration keeps a strict return contract despite ReturnTypeWillChange.
+#[test]
+fn test_iterator_return_type_will_change_keeps_source_contract_strict() {
+    expect_error(r#"<?php
+interface StrictLegacyIterator extends Iterator { public function current(): string; }
+class InvalidLegacyIterator implements StrictLegacyIterator {
+    #[\ReturnTypeWillChange] public function current(): int { return 1; }
+    public function next(): void {}
+    public function key(): mixed { return 0; }
+    public function valid(): bool { return false; }
+    public function rewind(): void {}
+}
+"#, "incompatible return type int (interface returns string)");
+}

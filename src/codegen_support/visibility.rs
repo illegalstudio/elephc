@@ -1,13 +1,14 @@
 //! Purpose:
-//! Symbol-visibility post-processing for `--emit cdylib` artifacts: appends
+//! Symbol-visibility post-processing for generated artifacts: appends
 //! ELF `.hidden` or Mach-O `.private_extern` directives for internal globals.
 //!
 //! Called from:
 //! - `crate::codegen_support::driver_support::generate_runtime_with_features_pic()` for
 //!   the PIC runtime object.
-//! - `crate::codegen::finalize_user_asm()` for cdylib user objects.
+//! - `crate::codegen::finalize_user_asm()` for generated user objects.
 //!
 //! Key details:
+//! - Final user assembly transfers its owned buffer so visibility suffixes do not copy the body.
 //! - Hidden visibility is what makes the cdylib correct and linkable: internal
 //!   globals (`.comm` buffers, data-section labels, runtime routines) must not
 //!   be preemptible, otherwise two elephc modules loaded into one process would
@@ -31,12 +32,12 @@ pub(crate) fn append_hidden_directives(
     exported: &HashSet<String>,
     platform: crate::codegen_support::platform::Platform,
 ) -> String {
-    append_hidden_directives_with_extras(asm, exported, platform, &[])
+    append_hidden_directives_with_extras(asm.to_string(), exported, platform, &[])
 }
 
-/// Appends platform visibility directives for declared globals plus linker-supplied internals.
+/// Appends visibility directives using the owned assembly buffer, without copying its body.
 pub(crate) fn append_hidden_directives_with_extras(
-    asm: &str,
+    asm: String,
     exported: &HashSet<String>,
     platform: crate::codegen_support::platform::Platform,
     additional_internal: &[&str],
@@ -50,7 +51,7 @@ pub(crate) fn append_hidden_directives_with_extras(
 
 /// Scans global declarations and appends one deterministic visibility directive per symbol.
 fn append_visibility_directives(
-    asm: &str,
+    mut asm: String,
     exported: &HashSet<String>,
     directive: &str,
     additional_internal: &[&str],
@@ -77,21 +78,19 @@ fn append_visibility_directives(
         hidden.push(symbol.to_string());
     }
     if hidden.is_empty() {
-        return asm.to_string();
+        return asm;
     }
-    let mut out = String::with_capacity(asm.len() + hidden.len() * 16);
-    out.push_str(asm);
-    if !out.ends_with('\n') {
-        out.push('\n');
+    if !asm.ends_with('\n') {
+        asm.push('\n');
     }
-    out.push_str("\n// -- internal symbols are local to the cdylib public ABI --\n");
+    asm.push_str("\n// -- internal symbols are local to the cdylib public ABI --\n");
     for symbol in hidden {
-        out.push_str(directive);
-        out.push(' ');
-        out.push_str(&symbol);
-        out.push('\n');
+        asm.push_str(directive);
+        asm.push(' ');
+        asm.push_str(&symbol);
+        asm.push('\n');
     }
-    out
+    asm
 }
 
 #[cfg(test)]
@@ -147,7 +146,7 @@ mod tests {
         let asm = ".globl roundtrip\nroundtrip:\n";
         let exported: HashSet<String> = ["roundtrip".to_string()].into_iter().collect();
         let out = append_hidden_directives_with_extras(
-            asm,
+            asm.to_string(),
             &exported,
             Platform::Linux,
             &["_init", "_fini"],
@@ -155,5 +154,45 @@ mod tests {
         assert!(out.contains(".hidden _init\n"));
         assert!(out.contains(".hidden _fini\n"));
         assert!(!out.contains(".hidden roundtrip"));
+    }
+
+    /// Every supported target reuses reserved input storage and retains exact directive order.
+    #[test]
+    fn owned_visibility_reuses_reserved_buffer_for_every_target() {
+        use crate::codegen_support::platform::Target;
+
+        let source = "  .globl public\npublic:\n.globl internal\n.comm storage, 64, 3\n.globl internal";
+        let exported: HashSet<String> = ["public".to_string()].into_iter().collect();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let directive = if target.platform == Platform::MacOS { ".private_extern" } else { ".hidden" };
+            let mut input = String::with_capacity(1024 * 1024);
+            input.push_str(source);
+            let original_buffer = input.as_ptr();
+            let original_capacity = input.capacity();
+            let output = append_hidden_directives_with_extras(
+                input, &exported, target.platform, &["extra", "public", "", "extra", "internal"],
+            );
+            assert_eq!(output.as_ptr(), original_buffer, "{name}: body must not be copied");
+            assert_eq!(output.capacity(), original_capacity, "{name}: reserved capacity must survive");
+            assert_eq!(output, format!(
+                "{source}\n\n// -- internal symbols are local to the cdylib public ABI --\n{directive} extra\n{directive} internal\n{directive} storage\n",
+            ), "{name}: visibility and declaration order must remain exact");
+        }
+    }
+
+    /// Empty inputs and fully exported inputs return the original allocation without a suffix.
+    #[test]
+    fn owned_visibility_without_internals_keeps_the_input_allocation() {
+        let exported: HashSet<String> = ["public".to_string()].into_iter().collect();
+        for source in ["", "    ret\n", ".globl public\npublic:"] {
+            let mut input = String::with_capacity(4096);
+            input.push_str(source);
+            let original_buffer = input.as_ptr();
+            let output = append_hidden_directives_with_extras(input, &exported, Platform::Linux, &[]);
+            assert_eq!(output.as_ptr(), original_buffer, "unchanged assembly must not be copied");
+            assert_eq!(output, source);
+            assert_eq!(output.capacity(), 4096);
+        }
     }
 }

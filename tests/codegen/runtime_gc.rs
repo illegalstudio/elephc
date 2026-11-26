@@ -26,6 +26,8 @@ mod borrowed_string_reads;
 mod shared_property_reads;
 mod foreach_hash_scalars;
 mod global_return_owners;
+mod xml_mixed_append;
+mod shared_property_writes;
 mod native_raw_property_guards;
 mod late_string_arguments;
 mod native_isset_key_owners;
