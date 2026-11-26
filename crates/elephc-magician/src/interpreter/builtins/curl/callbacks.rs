@@ -449,7 +449,7 @@ where
                             // method/closure callable thousands of times would be pure overhead.
                             let (callable, owners) =
                                 eval_callable(cell, context, values)?.into_parts();
-                            for owner in owners {
+                            if let Some(owner) = owners {
                                 receiver_owners.stage(owner);
                             }
                             Some(callable)
