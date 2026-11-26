@@ -379,6 +379,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
                 f"{php['value']} in PHP {baseline['php_version']}: fix the catalog value or "
                 f"record the divergence in KNOWN_VALUE_DIVERGENCES with its reason"
             )
+
     return functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, errors
 
 

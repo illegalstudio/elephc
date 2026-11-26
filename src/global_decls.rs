@@ -259,6 +259,7 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
                 collect_in_expr(value, names);
             }
         },
+        ExprKind::Reference(inner) => collect_in_expr(inner, names),
         // `new Box<int>(…)` before instantiation: its arguments are ordinary expressions and the
         // declarations inside them still count.
         ExprKind::NewGeneric { args, .. } => {

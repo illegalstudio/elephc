@@ -146,6 +146,7 @@ fn mark_main_expr_strict_types(expr: &mut Expr) {
         ExprKind::Runtime(runtime) => {
             for value in runtime.exprs_mut() { mark_main_expr_strict_types(value); }
         },
+        ExprKind::Reference(inner) => mark_main_expr_strict_types(inner),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             mark_main_strict_types(prelude);
             mark_main_expr_strict_types(target);

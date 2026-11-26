@@ -83,6 +83,8 @@ pub struct RuntimeFnDescriptor {
 /// Stable semantic identity for one runtime function callable from EIR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeFnId {
+    /// Escapes bytes selected by a literal character list and range expression.
+    Addcslashes,
     ArrayAll,
     ArrayAny,
     ArrayChunk,
@@ -684,6 +686,8 @@ pub enum RuntimeFnId {
     MbEreg,
     /// Parses multibyte query input into a live output reference using Core INI settings.
     MbParseStr,
+    /// Internal byte-preserving parser behind `parse_str()`.
+    ParseStr,
     /// Converts live variables, arrays, and object properties through shared mbstring policy.
     MbConvertVariables,
     /// Encodes and sends a message using shared mbstring language settings.
@@ -1121,6 +1125,19 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMerge if arg_types.iter().any(PhpType::is_php_array) => {
                 PhpType::php_array()
             }
+            // The boxed merge helper installs a Mixed cell in every ordinary result entry.
+            // A concrete hash result must declare that storage even when the checker's
+            // logical value type is narrower, or a concrete reader copies the cell address.
+            RuntimeFnId::ArrayMerge
+                if arg_types.iter().any(|ty| {
+                    matches!(ty.codegen_repr(), PhpType::AssocArray { .. })
+                }) =>
+            {
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
@@ -1233,6 +1250,32 @@ impl RuntimeFnId {
                     (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
                     (Some(PhpType::Mixed | PhpType::Union(_)), PhpType::AssocArray { .. })
                 ) =>
+            {
+                false
+            }
+            // The boxed merge helper writes Mixed cells into an ordinary hash. The checker's
+            // concrete array shape describes the logical values, not that storage, so the
+            // backend must derive its own Mixed-valued hash type.
+            RuntimeFnId::ArrayMerge
+                if arg_types.iter().any(|ty| {
+                    matches!(
+                        ty.codegen_repr(),
+                        PhpType::AssocArray { .. } | PhpType::Mixed
+                    )
+                }) && matches!(
+                    checked.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                ) =>
+            {
+                false
+            }
+            // A Mixed-valued hash stores boxed cells, so `array_values()` must derive its
+            // element storage from the operand, not from the checker's narrower logical type.
+            RuntimeFnId::ArrayValues
+                if matches!(
+                    arg_types.first().map(PhpType::codegen_repr),
+                    Some(PhpType::AssocArray { value, .. }) if value.codegen_repr() == PhpType::Mixed
+                ) && matches!(checked.codegen_repr(), PhpType::Array(_)) =>
             {
                 false
             }
@@ -1396,7 +1439,11 @@ impl RuntimeFnId {
         }
         match self {
             // Invalid `..` charlists emit PHP warnings and can invoke a user error handler.
-            RuntimeFnId::Chop | RuntimeFnId::Ltrim | RuntimeFnId::Rtrim | RuntimeFnId::Trim => {
+            RuntimeFnId::Chop
+            | RuntimeFnId::Ltrim
+            | RuntimeFnId::Rtrim
+            | RuntimeFnId::Trim
+            | RuntimeFnId::Addcslashes => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
                         | crate::ir::Effects::ALLOC_HEAP.bits()
@@ -2263,6 +2310,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbGetInfo
             | RuntimeFnId::SharedIni
             | RuntimeFnId::MbParseStr
+            | RuntimeFnId::ParseStr
             | RuntimeFnId::MbHttpInput
             | RuntimeFnId::MbRegexEncoding
             | RuntimeFnId::MbRegexSetOptions
@@ -2527,6 +2575,7 @@ impl RuntimeFnId {
             Self::MbGetInfo => Some(RuntimeBuiltinId::MbGetInfo),
             Self::SharedIni => Some(RuntimeBuiltinId::SharedIni),
             Self::MbParseStr => Some(RuntimeBuiltinId::MbParseStr),
+            Self::ParseStr => Some(RuntimeBuiltinId::ParseStr),
             Self::MbSendMail => Some(RuntimeBuiltinId::MbSendMail),
             Self::MbHttpInput => Some(RuntimeBuiltinId::MbHttpInput),
             Self::MbRegexEncoding => Some(RuntimeBuiltinId::MbRegexEncoding),
@@ -2554,7 +2603,7 @@ impl RuntimeFnId {
     /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
     /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
     pub const fn runtime_callable_supported(self) -> bool {
-        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
+        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::ParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
         matches!(
             self,
@@ -2584,6 +2633,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::GetDebugType
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
+                | RuntimeFnId::Addcslashes
         )
     }
 
@@ -2635,7 +2685,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MemoryGetUsage
             | RuntimeFnId::MemoryResetPeakUsage
             => true,
-            RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            RuntimeFnId::Trim | RuntimeFnId::Addcslashes => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             // ctype accepts PHP's whole `mixed` surface and implements the non-string
             // fallback itself, so a dynamically selected source value always fits.
             RuntimeFnId::CtypeAlnum
@@ -2812,7 +2862,7 @@ impl RuntimeFnId {
         }
         if self.uses_mbstring_runtime() {
             return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
-                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
+                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::ParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
                 BuiltinResultOwnership::NonHeap
             } else { BuiltinResultOwnership::Fresh };
         }
@@ -3231,6 +3281,9 @@ impl RuntimeFnId {
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
                 // handed back can alias the subject or the character-list argument.
                 | RuntimeFnId::StrWordCount
+                // addcslashes writes into a concat reservation and publishes it, so the result
+                // never aliases the subject or the character list.
+                | RuntimeFnId::Addcslashes
                 | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strripos
@@ -3757,6 +3810,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64Decode => "base64_decode",
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
+            RuntimeFnId::Addcslashes => "addcslashes",
             RuntimeFnId::ChunkSplit => "chunk_split",
             RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
@@ -3946,6 +4000,7 @@ impl RuntimeFnId {
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
             RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",
+            RuntimeFnId::ParseStr => "__elephc_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
             RuntimeFnId::MbHttpInputLen => "mb_http_input_len",

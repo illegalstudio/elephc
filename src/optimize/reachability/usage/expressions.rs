@@ -26,6 +26,7 @@ impl Scanner<'_> {
                 self.unresolved_callable_hazard();
                 for value in runtime.exprs() { self.scan_expr(value); }
             },
+            ExprKind::Reference(inner) => self.scan_expr(inner),
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {

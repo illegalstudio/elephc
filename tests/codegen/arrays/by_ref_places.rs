@@ -323,3 +323,187 @@ echo implode(",", $b->items);
     );
     assert_eq!(out, "7,3,2,1,0");
 }
+
+/// `[&$value]` stores a hash entry that aliases the variable's storage in both directions.
+#[test]
+fn test_array_literal_reference_aliases_variable() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$value = [1, 2];
+$refs = [&$value];
+$refs[0] = 9;
+var_dump($value, $refs);
+$value = [3];
+echo $refs[0][0];
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "int(9)\narray(1) {\n  [0]=>\n  &int(9)\n}\n3"
+    );
+}
+
+/// A keyed reference element aliases the source variable as well.
+#[test]
+fn test_keyed_array_literal_reference_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "x";
+$refs = ["k" => &$value];
+echo $refs["k"];
+$refs["k"] = "y";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "xy");
+}
+
+/// Rebinding an element that already holds a reference detaches the old cell instead of
+/// writing through it, so the variable it used to alias keeps its value.
+#[test]
+fn test_array_element_reference_rebinding_detaches_the_old_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$y = 2;
+$a = [&$y];
+$a[0] = &$x;
+echo $x, "|", $y, "|", $a[0], "\n";
+$x = 3;
+echo $x, "|", $y, "|", $a[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|1
+3|2|3
+");
+}
+
+/// A first reference write into an undefined array publishes the auto-vivified hash, and the
+/// returned array keeps the reference cell that write created.
+#[test]
+fn test_first_array_element_reference_write_publishes_the_array() {
+    let out = compile_and_run(
+        r#"<?php
+function build(mixed $x): array { $a["k"] = &$x; $x = 2; return $a; }
+$v = 1;
+$a = build($v);
+echo $a["k"], "|", $v, "|", implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1|k\n");
+}
+
+/// Rebinding a packed array's element promotes the container to hash storage without moving
+/// the element's insertion position.
+#[test]
+fn test_packed_array_element_reference_rebinding_preserves_key_order() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$y = 2;
+$a = [10, 20];
+$a[0] = &$y;
+$a[0] = &$x;
+echo $x, "|", $y, "|", $a[0], "|", implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|1|0,1\n");
+}
+
+/// Binding an element to a variable that already owns a reference cell reuses that cell, so
+/// every earlier member of the set observes later writes.
+#[test]
+fn test_array_element_reference_binding_reuses_the_source_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$a = [&$x];
+$b = ["k" => 0];
+$b["k"] = &$x;
+$x = 2;
+echo $a[0], "|", $b["k"], "\n";
+"#,
+    );
+    assert_eq!(out, "2|2\n");
+}
+
+/// Repeating `&$value` in later literals reuses the variable's existing cell, so every
+/// earlier element observes the later write instead of keeping a stale copy.
+#[test]
+fn test_repeated_array_literal_references_share_one_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$a = [&$value];
+$b = [&$value];
+$c = ["k" => &$value];
+$value = 2;
+echo $a[0], $b[0], $c["k"], $value;
+"#,
+    );
+    assert_eq!(out, "2222");
+}
+
+/// The legacy `array(&$value)` spelling takes the same reference path.
+#[test]
+fn test_legacy_array_literal_reference_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$refs = array(&$value);
+$refs[0] = 2;
+echo $value;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// A reference literal is still a list: the boxed reference cells use sequential keys.
+#[test]
+fn test_reference_array_literal_is_a_list() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$refs = [&$value];
+echo array_is_list($refs) ? "list" : "map", "|";
+$value = 2;
+echo $refs[0];
+"#,
+    );
+    assert_eq!(out, "list|2");
+}
+
+/// `$array[$key] = &$value` aliases both the slot and the source variable.
+#[test]
+fn test_array_element_reference_assignment_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "1";
+$data = ["a" => 1, "b" => 2];
+$data["a"] = &$value;
+$data["a"] = "5";
+echo $value, "|";
+$value = "7";
+echo $data["a"], "|", implode(",", array_keys($data));
+"#,
+    );
+    assert_eq!(out, "5|7|a,b");
+}
+
+/// `var_dump` prints PHP's `&` only while the reference cell has another owner.
+#[test]
+fn test_var_dump_marks_shared_references_only() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$value = 1;
+$refs = [&$value];
+var_dump($refs);
+unset($value);
+var_dump($refs);
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "array(1) {\n  [0]=>\n  &int(1)\n}\narray(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+}

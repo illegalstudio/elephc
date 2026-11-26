@@ -2,7 +2,7 @@
 title: "URI builtins"
 description: "Builtins in the URI category."
 sidebar:
-  order: 124
+  order: 125
 ---
 
 ## URI builtins

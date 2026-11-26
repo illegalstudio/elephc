@@ -186,7 +186,12 @@ pub(super) fn notification_callback_value(
     }
     let mut found = None;
     for instruction in &ctx.function.instructions {
-        if instruction.op != Op::HashSet || instruction.operands.len() != 3 {
+        // Associative literals use `HashSetValue`, which detaches a replaced reference binding;
+        // a runtime `HashSet` still appears for other static hash construction paths. Both carry
+        // the same `[hash, key, value]` operands.
+        if !matches!(instruction.op, Op::HashSet | Op::HashSetValue)
+            || instruction.operands.len() != 3
+        {
             continue;
         }
         if transparent_callback_source(ctx.function, instruction.operands[0])? != params_source {

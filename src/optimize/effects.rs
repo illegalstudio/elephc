@@ -339,6 +339,7 @@ pub(super) fn callable_value_binding_effect(callable: &Expr, args: &[Expr]) -> E
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
     match &expr.kind {
         ExprKind::Runtime(_) => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
+        ExprKind::Reference(inner) => expr_effect(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

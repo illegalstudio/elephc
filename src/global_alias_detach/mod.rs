@@ -477,7 +477,8 @@ fn rewrite_expr(expr: &mut Expr, name: &str, hidden: &str) {
             rewrite_expr(left, name, hidden);
             rewrite_expr(right, name, hidden);
         }
-        ExprKind::InstanceOf { value, .. }
+        ExprKind::Reference(value)
+        | ExprKind::InstanceOf { value, .. }
         | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)

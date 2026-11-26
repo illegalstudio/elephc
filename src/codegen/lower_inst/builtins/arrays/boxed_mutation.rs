@@ -129,6 +129,22 @@ pub(super) fn prepare_boxed_array_receiver(
     receiver.store_back_after_consuming_split(ctx, array)
 }
 
+/// Loads the hash payload installed in a prepared boxed array cell into the result register.
+///
+/// The cell stays owned by its receiver; the returned table is a borrow for the next helper.
+fn load_boxed_hash_payload(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // borrow the hash installed by the promotion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // borrow the hash installed by the promotion
+        }
+    }
+    Ok(())
+}
+
 /// Transfers the owned payload at the stack top into a unique cell, then retires its old payload.
 /// The new container must already retain every old value needed after publication.
 pub(super) fn install_boxed_array_payload(
@@ -161,6 +177,12 @@ pub(super) fn install_boxed_array_payload(
 }
 
 /// Reindexes and separates a boxed array before the shared scalar comparator mutates it.
+///
+/// An indexed payload takes the established value-extraction path. A hash payload keeps its
+/// entries instead: the cell is promoted to a unique hash, the chain is relinked by value
+/// (which compares through tag-11 cells without moving them), and the result is renumbered
+/// `0..n-1` into a fresh dense hash before it replaces the cell payload. Extracting values
+/// from a hash would dereference and detach every reference cell.
 pub(super) fn lower_boxed_array_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -168,6 +190,67 @@ pub(super) fn lower_boxed_array_sort(
     name: &str,
 ) -> Result<()> {
     prepare_boxed_array_receiver(ctx, array, name)?;
+    let hash_path = ctx.next_label("boxed_sort_hash");
+    let indexed_path = ctx.next_label("boxed_sort_indexed");
+    let done = ctx.next_label("boxed_sort_done");
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the boxed array payload tag
+            ctx.emitter.instruction("cmp x9, #5");                              // is the payload an associative hash?
+            ctx.emitter.instruction(&format!("b.eq {hash_path}"));              // hashes keep their entries and cells
+            ctx.emitter.instruction("cmp x9, #4");                              // is the payload an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {indexed_path}"));           // indexed arrays keep the value extraction path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the boxed array payload tag
+            ctx.emitter.instruction("cmp r9, 5");                               // is the payload an associative hash?
+            ctx.emitter.instruction(&format!("je {hash_path}"));                // hashes keep their entries and cells
+            ctx.emitter.instruction("cmp r9, 4");                               // is the payload an indexed array?
+            ctx.emitter.instruction(&format!("je {indexed_path}"));             // indexed arrays keep the value extraction path
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &format!("{name}(): Argument #1 ($array) must be of type array"),
+    );
+
+    ctx.emitter.label(&hash_path);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    require_valid_array_result(ctx, name);
+    let helper = match name {
+        "sort" => "__rt_hash_asort",
+        "rsort" => "__rt_hash_arsort",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{other} boxed hash sort"
+            )))
+        }
+    };
+    // The promotion installs a unique hash in the cell; reload it because the link sorter
+    // answers a boolean and the dense rebuild replaces the table with a fresh allocation.
+    load_boxed_hash_payload(ctx, array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the value-sort guard reads its table from the first argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_sort_require_scalars");
+    load_boxed_hash_payload(ctx, array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the link sorter reads its table from the first argument register
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    load_boxed_hash_payload(ctx, array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    install_boxed_array_payload(ctx, array, 5)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&indexed_path);
     ctx.load_value_to_result(array)?;
     super::values::emit_loaded_boxed_array_values(
         ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
@@ -184,7 +267,9 @@ pub(super) fn lower_boxed_array_sort(
     super::sort_dispatch::emit_mixed_slot_sort(ctx, name)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_load_int_immediate(ctx.emitter, result, 1);
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Promotes the published unique cell to hash storage and relinks keys without moving values.

@@ -1035,3 +1035,35 @@ function &finallyObservedNullableReference(SimpleXMLElement $root): SimpleXMLEle
 
 supported_target_cases!(protected_nullable_object_reference_returns_use_dynamic_slot_state,
     verify_protected_nullable_object_reference_returns_use_dynamic_slot_state);
+
+/// A typed by-reference parameter cannot be installed as an array reference element.
+///
+/// A plain local passed to `int &$x` is a borrowed raw frame word, not a managed mixed cell,
+/// so the entry would later dereference invalid storage after the call returns.
+#[test]
+fn typed_reference_parameter_array_element_is_refused_on_every_target() {
+    let source = r#"<?php
+function refs(int &$x): array { return [&$x]; }
+$n = 1;
+$a = refs($n);
+"#;
+    for name in TARGETS {
+        let error = match super::try_lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        ) {
+            Ok(_) => panic!("{name}: typed reference array element must be refused"),
+            Err(LoweringError::Unsupported(error)) => error,
+            Err(other) => panic!("{name}: expected a refusal, got {other:?}"),
+        };
+        assert!(
+            error.message.contains(
+                "A typed by-reference variable cannot back an array reference element"
+            ),
+            "{name}: {}",
+            error.message
+        );
+    }
+}

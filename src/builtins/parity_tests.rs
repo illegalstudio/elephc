@@ -56,6 +56,11 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("clamp_prelude", crate::clamp_prelude::clamp_declarations()),
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("core_prelude", crate::core_prelude::core_declarations()),
+        (
+            "parse_str_prelude",
+            crate::parse_str_prelude::parse_str_declarations(&Default::default()),
+        ),
+        ("locale_prelude", crate::locale_prelude::locale_declarations()),
         ("random_prelude", crate::random_prelude::random_declarations()),
         ("tz_prelude", crate::tz_prelude::tz_declarations()),
         (
@@ -82,6 +87,14 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
         ("simplexml_prelude", crate::simplexml_prelude::declarations()),
         ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
+        (
+            "filter_prelude",
+            crate::filter_prelude::filter_declarations(
+                crate::filter_prelude::request::FilterDefault::default(),
+                true,
+                false,
+            ),
+        ),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations(134_217_728, crate::tokenizer_prelude::IniMemorySource::None)),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
@@ -441,8 +454,11 @@ fn prelude_contracts_match_their_injected_signatures() {
             let tidy_adapter = name.starts_with("tidy_")
                 && matches!(param.name, "config" | "encoding")
                 && actual.php_type == "mixed";
+            // The filter prelude widens every non-`mixed` parameter so its explicit adapter
+            // can reproduce internal filter's weak coercion and TypeError ordering.
+            let filter_adapter = name.starts_with("filter_") && actual.php_type == "mixed";
             assert!(
-                tidy_adapter || php_type_matches(param.ty, &actual.php_type),
+                tidy_adapter || filter_adapter || php_type_matches(param.ty, &actual.php_type),
                 "{at}: declared type `{}` is not the contract's {:?}",
                 actual.php_type,
                 param.ty

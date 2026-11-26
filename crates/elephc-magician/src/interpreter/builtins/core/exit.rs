@@ -26,7 +26,7 @@ pub(in crate::interpreter) fn eval_builtin_exit(
         [] => 0,
         [status] => {
             let status = eval_expr(status, context, scope, values)?;
-            eval_int_value(status, values)?
+            eval_exit_status_value(&[status], values)?
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
@@ -49,7 +49,21 @@ pub(in crate::interpreter) fn eval_exit_status_value(
 ) -> Result<i64, EvalStatus> {
     match evaluated_args {
         [] => Ok(0),
-        [status] => eval_int_value(*status, values),
+        [status] => {
+            let tag = values.type_tag(*status)?;
+            if tag == EVAL_TAG_STRING {
+                values.echo(*status)?;
+                Ok(0)
+            } else if tag == EVAL_TAG_NULL {
+                // PHP 8's `string|int` status deprecates a null before exiting with 0.
+                values.warning(
+                    "Deprecated: exit(): Passing null to parameter #1 ($status) of type string|int is deprecated\n",
+                )?;
+                Ok(0)
+            } else {
+                eval_int_value(*status, values)
+            }
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

@@ -47,6 +47,8 @@ pub mod goto_lowering;
 pub(crate) mod global_decls;
 mod global_alias_detach;
 mod progress;
+/// PHP `ext/filter` standard-library prelude injection.
+pub mod filter_prelude;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
 /// PHP 8.6 `Time\Duration` and `Time\TimeException` standard-library prelude injection.
@@ -58,6 +60,7 @@ pub mod clamp_prelude;
 pub mod php86_declarations;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
+pub mod parse_str_prelude;
 pub mod random_prelude;
 pub mod uri_prelude;
 /// Incremental hashing standard-library prelude injection.
@@ -78,8 +81,12 @@ pub mod ir_passes;
 #[doc(hidden)]
 pub mod link_plan;
 /// Lexer for tokenizing PHP source.
+/// Shared mbstring and Core INI startup argument resolution.
+pub mod mbstring_startup;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
+/// PHP `setlocale` standard-library prelude injection.
+pub mod locale_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
 /// Curated project-native dependency management and artifact resolution.
@@ -150,7 +157,6 @@ pub mod xml_prelude;
 mod simplexml_prelude;
 pub mod tidy_prelude;
 pub mod fileinfo_prelude;
-pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// TOKEN_PARSE validation through the compiler AST parser.
 pub use elephc_chopper::syntax::tokenizer_validation;

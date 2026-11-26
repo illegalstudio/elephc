@@ -242,6 +242,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::LoadLocalRefCellPtr => local_loads::lower_load_local_ref_cell_ptr(ctx, &inst),
         Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
@@ -364,6 +365,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::HashSetValue => hashes::lower_hash_set_value(ctx, &inst),
         Op::DescriptorArgSet => hashes::lower_descriptor_arg_set(ctx, &inst),
         Op::DescriptorArgKeyExists => hashes::lower_descriptor_arg_key_exists(ctx, &inst),
         Op::ThrowNamedParameterOverwrite => {

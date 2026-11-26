@@ -678,6 +678,12 @@ impl ConditionalDetach {
                 }
                 None
             }
+            ExprKind::Reference(inner) => {
+                if self.lvalue_mentions(inner) || !self.rewrite_expr(inner) {
+                    return false;
+                }
+                None
+            }
             ExprKind::InstanceOf { value, .. }
             | ExprKind::Negate(value)
             | ExprKind::Not(value)

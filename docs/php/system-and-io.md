@@ -9,8 +9,8 @@ sidebar:
 
 | Function | Signature | Description |
 |---|---|---|
-| `exit()` | `exit($code = 0): void` | Terminate program |
-| `die()` | `die($code = 0): void` | Alias for `exit()` |
+| `exit()` | `exit(string\|int $status = 0): void` | Terminate the program. A string status prints before exiting successfully; an integer status becomes the exit code. Weak mode coerces bool (`true` → 1, `false` → 0), `null` (deprecation, then 0) and floats (an in-range value truncates with PHP's precision deprecation; out-of-range values, `INF`, `-INF` and `NAN` print their PHP string spelling). A strict call site raises PHP's catchable `TypeError` for those three instead. A `mixed` status dispatches on its runtime tag, and an array, resource, or object raises the same `TypeError` in both modes. |
+| `die()` | `die(string\|int $status = 0): void` | Alias for `exit()`; diagnostics name `exit()` like PHP. |
 | `time()` | `time(): int` | Unix timestamp |
 | `microtime()` | `microtime($as_float = false): string\|float` | Current time with microsecond precision. Returns the `"0.NNNNNNNN SSSSSSSSSS"` string (fractional microseconds as 8 digits, a space, then Unix seconds) by default or when `$as_float` is `false`; returns seconds as a `float` when `$as_float` is `true`. A non-literal flag yields `string\|float` (boxed `Mixed`), resolved at runtime. |
 | `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |
@@ -77,6 +77,10 @@ HTTP request instead.
 
 Seeding is pay-for-use: only the superglobals a program actually spells are built,
 which is what PHP's `auto_globals_jit` does for the same reason.
+
+`$_ENV` is populated only when `variables_order` contains `E`, and `$_SERVER` only when it
+contains `S`; the CLI default `EGPCS` populates both, and an override without `E` leaves
+`$_ENV` empty, as PHP does.
 
 `$_ENV` and `$_SERVER` are **snapshots taken before the program ran**, so a later
 `putenv()` does not reach them — only `getenv()`. PHP has the same asymmetry:

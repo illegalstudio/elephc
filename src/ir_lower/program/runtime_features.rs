@@ -26,6 +26,10 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.directory_resource |= features.directory_resource;
     module.required_runtime_features.handler_state |= features.handler_state;
     module.required_runtime_features.object_clone |= features.object_clone;
+    module.required_runtime_features.addcslashes |= features.addcslashes;
+    // The descriptor invoker emits a wrapper for every PHP-visible builtin it can dispatch,
+    // including `addcslashes()`, so the helper must exist even when no direct call is present.
+    module.required_runtime_features.addcslashes |= module.required_runtime_features.descriptor_invoker;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -105,6 +109,11 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
             function,
             is_mbstring_mime_callable_name,
         );
+        features.addcslashes |= function_references_callable_runtime(
+            module,
+            function,
+            is_addcslashes_callable_name,
+        );
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
         }
@@ -177,6 +186,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                             Some(ResourceCleanupKind::StreamFd) | None => {}
                         }
                         features.object_clone |= target == RuntimeFnId::CloneWith;
+                        features.addcslashes |= target == RuntimeFnId::Addcslashes;
                     }
                 }
                 Op::CoreBuiltin => {
@@ -558,6 +568,11 @@ fn function_references_callable_runtime(module: &Module, function: &Function, ac
         names.candidates(*value).is_some_and(|names|
             names.iter().any(|name| accepts(name)))
     })
+}
+
+/// Returns whether a callable name resolves to the `addcslashes()` runtime helper.
+fn is_addcslashes_callable_name(name: &str) -> bool {
+    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "addcslashes"
 }
 
 /// Resolves a callable name through the semantic registry to its optional runtime family.

@@ -37,6 +37,7 @@ AREAS: list[str] = [
     "Image",
     "XML",
     "Tidy",
+    "Filter",
     "URI",
 ]
 
@@ -52,7 +53,6 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "callables": ("Misc", "Callables"),
     "spl": ("SPL", "SPL"),
     "pointers": ("Pointer", "Pointer"),
-    "uri": ("URI", "URI"),
     # `Area::Curl` covers BOTH halves of ext/curl, and they render differently:
     #
     #  - the forty-three `internal: true` `__elephc_curl_*` entry points, which the
@@ -74,6 +74,7 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # generated pages and the CI drift gate alike. `extract.run_gen_builtins` refuses
     # to run against a default-feature exporter for exactly this reason.
     "curl": ("Network", "Network"),
+    "uri": ("URI", "URI"),
     # Prelude-provided and name-resolver-rewritten surfaces (contracts seeded from the
     # built prelude declarations and PHP's own date/calendar signatures).
     "date": ("Date", "Date"),
@@ -90,6 +91,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # `Area::Tidy`: the 24 `tidy_*` prelude functions and the `tidy`/`tidyNode`
     # classes, on a pinned static libtidy 5.8.0 from the native catalog.
     "tidy": ("Tidy", "Tidy"),
+    # `Area::Filter`: the seven filter_* prelude functions and the two
+    # Filter\* exception classes, over the `elephc_filter` bridge.
+    "filter": ("Filter", "Filter"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
 }

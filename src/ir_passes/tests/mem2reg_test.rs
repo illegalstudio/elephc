@@ -481,7 +481,7 @@ fn keeps_dynamic_eval_visible_local_in_memory() {
         b.position_at_end(entry);
         b.emit(Op::LanguageConstructCall, vec![],
             Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: false }),
-            IrType::Void, PhpType::Void, Ownership::NonHeap);
+            IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed, Ownership::MaybeOwned);
         let value = b.emit_const_i64(9);
         b.emit_store_local(slot, value);
         let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
@@ -490,6 +490,30 @@ fn keeps_dynamic_eval_visible_local_in_memory() {
     validate_function(&function).expect("input EIR is valid");
     assert!(!promote(&mut function));
     assert_eq!(traffic(&function, slot), 2);
+}
+
+/// An `exit()`/`die()` source profile is not dynamic eval: it yields void and cannot inspect
+/// the frame, so locals in the same function still promote.
+#[test]
+fn exit_source_profile_keeps_local_promotion() {
+    let mut function = Function::new("exit_profile".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        b.emit(Op::LanguageConstructCall, vec![],
+            Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: true }),
+            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let value = b.emit_const_i64(9);
+        b.emit_store_local(slot, value);
+        let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        b.terminate(Terminator::Return { value: Some(result) });
+    }
+    validate_function(&function).expect("input EIR is valid");
+    assert!(promote(&mut function));
+    assert_eq!(traffic(&function, slot), 0);
 }
 
 /// A definition before a loop must stay definite through a read-only back edge.

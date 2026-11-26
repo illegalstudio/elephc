@@ -551,6 +551,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
+
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "uri": ("uri_prelude/builders.rs", "uri", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
@@ -617,12 +618,27 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "tidy",
         "crates/elephc-builtin-contract/src/catalog_tidy.rs",
     ),
+    # The filter surface is built AST across the public/input/surface declaration modules.
+    "filter": (
+        (
+            "filter_prelude/public.rs",
+            "filter_prelude/input.rs",
+            "filter_prelude/surface.rs",
+        ),
+        "filter",
+        "crates/elephc-builtin-contract/src/catalog_filter.rs",
+    ),
 }
 
 # PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or
 # ``Area``. Both locale functions are `Area::String` (like the hash prelude) but live in
 # their own synthetic-AST prelude, so a per-name override keeps the page link truthful.
 PRELUDE_SOURCE_BY_NAME: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "parse_str": (
+        "parse_str_prelude.rs",
+        "parse_str",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "setlocale": (
         "locale_prelude.rs",
         "locale",

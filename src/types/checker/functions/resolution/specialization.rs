@@ -133,9 +133,29 @@ impl Checker {
         args: &[Expr],
         caller_env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        let stored = self.functions.get(name).cloned();
+        let regular_count = stored
+            .as_ref()
+            .map(crate::types::call_args::regular_param_count)
+            .unwrap_or(0);
         let actual_arg_types = args
             .iter()
-            .map(|arg| self.infer_type(arg, caller_env))
+            .enumerate()
+            .map(|(index, arg)| {
+                match self.infer_type(arg, caller_env) {
+                    Ok(ty) => Ok(ty),
+                    Err(error)
+                        if index < regular_count
+                            && stored.as_ref().is_some_and(|sig| {
+                                sig.ref_params.get(index).copied().unwrap_or(false)
+                            })
+                            && error.message.starts_with("Undefined variable: $") =>
+                    {
+                        Ok(PhpType::Mixed)
+                    }
+                    Err(error) => Err(error),
+                }
+            })
             .collect::<Result<Vec<_>, CompileError>>()?;
         if let Some(stored_sig) = self.functions.get_mut(name) {
             let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
@@ -208,7 +228,23 @@ impl Checker {
         let mut seen_idx = 0usize;
 
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let supplied_reference = seen_idx < regular_param_count
+                && stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
+                && !stored_sig
+                    .defaults
+                    .get(seen_idx)
+                    .and_then(Option::as_ref)
+                    .is_some();
+            let actual_ty = match self.infer_type(arg, caller_env) {
+                Ok(ty) => ty,
+                Err(error)
+                    if supplied_reference
+                        && error.message.starts_with("Undefined variable: $") =>
+                {
+                    PhpType::Mixed
+                }
+                Err(error) => return Err(error),
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }

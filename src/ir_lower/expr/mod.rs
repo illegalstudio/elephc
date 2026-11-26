@@ -127,6 +127,8 @@ mod ternary_cast;
 mod missing_string;
 pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
+
+pub(crate) use self::closures::expr_writes_local;
 mod closure_calls;
 mod descriptor_calls;
 mod descriptor_native_selections;
@@ -396,6 +398,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
 
     match &expr.kind {
         ExprKind::Runtime(_) => unreachable!("runtime fragment syntax must be lowered by Magician"),
+        ExprKind::Reference(inner) => lower_expr(ctx, inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

@@ -57,6 +57,20 @@ pub(in crate::syntax::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
+    // A static-property target carries `::` rather than the property/array postfix tokens
+    // this function normally lowers. Name the unsupported reference direction before the
+    // ordinary assignment parser reads `&` as a prefix token.
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(assign_pos + 1).map(|(token, _)| token), Some(Token::Ampersand))
+        && lhs.len() >= 2
+        && lhs[lhs.len() - 2].0 == Token::DoubleColon
+        && matches!(lhs[lhs.len() - 1].0, Token::Variable(_))
+    {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment to a static property is not supported; use `$value =& Class::$property` to alias the property",
+        ));
+    }
     let is_append = lhs.len() >= 3
         && lhs[lhs.len() - 2].0 == Token::LBracket
         && lhs[lhs.len() - 1].0 == Token::RBracket;
@@ -119,36 +133,22 @@ pub(in crate::syntax::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
-    // PHP's `$container[$index] = &$source` makes the entry and the source share one
-    // storage. For a plain-variable source this is exactly a value store (which creates
-    // the entry, including the PHP 8.6 absent WeakMap entry) followed by the existing
-    // `$source = &$container[$index]` alias. Other source shapes still need a
-    // container reference-store primitive.
     if op == AssignmentOperator::Assign
         && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
-        && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
     {
         *pos += 1;
-        let source = parse_expr(tokens, pos)?;
-        let ExprKind::Variable(source_name) = &source.kind else {
+        let source = parse_assignment_value_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        // An append needs a fresh element key before the source cell can be bound. The
+        // reference path only rewrites an existing element, so reject the form instead of
+        // silently rebinding the container itself to the source value.
+        if is_append {
             return Err(CompileError::new(
                 span,
-                "Reference assignment to an array element requires a plain variable source",
+                "Reference append (`$array[] = &$value`) is not supported",
             ));
-        };
-        expect_semicolon(tokens, pos)?;
-        let mut hoisted = EffectfulTargetLowerer::new(span);
-        let target = hoisted.stabilize_array_base(lhs_expr);
-        let value_stmt = array_element_value_assignment(target.clone(), source.clone(), span);
-        let bind_stmt = Stmt::new(
-            StmtKind::RefAssign {
-                target: source_name.clone(),
-                source: target,
-            },
-            span,
-        );
-        let final_stmt = StmtKind::Synthetic(vec![value_stmt, bind_stmt]);
-        return Ok(Some(hoisted.finish_if_used(final_stmt, span)));
+        }
+        return lower_postfix_reference_assignment(lhs_expr, source, span).map(Some);
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     if computed_indexed_update && matches!(tokens.get(*pos).map(|(token, _)| token),
@@ -588,6 +588,20 @@ pub(in crate::syntax::parser::stmt) fn try_parse_scoped_property_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(assign_pos + 1).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        if matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment to a static property is not supported; use `$value =& Class::$property` to alias the property",
+            ));
+        }
+        // A scoped receiver can still lead to a property or array target (`Foo::make()->p`,
+        // `Foo::items()[0]`); let the postfix writer name the actual unsupported shape.
+        return try_parse_postfix_assignment(tokens, pos, span);
+    }
+
     // A static property followed by object access is an instance-property target,
     // not a static store. The shared expression prelude evaluates an effectful RHS before
     // the delayed static receiver fetch, matching PHP instead of retaining a stale object.
@@ -953,6 +967,90 @@ fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
         InstanceOfTarget::Name(_) => true,
         InstanceOfTarget::Generic(_) => true,
         InstanceOfTarget::Expr(expr) => can_replay_assignment_target(expr),
+    }
+}
+
+/// Lowers `$place = &$source` for the one supported target: a plain local array element.
+///
+/// PHP makes the written slot itself the source variable's reference. The array writer
+/// rebinds the hash entry to the source local's managed cell, so an existing reference on
+/// the entry is detached without being written through and an existing source cell is
+/// reused. Every other target shape is rejected by
+/// [`unsupported_reference_assignment_target`] because it has no storage-replacement
+/// primitive yet, and a non-variable source cannot be rebound by the writer.
+fn lower_postfix_reference_assignment(
+    target: Expr,
+    source: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if let Some(message) = unsupported_reference_assignment_target(&target) {
+        return Err(CompileError::new(span, message));
+    }
+    if !matches!(source.kind, ExprKind::Variable(_)) {
+        return Err(CompileError::new(
+            source.span,
+            "Reference assignment source must be a variable",
+        ));
+    }
+    // `unsupported_reference_assignment_target` accepts exactly this shape; keep the
+    // fallback for a future target variant instead of panicking.
+    let ExprKind::ArrayAccess { array, index } = target.kind else {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment is only supported for a variable's array element",
+        ));
+    };
+    let ExprKind::Variable(array_name) = array.kind else {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment to an array element requires a variable array",
+        ));
+    };
+    // Keep the reference marker in the value position so the array writer can bind the hash
+    // entry to the source's managed cell instead of first storing a value through whatever
+    // reference the entry already holds.
+    let reference = Expr::new(ExprKind::Reference(Box::new(source)), span);
+    let store = StmtKind::ArrayAssign {
+        array: array_name,
+        index: *index,
+        value: reference,
+    };
+    Ok(Stmt::new(store, span))
+}
+
+/// Returns the diagnostic for `$place = &$source` targets the reference writer cannot represent.
+///
+/// A plain local array element is written by replacing the entry's storage with the source
+/// variable's managed cell, so an existing reference on the entry is detached without being
+/// written through and an existing cell on the source is reused. A property, static property,
+/// property array element, or nested array element has no storage-replacement primitive yet:
+/// the two-step desugaring would write through an old reference and would rebind the source
+/// local instead of making the target join its reference set. Reject those shapes instead of
+/// silently producing different PHP semantics.
+fn unsupported_reference_assignment_target(target: &Expr) -> Option<&'static str> {
+    match &target.kind {
+        ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => Some(
+            "Reference assignment to a property is not supported; use `$value =& $object->property` to alias the property",
+        ),
+        ExprKind::StaticPropertyAccess { .. } => Some(
+            "Reference assignment to a static property is not supported; use `$value =& Class::$property` to alias the property",
+        ),
+        ExprKind::ArrayAccess { array, .. } => match &array.kind {
+            ExprKind::Variable(name) if name == "GLOBALS" => {
+                Some("Reference assignment to a $GLOBALS element is not supported")
+            }
+            ExprKind::Variable(_) => None,
+            ExprKind::ArrayAccess { .. } => {
+                Some("Reference assignment to a nested array element is not supported")
+            }
+            ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. } => {
+                Some("Reference assignment to a property array element is not supported")
+            }
+            _ => Some("Reference assignment to an array element requires a variable array"),
+        },
+        _ => Some("Reference assignment is only supported for a variable's array element"),
     }
 }
 

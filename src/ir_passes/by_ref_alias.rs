@@ -106,6 +106,7 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
                         | Op::ArrayElemAddr
                         | Op::ArraySet
                         | Op::HashSet
+                        | Op::HashSetValue
                         | Op::ArraySetMixedKey
                         | Op::ArrayGetMixedKey
                         | Op::ArrayGetMixedKeySilent

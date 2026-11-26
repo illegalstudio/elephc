@@ -545,7 +545,7 @@ A namespaced constant may reuse the name of a predefined one: `namespace Math; c
 | `$_POST` | `array(string => mixed)` | Form/body parameters (`--web`); empty array in CLI builds |
 | `$_COOKIE` | `array(string => mixed)` | Request cookies (`--web`); empty array in CLI builds |
 | `$_FILES` | `array(string => mixed)` | Uploaded files (`--web`); empty array in CLI builds |
-| `$_ENV` | `array(string => mixed)` | The process environment, equal to `getenv()` entry for entry. A later `putenv()` does **not** reach it — it is a snapshot taken before the program ran, as it is in PHP |
+| `$_ENV` | `array(string => mixed)` | The process environment, equal to `getenv()` entry for entry, when `variables_order` contains `E` (the CLI default `EGPCS` does, so `$_ENV` is populated; an override without `E` leaves it empty). A later `putenv()` does **not** reach it — it is a snapshot taken before the program ran, as it is in PHP |
 | `$_REQUEST` | `array(string => mixed)` | Empty array in CLI builds |
 | `$_SESSION` | `array(string => mixed)` | Exists only after `session_start()` — `isset($_SESSION)` is `false` before it, exactly as in PHP |
 

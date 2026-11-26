@@ -57,6 +57,8 @@ pub enum Area {
     Xml,
     /// `ext/tidy` surface declared by the tidy prelude over the `elephc_tidy` bridge.
     Tidy,
+    /// `ext/filter` surface declared by the filter prelude over the `elephc_filter` bridge.
+    Filter,
     /// The `ext/random` surface declared by the random prelude: its procedural functions,
     /// `Random\*` classes, `MT_RAND_*` constants, and internal helpers.
     Random,

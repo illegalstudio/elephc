@@ -98,8 +98,31 @@ pub(super) fn lower_named_args_with_signature_options(
         let normalized = plan.normalized_args();
         return lower_normalized_args(ctx, sig, &plan, &normalized);
     }
+    // A by-reference array output can be read by a later named argument in source order.
+    // PHP replaces the output only after every argument has been evaluated, so defer both
+    // the output seed and its operand materialization until the source loop finishes.
+    let mut deferred_output_sources = Vec::new();
     let mut source_values = Vec::with_capacity(plan.source_args.len());
     for source_index in 0..plan.source_args.len() {
+        let deferred = capture_output_index.is_none()
+            && plan.source_values.iter().any(|source| {
+                source.source_index() == source_index
+                    && source.param_idx().is_some_and(|param_index| {
+                        super::call_arg_coercion::by_ref_array_output_seed_target(
+                            ctx,
+                            sig,
+                            param_index,
+                            source.expr(),
+                        )
+                        .is_some()
+                    })
+            });
+        if deferred {
+            deferred_output_sources.push(source_index);
+            let span = plan.source_args[source_index].span;
+            source_values.push(emit_i64_at_span(ctx, 0, span).value);
+            continue;
+        }
         let previous = capture_output_index.as_ref().and_then(|(output_index, ty)| {
             plan.source_values.iter().find(|source| {
                 source.source_index() == source_index && source.param_idx() == Some(*output_index)
@@ -110,6 +133,10 @@ pub(super) fn lower_named_args_with_signature_options(
         let value = lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values);
         source_values.push(value);
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
+    }
+    for source_index in deferred_output_sources {
+        source_values[source_index] =
+            lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values);
     }
 
     if plan.regular_args.iter()

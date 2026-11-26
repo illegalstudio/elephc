@@ -36,6 +36,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_filter::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
@@ -46,6 +47,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_filter::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
@@ -188,6 +190,9 @@ mod tests {
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
         // +1: the internal `__elephc_set_memory_limit` runtime setter.
         // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
+        // +2: the PHP-visible `addcslashes()` and `parse_str()` contracts.
+        // +7: the filter_* prelude contracts.
+        // +1: the internal byte-preserving `parse_str()` query parser.
         // +2: the internal `__elephc_unserialize_store_property` and
         // `__elephc_phar_archive_valid` helpers.
         // +7: `get_debug_type`, `stream_context_set_options`, `stream_socket_get_crypto_status`,
@@ -195,7 +200,7 @@ mod tests {
         // +2: the PHP 8.6 GMP functions `gmp_powm_sec` and `gmp_prevprime`.
         // +7: the ext/posix bridge builtins `posix_kill`, `posix_isatty`, `posix_geteuid`,
         // `posix_getpgrp`, `posix_get_last_error`, `posix_errno` and `posix_strerror`.
-        assert_eq!(contracts().len(), 1342 + curl_surface);
+        assert_eq!(contracts().len(), 1352 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -13,19 +13,37 @@ use super::catalog::Directive;
 /// Stable indices in sorted Core directive storage.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
-pub enum Key { Separators, DisplayErrors, ErrorIncludeArgs, MaxNesting, MaxVariables }
+pub enum Key {
+    Separators,
+    DisplayErrors,
+    ErrorIncludeArgs,
+    FilterDefault,
+    FilterFlags,
+    MaxNesting,
+    MaxVariables,
+}
 
-/// Core declarations needed by the query parser and its diagnostic policy.
-pub const DIRECTIVES: [Directive; 5] = [
+/// Core declarations needed by the query parser, the filter surface and its diagnostic policy.
+pub const DIRECTIVES: [Directive; 7] = [
     Directive { name: "arg_separator.input", default: Some("&"), access: 6 },
     Directive { name: "display_errors", default: Some("1"), access: 7 },
     Directive { name: "error_include_args", default: Some("0"), access: 7 },
+    Directive { name: "filter.default", default: Some("unsafe_raw"), access: 6 },
+    Directive { name: "filter.default_flags", default: Some(""), access: 6 },
     Directive { name: "max_input_nesting_level", default: Some("64"), access: 6 },
     Directive { name: "max_input_vars", default: Some("1000"), access: 6 },
 ];
 
 /// Core startup handler order, before extension INI registration.
-pub const REGISTRATION_ORDER: [Key; 5] = [Key::DisplayErrors, Key::ErrorIncludeArgs, Key::Separators, Key::MaxNesting, Key::MaxVariables];
+pub const REGISTRATION_ORDER: [Key; 7] = [
+    Key::DisplayErrors,
+    Key::ErrorIncludeArgs,
+    Key::Separators,
+    Key::FilterDefault,
+    Key::FilterFlags,
+    Key::MaxNesting,
+    Key::MaxVariables,
+];
 
 /// Looks up a supported Core directive without accepting case changes or embedded NUL suffixes.
 pub fn lookup(name: &[u8]) -> Option<Key> {

@@ -336,6 +336,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(value, names);
             }
         },
+        ExprKind::Reference(inner) => collect_required_class_names_in_expr(inner, names),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

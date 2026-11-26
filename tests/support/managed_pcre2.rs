@@ -317,6 +317,13 @@ pub(crate) fn test_pcre2_header_path(target: Target, name: &str) -> PathBuf {
     test_pcre2_provider(target).include_dir.join(name)
 }
 
+/// Returns whether the aligned host PCRE2 provider declares the 10.43
+/// `PCRE2_EXTRA_CASELESS_RESTRICT` extra option used by PHP's `/r` modifier.
+pub(crate) fn pcre2_supports_caseless_restrict(target: Target) -> bool {
+    fs::read_to_string(test_pcre2_header_path(target, "pcre2.h"))
+        .is_ok_and(|header| header.contains("PCRE2_EXTRA_CASELESS_RESTRICT"))
+}
+
 /// Returns the library directory from the target-aligned PCRE2 test provider.
 pub(crate) fn test_pcre2_library_dir(target: Target) -> PathBuf {
     test_pcre2_provider(target).library_dir.clone()

@@ -705,6 +705,10 @@ Current limits (see the incompatibilities list in [types](./types.md)):
 
 - The source must be an indexed array with an integer index. Associative arrays
   (`$b =& $a['key']`) are rejected at compile time.
+- Writing a reference into a property or a nested element
+  (`$object->value = &$value`, `$array[0][0] = &$value`) is rejected at compile
+  time; use `$value =& $object->value` to alias a property, or bind the source to
+  a local array element first.
 - Referencing an out-of-range index does **not** create the element the way PHP's
   autovivification does; the alias binds to a null cell instead.
 - The array must stay alive (and must not grow) while the alias is used: the alias

@@ -698,6 +698,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         ExprKind::Runtime(runtime) => {
             for value in runtime.exprs() { collect_assignment_target_dependencies(value, dependencies); }
         },
+        ExprKind::Reference(inner) => collect_assignment_target_dependencies(inner, dependencies),
         // A value-position include is never an assignment target, so it contributes no
         // target dependencies.
         ExprKind::IncludeValue { .. } => {}
@@ -846,6 +847,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
 fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
     match &expr.kind {
         ExprKind::Runtime(_) => true,
+        ExprKind::Reference(inner) => expr_may_write_dependency(inner, dependencies),
         // A value-position include runs in the caller's scope and may write any variable.
         ExprKind::IncludeValue { .. } => true,
         ExprKind::Assignment {
@@ -1097,6 +1099,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
 
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(|value| expr_contains_equivalent(value, needle)),
+        ExprKind::Reference(inner) => expr_contains_equivalent(inner, needle),
         ExprKind::IncludeValue { path, .. } => expr_contains_equivalent(path, needle),
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_equivalent(left, needle) || expr_contains_equivalent(right, needle)

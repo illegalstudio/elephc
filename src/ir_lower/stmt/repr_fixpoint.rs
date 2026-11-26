@@ -598,6 +598,7 @@ impl<'a> ConversionScan<'a> {
                     self.expr(value);
                 }
             },
+            ExprKind::Reference(inner) => self.expr(inner),
             ExprKind::Variable(name) => self.name(name),
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)

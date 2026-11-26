@@ -41,6 +41,19 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         php_manual: None, deprecation: None, extension: false, internal: true, requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_parse_str"), name: "__elephc_parse_str",
+        area: Area::String, module: PhpModule::Mbstring, since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "result", ty: TypeSpec::Mixed, default: None, by_ref: true },
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None, arity_error: None,
+        returns: TypeSpec::Int, by_ref_return: false,
+        summary: "Parses URL-encoded input byte-for-byte for the parse_str() prelude; returns one plus the exceeded max_input_vars, or zero.", examples: &[],
+        php_manual: None, deprecation: None, extension: true, internal: true, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("mb_parse_str"), name: "mb_parse_str",
         area: Area::String, module: PhpModule::Mbstring, since: None,
         kind: BuiltinKind::Function,

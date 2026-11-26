@@ -111,6 +111,12 @@ pub struct RuntimeFeatures {
     pub object_clone: bool,
     /// True when native property publishers use the weak source registry and validation coordinator.
     pub native_reference_validation: bool,
+    /// True when the program injects the ext/filter prelude and therefore links
+    /// `elephc_filter`, whose regexp object references the `__rt_filter_*` helpers.
+    pub filter: bool,
+    /// True when lowered EIR can call `addcslashes()`, either directly or through the
+    /// descriptor invoker's builtin table.
+    pub addcslashes: bool,
 }
 
 impl RuntimeFeatures {
@@ -147,6 +153,8 @@ impl RuntimeFeatures {
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
             | ((self.native_reference_validation as u64) << 16)
+            | ((self.filter as u64) << 17)
+            | ((self.addcslashes as u64) << 18)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -169,6 +177,8 @@ impl RuntimeFeatures {
             handler_state: false,
             object_clone: false,
             native_reference_validation: false,
+            filter: false,
+            addcslashes: false,
         }
     }
 
@@ -193,6 +203,8 @@ impl RuntimeFeatures {
             handler_state: true,
             object_clone: true,
             native_reference_validation: true,
+            filter: true,
+            addcslashes: true,
         }
     }
 }
@@ -274,10 +286,21 @@ fn runtime_features_for_program_and_classes_opt(
     classes: Option<&HashMap<String, ClassInfo>>,
 ) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
-    features.regex = program_requires_regex(program, classes);
+    features.regex = program_requires_regex(program, classes)
+        || filter_default_selects_regexp();
     features.phar_archive = class_emission_can_reference_phar_archive(program, classes);
     features.descriptor_invoker = program_requires_descriptor_invoker(program);
     features
+}
+
+/// Returns true when the configured `filter.default` selects `validate_regexp`.
+fn filter_default_selects_regexp() -> bool {
+    let overrides = crate::codegen_support::ini_overrides();
+    crate::filter_prelude::request::config_from_overrides(&overrides).name == "validate_regexp"
+        || overrides.iter().any(|(name, value)| {
+            name == "filter.default"
+                && value.trim().parse::<i64>().ok() == Some(272)
+        })
 }
 
 /// Returns true when user code or emitted builtin class methods can call regex helpers.
@@ -446,8 +469,16 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::FunctionDecl { body, .. } => body_has_regex_call(body),
+        | StmtKind::IncludeOnceGuard { body, .. } => body_has_regex_call(body),
+        // The injected filter helpers pass the caller's filter id through variables;
+        // scanning their bodies would turn every filter program into a PCRE2 user.
+        // The public call site that reaches the helper is scanned instead.
+        StmtKind::FunctionDecl { name, body, .. }
+            if php_symbol_key(name.trim_start_matches('\\')).starts_with("__elephc_filter_") =>
+        {
+            false
+        }
+        StmtKind::FunctionDecl { body, .. } => body_has_regex_call(body),
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. }
         | StmtKind::InterfaceDecl { methods, .. } => methods
@@ -486,6 +517,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
 fn expr_has_regex_call(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_has_regex_call),
+        ExprKind::Reference(inner) => expr_has_regex_call(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {
@@ -494,6 +526,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::FunctionCall { name, args } => {
             is_regex_builtin_name(name.as_str())
                 || regex_callback_dispatch_call(name.as_str(), args)
+                || filter_call_selects_regexp(name.as_str(), args)
                 || args.iter().any(expr_has_regex_call)
         }
         ExprKind::BinaryOp { left, right, .. } => {
@@ -630,6 +663,13 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::NewDynamic { name_expr, args } => {
             expr_has_regex_call(name_expr) || args.iter().any(expr_has_regex_call)
         }
+        // FILTER_VALIDATE_REGEXP selects the filter bridge's PCRE2 diagnostic path. The
+        // constant is the only link-time marker the user program carries for it; the filter
+        // switch itself uses the numeric id.
+        ExprKind::ConstRef(name) => name
+            .as_str()
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("FILTER_VALIDATE_REGEXP"),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -640,9 +680,149 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
-        | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => false,
+    }
+}
+
+/// Returns true when a filter call can select `FILTER_VALIDATE_REGEXP`.
+///
+/// A literal filter id or a literal array specification is decided exactly. A computed id
+/// (including `filter_id('validate_regexp')` and a runtime variable) is conservatively
+/// treated as selecting the regexp filter, because the managed PCRE2 path is the only one
+/// that matches php-src's byte-exact semantics. The filter prelude's own dispatch helper is
+/// not a user selection: without a selecting call the bridge uses its negative stubs and
+/// the Rust fallback, so a simple `FILTER_VALIDATE_INT` program never needs PCRE2.
+fn filter_call_selects_regexp(name: &str, args: &[Expr]) -> bool {
+    let name = php_symbol_key(name.trim_start_matches('\\'));
+    match name.as_str() {
+        "filter_var" | "__elephc_filter_var_strict" => {
+            filter_argument_may_select_regexp(args.get(1))
+        }
+        "filter_input" | "__elephc_filter_input_strict" => {
+            filter_argument_may_select_regexp(args.get(2))
+        }
+        "filter_var_array"
+        | "filter_input_array"
+        | "__elephc_filter_var_array_strict"
+        | "__elephc_filter_input_array_strict" => {
+            filter_argument_may_select_regexp(args.get(1))
+        }
+        "call_user_func" => dispatcher_may_select_regexp(args),
+        "call_user_func_array" => dispatcher_array_may_select_regexp(args),
+        _ => false,
+    }
+}
+
+/// Returns whether an optional filter argument may select `FILTER_VALIDATE_REGEXP`.
+fn filter_argument_may_select_regexp(arg: Option<&Expr>) -> bool {
+    // An omitted filter uses FILTER_DEFAULT/FILTER_UNSAFE_RAW, never regexp.
+    arg.is_some_and(|arg| regexp_filter_id(arg) != Some(false))
+}
+
+/// Returns `Some(true)` for the regexp filter id, `Some(false)` for a literal non-regexp id
+/// or a literal spec that cannot reach it, and `None` when the value is runtime-dependent.
+fn regexp_filter_id(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::IntLiteral(272) => Some(true),
+        ExprKind::IntLiteral(_) => Some(false),
+        ExprKind::ConstRef(name) => Some(
+            name.as_str()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("FILTER_VALIDATE_REGEXP"),
+        ),
+        ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => regexp_filter_id(value),
+        ExprKind::ArrayLiteral(items) => array_may_select_regexp(items.iter()),
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            array_may_select_regexp(entries.iter().map(|(_, value)| value))
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            array_may_select_regexp(entries.iter().filter_map(|entry| match entry {
+                crate::parser::ast::ArrayEntry::Keyed(_, value)
+                | crate::parser::ast::ArrayEntry::KeyReference(_, value)
+                | crate::parser::ast::ArrayEntry::Value(value)
+                | crate::parser::ast::ArrayEntry::Reference(value) => Some(value),
+                crate::parser::ast::ArrayEntry::Spread(_) => None,
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// Combines literal spec entries without weakening a literal non-regexp result.
+fn array_may_select_regexp<'a>(items: impl Iterator<Item = &'a Expr>) -> Option<bool> {
+    let mut dynamic = false;
+    for item in items {
+        match regexp_filter_id(item) {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => dynamic = true,
+        }
+    }
+    if dynamic { None } else { Some(false) }
+}
+
+/// Returns whether a `call_user_func()` callback and its arguments may select regexp.
+fn dispatcher_may_select_regexp(args: &[Expr]) -> bool {
+    let Some(callback) = args.first().and_then(literal_callback_name) else {
+        return false;
+    };
+    match callback.as_str() {
+        "filter_var" => filter_argument_may_select_regexp(args.get(2)),
+        "filter_input" => filter_argument_may_select_regexp(args.get(3)),
+        "filter_var_array" | "filter_input_array" => {
+            filter_argument_may_select_regexp(args.get(2))
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether a `call_user_func_array()` literal argument list may select regexp.
+fn dispatcher_array_may_select_regexp(args: &[Expr]) -> bool {
+    let Some(callback) = args.first().and_then(literal_callback_name) else {
+        return false;
+    };
+    let Some(array) = args.get(1) else { return false };
+    match callback.as_str() {
+        "filter_var" => call_array_element(array, 1).is_none_or(|arg| regexp_filter_id(arg) != Some(false)),
+        "filter_input" => call_array_element(array, 2).is_none_or(|arg| regexp_filter_id(arg) != Some(false)),
+        "filter_var_array" | "filter_input_array" => {
+            call_array_element(array, 1).is_none_or(|arg| regexp_filter_id(arg) != Some(false))
+        }
+        _ => false,
+    }
+}
+
+/// Returns the literal callback name of a dispatcher's first argument.
+fn literal_callback_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(name) => Some(php_symbol_key(name.trim_start_matches('\\'))),
+        ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => {
+            literal_callback_name(value)
+        }
+        _ => None,
+    }
+}
+
+/// Returns one element of a literal `call_user_func_array()` argument array.
+fn call_array_element<'a>(array: &'a Expr, index: usize) -> Option<&'a Expr> {
+    match &array.kind {
+        ExprKind::ArrayLiteral(items) => items.get(index),
+        ExprKind::ArrayLiteralAssoc(entries) => entries.get(index).map(|(_, value)| value),
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let values = entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    crate::parser::ast::ArrayEntry::Keyed(_, value)
+                    | crate::parser::ast::ArrayEntry::KeyReference(_, value)
+                    | crate::parser::ast::ArrayEntry::Value(value)
+                    | crate::parser::ast::ArrayEntry::Reference(value) => Some(value),
+                    crate::parser::ast::ArrayEntry::Spread(_) => None,
+                })
+                .collect::<Vec<_>>();
+            values.get(index).copied()
+        }
+        _ => None,
     }
 }
 
@@ -850,6 +1030,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
     }
     match &expr.kind {
         ExprKind::Runtime(_) => true,
+        ExprKind::Reference(inner) => expr_needs_descriptor_invoker(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {

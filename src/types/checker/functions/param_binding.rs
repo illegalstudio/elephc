@@ -177,6 +177,31 @@ impl Checker {
             {
                 return Ok(());
             }
+            // PHP's internal `parse_str()` has an untyped by-reference result:
+            // `zend_try_array_init()` replaces whatever the caller held (array, scalar,
+            // object, null, or an unset variable) with the parsed array. The prelude's
+            // documented `array` hint must not reject those call shapes; lowering seeds the
+            // slot with the empty array the parser creates and boxes it for the call.
+            //
+            // A reference-bound cell shared with a closure keeps the capture's static read
+            // type, so only an array cell (no storage change) or a Mixed cell (dynamic read)
+            // can receive the parsed array; a captured scalar keeps the diagnostic instead
+            // of misreading the replacement.
+            if context.eq_ignore_ascii_case("Function 'parse_str' parameter $result") {
+                if let crate::parser::ast::ExprKind::Variable(name) = &arg.kind {
+                    // Only a cell shared with a closure capture or a `=&` alias keeps
+                    // another static read type; an ordinary by-reference call promotion
+                    // does not.
+                    let shared_cell = self.by_ref_captured_locals.contains(name)
+                        || self.ref_assign_aliased_locals.contains(name);
+                    if !shared_cell
+                        || actual.is_php_array()
+                        || actual.codegen_repr() == PhpType::Mixed
+                    {
+                        return Ok(());
+                    }
+                }
+            }
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
         match classify_param_binding(expected, actual, arg) {

@@ -505,6 +505,58 @@ fn coerce_tostring_return_to_string_result(
     }
 }
 
+/// Writes a raw object payload through its `__toString()`, or raises `exit()`'s TypeError.
+///
+/// The caller reaches this from the weak-mode object branch of `exit()`/`die()`: a stringable
+/// object prints and exits, while a class without `__toString()` keeps PHP's `string|int`
+/// argument type error.
+pub(in crate::codegen) fn emit_object_tostring_or_exit_error(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    receiver_reg: &str,
+) -> Result<()> {
+    let candidates = mixed_method_candidates(ctx, "__toString", 1)?;
+    let no_match_label = ctx.next_label("exit_object_no_tostring");
+    let done_label = ctx.next_label("exit_object_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "exit_object_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    emit_mixed_method_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &no_match_label,
+    );
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
+        coerce_tostring_return_to_string_result(ctx, &return_ty)?;
+        super::output_values::emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&no_match_label);
+    crate::codegen::lower_inst::runtime_class_messages::emit_runtime_class_name_to_string_result(
+        ctx,
+        receiver_reg,
+        "object",
+    );
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        "exit(): Argument #1 ($status) must be of type string|int, ",
+    );
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+    super::exceptions::emit_type_error_from_string_result(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
 fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
     let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);

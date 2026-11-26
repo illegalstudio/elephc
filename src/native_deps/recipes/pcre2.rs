@@ -2,7 +2,7 @@
 //! Builds static PCRE2 10.47 libraries and the Elephc-owned opaque ABI shim.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 9.
+//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 10.
 //!
 //! Key details:
 //! - Uses explicit static/PIC/8-bit/Unicode flags and only the two required Make targets.
@@ -101,6 +101,7 @@ mod tests {
     #[test]
     fn shim_source_is_embedded_and_versioned() {
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_compile"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_compile_len"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_exec"));
         assert!(SHIM_SOURCE.contains("pcre2_next_match"));
         assert!(SHIM_SOURCE.contains("ELEPHC_PCRE2_GLOBAL_NEXT"));
@@ -111,7 +112,19 @@ mod tests {
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_compile"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_match"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_free"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_php_compile_check"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_error_message"));
         assert!(!SHIM_SOURCE.contains("extern regex_t"));
+    }
+
+    /// The filter bridge's compile diagnostic uses the same locale tables as matching.
+    #[test]
+    fn php_compile_check_uses_the_locale_compile_path() {
+        let check = SHIM_SOURCE
+            .split("int32_t elephc_pcre2_v1_php_compile_check(")
+            .nth(1)
+            .expect("php compile check definition");
+        assert!(check.contains("elephc_pcre2_compile_locale"));
+        assert!(!check.contains("pcre2_compile(pattern"));
     }
 }

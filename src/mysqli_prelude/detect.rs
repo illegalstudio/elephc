@@ -217,6 +217,7 @@ fn packed_field_refs_mysqli(field: &PackedField) -> bool {
 fn expr_refs_mysqli(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_mysqli),
+        ExprKind::Reference(inner) => expr_refs_mysqli(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

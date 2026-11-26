@@ -177,6 +177,7 @@ fn expr_carries_decision(expr: &Expr) -> bool {
     }
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_carries_decision),
+        ExprKind::Reference(inner) => expr_carries_decision(inner),
         ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp: _ } => {
             expr_carries_decision(target)
                 || expr_carries_decision(value)

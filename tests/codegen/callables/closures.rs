@@ -577,9 +577,9 @@ echo call_user_func($use_left ? $left->add(...) : $right->add(...));
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Verifies `call_user_func()` descriptor invokers preserve by-reference args for branch callables.
+/// Verifies `call_user_func()` passes by value for branch-selected first-class callables.
 #[test]
-fn test_call_user_func_complex_captured_callable_expr_preserves_by_ref_arg() {
+fn test_call_user_func_complex_captured_callable_expr_passes_by_value() {
     let source = r#"<?php
 class Counter {
     public int $step = 0;
@@ -598,8 +598,13 @@ $value = 5;
 call_user_func($use_left ? $left->bump(...) : $right->bump(...), $value);
 echo $value;
 "#;
-    let out = compile_and_run(source);
-    assert_eq!(out, "12");
+    let output = compile_and_run_capture(source);
+    assert_eq!(output.stdout, "5");
+    assert!(
+        output.stderr.contains("Counter::bump(): Argument #1 ($n) must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
 /// Verifies branch-selected captured first-class callables use descriptor invokers.

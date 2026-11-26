@@ -345,6 +345,25 @@ fn lower_trigger_operands(
     call: &NormalizedBuiltinCall<'_>,
     default_level: i64,
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
+    // `__elephc_builtin_deprecated(message, file, line)` can pin a diagnostic to an engine
+    // location such as INI startup's `Unknown on line 0`. Other user-error calls keep the
+    // source/caller location computed below.
+    if call.operands.len() >= 3 {
+        let level = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(default_level)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(call.span),
+        );
+        return Ok(vec![
+            call.operand(0)?,
+            level.value,
+            call.operand(1)?,
+            call.operand(2)?,
+        ]);
+    }
     // A source-written call carries its own file, which may be an included file. An injected
     // prelude call has a synthetic span, so it reads the file the entering call site published
     // instead of baking the module's entry path.

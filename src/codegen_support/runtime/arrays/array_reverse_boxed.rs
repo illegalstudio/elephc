@@ -83,6 +83,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #48]");                              // keep both key words while boxing the value
     emitter.instruction("ldr x0, [x11, #40]");                                  // each hash entry is authoritative for its value tag
     emitter.instruction("ldp x1, x2, [x11, #24]");                              // preserve both source payload words
+    emitter.instruction("cmp x0, #11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("b.eq __rt_array_reverse_boxed_reference");             // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "x0", "x1", "x2");
 
     // -- acquire one value owner and transfer it into a new hash entry --
@@ -108,7 +110,27 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the unique result hash
     emitter.instruction("mov x4, #0");                                          // a Mixed pointer occupies one payload word
     emitter.instruction("mov x5, #7");                                          // the hash owns this boxed cell after insertion
-    emitter.instruction("bl __rt_hash_set");                                    // persist borrowed string keys and consume the value owner
+    emitter.instruction("bl __rt_hash_set_value");                              // persist borrowed string keys and consume the value owner
+    emitter.instruction("str x0, [sp, #32]");                                   // publish any result relocation before advancing
+    emitter.instruction("b __rt_array_reverse_boxed_loop");                     // continue with the unchanged source
+
+    emitter.label("__rt_array_reverse_boxed_reference");
+    emitter.instruction("mov x0, x1");                                          // pass the borrowed cell to the singleton-aware clone
+    emitter.instruction("bl __rt_reference_cell_clone");                        // separate an unaliased cell, share a live reference
+    emitter.instruction("mov x3, x0");                                          // transfer the cloned or shared cell as the entry value
+    emitter.instruction("ldp x1, x2, [sp, #48]");                               // reload the source key
+    emitter.instruction("ldr x9, [sp]");                                        // recover the key-preservation flag
+    emitter.instruction("cbnz x9, __rt_array_reverse_boxed_reference_insert");  // keep every original key when requested
+    emitter.instruction("cmn x2, #1");                                          // only integer keys are renumbered
+    emitter.instruction("b.ne __rt_array_reverse_boxed_reference_insert");      // PHP always keeps string keys
+    emitter.instruction("ldr x1, [sp, #40]");                                   // use the next result integer key
+    emitter.instruction("add x9, x1, #1");                                      // reserve the following integer key
+    emitter.instruction("str x9, [sp, #40]");                                   // string keys never advance this counter
+    emitter.label("__rt_array_reverse_boxed_reference_insert");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the unique result hash
+    emitter.instruction("mov x4, #0");                                          // reference entries carry no high payload word
+    emitter.instruction("mov x5, #11");                                         // preserve the managed reference tag
+    emitter.instruction("bl __rt_hash_set_value");                              // persist the retained reference cell
     emitter.instruction("str x0, [sp, #32]");                                   // publish any result relocation before advancing
     emitter.instruction("b __rt_array_reverse_boxed_loop");                     // continue with the unchanged source
 
@@ -193,6 +215,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11 + 40]");                       // each entry supplies its actual runtime value tag
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // borrow the low payload word
     emitter.instruction("mov rsi, QWORD PTR [r11 + 32]");                       // preserve the high payload word
+    emitter.instruction("cmp rax, 11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("je __rt_array_reverse_boxed_reference");               // retain the shared cell instead of copying its value
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_array_reverse_boxed_deref_done", "rax", "rdi", "rsi");
 
     // -- acquire one value owner and transfer it into a new hash entry --
@@ -218,7 +242,28 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the unique result hash
     emitter.instruction("xor r8d, r8d");                                        // a Mixed pointer occupies one payload word
     emitter.instruction("mov r9, 7");                                           // the hash owns this boxed cell after insertion
-    emitter.instruction("call __rt_hash_set");                                  // persist borrowed keys and consume the value owner
+    emitter.instruction("call __rt_hash_set_value");                            // persist borrowed keys and consume the value owner
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // publish any result relocation before advancing
+    emitter.instruction("jmp __rt_array_reverse_boxed_loop");                   // continue with the unchanged source
+
+    emitter.label("__rt_array_reverse_boxed_reference");
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // read the managed reference cell's refcount
+    emitter.instruction("mov rax, rdi");                                        // pass the borrowed cell to the singleton-aware clone
+    emitter.instruction("call __rt_reference_cell_clone");                      // separate an unaliased cell, share a live reference
+    emitter.instruction("mov rcx, rax");                                        // transfer the cloned or shared cell as the entry value
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the source key's low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // reload its integer marker or string length
+    emitter.instruction("cmp QWORD PTR [rbp - 8], 0");                          // inspect the requested key policy
+    emitter.instruction("jne __rt_array_reverse_boxed_reference_insert");       // keep every original key when requested
+    emitter.instruction("cmp rdx, -1");                                         // only integer keys are renumbered
+    emitter.instruction("jne __rt_array_reverse_boxed_reference_insert");       // PHP always keeps string keys
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // use the next result integer key
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // string keys never advance this counter
+    emitter.label("__rt_array_reverse_boxed_reference_insert");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the unique result hash
+    emitter.instruction("xor r8d, r8d");                                        // reference entries carry no high payload word
+    emitter.instruction("mov r9, 11");                                          // preserve the managed reference tag
+    emitter.instruction("call __rt_hash_set_value");                            // persist the retained reference cell
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // publish any result relocation before advancing
     emitter.instruction("jmp __rt_array_reverse_boxed_loop");                   // continue with the unchanged source
 
@@ -246,7 +291,7 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_array_reverse_boxed(&mut emitter);
             let asm = emitter.output();
-            for symbol in ["__rt_mixed_unbox", "__rt_hash_new", "__rt_incref", "__rt_mixed_from_value", "__rt_hash_set"] {
+            for symbol in ["__rt_mixed_unbox", "__rt_hash_new", "__rt_incref", "__rt_mixed_from_value", "__rt_hash_set", "__rt_hash_set_value", "__rt_reference_cell_clone"] {
                 assert!(asm.contains(symbol), "{name}: {symbol}");
             }
             assert!(asm.find("__rt_array_reverse_boxed_invalid").unwrap()

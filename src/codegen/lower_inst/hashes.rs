@@ -20,6 +20,7 @@
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    REFERENCE_CELL_VALUE_TAG,
 };
 use crate::codegen::platform::Arch;
 use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
@@ -331,6 +332,20 @@ fn lower_hash_get_for_write_x86_64(
 
 /// Lowers an associative-array insert/update through the shared hash runtime helper.
 pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_hash_set_with_replacement(ctx, inst, false)
+}
+
+/// Lowers an associative-array insert that detaches an existing reference binding.
+pub(super) fn lower_hash_set_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_hash_set_with_replacement(ctx, inst, true)
+}
+
+/// Shared `HashSet`/`HashSetValue` lowering; `replace_binding` selects the runtime helper.
+fn lower_hash_set_with_replacement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    replace_binding: bool,
+) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
@@ -352,20 +367,135 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         // only a relocated table is published back.
         let reload = hash_key_materialization_may_run_user_code(ctx, key)?.then_some(&property);
         match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_hash_set_aarch64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload)?,
-            Arch::X86_64 => lower_hash_set_x86_64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload)?,
+            Arch::AArch64 => lower_hash_set_aarch64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload, replace_binding)?,
+            Arch::X86_64 => lower_hash_set_x86_64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload, replace_binding)?,
         }
         return property.publish_relocated(ctx, hash);
     }
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
+        Arch::AArch64 if replace_binding => lower_hash_set_aarch64_replacing(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
+        Arch::X86_64 if replace_binding => lower_hash_set_x86_64_replacing(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
         Arch::AArch64 => lower_hash_set_aarch64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
         Arch::X86_64 => lower_hash_set_x86_64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
     }
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Lowers `HashEntrySetReference`: binds one hash entry to a live managed reference cell.
+///
+/// The entry may already belong to another reference set, so the write must DETACH it instead
+/// of writing through its cell. `__rt_hash_set_value` is the bucket-replacing sibling that
+/// performs that detachment, keeps an existing key's insertion position, and inserts a missing
+/// key at the end. The caller's cell is retained for the table before the helper stores it.
+pub(super) fn lower_hash_reference_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    if let Some(property) = super::objects::in_place_property_container(ctx, hash)? {
+        // The property lent its own separated table, so only a relocated table is published back.
+        let reload = hash_key_materialization_may_run_user_code(ctx, key)?.then_some(&property);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_hash_reference_set_aarch64(ctx, hash, key, cell, reload)?,
+            Arch::X86_64 => lower_hash_reference_set_x86_64(ctx, hash, key, cell, reload)?,
+        }
+        return property.publish_relocated(ctx, hash);
+    }
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    receiver.prepare_consuming_storeback(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_reference_set_aarch64(ctx, hash, key, cell, None)?,
+        Arch::X86_64 => lower_hash_reference_set_x86_64(ctx, hash, key, cell, None)?,
+    }
+    // Growth and copy-on-write can relocate the table, so the operand SSA carries the pointer
+    // the helper returned and the receiver republishes it.
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Emits the AArch64 reference-entry write through `__rt_hash_set_value`.
+fn lower_hash_reference_set_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    cell: ValueId,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
+    // Snapshot the borrowed cell and the table before key materialization can run a warning
+    // handler. Their SSA homes may be caller-saved, and the key helpers and `__rt_incref`
+    // clobber those registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    ctx.load_value_to_reg(cell, "x0")?;
+    abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+    materialize_hash_key_aarch64(ctx, key)?;
+    // The key pair is pushed below the reserved snapshot area, so the saved cell and table
+    // move up by one 16-byte slot until the pair is popped.
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+        // The reload replaced the property's table pointer in the hash operand.
+        ctx.load_value_to_reg(hash, "x0")?;
+        abi::emit_store_to_sp(ctx.emitter, "x0", 24);
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 24);
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
+    abi::emit_load_int_immediate(ctx.emitter, "x5", REFERENCE_CELL_VALUE_TAG as i64);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
+    Ok(())
+}
+
+/// Emits the x86_64 reference-entry write through `__rt_hash_set_value`.
+fn lower_hash_reference_set_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    cell: ValueId,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
+    // Snapshot the borrowed cell and the table before key materialization can run a warning
+    // handler. Their SSA homes may be caller-saved, and the key helpers and `__rt_incref`
+    // clobber those registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    ctx.load_value_to_reg(cell, "rax")?;
+    abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_store_to_sp(ctx.emitter, "rdi", 8);
+    materialize_hash_key_x86_64(ctx, key)?;
+    // The key pair is pushed below the reserved snapshot area, so the saved cell and table
+    // move up by one 16-byte slot until the pair is popped.
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+        // The reload replaced the property's table pointer in the hash operand.
+        ctx.load_value_to_reg(hash, "rdi")?;
+        abi::emit_store_to_sp(ctx.emitter, "rdi", 24);
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24);
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+    abi::emit_load_int_immediate(ctx.emitter, "r9", REFERENCE_CELL_VALUE_TAG as i64);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
     Ok(())
 }
 
@@ -837,7 +967,22 @@ pub(super) fn lower_hash_set_aarch64_with(
     normalization: HashKeyNormalization,
 ) -> Result<()> {
     lower_hash_set_aarch64_reloading(
-        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None,
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None, false,
+    )
+}
+
+/// Lowers an AArch64 associative-array write that replaces an existing reference binding.
+pub(super) fn lower_hash_set_aarch64_replacing(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    lower_hash_set_aarch64_reloading(
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None, true,
     )
 }
 
@@ -852,6 +997,7 @@ fn lower_hash_set_aarch64_reloading(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
     reload: Option<&super::objects::InPlacePropertyContainer>,
+    replace_binding: bool,
 ) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_aarch64_with(ctx, key, normalization)?;
@@ -864,7 +1010,8 @@ fn lower_hash_set_aarch64_reloading(
     ctx.load_value_to_reg(hash, "x0")?;
     abi::emit_load_int_immediate(ctx.emitter, "x5", hash_set_value_tag(value_ty, storage_value_ty));
     let staged = super::ownership::stage_string_byte_view(ctx, key, "x1", "x2");
-    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    let helper = if replace_binding { "__rt_hash_set_value" } else { "__rt_hash_set" };
+    abi::emit_call_label(ctx.emitter, helper);
     super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
@@ -925,7 +1072,22 @@ pub(super) fn lower_hash_set_x86_64_with(
     normalization: HashKeyNormalization,
 ) -> Result<()> {
     lower_hash_set_x86_64_reloading(
-        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None,
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None, false,
+    )
+}
+
+/// Lowers an x86_64 associative-array write that replaces an existing reference binding.
+pub(super) fn lower_hash_set_x86_64_replacing(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    lower_hash_set_x86_64_reloading(
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None, true,
     )
 }
 
@@ -940,6 +1102,7 @@ fn lower_hash_set_x86_64_reloading(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
     reload: Option<&super::objects::InPlacePropertyContainer>,
+    replace_binding: bool,
 ) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_x86_64_with(ctx, key, normalization)?;
@@ -952,7 +1115,8 @@ fn lower_hash_set_x86_64_reloading(
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_load_int_immediate(ctx.emitter, "r9", hash_set_value_tag(value_ty, storage_value_ty));
     let staged = super::ownership::stage_string_byte_view(ctx, key, "rsi", "rdx");
-    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    let helper = if replace_binding { "__rt_hash_set_value" } else { "__rt_hash_set" };
+    abi::emit_call_label(ctx.emitter, helper);
     super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }

@@ -524,6 +524,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
                 audit_expr(value, errors);
             }
         },
+        ExprKind::Reference(inner) => audit_expr(inner, errors),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

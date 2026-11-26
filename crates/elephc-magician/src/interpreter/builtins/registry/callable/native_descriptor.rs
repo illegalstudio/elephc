@@ -38,7 +38,9 @@ pub(super) fn eval_native_descriptor_with_call_args(
                 let _ = cleanup_native_function_ref_args(&staged, values);
                 return finish_eval_argument_values(Err(status), [arg_array.take()], context, values);
             }
-            let result = values.invoke_native_callable(callback, arg_array.borrowed(), -1);
+            // Encoded weak-global invocation profile: the raw `-1` scope would set the
+            // invoker's private by-reference warning bit and silently copy by-ref args.
+            let result = values.invoke_native_callable(callback, arg_array.borrowed(), -4);
             let writeback = write_back_native_function_ref_args(&staged, context, values);
             let result = match (result, writeback) {
                 (Err(status), _) => Err(status),

@@ -60,6 +60,8 @@ mod codegen {
     mod json;
     mod preg_errors_grep;
     mod preg_runtime_parity;
+    mod filter;
+    mod filter_phpt;
     mod uri_php_src;
     mod uri86_php_src;
     mod uri;

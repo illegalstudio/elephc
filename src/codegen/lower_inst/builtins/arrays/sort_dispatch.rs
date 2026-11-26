@@ -109,12 +109,16 @@ pub(super) fn lower_hash_reindexing_sort(
         )));
     };
     let value_ty = value.codegen_repr();
+    // A Mixed-valued hash is where reference cells hide. Sorting the extracted values would
+    // dereference and detach them, so relink the hash chain by value and renumber its keys
+    // instead: `__rt_hash_asort` already dereferences tag-11 entries for comparison and moves
+    // no payload, and the dense rebuild preserves each entry's runtime tag.
+    if value_ty == PhpType::Mixed {
+        return lower_hash_link_reindex_sort(ctx, inst, name);
+    }
     let helper = match value_ty {
         PhpType::Str => Some(str_helper),
         PhpType::Int => Some(int_helper),
-        // A Mixed-valued hash has no typed comparator; `emit_mixed_slot_sort` orders the extracted
-        // list with `__rt_php_compare_slots` after a runtime scalar guard, exactly as a boxed sort.
-        PhpType::Mixed => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -193,6 +197,77 @@ pub(super) fn lower_hash_reindexing_sort(
     store_if_result(ctx, inst)
 }
 
+/// Sorts a Mixed-valued hash by relinking its chain and then renumbers the keys from zero.
+///
+/// `__rt_hash_asort`/`__rt_hash_arsort` order the insertion-order links in place: the entry
+/// payloads, including tag-11 managed reference cells, never move and are never dereferenced
+/// into the result. `__rt_hash_reindex_dense` then builds the dense `0..n-1` hash PHP returns
+/// from `sort()`/`rsort()` by moving each entry under its new integer key; the emptied source
+/// shell is released through the receiver's ordinary store-back, so ownership stays balanced.
+fn lower_hash_link_reindex_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let helper = match name {
+        "sort" => "__rt_hash_asort",
+        "rsort" => "__rt_hash_arsort",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{other} reindexing sort over a hash"
+            )))
+        }
+    };
+    lower_hash_relink_reindex(ctx, inst, name, Some(helper))
+}
+
+/// Relinks a Mixed-valued hash in place, rebuilds it under dense keys, and releases the shell.
+///
+/// `relink_helper` is `Some(__rt_hash_asort/arsort)` for a sort, or `None` for the shuffle
+/// helper (which also needs the random function pointers published). The table being replaced
+/// is parked before the rebuild because the dense helper moves its entries and leaves an
+/// emptied shell this call owns; publishing with a retiring store would drop it twice.
+fn lower_hash_relink_reindex(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    relink_helper: Option<&str>,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    ensure_unique_hash_sort_source(ctx, array)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result);
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    match relink_helper {
+        Some(helper) => {
+            // The value sorter compares every live entry; refuse containers before the
+            // merge mutates the chain, exactly like the packed Mixed sorter does.
+            abi::emit_call_label(ctx.emitter, "__rt_hash_sort_require_scalars");
+            ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        None => {
+            crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_shuffle_links");
+        }
+    }
+    // The dense rebuild reads its table from the integer result register on both targets;
+    // the first-argument register is only the same register on AArch64.
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");
+    ctx.store_result_value(array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    store_if_result(ctx, inst)
+}
+
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.
 pub(super) fn lower_indexed_array_sort(
     ctx: &mut FunctionContext<'_>,
@@ -267,6 +342,12 @@ pub(super) fn lower_indexed_array_sort(
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_hash_shuffle(ctx, inst, array);
+    }
     eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("shuffle")?;
@@ -289,6 +370,19 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
         1,
     );
     store_if_result(ctx, inst)
+}
+
+/// Shuffles a hash-backed array by permuting its insertion-order chain and renumbering keys.
+///
+/// `__rt_hash_shuffle_links` moves only the `prev`/`next` links, so every entry payload and
+/// managed reference cell stays in place; `__rt_hash_reindex_dense` then renumbers the keys
+/// `0..n-1` in the new chain order and moves the entries into a fresh dense hash.
+fn lower_hash_shuffle(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _array: ValueId,
+) -> Result<()> {
+    lower_hash_relink_reindex(ctx, inst, "shuffle", None)
 }
 
 /// Calls the user-sort helper with a static comparator and optional late-static environment.

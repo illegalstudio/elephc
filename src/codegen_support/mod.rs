@@ -82,7 +82,7 @@ pub(crate) use value_boxing::{
     emit_box_current_php_return_as_mixed,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    container_value_tag, mixed_unbox_payload_reg, runtime_value_tag,
+    container_value_tag, mixed_unbox_payload_reg, runtime_value_tag, REFERENCE_CELL_VALUE_TAG,
 };
 pub(crate) use wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,

@@ -44,6 +44,7 @@ impl CoreIni {
             let Some((_, value)) = overrides.iter().rev().find(|(name, _)| name == directive.name.as_bytes()) else { continue; };
             let accepted = match key {
                 Key::Separators => !value.is_empty(),
+                Key::FilterDefault | Key::FilterFlags => true,
                 Key::DisplayErrors => { state.display_errors = numeric::display_errors(value); true },
                 // Boolean directives accept any raw text; PHP coerces it at read time.
                 Key::ErrorIncludeArgs => true,
