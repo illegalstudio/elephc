@@ -18,7 +18,7 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_assign, e_binop, e_bool, e_call, e_class_const, e_concat, e_concat_all, e_const, e_int,
-    e_index, e_instance_of, e_new, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_static_prop,
+    e_index, e_instance_of, e_method_call, e_new, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_static_prop,
     e_str, e_var, function, s_array_push, s_assign, s_expr, s_foreach, s_global, s_if, s_return,
     s_return_void, s_static_prop_array_assign, s_static_prop_assign, s_throw, s_while, t_class, t_mixed, t_nullable,
 };
@@ -1268,6 +1268,27 @@ fn context_set_option_wrapper() -> Stmt {
                 ],
                 Vec::new(),
                 Some(vec![
+                    s_assign("convertedValue", e_var("value")),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("wrapper"), BinOp::StrictEq, e_str("ssl")),
+                            BinOp::And,
+                            e_binop(
+                                e_binop(e_var("option"), BinOp::StrictEq, e_str("session_data")),
+                                BinOp::And,
+                                e_call(
+                                    "is_a",
+                                    vec![e_var("value"), e_str("Openssl\\Session")],
+                                ),
+                            ),
+                        ),
+                        vec![s_assign(
+                            "convertedValue",
+                            e_method_call(e_var("value"), "export", vec![e_int(2)]),
+                        )],
+                        Vec::new(),
+                        None,
+                    ),
                     s_assign(
                         "result",
                         e_call(
@@ -1276,7 +1297,7 @@ fn context_set_option_wrapper() -> Stmt {
                                 e_var("context"),
                                 e_var("wrapper"),
                                 e_var("option"),
-                                e_var("value"),
+                                e_var("convertedValue"),
                             ],
                         ),
                     ),

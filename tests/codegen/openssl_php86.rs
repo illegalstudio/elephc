@@ -121,3 +121,29 @@ Error:Cannot call Openssl\\Session::__unserialize() on an already-initialized se
 Error:Cannot modify readonly property Openssl\\Session::$id\n"
     );
 }
+
+/// A `session_data` value reaches the stream-context builtin as a PEM string
+/// through the 8.6 wrapper while `stream_context_get_options()` keeps returning
+/// the original `Openssl\Session` object.
+#[test]
+fn test_openssl_session_context_option_preserves_visible_object_php86() {
+    if skip_without_openssl_native("test_openssl_session_context_option_preserves_visible_object_php86") {
+        return;
+    }
+    let pem = format!(
+        "{}\n",
+        include_str!("strings/fixtures/ssl_session_tls12.pem").trim_end()
+    );
+    let source = r#"<?php
+$pem = <<<'PEM'
+__SESSION_PEM__PEM;
+$session = Openssl\Session::import($pem);
+$context = stream_context_create();
+var_dump(stream_context_set_option($context, "ssl", "session_data", $session));
+$stored = stream_context_get_options($context)["ssl"]["session_data"] ?? null;
+echo $stored instanceof Openssl\Session ? "session" : get_debug_type($stored), "\n";
+"#
+    .replace("__SESSION_PEM__", &pem);
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "bool(true)\nsession\n");
+}
