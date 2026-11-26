@@ -263,7 +263,7 @@ impl RuntimeAddressOwner {
 /// One actual Rust owner whose address remains stable across the native call and cleanup.
 pub struct RuntimeOwnerSlot(Cell<RuntimeCellHandle>);
 
-/// One owner that may be transferred unchanged or replaced by a transformed result.
+/// One source cell that may be transferred unchanged or replaced by a transformed result.
 ///
 /// Both slots stay address-stable while the caller publishes this record as a runtime owner
 /// frame. Installing the replacement before retiring the original keeps the transformed result
@@ -393,9 +393,9 @@ impl RuntimeOwnerSlot {
 }
 
 impl RuntimeOwnerReplacement {
-    /// Starts one replacement transaction with exactly one owned original cell.
+    /// Starts one replacement transaction while preserving the original handle's provenance.
     pub fn new(original: RuntimeCellHandle) -> Self {
-        debug_assert!(!original.is_null() && !original.is_borrowed());
+        debug_assert!(!original.is_null());
         Self {
             original: RuntimeOwnerSlot::new(original),
             replacement: RuntimeOwnerSlot::empty(),
@@ -416,13 +416,18 @@ impl RuntimeOwnerReplacement {
         &self,
         result: Result<RuntimeCellHandle, E>,
         state: &mut S,
-        acquire: impl FnOnce(&mut S, RuntimeCellHandle) -> Result<RuntimeCellHandle, E>,
+        mut acquire: impl FnMut(&mut S, RuntimeCellHandle) -> Result<RuntimeCellHandle, E>,
         mut release: impl FnMut(&mut S, RuntimeCellHandle) -> Result<(), E>,
     ) -> Result<RuntimeCellHandle, E> {
+        if matches!(result, Ok(result) if result == self.original.borrowed()) {
+            let original = self.original.take();
+            return if original.is_borrowed() {
+                acquire(state, original)
+            } else {
+                Ok(original)
+            };
+        }
         let result = match result {
-            Ok(result) if result == self.original.borrowed() => {
-                return Ok(self.original.take());
-            }
             Ok(result) if result.is_borrowed() => acquire(state, result),
             result => result,
         };
@@ -438,7 +443,13 @@ impl RuntimeOwnerReplacement {
         let cleanup = self
             .original
             .take_optional()
-            .map_or(Ok(()), |original| release(state, original));
+            .map_or(Ok(()), |original| {
+                if original.is_borrowed() {
+                    Ok(())
+                } else {
+                    release(state, original)
+                }
+            });
 
         match (result, cleanup) {
             (Err(status), _) => Err(status),
@@ -1045,6 +1056,30 @@ mod tests {
 
         assert_eq!(result, Ok(cell));
         assert!(events.is_empty());
+    }
+
+    /// Same-cell borrowed replacement acquires one result owner without releasing its observer.
+    #[test]
+    fn runtime_owner_replacement_acquires_borrowed_identity() {
+        let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let owner = RuntimeOwnerReplacement::new(cell.borrowed());
+        let mut events = Vec::new();
+
+        let result: Result<RuntimeCellHandle, ()> = owner.finish(
+            Ok(owner.borrowed()),
+            &mut events,
+            |events, borrowed| {
+                events.push("acquire");
+                Ok(RuntimeCellHandle::from_raw(borrowed.as_ptr()))
+            },
+            |events, _| {
+                events.push("release");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(cell));
+        assert_eq!(events, ["acquire"]);
     }
 
     /// Distinct borrowed replacement is acquired before the original owner is retired.
