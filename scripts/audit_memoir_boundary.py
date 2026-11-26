@@ -313,6 +313,7 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": (
             "pub struct RuntimeOwnerBatch",
             "pub fn pop(&mut self)",
+            "pub struct RuntimeOwnerReplacement",
             "pub struct StagedRuntimeOwners",
             "pub const fn for_ownership(self, ownership: RuntimeCellOwnership)",
         ),
@@ -380,7 +381,7 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": ("impl RuntimeOwners for EvalReferenceTarget",),
     },
     "crates/elephc-magician/src/interpreter/return_values.rs": {
-        "required": ("RuntimeOwnerSlot", "finish_eval_argument_values("),
+        "required": ("RuntimeOwnerReplacement", "owner.finish("),
     },
     "crates/elephc-magician/src/interpreter/dynamic_functions/closure_execution.rs": {
         "required": ("with_runtime_scope_owners", "result.as_ref().ok()"),

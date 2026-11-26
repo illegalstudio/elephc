@@ -263,6 +263,16 @@ impl RuntimeAddressOwner {
 /// One actual Rust owner whose address remains stable across the native call and cleanup.
 pub struct RuntimeOwnerSlot(Cell<RuntimeCellHandle>);
 
+/// One owner that may be transferred unchanged or replaced by a transformed result.
+///
+/// Both slots stay address-stable while the caller publishes this record as a runtime owner
+/// frame. Installing the replacement before retiring the original keeps the transformed result
+/// visible if cleanup executes PHP or suspends the current worker.
+pub struct RuntimeOwnerReplacement {
+    original: RuntimeOwnerSlot,
+    replacement: RuntimeOwnerSlot,
+}
+
 // Every mutation is one complete `Cell::replace`, so unwinding can observe only the old or
 // new owner record, never a partially published cleanup obligation.
 impl std::panic::RefUnwindSafe for RuntimeOwnerSlot {}
@@ -382,6 +392,70 @@ impl RuntimeOwnerSlot {
     }
 }
 
+impl RuntimeOwnerReplacement {
+    /// Starts one replacement transaction with exactly one owned original cell.
+    pub fn new(original: RuntimeCellHandle) -> Self {
+        debug_assert!(!original.is_null() && !original.is_borrowed());
+        Self {
+            original: RuntimeOwnerSlot::new(original),
+            replacement: RuntimeOwnerSlot::empty(),
+        }
+    }
+
+    /// Lends the original cell to the transformation without moving its cleanup obligation.
+    pub fn borrowed(&self) -> RuntimeCellHandle {
+        self.original.borrowed()
+    }
+
+    /// Transfers an unchanged result, or publishes and returns its distinct replacement.
+    ///
+    /// The operation error wins when no result was produced. A cleanup failure discards one
+    /// already-published replacement before it escapes. Borrowed distinct results acquire their
+    /// own lease before the original owner is retired.
+    pub fn finish<E: Copy, S>(
+        &self,
+        result: Result<RuntimeCellHandle, E>,
+        state: &mut S,
+        acquire: impl FnOnce(&mut S, RuntimeCellHandle) -> Result<RuntimeCellHandle, E>,
+        mut release: impl FnMut(&mut S, RuntimeCellHandle) -> Result<(), E>,
+    ) -> Result<RuntimeCellHandle, E> {
+        let result = match result {
+            Ok(result) if result == self.original.borrowed() => {
+                return Ok(self.original.take());
+            }
+            Ok(result) if result.is_borrowed() => acquire(state, result),
+            result => result,
+        };
+
+        let replacement = match result {
+            Ok(replacement) => {
+                debug_assert!(!replacement.is_null() && !replacement.is_borrowed());
+                debug_assert!(self.replacement.replace(Some(replacement)).is_none());
+                Some(replacement)
+            }
+            Err(_) => None,
+        };
+        let cleanup = self
+            .original
+            .take_optional()
+            .map_or(Ok(()), |original| release(state, original));
+
+        match (result, cleanup) {
+            (Err(status), _) => Err(status),
+            (Ok(_), Ok(())) => Ok(self.replacement.take()),
+            (Ok(_), Err(status)) => {
+                if replacement.is_some() {
+                    let _ = self
+                        .replacement
+                        .take_optional()
+                        .map(|replacement| release(state, replacement));
+                }
+                Err(status)
+            }
+        }
+    }
+}
+
 impl Default for RuntimeOwnerSlot {
     /// Starts with no owner so resource records can fill their slots transactionally.
     fn default() -> Self { Self::empty() }
@@ -397,6 +471,14 @@ impl RuntimeOwners for RuntimeOwnerSlot {
             // only read it while this slot stays immobile and unchanged.
             visit(unsafe { &raw const (*self.0.as_ptr()).ptr });
         }
+    }
+}
+
+impl RuntimeOwners for RuntimeOwnerReplacement {
+    /// Visits the original and any published replacement as two distinct owner fields.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        self.original.visit_owned_slots(visit);
+        self.replacement.visit_owned_slots(visit);
     }
 }
 
@@ -939,6 +1021,77 @@ mod tests {
         let observer = RuntimeOwnerSlot::for_ownership(cell, RuntimeCellOwnership::Borrowed);
         assert!(!owner.take().is_borrowed());
         assert!(observer.take().is_borrowed());
+    }
+
+    /// Same-cell replacement transfers the original owner without a retain or release pair.
+    #[test]
+    fn runtime_owner_replacement_transfers_same_identity() {
+        let cell = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let owner = RuntimeOwnerReplacement::new(cell);
+        let mut events = Vec::new();
+
+        let result: Result<RuntimeCellHandle, ()> = owner.finish(
+            Ok(owner.borrowed()),
+            &mut events,
+            |events, _| {
+                events.push("acquire");
+                Ok(cell)
+            },
+            |events, _| {
+                events.push("release");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(cell));
+        assert!(events.is_empty());
+    }
+
+    /// Distinct borrowed replacement is acquired before the original owner is retired.
+    #[test]
+    fn runtime_owner_replacement_publishes_before_cleanup() {
+        let original = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let replacement = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let owner = RuntimeOwnerReplacement::new(original);
+        let mut events = Vec::new();
+
+        let result: Result<RuntimeCellHandle, ()> = owner.finish(
+            Ok(replacement.borrowed()),
+            &mut events,
+            |events, borrowed| {
+                events.push(("acquire", borrowed));
+                Ok(RuntimeCellHandle::from_raw(borrowed.as_ptr()))
+            },
+            |events, released| {
+                events.push(("release", released));
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(replacement));
+        assert_eq!(events, [("acquire", replacement), ("release", original)]);
+    }
+
+    /// Cleanup failure discards a distinct replacement exactly once.
+    #[test]
+    fn runtime_owner_replacement_discards_after_cleanup_failure() {
+        let original = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let replacement = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let owner = RuntimeOwnerReplacement::new(original);
+        let mut released = Vec::new();
+
+        let result = owner.finish(
+            Ok(replacement),
+            &mut released,
+            |_, _| -> Result<RuntimeCellHandle, u8> { unreachable!() },
+            |released, cell| {
+                released.push(cell);
+                if cell == original { Err(7) } else { Ok(()) }
+            },
+        );
+
+        assert_eq!(result, Err(7));
+        assert_eq!(released, [original, replacement]);
     }
 
     /// Persistent maps detach only distinct displaced owners and drain exactly once.

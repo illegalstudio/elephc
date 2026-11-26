@@ -32,8 +32,9 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             result
         }
         EvalControl::Return(value) => {
-            use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
-            let owner = RuntimeOwnerSlot::new(value);
+            use crate::runtime_hooks::owner_frames::with_runtime_owners;
+            use elephc_memoir::runtime_owners::RuntimeOwnerReplacement;
+            let owner = RuntimeOwnerReplacement::new(value);
             with_runtime_owners(&owner, || {
                 let result = eval_declared_explicit_return_value(
                     callee,
@@ -44,7 +45,14 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
                     context,
                     values,
                 );
-                finish_eval_argument_values(result, [owner.take()], context, values)
+                owner.finish(
+                    result,
+                    &mut (context, values),
+                    |(_, values), value| promote_borrowed_result(value, &mut **values),
+                    |(context, values), value| {
+                        eval_release_value(&mut **context, &mut **values, value)
+                    },
+                )
             })
         }
         EvalControl::Throw(result) => {
@@ -68,8 +76,9 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
-    let owner = RuntimeOwnerSlot::new(value);
+    use crate::runtime_hooks::owner_frames::with_runtime_owners;
+    use elephc_memoir::runtime_owners::RuntimeOwnerReplacement;
+    let owner = RuntimeOwnerReplacement::new(value);
     with_runtime_owners(&owner, || {
         let result = (|| {
             let value = owner.borrowed();
@@ -97,7 +106,14 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
                 values,
             )
         })();
-        finish_eval_argument_values(result, [owner.take()], context, values)
+        owner.finish(
+            result,
+            &mut (context, values),
+            |(_, values), value| promote_borrowed_result(value, &mut **values),
+            |(context, values), value| {
+                eval_release_value(&mut **context, &mut **values, value)
+            },
+        )
     })
 }
 

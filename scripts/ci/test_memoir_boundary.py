@@ -369,7 +369,7 @@ class MigratedSourceContractTests(unittest.TestCase):
             "crates/elephc-magician/src/context/reference_metadata.rs": "impl RuntimeOwners for EvalReferenceTarget",
             "crates/elephc-magician/src/interpreter/pcntl_escape.rs": "pending.pop()",
             "crates/elephc-magician/src/interpreter/builtins/registry/callable/execution.rs": "arguments.finish(",
-            "crates/elephc-magician/src/interpreter/return_values.rs": "finish_eval_argument_values(",
+            "crates/elephc-magician/src/interpreter/return_values.rs": "RuntimeOwnerReplacement",
             "crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs": "callback.borrowed()",
             "crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs": "RuntimeOwnerSlot",
             "crates/elephc-magician/src/interpreter/statements/loop_statements.rs": "retire_replaced_scope_cells(",
