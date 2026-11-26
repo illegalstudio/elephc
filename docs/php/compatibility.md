@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1121 / 2169** (52%), classes **202 / 329** (61%), constants **1617 / 3181** (51%).
+Overall coverage: functions **1130 / 2169** (52%), classes **204 / 329** (62%), constants **1673 / 3181** (53%).
 
 ## Coverage by PHP module
 
@@ -31,7 +31,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
 | [`fileinfo`](./fileinfo.md#functions) | 6 / 6 · 100% | 1 / 1 · 100% | 11 / 11 · 100% |
-| `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
+| [`filter`](./filter.md#functions) | 7 / 7 · 100% | 2 / 2 · 100% | 56 / 56 · 100% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | - | - |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 392 / 545 · 72% | 3 / 6 · 50% | 174 / 400 · 44% |
+| `standard` | 394 / 545 · 72% | 3 / 6 · 50% | 174 / 400 · 44% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -98,7 +98,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 392 / 353
+- `standard` functions: 394 / 354
 - `standard` constants: 174 / 153
 
 Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.

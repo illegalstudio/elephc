@@ -311,7 +311,8 @@ impl Detector {
             ExprKind::InstanceOf { value, target } => {
                 self.expr_refs_xml(value) || self.instanceof_target_refs_xml(target)
             }
-            ExprKind::Negate(inner)
+            ExprKind::Reference(inner)
+            | ExprKind::Negate(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)

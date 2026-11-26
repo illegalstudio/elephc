@@ -679,7 +679,7 @@ fn terminator_preserves_concat_state(term: &Terminator) -> bool {
 
 /// Returns whether `inst` is unconditionally non-inert regardless of operand or slot types.
 fn is_unconditional_concat_barrier(inst: &Instruction) -> bool {
-    if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
+    if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::HashSetValue | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
         // These defaults include callbacks, but a typed operand proof can rule them out.
         return false;
     }
@@ -952,7 +952,7 @@ impl<'a> ConcatInertAnalysis<'a> {
 
         // Proven container writes can be inert even though the opcode's default also
         // covers unknown reference markers and destructor-bearing Mixed payloads.
-        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey)
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::HashSetValue | Op::DescriptorArgSet | Op::ArraySetMixedKey)
             && self.container_write_is_concat_inert(inst)
         {
             return true;
@@ -1105,6 +1105,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::ArrayPush
             | Op::MixedArrayAppend
             | Op::HashSet
+            | Op::HashSetValue
             | Op::DescriptorArgSet
             | Op::HashAppend
             | Op::SlotDetach => self.container_write_is_concat_inert(inst),
@@ -1459,7 +1460,7 @@ impl<'a> ConcatInertAnalysis<'a> {
         let Some(container_meta) = self.function.value(container) else {
             return false;
         };
-        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::HashSetValue | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
             let Some(&key) = inst.operands.get(1) else {
                 return false;
             };
@@ -1618,6 +1619,7 @@ fn is_tracked_container_write_op(op: Op) -> bool {
             | Op::ArraySet
             | Op::ArraySetMixedKey
             | Op::HashSet
+            | Op::HashSetValue
             | Op::DescriptorArgSet
             | Op::HashSpread
     )

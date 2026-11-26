@@ -206,6 +206,7 @@ fn packed_field_refs_fileinfo(field: &PackedField) -> bool {
 fn expr_refs_fileinfo(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_fileinfo),
+        ExprKind::Reference(inner) => expr_refs_fileinfo(inner),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

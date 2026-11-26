@@ -34,3 +34,8 @@ pub(crate) fn test_pcre2_library_dir() -> std::path::PathBuf {
 pub(crate) fn test_pcre2_static_archive_path(name: &str) -> std::path::PathBuf {
     crate::managed_pcre2_support::test_pcre2_static_archive_path(target(), name)
 }
+
+/// Returns whether the host PCRE2 provider declares PCRE2_EXTRA_CASELESS_RESTRICT.
+pub(crate) fn host_pcre2_supports_caseless_restrict() -> bool {
+    crate::managed_pcre2_support::pcre2_supports_caseless_restrict(target())
+}

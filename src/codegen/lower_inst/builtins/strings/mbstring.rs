@@ -358,7 +358,7 @@ fn lower_mbstring_impl(
     store: bool,
 ) -> Result<()> {
     let capture = matches!(operation, RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi);
-    let query = operation == RuntimeBuiltinId::MbParseStr;
+    let query = matches!(operation, RuntimeBuiltinId::MbParseStr | RuntimeBuiltinId::ParseStr);
     let variables = operation == RuntimeBuiltinId::MbConvertVariables;
     let output = if query { Some(1) } else if capture || variables { Some(2) } else { None };
     if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ProfiledFunction {

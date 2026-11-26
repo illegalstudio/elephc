@@ -322,6 +322,7 @@ void unsupported_resource(void) { CHECK(0 && "unexpected resource payload"); }
     __attribute__((noreturn)) void name(void) { abort(); }
 UNUSED_RUNTIME_HELPER(__rt_decref_mixed)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_new)
+UNUSED_RUNTIME_HELPER(__rt_reference_cell_release)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_value_release)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_clone)
 UNUSED_RUNTIME_HELPER(__rt_resource_inventory_register)

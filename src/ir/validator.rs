@@ -741,7 +741,8 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadLocalRefCellPtr
+        | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1006,6 +1007,7 @@ fn validate_opcode_rules(
             Ok(())
         }
         LoadLocal
+        | LoadLocalRefCellPtr
         | LoadRefCell
         | LoadGlobal
         | LoadStaticLocal

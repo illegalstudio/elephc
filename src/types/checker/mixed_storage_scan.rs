@@ -1082,6 +1082,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 collect_expr(checker, value, depth + 1, facts);
             }
         },
+        ExprKind::Reference(inner) => collect_expr(checker, inner, depth, facts),
         // An expression-form assignment yields the stored value to its enclosing expression, so
         // re-binding it to boxed storage has no single well-defined result to hand back.
         ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp: _ } => {

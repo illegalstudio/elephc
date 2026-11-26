@@ -30,6 +30,22 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_deref_loop");                             // peel another nested wrapper
     emitter.label("__rt_mixed_deref_done");
     emitter.instruction("ret");                                                 // return the borrowed concrete box
+    emitter.label_global("__rt_mixed_deref_reference");
+    emitter.label("__rt_mixed_deref_reference_loop");
+    emitter.instruction("cbz x0, __rt_mixed_deref_reference_done");             // null has no nested cell
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the current boxed tag
+    emitter.instruction("cmp x9, #7");                                          // persistent wrappers own their child box
+    emitter.instruction("b.eq __rt_mixed_deref_reference_nested");              // follow the persistent wrapper
+    emitter.instruction("cmp x9, #11");                                         // hash entries store a managed reference cell
+    emitter.instruction("b.ne __rt_mixed_deref_reference_done");                // ordinary values are already concrete
+    emitter.instruction("ldr x0, [x0, #8]");                                    // read the managed reference cell behind the marker
+    emitter.instruction("ldr x0, [x0]");                                        // read the boxed value the cell owns
+    emitter.instruction("b __rt_mixed_deref_reference_loop");                   // peel another nested wrapper
+    emitter.label("__rt_mixed_deref_reference_nested");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // follow the owned boxed child
+    emitter.instruction("b __rt_mixed_deref_reference_loop");                   // peel another nested wrapper
+    emitter.label("__rt_mixed_deref_reference_done");
+    emitter.instruction("ret");                                                 // return the borrowed concrete box
     emitter.label_global("__rt_reference_is");
     emitter.instruction("cbz x0, __rt_reference_is_false");                     // null is not a persistent reference
     emitter.instruction("ldr x9, [x0]");                                        // inspect the raw wrapper tag
@@ -86,6 +102,22 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the owned boxed child
     emitter.instruction("jmp __rt_mixed_deref_loop");                           // peel the remaining nested wrappers
     emitter.label("__rt_mixed_deref_done");
+    emitter.instruction("ret");                                                 // return the borrowed concrete value
+    emitter.label_global("__rt_mixed_deref_reference");
+    emitter.label("__rt_mixed_deref_reference_loop");
+    emitter.instruction("test rax, rax");                                       // null has no nested cell
+    emitter.instruction("jz __rt_mixed_deref_reference_done");                  // return the concrete boxed value
+    emitter.instruction("cmp QWORD PTR [rax], 7");                              // persistent wrappers own their child box
+    emitter.instruction("je __rt_mixed_deref_reference_nested");                // follow the persistent wrapper
+    emitter.instruction("cmp QWORD PTR [rax], 11");                             // hash entries store a managed reference cell
+    emitter.instruction("jne __rt_mixed_deref_reference_done");                 // ordinary values are already concrete
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // read the managed reference cell behind the marker
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // read the boxed value the cell owns
+    emitter.instruction("jmp __rt_mixed_deref_reference_loop");                 // peel the remaining nested wrappers
+    emitter.label("__rt_mixed_deref_reference_nested");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the owned boxed child
+    emitter.instruction("jmp __rt_mixed_deref_reference_loop");                 // peel the remaining nested wrappers
+    emitter.label("__rt_mixed_deref_reference_done");
     emitter.instruction("ret");                                                 // return the borrowed concrete value
     emitter.label_global("__rt_reference_is");
     emitter.instruction("test rax, rax");                                       // recognize a null input

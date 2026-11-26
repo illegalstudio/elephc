@@ -84,6 +84,15 @@ impl Invalidation {
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
     match &expr.kind {
         ExprKind::Runtime(_) => Invalidation::All,
+        // Building a reference element exposes the variable to writes made through the array
+        // entry for the rest of its life, so no constant fact may survive this point.
+        ExprKind::Reference(inner) => match &inner.kind {
+            ExprKind::Variable(name) => {
+                super::stmt::mark_reference_volatile(name);
+                Invalidation::Names(HashSet::from([name.clone()]))
+            }
+            _ => expr_invalidation(inner),
+        },
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

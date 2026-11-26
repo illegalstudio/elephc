@@ -222,6 +222,7 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
                 collect_expr_scope_access(value, access);
             }
         },
+        ExprKind::Reference(inner) => collect_expr_scope_access(inner, access),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

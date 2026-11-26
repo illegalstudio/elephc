@@ -132,6 +132,18 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
         ir_module.probe_key = Some(key);
     }
+    // The eval catalog exposes the PHP 8.5 URI classes, so linking the interpreter makes its
+    // compiled method bodies reference the URI bridge even when the AOT source never names it.
+    let mut required_libraries = required_libraries.to_vec();
+    let eval_linked = required_libraries.iter().any(|library| library == "elephc_magician")
+        || extra_link_libs.iter().any(|library| library == "elephc_magician")
+        || ir_module.required_runtime_features.eval_bridge;
+    if eval_linked
+        && crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php85
+        && !required_libraries.iter().any(|library| library == "elephc_uri")
+    {
+        required_libraries.push("elephc_uri".to_string());
+    }
     let configures_mbstring = ir_module.required_runtime_features.mbstring
         || ir_module.required_runtime_features.mbregex
         || ir_module.required_runtime_features.eval_bridge;
@@ -139,7 +151,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.required_runtime_features.mbstring_mime |= ini_overrides.iter().any(|(name, _)| {
             name == "mbstring.http_output_conv_mimetypes"
         });
-        ir_module.mbstring_startup = Some(super::mbstring_configuration::arguments(ini_overrides));
+        ir_module.mbstring_startup = Some(crate::mbstring_startup::arguments(ini_overrides));
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -248,6 +260,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     };
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
+    runtime_features.addcslashes |= generated_user_asm.addcslashes;
     let user_asm = if emit_debug_info {
         debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
     } else {

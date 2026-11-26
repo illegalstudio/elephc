@@ -128,7 +128,9 @@ echo "[" . $s[99] . "]";  // []
 ```
 
 Negative indices count from end. An out-of-bounds read warns `Uninitialized string offset N`
-and returns an empty string.
+and returns an empty string. The same reads work through a `mixed` receiver, including a
+`mixed` parameter or global that currently holds a string; `isset()` stays quiet and false for
+a missing offset.
 
 ### Writing to a string offset
 
@@ -201,6 +203,9 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 `mb_parse_str($string, &$result)` decodes a URL-encoded query into the output
 array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
 same encoding detection, substitution settings, and Core INI query limits.
+Ordinary `parse_str()` is byte-preserving: it does not run mbstring input
+detection, does not change the state `mb_http_input()` reads, and keeps the first
+`max_input_vars` fields before warning.
 The example in `examples/mbstring/main.php` parses a product search and tags.
 
 The current AOT output adapter accepts local variables and managed aliases, while

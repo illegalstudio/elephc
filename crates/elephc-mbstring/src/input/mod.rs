@@ -40,19 +40,27 @@ pub struct Query { empty: bool, pairs: Vec<Pair> }
 
 impl Query {
     /// Splits and decodes all fields before enforcing the whole-query variable limit.
-    /// Exceeding the limit discards every field, including names that registration would ignore.
+    /// Exceeding the limit discards every field, including names that registration would ignore;
+    /// this is `mb_parse_str()`'s limit contract.
     pub fn decode(input: &[u8], separators: &[u8], max_variables: i64) -> Result<Self, InputLimit> {
-        let input = c_string(input);
-        let separators = c_string(separators);
-        let pairs = input.split(|byte| separators.contains(byte)).filter(|field| !field.is_empty()).map(|field| {
-            let equals = field.iter().position(|&byte| byte == b'=');
-            let (name, value) = equals.map_or((field, &b""[..]), |index| (&field[..index], &field[index + 1..]));
-            Pair { name: url_decode(name), value: url_decode(value) }
-        }).collect::<Vec<_>>();
-        if !input.is_empty() && (max_variables < 0 || pairs.len() as u128 > max_variables as u128) {
+        let (empty, pairs) = decode_fields(input, separators);
+        if !empty && max_variables >= 0 && pairs.len() as u128 > max_variables as u128 {
             return Err(InputLimit { maximum: max_variables });
         }
-        Ok(Self { empty: input.is_empty(), pairs })
+        Ok(Self { empty, pairs })
+    }
+
+    /// Splits and decodes all fields, then keeps the prefix PHP's `parse_str()` accepts under
+    /// `max_input_vars`. The returned limit reports how many fields PHP's warning names; the
+    /// dropped tail never reaches registration, and a negative limit is unlimited.
+    pub fn decode_partial(input: &[u8], separators: &[u8], max_variables: i64) -> (Self, Option<InputLimit>) {
+        let (empty, mut pairs) = decode_fields(input, separators);
+        let limit = (!empty && max_variables >= 0 && pairs.len() as u128 > max_variables as u128)
+            .then(|| {
+                pairs.truncate(usize::try_from(max_variables).unwrap_or(usize::MAX));
+                InputLimit { maximum: max_variables }
+            });
+        (Self { empty, pairs }, limit)
     }
 
     /// Identifies one encoding for all fields without altering request introspection yet.
@@ -90,6 +98,18 @@ impl InputLimit {
     pub fn message(&self) -> String {
         format!("Input variables exceeded {}. To increase the limit change max_input_vars in php.ini.", self.maximum)
     }
+}
+
+/// Splits one raw query into URL-decoded pairs, retaining whether the C-string source was empty.
+fn decode_fields(input: &[u8], separators: &[u8]) -> (bool, Vec<Pair>) {
+    let input = c_string(input);
+    let separators = c_string(separators);
+    let pairs = input.split(|byte| separators.contains(byte)).filter(|field| !field.is_empty()).map(|field| {
+        let equals = field.iter().position(|&byte| byte == b'=');
+        let (name, value) = equals.map_or((field, &b""[..]), |index| (&field[..index], &field[index + 1..]));
+        Pair { name: url_decode(name), value: url_decode(value) }
+    }).collect();
+    (input.is_empty(), pairs)
 }
 
 /// Applies the C-string boundary used for raw query bytes, separators, and registered names.

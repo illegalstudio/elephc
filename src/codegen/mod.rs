@@ -84,7 +84,7 @@ pub(crate) use crate::codegen_support::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
     emit_extern_callback_trampoline, emit_fiber_wrapper,
     emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
-    emit_write_literal_stderr, runtime_value_tag, container_value_tag,
+    emit_write_literal_stderr, runtime_value_tag, container_value_tag, REFERENCE_CELL_VALUE_TAG,
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
@@ -334,6 +334,8 @@ pub struct GeneratedUserAsm {
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
     pub object_clone: bool,
+    /// Whether generated wrappers reference the `addcslashes()` runtime helper.
+    pub addcslashes: bool,
 }
 
 /// Generates user assembly while preserving dependencies discovered after module EIR lowering.
@@ -643,6 +645,7 @@ fn finalize_user_asm(
         ),
         handler_state: generated_runtime_features.handler_state,
         object_clone: generated_runtime_features.object_clone,
+        addcslashes: generated_runtime_features.addcslashes,
     })
 }
 

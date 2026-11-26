@@ -84,10 +84,12 @@ pub(super) fn emit_guard(
     abi::load_at_offset(emitter, scratch, INVOKER_SCOPE_OFFSET);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction(&format!("asr {scratch}, {scratch}, #2"));      // recover the weak/strict scope from the encoded profile
             emitter.instruction(&format!("cmn {scratch}, #2"));                 // strict callers pass -2 or -class_id-3
             emitter.instruction(&format!("b.le {strict}"));                     // a profile at or below -2 checks strictly
         }
         Arch::X86_64 => {
+            emitter.instruction(&format!("sar {scratch}, 2"));                  // recover the weak/strict scope from the encoded profile
             emitter.instruction(&format!("cmp {scratch}, -2"));                 // strict callers pass -2 or -class_id-3
             emitter.instruction(&format!("jle {strict}"));                      // a profile at or below -2 checks strictly
         }

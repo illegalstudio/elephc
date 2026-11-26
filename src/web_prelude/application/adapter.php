@@ -153,6 +153,7 @@ namespace {
         try {
             elephc_web_application_request_begin();
             __elephc_web_prepare_request();
+            \__elephc_web_filter_request_hook();
             \Elephc\Web\Worker::dispatch();
         } catch (\Throwable) {
             elephc_web_handle_uncaught_exception();

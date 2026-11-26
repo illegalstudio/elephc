@@ -167,6 +167,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("Fiber", "fiber", Class, Core, CheckerInjected, since: Php81),
     class!("FiberError", "fibererror", Class, Core, CheckerInjected, since: Php81),
     class!("FilesystemIterator", "filesystemiterator", Class, Spl, CheckerInjected),
+    class!("Filter\\FilterException", "filter\\filterexception", Class, Filter, Prelude),
+    class!("Filter\\FilterFailedException", "filter\\filterfailedexception", Class, Filter, Prelude),
     class!("FilterIterator", "filteriterator", Class, Spl, CheckerInjected),
     class!("GdImage", "gdimage", Class, Gd, Prelude),
     class!("Generator", "generator", Class, Core, LanguageIntrinsic),

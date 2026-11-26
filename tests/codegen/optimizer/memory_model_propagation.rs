@@ -139,14 +139,11 @@ echo $x + 1;
     assert_eq!(out, "6");
 }
 
-/// `call_user_func` forwards the caller's variable to a by-ref parameter; the
-/// mutation must be visible in the read after the call. (elephc preserves
-/// by-ref through `call_user_func` — locked by the descriptor-invoker suite —
-/// where PHP 8 would coerce to by-value with a warning; the propagation must
-/// match elephc's own runtime.)
+/// `call_user_func` cannot forward a value argument to a by-ref parameter: PHP 8 reports
+/// the by-reference warning and the read after the call still sees the original value.
 #[test]
-fn test_callback_builtin_by_ref_forwarding_observed() {
-    let out = compile_and_run(
+fn test_callback_builtin_by_ref_warning_is_observed() {
+    let output = compile_and_run_capture(
         r#"<?php
 function add3(int &$n): void {
     $n = $n + 3;
@@ -156,7 +153,12 @@ call_user_func('add3', $v);
 echo $v;
 "#,
     );
-    assert_eq!(out, "8");
+    assert_eq!(output.stdout, "5");
+    assert!(
+        output.stderr.contains("must be passed by reference"),
+        "missing by-reference warning: {}",
+        output.stderr
+    );
 }
 
 /// `unset($a[0])` removes one element; unrelated scalars keep folding and the

@@ -95,6 +95,7 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
     let args = |values: &[Expr]| values.iter().any(expr);
     match &value.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr),
+        ExprKind::Reference(inner) => expr(inner),
         // `new Box<int>(…)`: its arguments are ordinary expressions and can read the backing slot.
         ExprKind::NewGeneric { args: values, .. } => args(values),
         ExprKind::PropertyAccess { object, property: name }

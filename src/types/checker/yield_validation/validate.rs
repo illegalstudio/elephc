@@ -252,6 +252,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
                 visit_expr(value, st);
             }
         },
+        ExprKind::Reference(inner) => visit_expr(inner, st),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

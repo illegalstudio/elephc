@@ -189,7 +189,12 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         System,
         Core,
         LanguageConstruct,
-        [param!("status", Int = DefaultSpec::Int(0))],
+        [ParamSpec {
+            name: "status",
+            ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
+            default: Some(DefaultSpec::Int(0)),
+            by_ref: false,
+        }],
         None,
         Void,
         "Terminates execution with an optional status."
@@ -219,7 +224,12 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         System,
         Core,
         LanguageConstruct,
-        [param!("status", Int = DefaultSpec::Int(0))],
+        [ParamSpec {
+            name: "status",
+            ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int]),
+            default: Some(DefaultSpec::Int(0)),
+            by_ref: false,
+        }],
         None,
         Void,
         "Terminates execution with an optional status."

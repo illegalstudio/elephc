@@ -540,15 +540,6 @@ fn test_error_call_user_func_ref_param_requires_variable() {
     );
 }
 
-/// A descriptor call cannot preserve an array element's writable reference identity yet.
-#[test]
-fn test_error_call_user_func_ref_param_rejects_array_element() {
-    expect_error(
-        "<?php function bump(mixed &$value): void {} $a = [\"k\" => 1]; call_user_func(bump(...), $a[\"k\"]);",
-        "cannot bind an array element by reference through callable descriptor dispatch",
-    );
-}
-
 /// An instance-method first-class callable uses descriptor dispatch and applies the same guard.
 #[test]
 fn test_error_instance_method_fcc_ref_param_rejects_array_element() {
@@ -582,31 +573,6 @@ fn test_error_call_user_func_array_ref_param_rejects_array_element_value() {
     expect_error(
         "<?php function write(mixed &$value): void {} $a = [\"k\" => 1]; call_user_func_array(write(...), [$a[\"k\"]]);",
         "cannot bind an array element by reference through callable descriptor dispatch",
-    );
-}
-
-/// Verifies that error call user func string literal ref param requires variable.
-#[test]
-fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
-    // Verifies `call_user_func()` with a named function string and a by-reference
-    // parameter passed a non-variable argument produces a diagnostic requiring
-    // a variable to be passed.
-    expect_error(
-        "<?php function bump(&$n) { $n = $n + 1; } call_user_func(\"bump\", 1);",
-        "parameter $n must be passed a variable",
-    );
-}
-
-/// Verifies that error case insensitive function string introspection keeps callback checks.
-#[test]
-fn test_error_case_insensitive_function_string_introspection_keeps_callback_checks() {
-    // Verifies that case-insensitive function string introspection via
-    // `function_exists("BUMP")` and `is_callable("BUMP")` still enforces
-    // by-reference parameter semantics when `call_user_func("BUMP", ...)` is
-    // subsequently invoked.
-    expect_error(
-        "<?php function Bump(&$n) { $n = $n + 1; } if (function_exists(\"BUMP\") && is_callable(\"BUMP\")) { call_user_func(\"BUMP\", 1); }",
-        "parameter $n must be passed a variable",
     );
 }
 
@@ -1084,10 +1050,6 @@ fn test_error_by_ref_variadic_arguments_require_supported_lvalues() {
     expect_error(
         "<?php function gather(&...$values): void { func_num_args(); } gather(1);",
         "variadic parameter $values must be passed a variable",
-    );
-    expect_error(
-        "<?php function gather(&...$values): void {} $callback = gather(...); $value = 1; call_user_func_array($callback, ['named' => $value]);",
-        "does not support associative argument literals for callbacks with by-reference parameters",
     );
 }
 

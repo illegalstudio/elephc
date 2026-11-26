@@ -114,6 +114,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_chunk(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
+arrays::emit_hash_shuffle_links(emitter);
     arrays::emit_mt_uniform(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
@@ -172,6 +173,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_multisort(emitter);
     arrays::emit_asort(emitter);
     arrays::emit_hash_sort(emitter);
+arrays::emit_hash_reindex_dense(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_array_map_boxed(emitter);
@@ -190,6 +192,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
+arrays::emit_hash_sort_require_scalars(emitter);
     arrays::emit_float_compare_slots(emitter);
     arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);

@@ -414,10 +414,11 @@ impl Checker {
             if let ExprKind::Spread(_) = &arg.kind {
                 for i in arg_idx..decl.params.len() {
                     if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
-                        let declared_ty = self.resolve_declared_param_type_hint(
+                        let declared_ty = self.resolve_declared_param_storage_hint(
                             type_ann,
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                            decl.ref_params.get(i).copied().unwrap_or(false),
                         )?;
                         // `validate_callable_spread_elements` above has already established that
                         // this spread is eligible for runtime descriptor validation. Only that
@@ -501,10 +502,11 @@ impl Checker {
                     .get(arg_idx)
                     .and_then(|annotation| annotation.as_ref())
                     .map(|annotation| {
-                        self.resolve_declared_param_type_hint(
+                        self.resolve_declared_param_storage_hint(
                             annotation,
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, param_name),
+                            decl.ref_params.get(arg_idx).copied().unwrap_or(false),
                         )
                     })
                     .transpose()?;
@@ -727,10 +729,12 @@ impl Checker {
                 let deferred_scope_error =
                     crate::types::deferred_defaults::deferred_error_message(default_expr).is_some();
                 if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
-                    let declared_ty = self.resolve_declared_param_type_hint(
+                    let by_ref = decl.ref_params.get(i).copied().unwrap_or(false);
+                    let declared_ty = self.resolve_declared_param_storage_hint(
                         type_ann,
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                        by_ref,
                     )?;
                     let default_ty = if deferred_scope_error {
                         declared_ty.clone()

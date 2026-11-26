@@ -96,6 +96,16 @@ pub fn t_array() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("array"))
 }
 
+/// PHP's `int` type in a synthetic signature.
+pub fn t_int() -> TypeExpr {
+    TypeExpr::Int
+}
+
+/// PHP's `bool` type in a synthetic signature.
+pub fn t_bool() -> TypeExpr {
+    TypeExpr::Bool
+}
+
 /// A class or interface type by name (`DOMNode`, `Iterator`, …).
 pub fn t_class(name: &str) -> TypeExpr {
     // Through `class_name`, so a type hint keeps the spelling it was written with. A `\`-

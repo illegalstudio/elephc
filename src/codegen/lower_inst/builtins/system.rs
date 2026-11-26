@@ -718,6 +718,269 @@ pub(crate) fn lower_usleep(
     lower_unary_blocking_c_call(ctx, inst, "usleep", "usleep microseconds")
 }
 
+/// Lowers one weak-mode float `exit()` status.
+///
+/// Finite values inside the signed integer range follow PHP's float-to-int coercion, which
+/// emits the precision deprecation through `__rt_float_key_to_int`. Out-of-range values,
+/// infinities and NaN are printed as their PHP string spelling instead; NaN keeps PHP's
+/// coercion warning.
+fn lower_weak_float_exit(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let nan = ctx.next_label("exit_float_nan");
+    let print = ctx.next_label("exit_float_print");
+    let dynamic = ctx.next_label("exit_float_dynamic");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d0, d0");                             // classify NaN before the ordered range checks
+            ctx.emitter.instruction(&format!("b.vs {nan}"));                    // NaN prints its NAN spelling
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 0x43e0000000000000);
+            ctx.emitter.instruction("fmov d1, x9");                             // load positive 2^63, outside the signed int range
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare the positive bound inclusively
+            ctx.emitter.instruction(&format!("b.ge {print}"));                  // large finite values print as strings
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 0xc3e0000000000000_u64 as i64);
+            ctx.emitter.instruction("fmov d1, x9");                             // load negative 2^63, the minimum signed int
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare the negative bound exclusively
+            ctx.emitter.instruction(&format!("b.lt {print}"));                  // below-range values print as strings
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");         // convert in-range floats with PHP's precision deprecation
+            ctx.emitter.instruction(&format!("b {dynamic}"));                   // terminate with the converted integer status
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("ucomisd xmm0, xmm0");                      // classify NaN before the ordered range checks
+            ctx.emitter.instruction(&format!("jp {nan}"));                      // NaN prints its NAN spelling
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 0x43e0000000000000);
+            ctx.emitter.instruction("movq xmm1, r10");                          // load positive 2^63, outside the signed int range
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the positive bound inclusively
+            ctx.emitter.instruction(&format!("jae {print}"));                   // large finite values print as strings
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 0xc3e0000000000000_u64 as i64);
+            ctx.emitter.instruction("movq xmm1, r10");                          // load negative 2^63, the minimum signed int
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the negative bound exclusively
+            ctx.emitter.instruction(&format!("jb {print}"));                    // below-range values print as strings
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");         // convert in-range floats with PHP's precision deprecation
+            ctx.emitter.instruction(&format!("jmp {dynamic}"));                 // terminate with the converted integer status
+        }
+    }
+    ctx.emitter.label(&nan);
+    crate::codegen::lower_inst::runtime_class_messages::emit_static_diagnostic(
+        ctx,
+        "Warning: unexpected NAN value was coerced to string\n",
+        true,
+    );
+    // The diagnostic clobbers the float result registers, and NaN always prints the same
+    // three bytes, so write the literal instead of re-formatting the lost value.
+    let (nan_label, nan_len) = ctx.data.add_string(b"NAN");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &nan_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, nan_len as i64);
+    abi::emit_write_stdout(ctx.emitter, &PhpType::Str);                         // write NAN without a newline
+    abi::emit_exit(ctx.emitter, 0);                                             // PHP's string exit always succeeds
+    ctx.emitter.label(&print);
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_repr");                    // format finite out-of-range values and infinities
+    abi::emit_write_stdout(ctx.emitter, &PhpType::Str);                         // write the formatted status without a newline
+    abi::emit_exit(ctx.emitter, 0);                                             // PHP's string exit always succeeds
+    ctx.emitter.label(&dynamic);
+    emit_dynamic_exit(ctx);
+    Ok(())
+}
+
+/// Lowers one `exit()`/`die()` status that arrives as a nullable integer.
+///
+/// The tagged scalar carries the integer payload in the result register and the runtime tag in
+/// the adjacent one. PHP's weak mode treats a null status as the null deprecation followed by a
+/// zero exit code, and any integer status as the exit code itself. A strict call site instead
+/// raises the null `TypeError` its `string|int` signature requires.
+fn lower_tagged_scalar_exit(ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<()> {
+    let null = ctx.next_label("exit_tagged_null");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x1, #{}", crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction(&format!("b.eq {null}"));                   // null takes the null-status path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rdx, {}", crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction(&format!("je {null}"));                     // null takes the null-status path
+        }
+    }
+    emit_dynamic_exit(ctx);
+    ctx.emitter.label(&null);
+    if strict_php {
+        emit_exit_strict_status_error(ctx, "null");
+    } else {
+        emit_null_exit_deprecation(ctx);
+        abi::emit_exit(ctx.emitter, 0);
+    }
+    Ok(())
+}
+
+/// Lowers one `exit()`/`die()` status that arrives as a boxed `Mixed`.
+///
+/// PHP's `string|int` parameter coercion is applied to the runtime tag: integers and booleans
+/// select the exit code, strings print and succeed, floats follow the weak float path, and null
+/// keeps its deprecation. A strict call site raises the tag's `TypeError` instead. Arrays,
+/// resources, and objects raise PHP's catchable `TypeError` in both modes.
+fn lower_mixed_exit(ctx: &mut FunctionContext<'_>, status: ValueId, strict_php: bool) -> Result<()> {
+    let int_case = ctx.next_label("exit_mixed_int");
+    let string_case = ctx.next_label("exit_mixed_string");
+    let float_case = ctx.next_label("exit_mixed_float");
+    let bool_case = ctx.next_label("exit_mixed_bool");
+    let null_case = ctx.next_label("exit_mixed_null");
+    let array_case = ctx.next_label("exit_mixed_array");
+    let resource_case = ctx.next_label("exit_mixed_resource");
+    let object_case = ctx.next_label("exit_mixed_object");
+    let other_case = ctx.next_label("exit_mixed_other");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_deref_reference");            // a reference cell hands over the value it aliases
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // tag in the result register, payload in the argument registers
+    for (tag, label) in [
+        (0u8, &int_case),
+        (1, &string_case),
+        (2, &float_case),
+        (3, &bool_case),
+        (4, &array_case),
+        (5, &array_case),
+        (6, &object_case),
+        (8, &null_case),
+        (9, &resource_case),
+    ] {
+        super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, tag, label);
+    }
+    abi::emit_jump(ctx.emitter, &other_case);
+
+    ctx.emitter.label(&int_case);
+    move_unboxed_payload_to_result(ctx);
+    emit_dynamic_exit(ctx);
+    ctx.emitter.label(&bool_case);
+    if strict_php {
+        // PHP names a boolean status by its value, not by the `bool` type.
+        let truthy = ctx.next_label("exit_mixed_strict_true");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x1, {truthy}"));         // a non-zero bool payload is `true`
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rdi, rdi");                       // classify the boxed bool payload
+                ctx.emitter.instruction(&format!("jne {truthy}"));              // a non-zero bool payload is `true`
+            }
+        }
+        emit_exit_strict_status_error(ctx, "false");
+        ctx.emitter.label(&truthy);
+        emit_exit_strict_status_error(ctx, "true");
+    } else {
+        move_unboxed_payload_to_result(ctx);
+        emit_dynamic_exit(ctx);
+    }
+    ctx.emitter.label(&null_case);
+    if strict_php {
+        emit_exit_strict_status_error(ctx, "null");
+    } else {
+        emit_null_exit_deprecation(ctx);
+        abi::emit_exit(ctx.emitter, 0);
+    }
+    ctx.emitter.label(&string_case);
+    move_unboxed_string_to_result(ctx);
+    abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+    abi::emit_exit(ctx.emitter, 0);
+    ctx.emitter.label(&float_case);
+    if strict_php {
+        emit_exit_strict_status_error(ctx, "float");
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("fmov d0, x1");                         // move the unboxed float bits into the FP result register
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("movq xmm0, rdi");                      // move the unboxed float bits into the FP result register
+            }
+        }
+        lower_weak_float_exit(ctx)?;
+    }
+    ctx.emitter.label(&array_case);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "exit(): Argument #1 ($status) must be of type string|int, array given",
+    );
+    ctx.emitter.label(&resource_case);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "exit(): Argument #1 ($status) must be of type string|int, resource given",
+    );
+    ctx.emitter.label(&object_case);
+    if strict_php {
+        move_unboxed_payload_to_result(ctx);
+        crate::codegen::lower_inst::runtime_class_messages::emit_runtime_class_name_to_string_result(
+            ctx,
+            abi::int_result_reg(ctx.emitter),
+            "object",
+        );
+        crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_prefix(
+            ctx,
+            "exit(): Argument #1 ($status) must be of type string|int, ",
+        );
+        crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+        super::super::exceptions::emit_type_error_from_string_result(ctx);
+    } else {
+        // Weak mode coerces a stringable object through `__toString()`; a class without one
+        // keeps PHP's `string|int` TypeError. The object pointer is still in the unboxed
+        // payload register at this label.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                crate::codegen::lower_inst::conversions::emit_object_tostring_or_exit_error(
+                    ctx, status, "x1",
+                )?;
+            }
+            Arch::X86_64 => {
+                crate::codegen::lower_inst::conversions::emit_object_tostring_or_exit_error(
+                    ctx, status, "rdi",
+                )?;
+            }
+        }
+        abi::emit_exit(ctx.emitter, 0);
+    }
+    ctx.emitter.label(&other_case);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "exit(): Argument #1 ($status) must be of type string|int, object given",
+    );
+    Ok(())
+}
+
+/// Moves the unboxed `Mixed` payload word into the integer result register.
+fn move_unboxed_payload_to_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // payload low word becomes the exit status
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // payload low word becomes the exit status
+    }
+}
+
+/// Moves the unboxed `Mixed` string payload into the string result registers.
+fn move_unboxed_string_to_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // x1/x2 already hold the unboxed string pointer and length.
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // pointer moves from the payload register into the string result
+        }
+    }
+}
+
+/// Emits PHP 8's null-to-`string|int` deprecation for an `exit()`/`die()` status.
+fn emit_null_exit_deprecation(ctx: &mut FunctionContext<'_>) {
+    crate::codegen::lower_inst::runtime_class_messages::emit_static_diagnostic(
+        ctx,
+        "Deprecated: exit(): Passing null to parameter #1 ($status) of type string|int is deprecated\n",
+        true,
+    );
+}
+
+/// Raises PHP's catchable `TypeError` for a strict call site's non-`string|int` status.
+fn emit_exit_strict_status_error(ctx: &mut FunctionContext<'_>, actual: &str) {
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "exit(): Argument #1 ($status) must be of type string|int, {actual} given"
+        ),
+    );
+}
+
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
@@ -731,8 +994,84 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
-    emit_dynamic_exit(ctx);
+    let status_ty = ctx.value_php_type(status)?.codegen_repr();
+    let strict_php = super::super::instruction_helpers::instruction_strict_php_profile(inst);
+    match status_ty {
+        PhpType::Str => {
+            ctx.load_value_to_result(status)?;
+            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            abi::emit_exit(ctx.emitter, 0);
+        }
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            ctx.load_value_to_result(status)?;
+            emit_dynamic_exit(ctx);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(status)?;
+            lower_weak_float_exit(ctx)?;
+        }
+        PhpType::Void => {
+            emit_null_exit_deprecation(ctx);
+            abi::emit_exit(ctx.emitter, 0);
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(status)?;
+            lower_tagged_scalar_exit(ctx, strict_php)?;
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(status)?;
+            lower_mixed_exit(ctx, status, strict_php)?;
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            super::super::exceptions::emit_type_error(
+                ctx,
+                "exit(): Argument #1 ($status) must be of type string|int, array given",
+            );
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(status)?;
+            if strict_php {
+                // Strict `string|int` validation names the runtime class, like the boxed path.
+                crate::codegen::lower_inst::runtime_class_messages::emit_runtime_class_name_to_string_result(
+                    ctx,
+                    abi::int_result_reg(ctx.emitter),
+                    "object",
+                );
+                crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_prefix(
+                    ctx,
+                    "exit(): Argument #1 ($status) must be of type string|int, ",
+                );
+                crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+                super::super::exceptions::emit_type_error_from_string_result(ctx);
+            } else {
+                // Weak mode converts a stringable object through `__toString()`; a class
+                // without one keeps PHP's `string|int` TypeError. The loaded pointer is in
+                // the result register, while the tostring dispatcher takes it in the
+                // unboxed payload register.
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("mov x1, x0");                  // pass the raw object payload to the tostring dispatcher
+                        crate::codegen::lower_inst::conversions::emit_object_tostring_or_exit_error(
+                            ctx, status, "x1",
+                        )?;
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov rdi, rax");                // pass the raw object payload to the tostring dispatcher
+                        crate::codegen::lower_inst::conversions::emit_object_tostring_or_exit_error(
+                            ctx, status, "rdi",
+                        )?;
+                    }
+                }
+                abi::emit_exit(ctx.emitter, 0);
+            }
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "exit status for PHP type {:?}",
+                other
+            )));
+        }
+    }
     Ok(())
 }
 

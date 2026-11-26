@@ -75,8 +75,11 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.label("__rt_mixed_sort_scalar_done");
             emitter.instruction("ret");                                         // return the unchanged array pointer in x0
 
-            // -- report an unsupported runtime value before terminating --
+            // -- local conditional target that reaches the shared fatal helper --
             emitter.label("__rt_mixed_sort_non_scalar");
+            abi::emit_jump(emitter, "__rt_mixed_sort_reject_non_scalar");
+            // -- report an unsupported runtime value before terminating --
+            emitter.label_global("__rt_mixed_sort_reject_non_scalar");
             if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
             emitter.instruction("mov x0, #2");                                  // select stderr for the explicit Mixed-sort diagnostic
             abi::emit_symbol_address(emitter, "x1", "_mixed_sort_non_scalar_msg");
@@ -116,8 +119,12 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("add rsp, 8");                                  // release the alignment slot before returning
             emitter.instruction("ret");                                         // return the unchanged array pointer in rax
 
-            // -- report an unsupported runtime value before terminating --
+            // -- local conditional target that reaches the shared fatal helper --
             emitter.label("__rt_mixed_sort_non_scalar_x86");
+            abi::emit_jump(emitter, "__rt_mixed_sort_reject_non_scalar_x86");
+            // -- report an unsupported runtime value before terminating --
+            emitter.label_global("__rt_mixed_sort_reject_non_scalar_x86");
+            emitter.instruction("and rsp, -16");                                // realign any caller path before the output flush call
             if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
             emitter.instruction("mov edi, 2");                                  // select stderr for the explicit Mixed-sort diagnostic
             abi::emit_symbol_address(emitter, "rsi", "_mixed_sort_non_scalar_msg");
@@ -189,6 +196,135 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
             emitter.instruction("add rsp, 48");                                 // release comparator locals
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             emitter.instruction("ret");                                         // return the PHP ordering result
+        }
+    }
+}
+
+/// Emits `__rt_hash_sort_require_scalars`, the hash-backed sibling of the packed guard.
+///
+/// Hash entries store one runtime tag per entry: a boxed `Mixed` cell (tag 7) or a managed
+/// reference cell (tag 11) hides the comparable tag one level down. The guard walks every
+/// occupied slot, normalizes those two shapes to the value they own, and joins the shared
+/// `__rt_mixed_sort_non_scalar` diagnostic for arrays, resources, callables, and objects
+/// without a comparison adapter. Input/output: the hash table in `x0` / `rdi`; the helper
+/// returns it unchanged so the caller can tail into the value sorter.
+pub fn emit_hash_sort_require_scalars(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_sort_require_scalars ---");
+    emitter.label_global("__rt_hash_sort_require_scalars");
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cbz x0, __rt_hash_sort_scalar_done");          // a null table has no entries to validate
+            emitter.instruction("ldr x9, [x0]");                                // load the live entry count
+            emitter.instruction("cbz x9, __rt_hash_sort_scalar_done");          // an empty hash is trivially sortable
+            emitter.instruction("ldr x10, [x0, #8]");                           // load the entry-slot capacity
+            emitter.instruction("ldr x11, [x0, #40]");                          // borrow the separate entry storage
+            emitter.instruction("mov x12, #0");                                 // start at the first occupied slot
+            emitter.label("__rt_hash_sort_scalar_scan");
+            emitter.instruction("cmp x12, x10");                                // have all entry slots been inspected?
+            emitter.instruction("b.hs __rt_hash_sort_scalar_done");             // return once every live value is supported
+            emitter.instruction("lsl x13, x12, #6");                            // scale the slot index to the 64-byte entry size
+            emitter.instruction("add x13, x11, x13");                           // address the current entry
+            emitter.instruction("ldr x14, [x13]");                              // load the occupied marker
+            emitter.instruction("cmp x14, #1");                                 // only live entries carry a value to compare
+            emitter.instruction("b.ne __rt_hash_sort_scalar_next");             // skip empty and tombstone slots
+            emitter.instruction("mov x16, #0");                                 // inline payloads have no boxed Mixed pointer
+            emitter.instruction("ldr x15, [x13, #40]");                         // load the entry runtime value tag
+            emitter.instruction("cmp x15, #11");                                // does this entry belong to a PHP reference set?
+            emitter.instruction("b.eq __rt_hash_sort_scalar_reference");        // the managed cell owns the comparable value
+            emitter.instruction("cmp x15, #7");                                 // does this entry hold a boxed Mixed cell?
+            emitter.instruction("b.eq __rt_hash_sort_scalar_boxed");            // the box carries the comparable tag
+            emitter.instruction("b __rt_hash_sort_scalar_classify");            // inline scalar and object payloads are ready
+            emitter.label("__rt_hash_sort_scalar_reference");
+            emitter.instruction("ldr x16, [x13, #24]");                         // load the managed reference cell
+            emitter.instruction("ldr x16, [x16]");                              // read the boxed Mixed value the cell owns
+            emitter.instruction("ldr x15, [x16]");                              // read the comparable runtime tag
+            emitter.instruction("b __rt_hash_sort_scalar_classify");            // classify the dereferenced value
+            emitter.label("__rt_hash_sort_scalar_boxed");
+            emitter.instruction("ldr x16, [x13, #24]");                         // load the boxed Mixed cell pointer
+            emitter.instruction("ldr x15, [x16]");                              // read the comparison tag from the cell
+            emitter.label("__rt_hash_sort_scalar_classify");
+            emitter.instruction("cmp x15, #3");                                 // are int, string, float, or bool semantics sufficient?
+            emitter.instruction("b.ls __rt_hash_sort_scalar_next");             // accept runtime scalar tags 0 through 3
+            emitter.instruction("cmp x15, #8");                                 // is this value PHP null?
+            emitter.instruction("b.eq __rt_hash_sort_scalar_next");             // null is a supported scalar comparison operand
+            emitter.instruction("cmp x15, #6");                                 // is this value an object?
+            emitter.instruction("b.ne __rt_hash_sort_scalar_non_scalar");       // reject containers, resources, and callables
+            emitter.instruction("cbz x16, __rt_hash_sort_scalar_inline_object"); // an inline object pointer lives in the entry
+            emitter.instruction("ldr x14, [x16, #8]");                          // load the object pointer from the box payload
+            emitter.instruction("b __rt_hash_sort_scalar_object_class");        // resolve the object's comparison adapter
+            emitter.label("__rt_hash_sort_scalar_inline_object");
+            emitter.instruction("ldr x14, [x13, #24]");                         // load the inline object pointer
+            emitter.label("__rt_hash_sort_scalar_object_class");
+            emitter.instruction("ldr x14, [x14]");                              // load the object's runtime class id
+            abi::emit_symbol_address(emitter, "x17", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
+            emitter.instruction("ldr x14, [x17, x14, lsl #3]");                 // read this class's comparison adapter
+            emitter.instruction("cbz x14, __rt_hash_sort_scalar_non_scalar");   // unhandled object classes still fail closed
+            emitter.label("__rt_hash_sort_scalar_next");
+            emitter.instruction("add x12, x12, #1");                            // advance to the next entry slot
+            emitter.instruction("b __rt_hash_sort_scalar_scan");                // continue validating runtime tags
+            emitter.label("__rt_hash_sort_scalar_done");
+            emitter.instruction("ret");                                         // return the unchanged table pointer in x0
+            emitter.label("__rt_hash_sort_scalar_non_scalar");
+            abi::emit_jump(emitter, "__rt_mixed_sort_reject_non_scalar");       // share the explicit Mixed-sort fatal helper
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdi, rdi");                               // a null table has no entries to validate
+            emitter.instruction("jz __rt_hash_sort_scalar_done_x86");           // return without touching a null table
+            emitter.instruction("cmp QWORD PTR [rdi], 0");                      // does the hash hold any live entries?
+            emitter.instruction("je __rt_hash_sort_scalar_done_x86");           // an empty hash is trivially sortable
+            emitter.instruction("mov rcx, QWORD PTR [rdi + 8]");                // load the entry-slot capacity
+            emitter.instruction("mov r8, QWORD PTR [rdi + 40]");                // borrow the separate entry storage
+            emitter.instruction("xor r9d, r9d");                                // start at the first occupied slot
+            emitter.label("__rt_hash_sort_scalar_scan_x86");
+            emitter.instruction("cmp r9, rcx");                                 // have all entry slots been inspected?
+            emitter.instruction("jae __rt_hash_sort_scalar_done_x86");          // return once every live value is supported
+            emitter.instruction("mov r10, r9");                                 // copy the slot index before scaling
+            emitter.instruction("shl r10, 6");                                  // scale the slot index to the 64-byte entry size
+            emitter.instruction("add r10, r8");                                 // address the current entry
+            emitter.instruction("cmp QWORD PTR [r10], 1");                      // only live entries carry a value to compare
+            emitter.instruction("jne __rt_hash_sort_scalar_next_x86");          // skip empty and tombstone slots
+            emitter.instruction("xor edx, edx");                                // inline payloads have no boxed Mixed pointer
+            emitter.instruction("mov r11, QWORD PTR [r10 + 40]");               // load the entry runtime value tag
+            emitter.instruction("cmp r11, 11");                                 // does this entry belong to a PHP reference set?
+            emitter.instruction("je __rt_hash_sort_scalar_reference_x86");      // the managed cell owns the comparable value
+            emitter.instruction("cmp r11, 7");                                  // does this entry hold a boxed Mixed cell?
+            emitter.instruction("je __rt_hash_sort_scalar_boxed_x86");          // the box carries the comparable tag
+            emitter.instruction("jmp __rt_hash_sort_scalar_classify_x86");      // inline scalar and object payloads are ready
+            emitter.label("__rt_hash_sort_scalar_reference_x86");
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");               // load the managed reference cell
+            emitter.instruction("mov rdx, QWORD PTR [rdx]");                    // read the boxed Mixed value the cell owns
+            emitter.instruction("mov r11, QWORD PTR [rdx]");                    // read the comparable runtime tag
+            emitter.instruction("jmp __rt_hash_sort_scalar_classify_x86");      // classify the dereferenced value
+            emitter.label("__rt_hash_sort_scalar_boxed_x86");
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");               // load the boxed Mixed cell pointer
+            emitter.instruction("mov r11, QWORD PTR [rdx]");                    // read the comparison tag from the cell
+            emitter.label("__rt_hash_sort_scalar_classify_x86");
+            emitter.instruction("cmp r11, 3");                                  // are int, string, float, or bool semantics sufficient?
+            emitter.instruction("jbe __rt_hash_sort_scalar_next_x86");          // accept runtime scalar tags 0 through 3
+            emitter.instruction("cmp r11, 8");                                  // is this value PHP null?
+            emitter.instruction("je __rt_hash_sort_scalar_next_x86");           // null is a supported scalar comparison operand
+            emitter.instruction("cmp r11, 6");                                  // is this value an object?
+            emitter.instruction("jne __rt_hash_sort_scalar_non_scalar_x86");    // reject containers, resources, and callables
+            emitter.instruction("test rdx, rdx");                               // does a box carry this object value?
+            emitter.instruction("jz __rt_hash_sort_scalar_inline_object_x86");  // an inline object pointer lives in the entry
+            emitter.instruction("mov rax, QWORD PTR [rdx + 8]");                // load the object pointer from the box payload
+            emitter.instruction("jmp __rt_hash_sort_scalar_object_class_x86");  // resolve the object's comparison adapter
+            emitter.label("__rt_hash_sort_scalar_inline_object_x86");
+            emitter.instruction("mov rax, QWORD PTR [r10 + 24]");               // load the inline object pointer
+            emitter.label("__rt_hash_sort_scalar_object_class_x86");
+            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the object's runtime class id
+            abi::emit_symbol_address(emitter, "rsi", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
+            emitter.instruction("cmp QWORD PTR [rsi + rax * 8], 0");            // does this class declare a comparison adapter?
+            emitter.instruction("je __rt_hash_sort_scalar_non_scalar_x86");     // unhandled object classes still fail closed
+            emitter.label("__rt_hash_sort_scalar_next_x86");
+            emitter.instruction("add r9, 1");                                   // advance to the next entry slot
+            emitter.instruction("jmp __rt_hash_sort_scalar_scan_x86");          // continue validating runtime tags
+            emitter.label("__rt_hash_sort_scalar_done_x86");
+            emitter.instruction("ret");                                         // return the unchanged table pointer in rax
+            emitter.label("__rt_hash_sort_scalar_non_scalar_x86");
+            abi::emit_jump(emitter, "__rt_mixed_sort_reject_non_scalar_x86");   // share the explicit Mixed-sort fatal helper
         }
     }
 }

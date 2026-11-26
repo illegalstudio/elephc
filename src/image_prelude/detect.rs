@@ -390,6 +390,7 @@ fn packed_field_refs_image(field: &PackedField) -> bool {
 fn expr_refs_image(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_image),
+        ExprKind::Reference(inner) => expr_refs_image(inner),
         // Leaves and identifier-only forms carry no image reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

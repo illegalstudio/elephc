@@ -424,6 +424,239 @@ echo $repeated;
     assert_eq!(out, "position:name|position:name|position|counted|second");
 }
 
+/// A by-reference parameter creates an undefined variable it receives, as PHP does.
+#[test]
+fn test_by_reference_parameter_creates_undefined_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function set_value(&$value): void { $value = 42; }
+set_value($created);
+echo $created;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// A by-reference callback parameter passed through `call_user_func()` reports PHP's warning
+/// for every argument; a dynamic variable callee with a real variable stays silent.
+#[test]
+fn test_call_user_func_by_reference_parameter_warning() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function inspect(&$value): string { return "seen"; }
+function run_dynamic(mixed $callback, mixed $value): string {
+    return call_user_func($callback, (string) $value);
+}
+$x = 1;
+$y = 2;
+$callback = $argv[0] !== "" ? "inspect" : "strlen";
+echo run_dynamic($callback, $x), "|", run_dynamic($callback, $y), "|";
+$dynamic = "inspect";
+echo $dynamic($x);
+"#,
+    );
+    assert_eq!(output.stdout, "seen|seen|seen");
+    let warning = "Warning: inspect(): Argument #1 ($value) must be passed by reference, value given";
+    // php-src prefixes every displayed diagnostic with a newline, so ignore the blank lines
+    // that separate the emitted messages when counting them.
+    assert_eq!(
+        output.stderr.lines().filter(|line| !line.is_empty()).count(),
+        2,
+        "stderr: {:?}",
+        output.stderr
+    );
+    assert_eq!(output.stderr.matches(warning).count(), 2, "stderr: {:?}", output.stderr);
+    assert!(
+        output.stderr.lines().filter(|line| !line.is_empty()).all(|line| line.contains("test.php")),
+        "by-reference warnings must name the source file: {:?}",
+        output.stderr
+    );
+}
+
+/// `call_user_func()` passes plain variables and reference cells by value.
+#[test]
+fn test_call_user_func_by_reference_parameter_passes_by_value() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function set_value(&$value): void { $value = 99; }
+$plain = 1;
+call_user_func('set_value', $plain);
+echo $plain, "|";
+$array = [1, 2];
+$reference = &$array[1];
+call_user_func('set_value', $reference);
+echo $array[1], "|", $reference, "|";
+$boxed = 3;
+$arguments = [$boxed];
+call_user_func_array('set_value', $arguments);
+echo $boxed;
+"#,
+    );
+    assert_eq!(output.stdout, "1|2|2|3");
+    assert_eq!(
+        output
+            .stderr
+            .matches("set_value(): Argument #1 ($value) must be passed by reference, value given")
+            .count(),
+        3,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// `call_user_func()` accepts an array element or a plain reference alias for a by-reference
+/// callback parameter. PHP warns and passes a by-value temporary, leaving the caller intact.
+#[test]
+fn test_call_user_func_by_reference_parameter_accepts_array_elements_and_aliases() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function set_value(&$value): void { $value = 42; }
+$array = [1, 2];
+call_user_func('set_value', $array[0]);
+$local = 7;
+$alias = &$local;
+call_user_func('set_value', $alias);
+echo $array[0], "|", $local, "|", $alias;
+"#,
+    );
+    assert_eq!(output.stdout, "1|7|7");
+    assert_eq!(
+        output
+            .stderr
+            .matches("set_value(): Argument #1 ($value) must be passed by reference, value given")
+            .count(),
+        2,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Named `call_user_func()` arguments bind by value too: PHP warns and the caller is unchanged.
+#[test]
+fn test_call_user_func_named_by_reference_parameter_passes_by_value() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function set_value(&$value) { $value = 99; }
+$x = 1;
+call_user_func('set_value', value: $x);
+echo $x;
+"#,
+    );
+    assert_eq!(output.stdout, "1");
+    assert_eq!(
+        output.stderr.matches("set_value(): Argument #1 ($value) must be passed by reference, value given").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Plain associative CUFA entries are by-value; an explicit `&$x` entry still binds the cell.
+#[test]
+fn test_call_user_func_array_assoc_arguments_follow_the_by_value_contract() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function set_value(&$value) { $value = 99; }
+$x = 1;
+call_user_func_array('set_value', ['value' => $x]);
+echo $x, "|";
+$y = 1;
+call_user_func_array('set_value', ['value' => &$y]);
+echo $y;
+"#,
+    );
+    assert_eq!(output.stdout, "1|99");
+    assert_eq!(
+        output.stderr.matches("set_value(): Argument #1 ($value) must be passed by reference, value given").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// A literal argument to a by-reference callback warns and the call continues.
+#[test]
+fn test_call_user_func_literal_by_reference_parameter_warns_and_continues() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function bump(&$n) { $n = $n + 1; }
+call_user_func("bump", 1);
+echo "done";
+"#,
+    );
+    assert_eq!(output.stdout, "done");
+    assert!(
+        output.stderr.contains("bump(): Argument #1 ($n) must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Case-insensitive introspection does not change the by-value callback contract.
+#[test]
+fn test_call_user_func_case_insensitive_by_reference_parameter_warns() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function Bump(&$n) { $n = $n + 1; }
+if (function_exists("BUMP") && is_callable("BUMP")) {
+    call_user_func("BUMP", 1);
+}
+echo "done";
+"#,
+    );
+    assert_eq!(output.stdout, "done");
+    assert!(
+        output.stderr.contains("must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// A first-class callable receives an array element by value: the caller's entry is unchanged.
+#[test]
+fn test_call_user_func_first_class_array_element_by_reference_passes_by_value() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function bump(mixed &$value): void { $value = 99; }
+$f = bump(...);
+$a = ["k" => 1];
+call_user_func($f, $a["k"]);
+echo $a["k"];
+"#,
+    );
+    assert_eq!(output.stdout, "1");
+    assert!(
+        output.stderr.contains("bump(): Argument #1 ($value) must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// A closure by-reference warning uses PHP's `{closure:file:line}` display name.
+#[test]
+fn test_call_user_func_closure_by_reference_warning_uses_php_name() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$callback = $argc > 0 ? function (&$value): void {} : function ($value): void {};
+function run_closure_warning(mixed $callback): void {
+    $x = 1;
+    call_user_func($callback, (string) $x);
+}
+run_closure_warning($callback);
+"#,
+    );
+    assert!(
+        output.stderr.contains("{closure:") && output.stderr.contains("test.php:"),
+        "stderr: {:?}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("__eir_closure"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 // --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------
 //
 // `f(&...$items)` is the one by-reference form PHP's checker does not constrain: the callee

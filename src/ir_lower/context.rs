@@ -2681,6 +2681,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Loads a local mutation view under a caller-selected logical container type.
+    ///
+    /// A killed binding (`unset()`/`$a = null`) is typed `Void`, but its slot holds a raw
+    /// container word. The auto-vivifier needs that word typed as the container it will reuse;
+    /// the caller's logical type is restored afterwards so unrelated reads keep their null fact.
+    pub(crate) fn load_local_mutation_as(
+        &mut self,
+        name: &str,
+        ty: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let previous = self.local_types.insert(name.to_string(), ty);
+        let value = self.load_local_for_mutation(name, span);
+        match previous {
+            Some(previous) => {
+                self.local_types.insert(name.to_string(), previous);
+            }
+            None => {
+                self.local_types.remove(name);
+            }
+        }
+        value
+    }
+
     /// Loads the physical occupant even when an earlier unset left a logical null fact.
     pub(crate) fn load_local_for_retirement_pin(
         &mut self, name: &str, span: Option<Span>,

@@ -772,7 +772,7 @@ fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
 fn key_observation(inst: &crate::ir::Instruction, value: ValueId) -> bool {
     matches!(
         inst.op,
-        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet
+        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet | Op::HashSetValue
             | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent | Op::ArraySetMixedKey
     ) && inst.operands.get(1) == Some(&value)
         && inst.operands.iter().enumerate().all(|(position, &operand)| position == 1 || operand != value)

@@ -113,7 +113,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_loop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the source hash pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the insertion-order iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next source entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the raw next source entry in insertion order
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the terminal done sentinel?
     emitter.instruction("b.eq __rt_hash_spread_done");                          // finish once every source entry has been flattened
     emitter.instruction("str x0, [sp, #24]");                                   // save the next insertion-order iterator cursor
@@ -125,6 +125,8 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
 
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the source value runtime tag
+    emitter.instruction("cmp x5, #11");                                         // is the source value a managed PHP reference cell?
+    emitter.instruction("b.eq __rt_hash_spread_value_reference");               // retain the shared cell instead of copying its value
     emitter.instruction("cmp x5, #1");                                          // is the source value a string payload?
     emitter.instruction("b.eq __rt_hash_spread_value_str");                     // strings need a persisted copy for the destination owner
     emitter.instruction("cmp x5, #4");                                          // is the source value a refcounted indexed array?
@@ -139,6 +141,15 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #56]");                                   // reload the scalar value high word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the scalar value runtime tag
     emitter.instruction("b __rt_hash_spread_insert");                           // scalars are ready to insert
+
+    emitter.label("__rt_hash_spread_value_reference");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // load the borrowed managed reference cell pointer
+    emitter.instruction("bl __rt_reference_cell_clone");                        // separate an unaliased cell, share a live reference
+    emitter.instruction("str xzr, [sp, #56]");                                  // reference entries carry no high payload word
+    emitter.instruction("mov x3, x0");                                          // use the cloned or shared cell as the entry value
+    emitter.instruction("mov x4, xzr");                                         // clear the reference entry's high payload word
+    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the managed reference runtime tag
+    emitter.instruction("b __rt_hash_spread_insert");                           // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_value_str");
     emitter.instruction("ldr x1, [sp, #48]");                                   // load the borrowed source string pointer
@@ -186,7 +197,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_set");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the destination hash pointer
     // x3/x4/x5 already hold the retained value and runtime tag
-    emitter.instruction("bl __rt_hash_set");                                    // insert or overwrite the destination entry
+    emitter.instruction("bl __rt_hash_set_value");                              // insert or overwrite the destination entry
     emitter.instruction("str x0, [sp, #0]");                                    // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --
@@ -281,7 +292,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the source hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the insertion-order iterator cursor
-    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next source entry in insertion order
+    emitter.instruction("call __rt_hash_iter_next");                            // fetch the raw next source entry in insertion order
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the terminal done sentinel?
     emitter.instruction("je __rt_hash_spread_x86_done");                        // finish once every source entry has been flattened
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the next insertion-order iterator cursor
@@ -293,6 +304,8 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
 
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source value runtime tag
+    emitter.instruction("cmp r9, 11");                                          // is the source value a managed PHP reference cell?
+    emitter.instruction("je __rt_hash_spread_x86_value_reference");             // retain the shared cell instead of copying its value
     emitter.instruction("cmp r9, 1");                                           // is the source value a string payload?
     emitter.instruction("je __rt_hash_spread_x86_value_str");                   // strings need a persisted copy for the destination owner
     emitter.instruction("cmp r9, 4");                                           // is the source value a refcounted indexed array?
@@ -307,6 +320,15 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the scalar value high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the scalar value runtime tag
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // scalars are ready to insert
+
+    emitter.label("__rt_hash_spread_x86_value_reference");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed managed reference cell pointer
+    emitter.instruction("call __rt_reference_cell_clone");                      // separate an unaliased cell, share a live reference
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // reference entries carry no high payload word
+    emitter.instruction("mov rcx, rax");                                        // use the cloned or shared cell as the entry value
+    emitter.instruction("xor r8d, r8d");                                        // clear the reference entry's high payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the managed reference runtime tag
+    emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_x86_value_str");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed source string pointer
@@ -356,7 +378,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the destination hash pointer
     // rcx/r8/r9 already hold the retained value and runtime tag
-    emitter.instruction("call __rt_hash_set");                                  // insert or overwrite the destination entry
+    emitter.instruction("call __rt_hash_set_value");                            // insert or overwrite the destination entry
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --

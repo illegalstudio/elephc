@@ -225,6 +225,55 @@ return function_exists("hex2bin");"#,
         vec![HEX2BIN_ODD_LENGTH_WARNING.to_string()]
     );
 }
+/// A descending addcslashes range keeps its literal bytes and warns once per range.
+#[test]
+fn execute_program_addcslashes_descending_range_warns_and_keeps_literals() {
+    let program = parse_fragment(br#"echo addcslashes("azAZ", "z..A y..B");"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, r"a\z\AZ");
+    assert_eq!(values.warnings.len(), 2, "warnings: {:?}", values.warnings);
+    assert!(
+        values
+            .warnings
+            .iter()
+            .all(|warning| warning.contains("Invalid '..'-range")),
+        "warnings: {:?}",
+        values.warnings
+    );
+}
+
+/// Matches php_charmask's three-dot range and its ordered invalid-range diagnostics.
+#[test]
+fn execute_program_addcslashes_three_dot_range_and_diagnostics() {
+    let program = parse_fragment(
+        br#"echo addcslashes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "H...o"), "|";
+echo addcslashes("abc", ".."), "|";
+echo addcslashes("abc", "a.."), "|";
+echo addcslashes("abc", "a..b..c"), "|";
+echo addcslashes("abc", "H..o..e"), "|";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        r"\A\B\C\D\E\F\G\H\I\J\K\L\M\N\O\P\Q\R\S\T\U\V\W\X\Y\Z\a\b\c\d\e\f\g\h\i\j\k\l\m\n\opqrstuvwxyz|abc|\abc|\a\b\c|\a\b\c|"
+    );
+    assert_eq!(values.warnings.len(), 4, "warnings: {:?}", values.warnings);
+    assert!(values.warnings[0].contains("no character to the left of '..'"));
+    assert!(values.warnings[1].contains("no character to the right of '..'"));
+    assert!(values.warnings[2].ends_with("Invalid '..'-range\n"));
+    assert!(values.warnings[3].contains("'..'-range needs to be incrementing"));
+}
+
 /// Verifies eval slash escaping builtins use PHP byte-string semantics.
 #[test]
 fn execute_program_dispatches_slash_escape_builtins() {
@@ -234,7 +283,10 @@ echo bin2hex($escaped); echo ":";
 echo bin2hex(stripslashes($escaped)); echo ":";
 echo call_user_func("addslashes", "x\"y"); echo ":";
 echo call_user_func_array("stripslashes", [addslashes("o\"k")]); echo ":";
-return function_exists("addslashes") && function_exists("stripslashes");"#,
+echo addcslashes("abc", "a..c"); echo ":";
+echo call_user_func("addcslashes", "x\0", "\0"); echo ":";
+return function_exists("addslashes") && function_exists("stripslashes")
+    && function_exists("addcslashes");"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -246,7 +298,7 @@ return function_exists("addslashes") && function_exists("stripslashes");"#,
 
     assert_eq!(
         values.output,
-        "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:"
+        "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:\\a\\b\\c:x\\000:"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

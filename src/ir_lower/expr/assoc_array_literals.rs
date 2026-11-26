@@ -46,9 +46,24 @@ pub(super) fn lower_assoc_array_literal_as(
     if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let mut roots = Vec::new();
+        let reference_source = match &value.kind {
+            ExprKind::Reference(inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+        let value_expr = reference_source.unwrap_or(value);
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
-        let value_operand = lower_expr(ctx, value);
+        let value_operand = if reference_source.is_some() {
+            // A reference bind creates an undefined variable silently in PHP.
+            ctx.begin_quiet_undefined_reads(value_expr);
+            let value = lower_reference_literal_value(ctx, value_expr)
+                .unwrap_or_else(|| lower_expr(ctx, value_expr));
+            ctx.end_quiet_undefined_reads();
+            value
+        } else {
+            lower_reference_literal_value(ctx, value_expr)
+                .unwrap_or_else(|| lower_expr(ctx, value_expr))
+        };
         // A packed record address or `null` stored as a pointer value is the pointer word.
         let value_operand = match &hash_ty {
             PhpType::AssocArray { value: value_ty, .. } => {
@@ -58,13 +73,131 @@ pub(super) fn lower_assoc_array_literal_as(
         };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
-        ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        ctx.emit_void(Op::HashSetValue, vec![hash.value, key.value, value.value], None, Op::HashSetValue.default_effects(), Some(expr.span));
+        if let Some(source) = reference_source {
+            let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
+            bind_reference_literal_entry(ctx, hash.value, key.value, source, value_expr.span);
+        }
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
         for slot in roots.into_iter().rev() {
             retire_owned_call_operand(ctx, slot, expr.span);
         }
     }
     take_published_container(ctx, owner, hash_ty, expr.span)
+}
+
+/// Lowers the value inserted for one `&$name` literal element.
+///
+/// A variable that already owns a reference cell stores the cell's current payload, not the
+/// cell pointer: `lower_expr()` reads the pointer for a Mixed ref-cell local, which would put
+/// an opaque address into the hash.
+pub(super) fn lower_reference_literal_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::Variable(name) = &source.kind else { return None; };
+    if !ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    let slot = ctx.local_slots.get(name).copied()?;
+    Some(ctx.emit_owned_value(
+        Op::LoadRefCellValue,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        PhpType::Mixed,
+        Op::LoadRefCellValue.default_effects(),
+        Some(source.span),
+    ))
+}
+
+/// Binds one `&$name` literal element to reference storage.
+///
+/// A variable that is already a reference must share its existing cell: creating a fresh
+/// cell and rebinding the variable would leave earlier elements (`$a = [&$x]; $b = [&$x];`)
+/// pointing at the old storage. Only the first element promotes the entry from its value.
+pub(super) fn bind_reference_literal_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: crate::ir::ValueId,
+    key: crate::ir::ValueId,
+    source: &Expr,
+    span: Span,
+) {
+    if let ExprKind::Variable(name) = &source.kind {
+        if ctx.is_ref_bound_local(name) {
+            // A typed reference can be backed by a borrowed raw frame word (a caller passing a
+            // plain local to `int &$x`), which has no managed cell to share with the array.
+            // Installing that word as a reference entry would later dereference invalid storage,
+            // so refuse the shape until typed references carry managed cells end to end.
+            let local_ty = ctx.local_type(name);
+            if local_ty.codegen_repr() != PhpType::Mixed {
+                crate::ir_lower::diagnostics::refuse(
+                    span,
+                    &format!(
+                        "A typed by-reference variable cannot back an array reference element: \
+                         ${name} is stored as {local_ty}, but the array entry needs a managed \
+                         `mixed` reference cell. Use an untyped (`mixed`) reference for the \
+                         array element."
+                    ),
+                );
+                return;
+            }
+            // The value slot is a dynamic alias (it may hold either a raw value or a cell),
+            // so `LoadLocal` would project the payload. `LoadLocalRefCellPtr` reads the raw
+            // managed-cell pointer without boxing the slot word.
+            let slot = ctx
+                .ref_cell_owner_slot(name)
+                .or_else(|| ctx.local_slots.get(name).copied());
+            if let Some(slot) = slot {
+                let cell = ctx.emit_value(
+                    Op::LoadLocalRefCellPtr,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    PhpType::Pointer(None),
+                    Op::LoadLocalRefCellPtr.default_effects(),
+                    Some(span),
+                );
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash, key, cell.value],
+                    Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::HashEntryBindReference,
+                    )),
+                    crate::ir_lower::effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return;
+            }
+        }
+    }
+    let cell = ctx.emit_value(
+        Op::LoadArrayElemRefCell,
+        vec![hash, key],
+        None,
+        PhpType::Mixed,
+        Op::LoadArrayElemRefCell.default_effects(),
+        Some(span),
+    );
+    bind_reference_literal_source(ctx, source, cell, PhpType::Mixed, span);
+}
+
+/// Binds the variable a `&$name` literal element aliases to the entry's managed reference cell.
+///
+/// The entry was just inserted with the variable's current value and promoted to a reference by
+/// `LoadArrayElemRefCell`. Rebinding the local to that same cell is what makes later writes on
+/// either side visible through both, exactly like PHP's reference set.
+pub(super) fn bind_reference_literal_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+    cell: LoweredValue,
+    value_type: PhpType,
+    span: Span,
+) {
+    let ExprKind::Variable(name) = &source.kind else {
+        // The parser restricts reference elements to variables, so a non-variable shape cannot
+        // reach this helper; leave the entry as an ordinary value rather than miscompiling.
+        return;
+    };
+    ctx.bind_owned_local_ref_cell_ptr(name, cell, value_type, Some(span));
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -219,6 +352,9 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         return storage;
     }
     match &value.kind {
+        // A reference entry's payload is a boxed Mixed cell owned by the managed reference, so
+        // the hash storage stays dynamic regardless of the aliased place's declared type.
+        ExprKind::Reference(_) => PhpType::Mixed,
         ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::Cast {
             target: CastType::Array,
@@ -303,6 +439,11 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
                 .map(ir_array_storage_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
+        // A call through a runtime callable (`$f()`, `($arr[0])()`) has no syntactic return
+        // type: `infer_expr_type_syntactic` answers `Int` for it, which would stamp the
+        // literal with an integer element and cast away (or release) the returned string or
+        // array. Keep the boxed runtime result.
+        ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }

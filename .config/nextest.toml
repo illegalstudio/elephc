@@ -292,6 +292,9 @@ relative-to = "target"
 path = "debug/libelephc_pcntl.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_filter.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_fileinfo.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -485,10 +488,6 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # containerized runners are involved. The budget is larger than the 180s default because
 # the cost here is dominated by linking a large archive rather than by compilation, which
 # is exactly what a loaded runner stretches most.
-# The NaN string-cast eval fixture also compiles and links one host per PHP profile, and its
-# source arrives at run time, so every profile lowers the whole builtin catalog: 497s measured
-# on an idle macOS host, against a 300s cap that a loaded shard worker crossed twice. Three
-# periods bound a hang while leaving room for the profile compiles under the shard's parallelism.
 [[profile.default.overrides]]
 filter = '(binary_id(elephc::integration) and test(/^php_profile_independence_tests::eval_/)) or (binary_id(elephc::integration) and test(=nan_bool_coercion_tests::nan_string_dynamic_eval_cast_warns_once))'
 slow-timeout = { period = "300s", terminate-after = 3 }
@@ -500,6 +499,17 @@ slow-timeout = { period = "300s", terminate-after = 3 }
 [[profile.ci.archive.include]]
 path = "debug/elephc-pdo-features.txt"
 relative-to = "target"
+
+# The eval fixture lowers a runtime-selected source (132s locally) and the XML fixture
+# compiles the complete SimpleXML prelude; keep a bounded 300s allowance for shared macOS
+# runners instead of the 180s default.
+[[profile.default.overrides]]
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_native_throwable_wrapped_by_eval_releases_unread_previous) or test(=codegen::simplexml::dom_and_iterator::test_simplexml_dom_reflected_load_xml_detection))'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_native_throwable_wrapped_by_eval_releases_unread_previous) or test(=codegen::simplexml::dom_and_iterator::test_simplexml_dom_reflected_load_xml_detection))'
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 # On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
 # measured 60-66s in otherwise green runs, with a different fixture crossing the guard:

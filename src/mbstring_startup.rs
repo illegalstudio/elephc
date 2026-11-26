@@ -2,7 +2,8 @@
 //! Carries mbstring startup defaults and supplied settings into the native shared engine.
 //!
 //! Called from:
-//! - Backend configuration after optional mbstring capability selection.
+//! - `crate::pipeline::backend` after optional mbstring capability selection.
+//! - The codegen fixture harness, which mirrors the same backend startup configuration.
 //!
 //! Key details:
 //! - Effective core encodings follow php_get_*_encoding inheritance and C-string boundaries.
@@ -10,7 +11,7 @@
 //! - Default-only programs initialize shared state without selecting the optional MIME provider.
 
 /// Selects relevant startup overrides and resolves the three core encoding fallback chains.
-pub(super) fn arguments(overrides: &[(String, String)]) -> Vec<Vec<u8>> {
+pub fn arguments(overrides: &[(String, String)]) -> Vec<Vec<u8>> {
     let directive = |name: &str| {
         use elephc_builtin_contract::mbstring_abi::ini::{catalog, core};
         catalog::lookup(name.as_bytes()).is_some() || core::lookup(name.as_bytes()).is_some()

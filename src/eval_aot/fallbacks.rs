@@ -161,6 +161,7 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
 pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason> {
     match &expr.kind {
         ExprKind::Runtime(_) => Some(EvalAotFallbackReason::UnsupportedConstruct),
+        ExprKind::Reference(inner) => expr_fallback_reason(inner),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

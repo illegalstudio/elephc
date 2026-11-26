@@ -126,3 +126,45 @@ fn test_string_offset_integer_string_read_is_silent() {
     assert_eq!(out.stdout, "b");
     assert_eq!(out.stderr, "");
 }
+/// A boxed `mixed` string receiver reads integer offsets, including negative ones.
+#[test]
+fn test_string_offset_read_through_mixed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function at(mixed $s, int $i): mixed { return $s[$i]; }
+echo at("abc", 0), at("abc", -1), at("abc", 2), "|";
+function outOfRange(mixed $s, int $i): mixed { return $s[$i]; }
+var_dump(outOfRange("abc", 99));
+var_dump(outOfRange("abc", -4));
+"#,
+    );
+    assert_eq!(out, "acc|string(0) \"\"\nstring(0) \"\"\n");
+}
+
+/// A missing boxed-string offset warns once with PHP's original offset text.
+#[test]
+fn test_string_offset_read_through_mixed_parameter_warns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function at(mixed $s, int $i): mixed { return $s[$i]; }
+var_dump(at("abc", 99));
+var_dump(at("abc", -4));
+"#,
+    );
+    assert_eq!(out.stdout, "string(0) \"\"\nstring(0) \"\"\n");
+    assert!(out.stderr.contains("Uninitialized string offset 99"), "{}", out.stderr);
+    assert!(out.stderr.contains("Uninitialized string offset -4"), "{}", out.stderr);
+}
+
+/// `isset()` on an out-of-range boxed-string offset stays quiet and false.
+#[test]
+fn test_string_offset_isset_through_mixed_parameter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function has(mixed $s, int $i): bool { return isset($s[$i]); }
+var_dump(has("abc", 1), has("abc", 99));
+"#,
+    );
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+    assert_eq!(out.stderr, "");
+}

@@ -256,8 +256,14 @@ managed PCRE2 package (10.47), not the PHP build's library.
   ("Unknown modifier", "No ending delimiter", ...) are not emitted.
 - PCRE2's own default match limit (10,000,000) applies instead of PHP's
   `pcre.backtrack_limit` (1,000,000).
-- Pattern and subject strings cross the current shim as NUL-terminated strings,
-  preserving the existing embedded-NUL limitation.
+- `preg_match()` passes its pattern to the managed shim with an explicit byte
+  length, so an embedded NUL byte in the pattern is compiled like PHP does.
+  `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`
+  and the SPL regex iterators still pass NUL-terminated patterns, so those calls
+  truncate a pattern at an embedded NUL. Subjects are searched through
+  `REG_STARTEND`, so embedded NUL subject bytes are preserved across the family.
+  `FILTER_VALIDATE_REGEXP` uses the `preg_match()` path and keeps PHP's
+  byte-exact pattern behavior.
 
 <!-- elephc:generated:symbols:begin -->
 

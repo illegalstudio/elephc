@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Tidy](./builtins/tidy.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [Filter](./builtins/filter.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Tidy](./builtins/tidy.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -345,6 +345,13 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`touch()`](./builtins/filesystem/touch.md) | `(string $filename, ?int $mtime = null, ?int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./builtins/filesystem/umask.md) | `(?int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
+| [`filter_has_var()`](./builtins/filter/filter_has_var.md) | `(int $input_type, string $var_name): bool` | `bool` | ✓ | ✓ |
+| [`filter_id()`](./builtins/filter/filter_id.md) | `(string $name): int|false` | `int|false` | ✓ | ✓ |
+| [`filter_input()`](./builtins/filter/filter_input.md) | `(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_input_array()`](./builtins/filter/filter_input_array.md) | `(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
+| [`filter_list()`](./builtins/filter/filter_list.md) | `(): array` | `array` | ✓ | ✓ |
+| [`filter_var()`](./builtins/filter/filter_var.md) | `(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_var_array()`](./builtins/filter/filter_var_array.md) | `(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
 | [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./builtins/io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -864,9 +871,9 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`zval_pack()`](./builtins/pointer/zval_pack.md) | `(mixed $value): pointer` | `pointer` | ✓ | - |
 | [`zval_type()`](./builtins/pointer/zval_type.md) | `(pointer $zval): int` | `int` | ✓ | - |
 | [`zval_unpack()`](./builtins/pointer/zval_unpack.md) | `(pointer $zval): mixed` | `mixed` | ✓ | - |
-| [`die()`](./builtins/process/die.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
+| [`die()`](./builtins/process/die.md) | `(string|int $status = 0): void` | `void` | ✓ | ✓ |
 | [`exec()`](./builtins/process/exec.md) | `(string $command): string` | `string` | ✓ | ✓ |
-| [`exit()`](./builtins/process/exit.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
+| [`exit()`](./builtins/process/exit.md) | `(string|int $status = 0): void` | `void` | ✓ | ✓ |
 | [`passthru()`](./builtins/process/passthru.md) | `(string $command): void` | `void` | ✓ | ✓ |
 | [`pclose()`](./builtins/process/pclose.md) | `(resource $handle): int` | `int` | ✓ | ✓ |
 | [`popen()`](./builtins/process/popen.md) | `(string $command, string $mode): mixed` | `mixed` | ✓ | ✓ |
@@ -902,6 +909,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_bucket_prepend()`](./builtins/streams/stream_bucket_prepend.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
 | [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_filter_prepend()`](./builtins/streams/stream_filter_prepend.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
+| [`addcslashes()`](./builtins/string/addcslashes.md) | `(string $string, string $characters): string` | `string` | ✓ | ✓ |
 | [`addslashes()`](./builtins/string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`base64_decode()`](./builtins/string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./builtins/string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -1020,6 +1028,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`parse_str()`](./builtins/string/parse_str.md) | `(string $string, array $result): void` | `void` | ✓ | - |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`quoted_printable_encode()`](./builtins/string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |

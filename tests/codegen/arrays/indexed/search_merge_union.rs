@@ -104,6 +104,28 @@ echo $c[0] . $c[1];
     assert_eq!(out, "2:34");
 }
 
+/// Associative merges store boxed values; concrete readers such as `array_values()` must
+/// unbox them instead of copying the box address as an integer.
+#[test]
+fn test_array_merge_associative_values_unbox_through_array_values() {
+    let out = compile_and_run(
+        r#"<?php
+$merged = array_merge(["a" => 1], ["b" => 2]);
+var_dump(array_values($merged));
+echo $merged["a"], "|", $merged["b"], "|";
+function typedAssocMerge(): array<string, int> {
+    return array_merge(["a" => 1], ["b" => 2]);
+}
+$typed = typedAssocMerge();
+echo $typed["a"], $typed["b"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n1|2|12"
+    );
+}
+
 /// Verifies the `+` operator keeps the left operand's values when both arrays
 /// have the same numeric key (left wins semantics).
 #[test]

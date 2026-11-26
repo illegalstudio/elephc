@@ -11,8 +11,10 @@ UNUSED_RUNTIME_HELPER(__rt_decref_mixed)
 UNUSED_RUNTIME_HELPER(__rt_hash_get)
 UNUSED_RUNTIME_HELPER(__rt_hash_to_mixed_box_owned)
 UNUSED_RUNTIME_HELPER(__rt_hash_to_mixed_x86_box_owned)
+UNUSED_RUNTIME_HELPER(__rt_incref)
 UNUSED_RUNTIME_HELPER(__rt_mixed_from_value)
 UNUSED_RUNTIME_HELPER(__rt_reference_cell_new)
+UNUSED_RUNTIME_HELPER(__rt_reference_cell_release)
 
 typedef struct { uint64_t tag, lo, hi; } Value;
 typedef struct { uint64_t kind, length, capacity, width, data[24]; } Indexed;
