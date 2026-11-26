@@ -50,6 +50,7 @@ mod codegen {
     mod image;
     mod pcntl;
     mod posix;
+    mod proc_open;
     mod xml;
     mod tokenizer;
     mod calendar;

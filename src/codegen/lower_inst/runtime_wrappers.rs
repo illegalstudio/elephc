@@ -239,6 +239,18 @@ pub(in crate::codegen) fn runtime_builtin_wrapper_sig(name: &str, sig: &Function
             *ty = None;
         }
     }
+    // `proc_terminate()`/`proc_nice()` hand their raw operands to a prelude helper that
+    // applies php-src's checks: an `int` slot here would let the invoker cast `[9]` to `1`.
+    if crate::builtins::proc::callable_takes_boxed_operands(name) {
+        for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                *ty = PhpType::Mixed;
+                if let Some(type_expr) = sig.param_type_exprs.get_mut(index) {
+                    *type_expr = None;
+                }
+            }
+        }
+    }
     if let Some(def) = crate::builtins::registry::lookup(name) {
         if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
             def.spec.semantics.runtime_functions
@@ -345,7 +357,10 @@ fn build_runtime_call_wrapper_function(
                 && elephc_builtin_contract::lookup(name)
                     .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
         });
-        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+        // The boxed proc wrappers reuse it too, so the helper sees the caller's strict_types.
+        if prepared_eir_lowering
+            || crate::builtins::proc::callable_takes_boxed_operands(name)
+            || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
             def.spec.semantics.argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
         )) {
@@ -779,6 +794,59 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 Op::Release.default_effects(),
                 span,
             );
+        }
+        result
+    }
+
+    /// Guards each lowering-owned box with the exception chain for the call (the surplus
+    /// collector's model), so a caught helper failure releases it; the normal path unguards
+    /// and releases it.
+    fn emit_user_call_owning(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        owned: &[ValueId],
+        php_type: PhpType,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let mut guards = Vec::new();
+        for value in owned {
+            let anchor = self.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                span,
+            );
+            let guard = self.emit_value(
+                Op::RuntimeCall,
+                vec![*value, anchor.value],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                )),
+                PhpType::Int,
+                crate::ir::Effects::WRITES_GLOBAL,
+                span,
+            );
+            guards.push(guard.value);
+        }
+        let result = crate::builtins::semantics::BuiltinLoweringContext::emit_user_call(
+            self, name, operands, php_type, span,
+        );
+        for guard in guards.into_iter().rev() {
+            self.emit_void(
+                Op::RuntimeCall,
+                vec![guard],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                )),
+                crate::ir::Effects::WRITES_GLOBAL,
+                span,
+            );
+        }
+        for value in owned {
+            self.emit_void(Op::Release, vec![*value], None, Op::Release.default_effects(), span);
         }
         result
     }

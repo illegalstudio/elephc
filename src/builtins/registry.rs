@@ -157,7 +157,7 @@ fn registry() -> &'static HashMap<String, BuiltinDef> {
 pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
     match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_rand" => &[crate::random_prelude::ARRAY_RAND_HELPER],
-        _ => &[],
+        key => crate::builtins::proc::dynamic_wrapper_helpers(key),
     }
 }
 
