@@ -63,22 +63,27 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("stp x0, x1, [sp, #-16]!");                             // save host_ptr/host_len across the context lookups
     emitter.instruction("str x2, [sp, #-16]!");                                 // save port (16 bytes for stack alignment)
     emitter.instruction("sub sp, sp, #16");                                     // string-lookup out slots: [sp+0]=ptr, [sp+8]=len
-    // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
-    // Openssl\Session object to its PEM export in the builtin option map.
-    emitter.instruction("str xzr, [sp, #0]");                                   // out ptr default
-    emitter.instruction("str xzr, [sp, #8]");                                   // out len default
-    abi::emit_symbol_address(emitter, "x0", "_ssl_key_str");
-    emitter.instruction("mov x1, #3");                                          // strlen("ssl")
-    abi::emit_symbol_address(emitter, "x2", "_ssl_session_data_key_str");
-    emitter.instruction("mov x3, #12");                                         // strlen("session_data")
-    emitter.instruction("mov x4, sp");                                          // out_ptr_addr
-    emitter.instruction("add x5, sp, #8");                                      // out_len_addr
-    emitter.instruction("bl __rt_get_string_context_option");                   // x0 = 1 on hit
-    emitter.instruction("cbz x0, __rt_https_open_no_session_lookup_aarch64");   // no session_data → normal option chain
-    emitter.instruction("ldr x19, [sp, #0]");                                   // session PEM pointer
-    emitter.instruction("ldr x20, [sp, #8]");                                   // session PEM length
-    emitter.instruction("mov x21, #1");                                         // remember that a session was supplied
-    emitter.label("__rt_https_open_no_session_lookup_aarch64");
+    let session_enabled = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
+    if session_enabled {
+        // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
+        // Openssl\Session object to its PEM export in the builtin option map.
+        // Earlier profiles treat the key as an ordinary unknown option.
+        emitter.instruction("str xzr, [sp, #0]");                               // out ptr default
+        emitter.instruction("str xzr, [sp, #8]");                               // out len default
+        abi::emit_symbol_address(emitter, "x0", "_ssl_key_str");
+        emitter.instruction("mov x1, #3");                                      // strlen("ssl")
+        abi::emit_symbol_address(emitter, "x2", "_ssl_session_data_key_str");
+        emitter.instruction("mov x3, #12");                                     // strlen("session_data")
+        emitter.instruction("mov x4, sp");                                      // out_ptr_addr
+        emitter.instruction("add x5, sp, #8");                                  // out_len_addr
+        emitter.instruction("bl __rt_get_string_context_option");               // x0 = 1 on hit
+        emitter.instruction("cbz x0, __rt_https_open_no_session_lookup_aarch64"); // no session_data → normal option chain
+        emitter.instruction("ldr x19, [sp, #0]");                               // session PEM pointer
+        emitter.instruction("ldr x20, [sp, #8]");                               // session PEM length
+        emitter.instruction("mov x21, #1");                                     // remember that a session was supplied
+        emitter.label("__rt_https_open_no_session_lookup_aarch64");
+    }
     // ssl.cafile lookup — a custom CA bundle path
     emitter.instruction("str xzr, [sp, #0]");                                   // out ptr default
     emitter.instruction("str xzr, [sp, #8]");                                   // out len default
@@ -348,25 +353,30 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     // -- pick the connect fn from the ssl context: cafile, else verify_peer --
     //    The call always passes cafile args (rcx/r8); the secure/insecure
     //    variants ignore them, so one call site serves all three.
-    // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
-    // Openssl\Session object to its PEM export in the builtin option map.
-    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // string-lookup out ptr default
-    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // string-lookup out len default
-    abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");                   // load runtime data address
-    emitter.instruction("mov rsi, 3");                                          // strlen("ssl")
-    abi::emit_symbol_address(emitter, "rdx", "_ssl_session_data_key_str");      // load runtime data address
-    emitter.instruction("mov rcx, 12");                                         // strlen("session_data")
-    emitter.instruction("lea r8, [rbp - 80]");                                  // out_ptr_addr
-    emitter.instruction("lea r9, [rbp - 88]");                                  // out_len_addr
-    emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
-    emitter.instruction("test rax, rax");                                       // check whether session_data was found
-    emitter.instruction("jz __rt_https_open_no_session_lookup_x");              // no session_data → normal option chain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // session PEM pointer
-    emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // save the session pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // session PEM length
-    emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // save the session length
-    emitter.instruction("mov QWORD PTR [rbp - 96], 1");                         // remember that a session was supplied
-    emitter.label("__rt_https_open_no_session_lookup_x");
+    let session_enabled = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86;
+    if session_enabled {
+        // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
+        // Openssl\Session object to its PEM export in the builtin option map.
+        // Earlier profiles treat the key as an ordinary unknown option.
+        emitter.instruction("mov QWORD PTR [rbp - 80], 0");                     // string-lookup out ptr default
+        emitter.instruction("mov QWORD PTR [rbp - 88], 0");                     // string-lookup out len default
+        abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");               // load runtime data address
+        emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
+        abi::emit_symbol_address(emitter, "rdx", "_ssl_session_data_key_str");  // load runtime data address
+        emitter.instruction("mov rcx, 12");                                     // strlen("session_data")
+        emitter.instruction("lea r8, [rbp - 80]");                              // out_ptr_addr
+        emitter.instruction("lea r9, [rbp - 88]");                              // out_len_addr
+        emitter.instruction("call __rt_get_string_context_option");             // rax = 1 on hit
+        emitter.instruction("test rax, rax");                                   // check whether session_data was found
+        emitter.instruction("jz __rt_https_open_no_session_lookup_x");          // no session_data → normal option chain
+        emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // session PEM pointer
+        emitter.instruction("mov QWORD PTR [rbp - 112], rax");                  // save the session pointer
+        emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                   // session PEM length
+        emitter.instruction("mov QWORD PTR [rbp - 120], rax");                  // save the session length
+        emitter.instruction("mov QWORD PTR [rbp - 96], 1");                     // remember that a session was supplied
+        emitter.label("__rt_https_open_no_session_lookup_x");
+    }
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // string-lookup out ptr default
     emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // string-lookup out len default
     abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");                   // load runtime data address
@@ -610,10 +620,51 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// The session lookup is emitted only for the PHP 8.6 profile, so an older
+    /// profile keeps treating `session_data` as an unknown ordinary option.
+    #[test]
+    fn https_session_lookup_is_php86_only() {
+        let profile = crate::codegen_support::compile_php_version();
+        let targets = [
+            Target::new(crate::codegen_support::platform::Platform::MacOS, Arch::AArch64),
+            Target::new(crate::codegen_support::platform::Platform::Linux, Arch::X86_64),
+        ];
+        crate::codegen_support::set_compile_profile(
+            crate::php_version::PhpVersion::Php86,
+            false,
+        );
+        for target in targets {
+            let mut emitter = Emitter::new(target);
+            emit_https(&mut emitter);
+            assert!(
+                emitter.output().contains("_ssl_session_data_key_str"),
+                "{target:?}: PHP 8.6 must read ssl.session_data"
+            );
+        }
+        crate::codegen_support::set_compile_profile(
+            crate::php_version::PhpVersion::Php85,
+            false,
+        );
+        for target in targets {
+            let mut emitter = Emitter::new(target);
+            emit_https(&mut emitter);
+            assert!(
+                !emitter.output().contains("_ssl_session_data_key_str"),
+                "{target:?}: PHP 8.5 must ignore ssl.session_data"
+            );
+        }
+        crate::codegen_support::set_compile_profile(profile, false);
+    }
+
     /// Every supported target emits the PHP 8.6 session lookup and both session
     /// connect dispatch paths when it emits the shared HTTPS runtime helper.
     #[test]
     fn https_session_wiring_is_emitted_for_every_supported_target() {
+        let profile = crate::codegen_support::compile_php_version();
+        crate::codegen_support::set_compile_profile(
+            crate::php_version::PhpVersion::Php86,
+            false,
+        );
         for name in [
             "macos-aarch64",
             "ios-arm64",
@@ -633,5 +684,6 @@ mod tests {
                 assert!(asm.contains(needle), "{name}: missing {needle}");
             }
         }
+        crate::codegen_support::set_compile_profile(profile, false);
     }
 }
