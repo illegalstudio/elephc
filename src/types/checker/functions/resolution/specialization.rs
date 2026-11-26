@@ -281,9 +281,12 @@ impl Checker {
                 .is_some_and(|(_, ty)| {
                     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                 });
+            // A closure argument widens like any other. Skipping it kept a parameter first
+            // called with an object (or a string callable) at that type, so the body read the
+            // closure descriptor as an object or a function name.
             if seen_idx < regular_param_count
                 && (!declared || generic_array_param)
-                && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
+                && !matches!(actual_ty, PhpType::Never)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {
