@@ -129,12 +129,10 @@ pub(in crate::interpreter) fn release_native_bound_args(
         arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)))
         .map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
     with_runtime_owners(&owners, || {
-        let mut result = Ok(());
-        for owner in &owners {
-            let released = release_expr_result(owner.take(), context, values);
-            if result.is_ok() { result = released; }
-        }
-        result
+        use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
+        release_in_order(&owners, CleanupErrorPolicy::First, |owner| {
+            release_expr_result(owner.take(), context, values)
+        })
     })
 }
 
@@ -189,7 +187,7 @@ fn write_back_native_ref_target(
     }
     let retained = values.retain(value)?;
     let replaced = set_owned_scope_cell(context, scope, name.clone(), retained, values)?;
-    for cell in replaced { eval_release_value(context, values, cell)?; }
+    super::super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     Ok(())
 }
 

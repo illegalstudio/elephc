@@ -224,7 +224,8 @@ impl<'f> Builder<'f> {
     /// any slot named by an unknown op.
     pub fn prune_untracked_release_local_slot_ops(&mut self) {
         for inst in &mut self.func.instructions {
-            if inst.op != Op::ReleaseLocalSlot {
+            let replacing = inst.replaces_local_owner();
+            if inst.op != Op::ReleaseLocalSlot && !replacing {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
@@ -232,6 +233,10 @@ impl<'f> Builder<'f> {
             };
             let storage_type = &self.func.locals[slot.as_raw() as usize].php_type;
             if Ownership::php_type_needs_lifetime_tracking(storage_type) {
+                continue;
+            }
+            if replacing {
+                inst.effects = Op::StoreLocal.default_effects();
                 continue;
             }
             // The slot's final storage is a plain scalar: the deferred release

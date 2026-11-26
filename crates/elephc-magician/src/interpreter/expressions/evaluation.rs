@@ -233,11 +233,10 @@ pub(super) fn eval_new_object_result(
     let result = eval_native_constructor_with_evaluated_args(
         class_name, object, args.clone(), context, values,
     );
-    let mut released = Ok(());
-    for arg in args {
-        let cleanup = release_expr_result(arg.value, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
+    let released = release_in_order(args, CleanupErrorPolicy::First, |arg| {
+        release_expr_result(arg.value, context, values)
+    });
     if let Err(err) = result.and(released) {
         let _ = values.release(object);
         return Err(err);

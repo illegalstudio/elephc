@@ -74,6 +74,7 @@ pub use symbols::{
 };
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
+pub(crate) use symbols::{emit_drain_static_owner, emit_store_result_to_symbol_then};
 pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
     emit_branch_if_not_equal_wide, emit_branch_if_zero_wide,

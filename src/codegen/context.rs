@@ -1127,7 +1127,12 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Retire, false)
+    }
+
+    /// Publishes an acquired local owner before retiring the prior frame or ref-cell owner.
+    pub(super) fn replace_value_in_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::RetireAcquired, true)
     }
 
     /// Republishes a container a mutating runtime helper may have relocated.
@@ -1140,7 +1145,7 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
-        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
+        self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep, false)
     }
 
     /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
@@ -1200,9 +1205,10 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
         previous: RefCellStorePrevious,
+        replace_raw_owner: bool,
     ) -> Result<()> {
         match self.local_slot_representation(slot) {
-            LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
+            LocalSlotRepresentation::Raw => self.store_value_to_raw_local_as(slot, value, replace_raw_owner),
             LocalSlotRepresentation::RefCell => {
                 self.store_value_to_ref_cell_local(slot, value, previous)
             }
@@ -1226,7 +1232,7 @@ impl<'a> FunctionContext<'a> {
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
                 }
-                self.store_value_to_raw_local(slot, value)?;
+                self.store_value_to_raw_local_as(slot, value, replace_raw_owner)?;
                 self.emit_branch(&done);
                 self.emitter.label(&ref_cell);
                 self.store_value_to_ref_cell_local(slot, value, previous)?;
@@ -1265,6 +1271,13 @@ impl<'a> FunctionContext<'a> {
         &mut self,
         slot: LocalSlotId,
         value: ValueId,
+    ) -> Result<()> {
+        self.store_value_to_raw_local_as(slot, value, false)
+    }
+
+    /// Materializes the replacement first so a failed conversion leaves the old owner published.
+    fn store_value_to_raw_local_as(
+        &mut self, slot: LocalSlotId, value: ValueId, replace_owner: bool,
     ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
@@ -1308,7 +1321,25 @@ impl<'a> FunctionContext<'a> {
         }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
-        self.store_current_result_at_offset(&target_ty, offset);
+        let ty = target_ty.codegen_repr();
+        if replace_owner && (ty == PhpType::Str || abi::refcount_release_helper(&ty).is_some()) {
+            elephc_memoir::symbol_owners::emit_publish_owner(
+                self.emitter,
+                |emitter, previous| abi::load_at_offset(emitter, previous, offset),
+                |emitter| {
+                    if ty == PhpType::Str {
+                        let (ptr, len) = abi::string_result_regs(emitter);
+                        abi::store_at_offset(emitter, ptr, offset);
+                        abi::store_at_offset(emitter, len, offset - 8);
+                    } else {
+                        abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+                    }
+                },
+            );
+            super::lower_inst::local_stores::retire_displaced_local_owner(self, slot, &ty)?;
+        } else {
+            self.store_current_result_at_offset(&target_ty, offset);
+        }
         Ok(())
     }
 

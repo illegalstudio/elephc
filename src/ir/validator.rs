@@ -412,6 +412,9 @@ fn validate_instruction_effects_with_operand(
         && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
     let expected = if pure_int_restamp {
         Effects::PURE
+    } else if inst.replaces_local_owner() {
+        // Retiring a displaced owner can enter arbitrary user code before the store returns.
+        Effects::all()
     } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI

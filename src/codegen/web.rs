@@ -107,14 +107,17 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     if super::context::module_uses_pcntl_signal_handlers(module) {
         abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
     }
+    let restart = labels.next("request_root_drain");
+    emitter.label(&restart);
     for record in data.static_locals() {
         emit_static_local_reset(emitter, record, &mut labels);
     }
     let (static_properties, hosting_tables) = static_properties_hosting_last(module);
-    for (symbol, php_type) in static_properties {
-        emit_static_property_release(emitter, &symbol, &php_type, &mut labels,
+    for (symbol, php_type) in &static_properties {
+        emit_static_property_release(emitter, symbol, php_type, &mut labels,
             module.required_runtime_features.native_reference_validation);
     }
+    let mut owned_globals = Vec::new();
     for name in &module.data.global_names {
         if superglobals::is_superglobal(name) || module.extern_globals.contains_key(name) {
             continue;
@@ -127,13 +130,17 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             continue;
         }
         emit_ordinary_global_reset(emitter, &symbol, &mut labels);
+        owned_globals.push(symbol);
     }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol
     // storage and are reassigned by the web prelude every request. Reset them here
     // so stale request arrays are gone before the next prelude builds replacements.
     for name in superglobals::SUPERGLOBALS {
-        emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+        let symbol = ir_global_symbol(name);
+        emit_superglobal_reset(emitter, &symbol, &mut labels);
+        owned_globals.push(symbol);
     }
+    emit_root_rescan(emitter, data, &static_properties, &owned_globals, &restart, &mut labels);
     // A hosted extension ends the previous request (RSHUTDOWN) once its destructors have run,
     // while the tables and callbacks it may still call back into are alive; the tables go right
     // after, as php-src frees request memory after RSHUTDOWN, in the main epilogue's order.
@@ -220,6 +227,24 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     }
     if module.web_application {
         application::emit(emitter, module, data);
+    }
+}
+
+/// Restarts a root inventory pass when a later destructor repopulated an earlier root.
+fn emit_root_rescan(
+    emitter: &mut Emitter, data: &DataSection, properties: &[(String, PhpType)],
+    globals: &[String], restart: &str, labels: &mut LabelGen,
+) {
+    let static_locals = data.static_locals().iter().filter(|record| {
+        let ty = record.php_type.codegen_repr();
+        ty == PhpType::Str || abi::refcount_release_helper(&ty).is_some()
+    });
+    let symbols = globals.iter().chain(properties.iter().map(|(symbol, _)| symbol))
+        .chain(static_locals.map(|record| &record.symbol));
+    for symbol in symbols {
+        elephc_memoir::symbol_owners::emit_branch_if_published_owner(
+            emitter, symbol, restart, &labels.next("root_empty"),
+        );
     }
 }
 
@@ -589,7 +614,8 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), &record.init_symbol, 0);
     abi::emit_branch_if_int_result_zero(emitter, &skip_label);
 
-    emit_release_symbol_value(emitter, &record.symbol, &ty);
+    let drain = labels.next("drain_static_local");
+    abi::emit_drain_static_owner(emitter, &record.symbol, &ty, &drain, Some(0));
     // Zero the 16-byte value slot and the init marker so the initializer re-runs.
     abi::emit_store_zero_to_symbol(emitter, &record.symbol, 0);
     abi::emit_store_zero_to_symbol(emitter, &record.symbol, 8);
@@ -598,12 +624,7 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
     emitter.label(&skip_label);
 }
 
-/// Releases the previous value of one refcounted static class property without
-/// zeroing it: the handler body's re-run initializer overwrites both the value
-/// and the typed-property sentinel after this reset, so only the old owner needs
-/// releasing to avoid a per-request leak. Skips the uninitialized sentinel so a
-/// sentinel is never released as if it were a heap pointer. Optional managed Mixed
-/// bindings instead detach their cell and restore the marker before its child cleanup.
+/// Drains a static property's owners, then restores its uninitialized marker.
 fn emit_static_property_release(
     emitter: &mut Emitter,
     symbol: &str,
@@ -624,7 +645,9 @@ fn emit_static_property_release(
     // owned heap pointer, so skip the release entirely.
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 8);
     emit_branch_if_equals_sentinel(emitter, &skip_label);
-    emit_release_symbol_value(emitter, symbol, &ty);
+    let drain = labels.next("drain_static_property");
+    abi::emit_drain_static_owner(emitter, symbol, &ty, &drain,
+        Some(UNINITIALIZED_TYPED_PROPERTY_SENTINEL));
     emitter.label(&skip_label);
 }
 
@@ -635,51 +658,14 @@ fn emit_static_property_release(
 /// symbol right after the reset, and `StoreGlobal` does not read the old value.
 fn emit_superglobal_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
     let ty = superglobals::superglobal_type().codegen_repr();
-    let skip_label = labels.next("skip_superglobal");
     emitter.comment(&format!("reset request superglobal {}", symbol));
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-    abi::emit_branch_if_int_result_zero(emitter, &skip_label);
-    emit_release_symbol_value(emitter, symbol, &ty);
-    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    emitter.label(&skip_label);
+    abi::emit_drain_static_owner(emitter, symbol, &ty, &labels.next("drain_superglobal"), None);
 }
 
 /// Releases and zeroes one ordinary PHP global, whose storage is a boxed Mixed cell.
 fn emit_ordinary_global_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
-    let ty = PhpType::Mixed;
-    let skip_label = labels.next("skip_global");
     emitter.comment(&format!("reset ordinary global {}", symbol));
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-    abi::emit_branch_if_int_result_zero(emitter, &skip_label);
-    emit_release_symbol_value(emitter, symbol, &ty);
-    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    emitter.label(&skip_label);
-}
-
-/// Releases the owned refcounted value currently stored at `symbol` (offset 0).
-///
-/// Mirrors the function-epilogue cleanup shapes: strings free their payload via
-/// the validating heap-free helper, callables release their descriptor, and
-/// other refcounted kinds decref through the type-specific helper. Non-refcounted
-/// types (int/bool/float/tagged scalar) own no heap value and are a no-op here.
-fn emit_release_symbol_value(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
-    match ty {
-        PhpType::Str => {
-            // Load the string pointer into the result register and free it. The
-            // validating free safely ignores null and non-heap pointers.
-            abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-            abi::emit_call_label(emitter, "__rt_heap_free_safe");
-        }
-        PhpType::Callable => {
-            abi::emit_load_symbol_to_result(emitter, symbol, ty);
-            abi::emit_decref_if_refcounted(emitter, ty);
-        }
-        other if other.is_refcounted() => {
-            abi::emit_load_symbol_to_result(emitter, symbol, other);
-            abi::emit_decref_if_refcounted(emitter, other);
-        }
-        _ => {}
-    }
+    abi::emit_drain_static_owner(emitter, symbol, &PhpType::Mixed, &labels.next("drain_global"), None);
 }
 
 /// Branches to `label` when the integer result register equals the uninitialized

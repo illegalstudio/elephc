@@ -7,7 +7,7 @@
 //! Key details:
 //! - Called inside the fixed Mixed frame: ARM payload/node at sp+8/+16/+24; x86 at rbp-16/-24/-32.
 
-use elephc_memoir::values::resource_weak::CELL_OFFSET;
+use elephc_memoir::values::resource_weak;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits resource subtype exclusions, shared resource ids and canonical cell reuse.
@@ -31,11 +31,6 @@ pub(super) fn emit_identity(emitter: &mut Emitter) {
             emitter.instruction("ldr x2, [sp, #16]");                           // reload resource subtype for introspection filtering
             emitter.instruction("bl __rt_resource_inventory_register");         // record this PHP id exactly once for get_resources
             emitter.instruction("str x0, [sp, #24]");                           // keep the weak cell slot across allocation
-            emitter.instruction("cbz x0, __rt_mixed_from_value_alloc");         // synthesized resources need no shared node
-            emitter.instruction(&format!("ldr x0, [x0, #{CELL_OFFSET}]"));      // resolve any already-boxed owner of this incarnation
-            emitter.instruction("cbz x0, __rt_mixed_from_value_alloc");         // the first owner creates the canonical cell
-            emitter.instruction("bl __rt_incref");                              // each alias owns one reference to the same cell
-            emitter.instruction("b __rt_mixed_from_value_done");                // never allocate an independently destructible alias
         }
         Arch::X86_64 => {
             emitter.label("__rt_mixed_from_value_resource");
@@ -56,13 +51,11 @@ pub(super) fn emit_identity(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // reload resource subtype for filtering
             emitter.instruction("call __rt_resource_inventory_register");       // record this PHP id exactly once for get_resources
             emitter.instruction("mov QWORD PTR [rbp - 32], rax");               // keep the weak cell slot across allocation
-            emitter.instruction("test rax, rax");                               // synthesized resources have no inventory node
-            emitter.instruction("jz __rt_mixed_from_value_alloc");              // box synthesized resources normally
-            emitter.instruction(&format!("mov rax, QWORD PTR [rax + {CELL_OFFSET}]")); // resolve any already-boxed owner of this incarnation
-            emitter.instruction("test rax, rax");                               // the first owner creates the canonical cell
-            emitter.instruction("jz __rt_mixed_from_value_alloc");              // allocate only when no owner exists yet
-            emitter.instruction("call __rt_incref");                            // each alias owns one reference to the same cell
-            emitter.instruction("jmp __rt_mixed_from_value_done");              // never allocate an independently destructible alias
         }
     }
+    resource_weak::emit_reuse_registered_cell(
+        emitter,
+        "__rt_mixed_from_value_alloc",
+        "__rt_mixed_from_value_done",
+    );
 }

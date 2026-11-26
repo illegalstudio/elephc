@@ -34,17 +34,12 @@ pub(crate) fn eval_ob_handler_callback(
         owners.push(phase_cell);
         eval_call_user_func_with_values(vec![callback, buffer_cell, phase_cell], context, values)
     })();
-    let mut cleanup = Ok(());
-    for owner in owners {
-        if let Err(status) = eval_release_value(context, values, owner) { cleanup = Err(status); }
-    }
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value), (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, owners, CleanupErrorPolicy::Last, &mut (context, values),
+        |(context, values), value| eval_release_value(context, &mut **values, value),
+        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+    )
 }
 
 /// Retires detached registry roots while their eval context still supports protected destructors.
@@ -52,9 +47,8 @@ pub(crate) fn eval_ob_handler_callback(
 pub(crate) fn release_ob_handler_callbacks(
     callbacks: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for callback in callbacks {
-        if let Err(status) = eval_release_value(context, values, callback) { result = Err(status); }
-    }
-    result
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
+    release_in_order(callbacks, CleanupErrorPolicy::Last, |callback| {
+        eval_release_value(context, values, callback)
+    })
 }

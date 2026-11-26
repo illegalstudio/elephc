@@ -27,6 +27,19 @@ pub const RETIRED: usize = 2;
 
 const NODE_BYTES: i64 = CELL_OFFSET as i64 + 8;
 
+/// Retains the canonical cell of the inventory node returned by registration.
+///
+/// The caller stages that node for publication on the allocation path. A missing
+/// node or cell branches to allocation, otherwise the shared owner is returned.
+pub fn emit_reuse_registered_cell(emitter: &mut impl Emitter, allocate: &str, done: &str) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_branch_if_int_result_zero(emitter, allocate);
+    abi::emit_load_from_address(emitter, result, result, CELL_OFFSET);
+    abi::emit_branch_if_int_result_zero(emitter, allocate);
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_jump(emitter, done);
+}
+
 /// Allocates and appends a resource node with its identity tuple staged in the registration frame.
 ///
 /// The caller stages id, native payload and subtype in three consecutive words.

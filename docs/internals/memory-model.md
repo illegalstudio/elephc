@@ -122,6 +122,17 @@ operations run.
 AOT assignment and eval writeback share Mixed payload transfer and displaced-owner
 release. The compiler supplies the destination and chooses when to publish. Native
 destructor dispatch and the cycle collector share the same heap header flags.
+Replacing a frame, symbol or declared property owner publishes the new value
+before retiring the previous one. A destructor can therefore observe the new
+value or assign another replacement, and a destructor exception leaves the
+completed assignment visible to its catch.
+
+Persistent root cleanup keeps a direct object owner published while its
+destructor runs, with a temporary lease to keep the receiver alive across
+reentrant writes. The drain checks which owner is still published after the
+callback and repeats for replacements. The compiler supplies the root inventory
+and the initialization markers for globals, static locals and static properties.
+
 Memoir drains resource inventory nodes after the compiler-selected handle cleanup.
 For glob directories it releases libc results with `globfree` and returns the
 envelope to the native heap, including when a directory fails to open. Fixed SPL

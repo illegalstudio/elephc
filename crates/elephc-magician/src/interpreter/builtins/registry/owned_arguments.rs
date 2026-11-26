@@ -200,18 +200,12 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
         }
     }
     releases.extend(owners);
-    let mut cleanup = Ok(());
-    for value in releases {
-        if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }
-    }
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, releases, CleanupErrorPolicy::Last, &mut (context, values),
+        |(context, values), value| eval_release_value(context, &mut **values, value),
+        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+    )
 }
 
 /// Warns for callback values sent to reference parameters and transfers their owners into temporary wrappers.

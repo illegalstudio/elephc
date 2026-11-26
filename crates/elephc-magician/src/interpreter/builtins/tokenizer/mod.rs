@@ -134,18 +134,12 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
                         positional_args(arguments.iter().map(|value| value.borrowed()).collect()),
                         context, &mut scope, values)
                 })();
-                let mut released = Ok(());
-                for argument in arguments {
-                    let cleanup = release_expr_result(argument, context, values);
-                    if released.is_ok() { released = cleanup; }
-                }
-                let result = match (result, released) {
-                    (Ok(object), Err(status)) => {
-                        let _ = release_expr_result(object, context, values);
-                        Err(status)
-                    }
-                    (result, _) => result,
-                };
+                use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+                let result = finish_owner_cleanup(
+                    result, arguments, CleanupErrorPolicy::First, &mut (&mut *context, &mut *values),
+                    |(context, values), value| release_expr_result(value, context, &mut **values),
+                    |(context, values), value| { let _ = release_expr_result(value, context, &mut **values); },
+                );
                 finish_activation_scope(&mut scope, result, context, values)
             })?;
         }

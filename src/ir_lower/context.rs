@@ -3183,36 +3183,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // An earlier conditional PHP assignment may have populated this slot even when
         // the merge cannot prove definite initialization. A merely declared one-shot temporary
         // has no previous owner; keep its first store free of artificial destructor effects.
-        if !uses_global
+        let may_carry_an_earlier_store = !self.loop_stack.is_empty()
+            || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active);
+        let replaces_local_owner = !uses_global
+            && !self.is_ref_bound_local(name)
             && local_kind_uses_plain_store_cleanup(previous_kind)
-            && previous_slot.is_some_and(|slot| {
+            && (may_carry_an_earlier_store || previous_slot.is_some_and(|slot| {
                 self.initialized_slots.contains(&slot)
                     || (previous_kind == LocalKind::PhpLocal
                         && self.assigned_php_local_slots.contains(&slot))
-                    || !self.loop_stack.is_empty()
-                    || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active)
-            })
-        {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
-        }
-        // A first syntactic store inside a loop body (main or function) can still
-        // overwrite a prior runtime iteration's value. The same is true after eval, whose
-        // backend inventory can reload a future PHP local before this store exists in EIR.
-        // Function cleanup locals (including returned slots) are zero-initialized in the
-        // prologue, so paths with no prior runtime occupant safely release a null slot.
-        if !uses_global
-            && local_kind_uses_plain_store_cleanup(previous_kind)
-            && previous_slot.is_none()
-            && (!self.loop_stack.is_empty()
-                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
-        {
-            self.release_stored_local_value_before_overwrite(name, slot, span);
+            }));
+        if replaces_local_owner {
+            self.invalidate_callable_facts_after_user_code(
+                Op::ReleaseLocalSlot, &[], Some(&Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+            );
         }
         // NO release of the previous occupant is emitted here for the string case: the
         // BACKEND already does it. `lower_store_static_local` calls
         // `emit_store_result_to_symbol(.., release_previous = true)`, whose `PhpType::Str`
-        // arm loads the symbol's current payload and calls `__rt_heap_free_safe` before
-        // overwriting it. Emitting a second release here is a DOUBLE FREE — it survived
+        // arm publishes the result and calls `__rt_heap_free_safe` on the previous owner.
+        // Emitting a second release here is a double free. It survived
         // macOS/aarch64 (where the redundant free was absorbed) and was caught by the
         // heap-debug double-free guard on linux-x86_64.
         //
@@ -3220,10 +3211,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // RETAIN (the backend's `emit_incref_if_refcounted` skips `Str`), the backend owns
         // the RELEASE of what it overwrites.
         //
-        // The slot widens only AFTER the releases above were emitted, and the two sides read
-        // different types on purpose. Every initialized slot gets deferred cleanup, which
-        // finalization erases if storage stays scalar. The release is analysed using
-        // the slot's type at emission, which still describes what the slot HOLDS: a `string`
+        // The slot widens only after the cleanup's callable facts were analyzed. Finalization
+        // removes the cleanup effects if storage stays scalar. The initial analysis uses the
+        // slot's predecessor type, which still describes what the slot holds: a `string`
         // local being overwritten with `null` retires a string, not the `Mixed` the widened slot
         // will carry. Widening first made that release look like a possible destructor and
         // erased every global-backed closure fact in the frame. The backend lays the frame out
@@ -3252,12 +3242,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 PhpType::Mixed
             )
             && matches!(previous_type.codegen_repr(), PhpType::Int);
-        // A ref-cell store publishes its replacement before retiring the old pointee. That
-        // retirement can run user destructors and throw, so an owned source whose ordinary
+        // Owner replacement publishes the new value before retiring the old one. Retirement
+        // can throw, so an owned source whose ordinary
         // post-store release has not run yet needs an unwind-visible owner of its own. The
         // store's acquired value becomes the new pointee owner; this root owns only the source
         // expression lease that normal control flow retires immediately after publication.
-        let ref_store_source_owner = if is_ref_bound
+        let ref_store_source_owner = if (is_ref_bound || (replaces_local_owner && store_retains_value))
             && release_source_after_store
             && !transfer_source_to_store
             && !ref_cell_narrowed_mixed_to_int
@@ -3277,7 +3267,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let value = self.box_typed_array_for_mixed_ref_cell(value, &store_type, span);
             self.store_ref_cell_slot(slot, value, store_type, ref_store_source_owner, span);
         } else {
-            self.store_slot_with_op(slot, value, op, span);
+            let effects = if replaces_local_owner { Effects::all() } else { op.default_effects() };
+            self.store_slot_with_effects(slot, value, op, effects, span);
         }
         if !is_ref_bound {
             self.set_local_type(name, php_type);
@@ -5636,10 +5627,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         op: Op,
         span: Option<Span>,
     ) {
+        self.store_slot_with_effects(slot, value, op, op.default_effects(), span);
+    }
+
+    /// Records a store and its potential displaced-owner cleanup as one instruction.
+    fn store_slot_with_effects(
+        &mut self,
+        slot: LocalSlotId,
+        value: LoweredValue,
+        op: Op,
+        effects: Effects,
+        span: Option<Span>,
+    ) {
         self.invalidate_callable_facts_after_user_code(
             op,
             &[value.value],
             Some(&Immediate::LocalSlot(slot)),
+            // Replacement invalidates using the predecessor type before slot widening.
             op.default_effects(),
         );
         self.builder.emit_with_effects(
@@ -5649,7 +5653,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             IrType::Void,
             PhpType::Void,
             Ownership::NonHeap,
-            op.default_effects(),
+            effects,
             span,
         );
         if op == Op::StoreLocal && self.builder.local_kind(slot) == LocalKind::PhpLocal {

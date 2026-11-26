@@ -478,23 +478,17 @@ fn eval_array_callable_with_receiver_owner(
         }
         _ => None,
     };
-    let mut cleanup = Ok(());
-    for temporary in temporaries {
-        if Some(temporary) != receiver {
-            let released = values.release(temporary);
-            if cleanup.is_ok() { cleanup = released; }
-        }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(_), Err(status)) => {
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, temporaries.into_iter().filter(|temporary| Some(*temporary) != receiver),
+        CleanupErrorPolicy::First, values,
+        |values, temporary| values.release(temporary),
+        |values, _| {
             if let Some(receiver) = receiver.filter(|cell| !cell.is_borrowed()) {
                 let _ = values.release(receiver);
             }
-            Err(status)
-        }
-        (Ok(callable), Ok(())) => Ok((callable, receiver)),
-    }
+        },
+    ).map(|callable| (callable, receiver))
 }
 
 /// Resolves deprecated `self`/`static`/`parent` callable arrays inside method scope.

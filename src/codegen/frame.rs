@@ -797,11 +797,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, &shutdown);
     }
     emit_main_local_epilogue_cleanup(ctx);
-    emit_main_static_local_cleanup(ctx);
-    emit_main_global_epilogue_cleanup(ctx);
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
-    emit_main_static_property_cleanup(ctx, static_properties);
+    emit_main_persistent_root_cleanup(ctx, &static_properties);
     // Collect PHP cycles while eval declarations and hosted extension state are alive.
     emit_shutdown_cycle_collection(ctx.emitter);
     emit_eval_context_epilogue_cleanup(ctx);
@@ -813,7 +811,8 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
         abi::emit_call_label(ctx.emitter, &symbol);
     }
-    emit_main_static_property_cleanup(ctx, hosting_tables);
+    emit_main_static_property_cleanup(ctx, &hosting_tables);
+    emit_pending_shutdown_exception(ctx.emitter);
     // Last owner teardown: a destructor above, or an engine object a hosting table released, may
     // still reach C code that calls a callback.
     if module_binds_extern_callbacks(ctx.module) {
@@ -904,7 +903,7 @@ fn emit_shutdown_cycle_collection(emitter: &mut Emitter) {
 }
 
 /// Retires class static owners once, finishing every property before propagating a destructor throw.
-fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: Vec<(String, PhpType)>) {
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: &[(String, PhpType)]) {
     if properties.is_empty() { return; }
     for (symbol, php_type) in properties {
         let ty = php_type.codegen_repr();
@@ -930,24 +929,17 @@ fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: 
                 ctx.emitter.instruction(&format!("je {done}"));                 // skip properties that never acquired an owner
             }
         }
-        if ty == PhpType::Str {
-            abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 0);
-        } else {
-            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
-        }
-        ctx.emitter.comment("retire the static property before invoking its destructor");
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &symbol, 8);
-        if ty == PhpType::Str {
-            abi::emit_unary_cleanup_preserving_exception(ctx.emitter, "__rt_heap_free_safe", result);
-        } else {
-            abi::emit_decref_preserving_exception(ctx.emitter, &ty);
-        }
+        let drain = ctx.next_label("drain_static_property");
+        abi::emit_drain_static_owner(ctx.emitter, symbol, &ty, &drain,
+            Some(crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL));
         ctx.emitter.label(&done);
     }
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+}
+
+/// Propagates cleanup exceptions only after the static-root pass has completed.
+fn emit_pending_shutdown_exception(emitter: &mut Emitter) {
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -968,16 +960,15 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
             0,
         );
         abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-        emit_static_symbol_value_cleanup(ctx, &record.symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 0);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 8);
+        let drain = ctx.next_label("drain_static_local");
+        abi::emit_drain_static_owner(ctx.emitter, &record.symbol, &ty, &drain, Some(0));
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.init_symbol, 0);
         ctx.emitter.label(&done);
     }
 }
 
-/// Releases global symbol storage owned by the top-level EIR body before diagnostics.
-fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+/// Collects global symbol storage owned by the top-level EIR body before diagnostics.
+fn main_owned_globals(ctx: &FunctionContext<'_>) -> Vec<(String, PhpType)> {
     let mut globals = ctx.module.data.global_names.clone();
     // Eval exposes process globals even when no source-level global instruction names them.
     for name in ["argc", "argv"] {
@@ -985,48 +976,45 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             globals.push(name.to_string());
         }
     }
-    for name in globals {
+    globals.into_iter().filter_map(|name| {
         if ctx.module.extern_globals.contains_key(&name) {
-            continue;
+            return None;
         }
         let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
         };
-        if !cleanup_tracked_codegen_type(&ty) {
-            continue;
-        }
         let symbol = ir_global_symbol(&name);
-        if !ctx.data.has_comm(&symbol) {
-            continue;
-        }
-        ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
-        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-        if ty == PhpType::Str {
-            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
-        }
-    }
+        (cleanup_tracked_codegen_type(&ty) && ctx.data.has_comm(&symbol)).then_some((symbol, ty))
+    }).collect()
 }
 
-/// Releases the refcounted value stored in a static-local symbol.
-fn emit_static_symbol_value_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str, ty: &PhpType) {
-    match ty {
-        PhpType::Str => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), symbol, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-        }
-        PhpType::Callable => {
-            abi::emit_load_symbol_to_result(ctx.emitter, symbol, ty);
-            abi::emit_decref_if_refcounted(ctx.emitter, ty);
-        }
-        other if other.is_refcounted() => {
-            abi::emit_load_symbol_to_result(ctx.emitter, symbol, other);
-            abi::emit_decref_if_refcounted(ctx.emitter, other);
-        }
-        _ => {}
+/// Revisits persistent roots repopulated by a destructor belonging to a later root.
+fn emit_main_persistent_root_cleanup(ctx: &mut FunctionContext<'_>, properties: &[(String, PhpType)]) {
+    let globals = main_owned_globals(ctx);
+    let static_locals = ctx.data.static_locals().to_vec();
+    let restart = ctx.next_label("persistent_root_drain");
+    ctx.emitter.label(&restart);
+    emit_main_static_local_cleanup(ctx);
+    for (symbol, ty) in &globals {
+        let drain = ctx.next_label("drain_global");
+        abi::emit_drain_static_owner(ctx.emitter, symbol, ty, &drain, (*ty == PhpType::Str).then_some(0));
     }
+    emit_main_static_property_cleanup(ctx, properties);
+    for (symbol, _) in globals.iter().chain(properties) {
+        let empty = ctx.next_label("static_root_empty");
+        elephc_memoir::symbol_owners::emit_branch_if_published_owner(ctx.emitter, symbol, &restart, &empty);
+    }
+    for record in static_locals.iter().filter(|record|
+        cleanup_tracked_codegen_type(&record.php_type.codegen_repr()))
+    {
+        let empty = ctx.next_label("static_local_root_empty");
+        elephc_memoir::symbol_owners::emit_branch_if_published_owner(
+            ctx.emitter, &record.symbol, &restart, &empty,
+        );
+    }
+    emit_pending_shutdown_exception(ctx.emitter);
 }
 
 /// Emits the C-callable `--web` top-level handler prologue.

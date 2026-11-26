@@ -154,7 +154,7 @@ writeReviewPinnedObject();
     }
 }
 
-/// Every target retires inherited class-static owners before bounded shutdown release.
+/// Every target drains inherited class-static owners through the protected shutdown loop.
 #[test]
 fn class_static_shutdown_ownership_is_emitted_on_all_targets() {
     let source = r#"<?php
@@ -179,13 +179,18 @@ echo isset(ShutdownEmitterChild::$uninitialized);
             let comment = format!("epilogue cleanup static property {symbol}");
             assert_eq!(asm.matches(&comment).count(), 1, "{name}: {property}");
             let cleanup = asm.split_once(&comment).unwrap().1;
-            let retired = cleanup.find("retire the static property").unwrap();
+            let drain = cleanup.find("drain_static_property").unwrap();
             let released = cleanup.find("__rt_cleanup_preserve_exception").unwrap();
-            assert!(retired < released, "{name}: {property} must retire before destructor entry");
+            assert!(drain < released, "{name}: {property} must use the bounded drain");
+            if property == "payload" {
+                let destructor = cleanup.find("__rt_call_object_destructor").unwrap();
+                let recheck = cleanup.find("_release_pin").unwrap();
+                assert!(destructor < recheck, "{name}: recheck publication after the destructor");
+            }
             let inherited = crate::names::static_property_symbol("ShutdownEmitterChild", property);
             assert!(!asm.contains(&format!("epilogue cleanup static property {inherited}")), "{name}");
         }
-        let tail = asm.rsplit_once("retire the static property").unwrap().1;
+        let tail = asm.rsplit_once("epilogue cleanup static property").unwrap().1;
         assert!(tail.find("__rt_cleanup_preserve_exception").unwrap() < tail.find("__rt_throw_current").unwrap(), "{name}");
     }
 }

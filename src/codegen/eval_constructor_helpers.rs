@@ -18,6 +18,8 @@
 
 use std::collections::BTreeMap;
 
+use elephc_memoir::values::throwable_storage;
+
 use crate::codegen::abi;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -607,8 +609,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emit_borrowed_string_arg(emitter, &PhpType::Str, 16, fail_label);
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
-    emitter.instruction("str x1, [x9, #8]");                                    // transfer the owned message pointer into the compact Throwable payload
-    emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
+    throwable_storage::emit_store_message_pair(emitter, "x9", "x1", "x2");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
@@ -624,7 +625,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
-    emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
+    throwable_storage::emit_store_code(emitter, "x9", "x0");
     emit_aarch64_builtin_throwable_previous_arg(
         module,
         emitter,
@@ -651,8 +652,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emit_borrowed_string_arg(emitter, &PhpType::Str, 40, fail_label);
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
-    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // transfer the owned message pointer into the compact Throwable payload
-    emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
+    throwable_storage::emit_store_message_pair(emitter, "r11", "rax", "rdx");
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
@@ -668,7 +668,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
-    emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
+    throwable_storage::emit_store_code(emitter, "r11", "rax");
     emit_x86_64_builtin_throwable_previous_arg(
         module,
         emitter,
@@ -702,7 +702,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("csel x0, x1, x0, eq");                                 // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the receiver after retaining its previous owner
-    emitter.instruction("str x0, [x9, #40]");                                   // store the previous owner in the representation its reader and cleanup expect
+    throwable_storage::emit_store_previous(emitter, "x9", "x0");
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
 }
 
@@ -731,7 +731,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("cmove rax, rdi");                                      // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the receiver after retaining its previous owner
-    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the previous owner in its reader and cleanup representation
+    throwable_storage::emit_store_previous(emitter, "r11", "rax");
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 

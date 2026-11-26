@@ -101,6 +101,11 @@ impl PassOrigin {
 }
 
 impl Instruction {
+    /// Reports whether this local store retires the displaced physical frame owner.
+    pub fn replaces_local_owner(&self) -> bool {
+        self.op == Op::StoreLocal && self.effects.contains(Effects::REFCOUNT_OP)
+    }
+
     /// Creates a new instruction payload with all semantic metadata attached.
     pub fn new(
         op: Op,

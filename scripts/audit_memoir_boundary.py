@@ -113,7 +113,58 @@ MIGRATED_SOURCE_CONTRACTS = {
         "required": ("values::array_header::emit_load_value_type_tag(",),
     },
     "src/codegen_support/abi/symbols.rs": {
-        "required": ("symbol_owners::emit_replace_result_owner(",),
+        "required": (
+            "symbol_owners::emit_replace_result_owner(",
+            "symbol_owners::emit_publish_owner(",
+            "emit_drain_symbol_owner(",
+        ),
+    },
+    "src/codegen/context.rs": {
+        "required": ("symbol_owners::emit_publish_owner(",),
+    },
+    "src/codegen/lower_inst/local_stores.rs": {
+        "required": (
+            "symbol_owners::emit_publish_owner(",
+            "symbol_owners::emit_publish_address_owner(",
+        ),
+    },
+    "src/codegen/lower_inst/objects/property_stores.rs": {
+        "required": ("symbol_owners::emit_publish_address_owner(",),
+        "forbidden": ("release_previous_property_value(",),
+    },
+    "src/codegen/eval_property_helpers/replacement.rs": {
+        "required": ("symbol_owners::emit_publish_owner(",),
+    },
+    "src/codegen/lower_inst/builtins/eval/scope_reload.rs": {
+        "required": ("symbol_owners::emit_publish_staged_owner(",),
+    },
+    "src/codegen/frame.rs": {
+        "required": ("abi::emit_drain_static_owner(",),
+        "forbidden": ("emit_static_symbol_value_cleanup(",),
+    },
+    "src/codegen/web.rs": {
+        "required": ("abi::emit_drain_static_owner(",),
+        "forbidden": ("emit_release_symbol_value(",),
+    },
+    "src/codegen/web/application/shutdown.rs": {
+        "required": ("abi::emit_drain_static_owner(",),
+    },
+    "src/codegen/eval_constructor_helpers.rs": {
+        "required": (
+            "throwable_storage::emit_store_message_pair(",
+            "throwable_storage::emit_store_code(",
+            "throwable_storage::emit_store_previous(",
+        ),
+    },
+    "src/codegen_support/runtime/memoir/resources.rs": {
+        "required": ("resource_weak::emit_reuse_registered_cell(",),
+        "forbidden": ("CELL_OFFSET", "__rt_incref"),
+    },
+    "crates/elephc-magician/src/interpreter/scope_cells.rs": {
+        "required": ("finish_owner_cleanup(", "owners.release("),
+    },
+    "crates/elephc-magician/src/interpreter/output_handlers.rs": {
+        "required": ("finish_owner_cleanup(", "release_in_order("),
     },
     "src/codegen/eval_static_property_helpers.rs": {
         "required": ("symbol_owners::emit_replace_result_owner(",),

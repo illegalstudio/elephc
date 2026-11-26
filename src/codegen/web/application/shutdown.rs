@@ -5,7 +5,7 @@
 //! - The generated application lifecycle shutdown entry.
 //!
 //! Key details:
-//! - Each root is detached before protected release, including throwing destructors.
+//! - Memoir drains reentrant roots and protects each destructor.
 //! - Superglobals stay valid arrays until PHP callbacks finish.
 //! - The process owns the final arena reclamation; live exception frames are never reset.
 
@@ -23,17 +23,22 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         let shutdown = emitter.target.extern_symbol("__elephc_eval_pcntl_shutdown");
         scope.call(emitter, &shutdown, false);
     }
-    // -- detach persistent roots before their destructors can reenter application code --
+    // -- drain persistent roots while destructors can still reenter application code --
+    let mut labels = LabelGen::new();
+    let restart = labels.next("application_shutdown_root_drain");
+    emitter.label(&restart);
     for (index, record) in data.static_locals().iter().enumerate() {
         let skip = format!("__rt_web_app_shutdown_static_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &record.init_symbol, 0);
         abi::emit_branch_if_int_result_zero(emitter, &skip);
+        abi::emit_drain_static_owner(emitter, &record.symbol, &record.php_type.codegen_repr(),
+            &format!("{skip}_drain"), Some(0));
         abi::emit_store_zero_to_symbol(emitter, &record.init_symbol, 0);
-        release(emitter, scope, &record.symbol, &record.php_type.codegen_repr(), false);
         emitter.label(&skip);
     }
-    let (properties, hosting) = static_properties_hosting_last(module);
-    for (index, (symbol, ty)) in properties.into_iter().chain(hosting).enumerate() {
+    let (mut properties, hosting) = static_properties_hosting_last(module);
+    properties.extend(hosting);
+    for (index, (symbol, ty)) in properties.iter().enumerate() {
         if module.required_runtime_features.native_reference_validation && ty.codegen_repr() == PhpType::Mixed {
             abi::emit_symbol_address(emitter, value, &symbol);
             scope.call(emitter, "__rt_reference_static_mixed_release", false);
@@ -42,14 +47,22 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         let skip = format!("__rt_web_app_shutdown_property_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &symbol, 8);
         super::super::emit_branch_if_equals_sentinel(emitter, &skip);
-        release(emitter, scope, &symbol, &ty.codegen_repr(), true);
+        abi::emit_drain_static_owner(emitter, &symbol, &ty.codegen_repr(), &format!("{skip}_drain"),
+            Some(UNINITIALIZED_TYPED_PROPERTY_SENTINEL));
         emitter.label(&skip);
     }
+    let mut owned_globals = Vec::new();
     for name in &module.data.global_names {
-        if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
-            release(emitter, scope, &ir_global_symbol(name), &PhpType::Mixed, false);
+        let symbol = ir_global_symbol(name);
+        if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name)
+            && data.has_comm(&symbol)
+        {
+            abi::emit_drain_static_owner(emitter, &symbol, &PhpType::Mixed,
+                &format!("__rt_web_app_shutdown_drain{symbol}"), None);
+            owned_globals.push(symbol);
         }
     }
+    super::super::emit_root_rescan(emitter, data, &properties, &owned_globals, &restart, &mut labels);
     if crate::codegen::context::module_uses_pcntl_signal_handlers(module) {
         scope.call(emitter, "__rt_pcntl_release_handlers", false);
     }
@@ -80,27 +93,11 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     }
     // -- preserve a pending Throwable until the generated PHP catch can log it --
     scope.finish(emitter);
+    abi::emit_load_symbol_to_reg(emitter, value, "_exc_value", 0);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_web_app_shutdown_clean");
     abi::emit_frame_restore(emitter, 64);
     abi::emit_jump(emitter, "__rt_throw_current");
     emitter.label("__rt_web_app_shutdown_clean");
     abi::emit_frame_restore(emitter, 64);
     abi::emit_return(emitter);
-}
-
-/// Clears one symbol before releasing its single owned payload under the shutdown scope.
-fn release(emitter: &mut Emitter, scope: Scope, symbol: &str, ty: &PhpType, property: bool) {
-    let helper = if *ty == PhpType::Str { Some("__rt_heap_free_safe") }
-        else { abi::refcount_release_helper(ty) };
-    let Some(helper) = helper else { return };
-    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
-    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    if property {
-        let marker = abi::secondary_scratch_reg(emitter);
-        abi::emit_load_int_immediate(emitter, marker, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        abi::emit_store_reg_to_symbol(emitter, marker, symbol, 8);
-    } else {
-        abi::emit_store_zero_to_symbol(emitter, symbol, 8);
-    }
-    scope.call(emitter, helper, false);
 }

@@ -133,16 +133,10 @@ fn eval_owned_read<V: RuntimeValueOps>(
             Ok(value)
         }
     });
-    let mut cleanup = Ok(());
-    for value in owners.into_iter().rev() {
-        if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }
-    }
-    match (result, cleanup) {
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-        (Err(status), _) => Err(status),
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, owners.into_iter().rev(), CleanupErrorPolicy::Last, &mut (context, values),
+        |(context, values), value| eval_release_value(context, &mut **values, value),
+        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+    )
 }

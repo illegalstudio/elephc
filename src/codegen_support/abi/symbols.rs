@@ -12,7 +12,7 @@ use crate::codegen_support::NULL_SENTINEL;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
-use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
+use super::calls::emit_call_label;
 use super::frame::{emit_load_from_address, emit_store_to_address};
 #[cfg(test)]
 use super::frame::{load_at_offset_scratch, store_at_offset_scratch};
@@ -22,7 +22,40 @@ use super::registers::{
     float_result_reg, int_result_reg, is_float_register, secondary_scratch_reg, string_result_regs,
     symbol_scratch_reg,
 };
-use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
+use super::values::{emit_decref_if_refcounted, emit_load_int_immediate, refcount_release_helper};
+
+/// Drains one typed persistent owner with the compiler's marker and exception conventions.
+pub(crate) fn emit_drain_static_owner(
+    emitter: &mut Emitter, symbol: &str, ty: &PhpType, label: &str, high_word: Option<i64>,
+) {
+    use elephc_memoir::symbol_owners::{PublishedDestructor, emit_drain_symbol_owner};
+    let release = if *ty == PhpType::Str {
+        "__rt_heap_free_safe"
+    } else if let Some(entry) = refcount_release_helper(ty) {
+        entry
+    } else {
+        return;
+    };
+    let destructor = match ty {
+        PhpType::Mixed | PhpType::Union(_) => PublishedDestructor::Mixed,
+        PhpType::Object(_) => PublishedDestructor::Object,
+        _ => PublishedDestructor::None,
+    };
+    emit_drain_symbol_owner(
+        emitter, symbol, label, destructor,
+        |emitter| {
+            emit_store_zero_to_symbol(emitter, symbol, 0);
+            if let Some(marker) = high_word {
+                let scratch = secondary_scratch_reg(emitter);
+                emit_load_int_immediate(emitter, scratch, marker);
+                emit_store_reg_to_symbol(emitter, scratch, symbol, 8);
+            }
+        },
+        |emitter| super::emit_unary_cleanup_preserving_exception(
+            emitter, release, int_result_reg(emitter),
+        ),
+    );
+}
 
 /// Stores a local variable from its frame slot into a static/global symbol.
 /// Loads the value from `offset` relative to the frame pointer, then writes it
@@ -475,57 +508,45 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
 }
 
 /// Stores the current result registers into a static/global symbol.
-/// If `release_previous` is true, first loads the old symbol value and
-/// releases it: strings call `__rt_heap_free_safe`, refcounted types call
-/// `emit_decref_if_refcounted`.  Incoming results are preserved on the stack
-/// during the release call. Handles Float, Str (pointer + length pair),
-/// TaggedScalar (payload + tag pair), Void (null sentinel), and scalar/pointer types.
-///
-/// `Callable` storage is delegated to `emit_store_callable_result_to_symbol`, which performs a
-/// publish-before-retire descriptor transfer instead of the retire-before-publish discipline used
-/// by strings and refcounted heap values, because releasing a callable descriptor can run
-/// captured-object destructors that throw or reenter the same slot.
+/// When replacing an owner, publishes the full result before releasing the old value.
 pub fn emit_store_result_to_symbol(
     emitter: &mut Emitter,
     symbol: &str,
     ty: &PhpType,
     release_previous: bool,
 ) {
+    emit_store_result_to_symbol_then(emitter, symbol, ty, release_previous, |_| {});
+}
+
+/// Publishes symbol metadata with the replacement before cleanup can execute PHP.
+pub(crate) fn emit_store_result_to_symbol_then(
+    emitter: &mut Emitter,
+    symbol: &str,
+    ty: &PhpType,
+    release_previous: bool,
+    after_publish: impl FnOnce(&mut Emitter),
+) {
     let ty = ty.codegen_repr();
-    if matches!(ty, PhpType::Callable) {
-        emit_store_callable_result_to_symbol(emitter, symbol, release_previous);
+    if release_previous && refcount_release_helper(&ty).is_some() {
+        elephc_memoir::symbol_owners::emit_replace_result_owner(
+            emitter, symbol, after_publish, |emitter| emit_decref_if_refcounted(emitter, &ty),
+        );
         return;
     }
-    if release_previous {
-        if matches!(ty, PhpType::Str) {
-            let (ptr_reg, len_reg) = string_result_regs(emitter);
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the incoming string result while releasing the previous symbol payload
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", ptr_reg));          // preserve the incoming string pointer result while releasing the previous symbol payload
-                    emitter.instruction(&format!("push {}", len_reg));          // preserve the incoming string length result while releasing the previous symbol payload
-                }
-            }
-            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
-            emit_call_label(emitter, "__rt_heap_free_safe"); // release the previous string allocation before overwriting the symbol slot
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("ldp x1, x2, [sp], #16");               // restore the incoming string result after the release helper call
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", len_reg));           // restore the incoming string length result after the release helper call
-                    emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
-                }
-            }
-        } else if ty.is_refcounted() {
-            let result = int_result_reg(emitter);
-            emit_push_reg(emitter, result);
-            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
-            emit_decref_if_refcounted(emitter, &ty);
-            emit_pop_reg(emitter, result);
-        }
+    if release_previous && ty == PhpType::Str {
+        let (ptr, len) = string_result_regs(emitter);
+        elephc_memoir::symbol_owners::emit_publish_owner(
+            emitter,
+            |emitter, previous| emit_load_symbol_to_reg(emitter, previous, symbol, 0),
+            |emitter| {
+                emit_store_reg_to_symbol(emitter, ptr, symbol, 0);
+                emit_store_reg_to_symbol(emitter, len, symbol, 8);
+            },
+        );
+        emit_call_label(emitter, "__rt_heap_free_safe");
+        emit_load_symbol_to_result(emitter, symbol, &ty);
+        after_publish(emitter);
+        return;
     }
 
     match ty {
@@ -557,33 +578,5 @@ pub fn emit_store_result_to_symbol(
             // store the scalar or pointer-like result into symbol storage
         }
     }
-}
-
-/// Overwrites a symbol-backed callable descriptor slot with the current result descriptor.
-///
-/// Callable descriptors are refcounted through `__rt_callable_descriptor_release`, but that
-/// release can run captured-object destructors that throw or reenter the same static slot. A
-/// plain retire-before-publish transfer (as `is_refcounted` storage uses) would therefore hand a
-/// reentrant destructor a slot that still points at the descriptor being freed, and would clobber
-/// any replacement the destructor stored once cleanup returned. This path instead publishes the
-/// new descriptor into the slot *before* retiring the previous one, so:
-/// - the slot always owns a live descriptor when a destructor observes it, and
-/// - a reentrant store during cleanup is never overwritten after the release helper returns.
-///
-/// The new descriptor already carries the owner destined for the slot (the EIR lowering moves an
-/// owning temporary or acquires a borrowed source), so no extra retain is emitted here. The
-/// incoming descriptor is preserved in the integer result register across the release call, and
-/// the single 16-byte push keeps the nested call 16-byte aligned on every supported target.
-fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, release_previous: bool) {
-    let result_reg = int_result_reg(emitter);
-    if !release_previous {
-        emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the callable descriptor result into symbol storage
-        return;
-    }
-    elephc_memoir::symbol_owners::emit_replace_result_owner(
-        emitter,
-        symbol,
-        |_| {},
-        |emitter| emit_call_label(emitter, "__rt_callable_descriptor_release"),
-    );
+    after_publish(emitter);
 }

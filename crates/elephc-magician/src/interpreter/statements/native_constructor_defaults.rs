@@ -290,11 +290,10 @@ pub(super) fn materialize_native_callable_object_default(
             class_name, object, constructor_args.clone(), context, values,
         )
     })();
-    let mut released = Ok(());
-    for arg in constructor_args {
-        let cleanup = release_expr_result(arg.value, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
+    let released = release_in_order(constructor_args, CleanupErrorPolicy::First, |arg| {
+        release_expr_result(arg.value, context, values)
+    });
     if let Err(err) = constructed.and(released) {
         let _ = values.release(object);
         return Err(err);

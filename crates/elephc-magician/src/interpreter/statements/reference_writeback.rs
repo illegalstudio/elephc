@@ -9,7 +9,8 @@
 //! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, StagedRuntimeOwners, with_runtime_owners};
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+use crate::interpreter::scope_cells::retire_replaced_scope_cells;
 use elephc_memoir::owner_layout::InvokerSlotWords;
 
 /// Returns the calling-scope class when PHP's private-method shadowing rule
@@ -117,7 +118,7 @@ pub(super) fn alias_duplicate_method_ref_args(
                     bound_args[previous_position].value,
                     ScopeCellOwnership::Borrowed,
                 );
-                for old in replaced { eval_release_value(context, values, old)?; }
+                retire_replaced_scope_cells(replaced, context, values)?;
             }
             break;
         }
@@ -555,24 +556,6 @@ pub(super) fn write_back_method_array_element_ref_target(
         let replaced = set_owned_scope_cell(context, scope, array_name.to_string(), updated, values)?;
         retire_replaced_scope_cells(replaced, context, values)
     })
-}
-
-/// Retires displaced cells after writeback while preserving every outstanding owner across reentry.
-fn retire_replaced_scope_cells(
-    replaced: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if replaced.is_empty() {
-        return Ok(());
-    }
-    let owners = StagedRuntimeOwners::default();
-    for cell in replaced {
-        owners.stage(cell);
-    }
-    with_runtime_owners(&owners, || owners.release(Ok(()), |cell| {
-        eval_release_value(context, values, cell)
-    }))
 }
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.

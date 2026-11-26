@@ -38,16 +38,12 @@ pub(in crate::interpreter) fn update(
         values.operator_method_call(object.borrowed(), method,
             vec![owners[0].borrowed(), right.borrowed(), owners[1].borrowed(), owners[2].borrowed()])
     })();
-    let mut cleanup = Ok(());
-    for owner in owners.into_iter().rev() {
-        let released = values.release(owner);
-        if cleanup.is_ok() { cleanup = released; }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => { let _ = values.release(value); Err(status) }
-        (Ok(value), Ok(())) => Ok(Some(value)),
-    }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, owners.into_iter().rev(), CleanupErrorPolicy::First, values,
+        |values, owner| values.release(owner),
+        |values, value| { let _ = values.release(value); },
+    ).map(Some)
 }
 
 /// Recognizes native XML properties without fetching or materializing a selection.

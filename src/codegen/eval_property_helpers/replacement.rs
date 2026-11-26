@@ -30,18 +30,22 @@ pub(super) fn emit_owned_slot_replacement(emitter: &mut Emitter, slot: &EvalProp
         );
     }
     let slot = payload.as_ref();
-    abi::emit_load_from_address(emitter, previous, object, slot.offset);
-    if slot.ty.codegen_repr() == PhpType::Str {
-        let (pointer, length) = abi::string_result_regs(emitter);
-        abi::emit_store_to_address(emitter, pointer, object, slot.offset);
-        abi::emit_store_to_address(emitter, length, object, slot.offset + 8);
-    } else {
-        abi::emit_store_to_address(emitter, result, object, slot.offset);
-        if !is_reference {
-            abi::emit_store_zero_to_address(emitter, object, slot.offset + 8);
-        }
-    }
-    abi::emit_reg_move(emitter, result, previous);
+    elephc_memoir::symbol_owners::emit_publish_owner(
+        emitter,
+        |emitter, previous| abi::emit_load_from_address(emitter, previous, object, slot.offset),
+        |emitter| {
+            if slot.ty.codegen_repr() == PhpType::Str {
+                let (pointer, length) = abi::string_result_regs(emitter);
+                abi::emit_store_to_address(emitter, pointer, object, slot.offset);
+                abi::emit_store_to_address(emitter, length, object, slot.offset + 8);
+            } else {
+                abi::emit_store_to_address(emitter, result, object, slot.offset);
+                if !is_reference {
+                    abi::emit_store_zero_to_address(emitter, object, slot.offset + 8);
+                }
+            }
+        },
+    );
     abi::emit_call_label(emitter, "__rt_decref_any");
 }
 

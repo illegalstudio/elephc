@@ -385,10 +385,8 @@ fn retire_name_source(
 pub(super) fn release_receivers(
     operands: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for operand in operands.into_iter().rev() {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, release_in_order};
+    release_in_order(operands.into_iter().rev(), CleanupErrorPolicy::First, |operand| {
+        eval_release_value(context, values, operand)
+    })
 }

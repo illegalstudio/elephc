@@ -448,8 +448,12 @@ fn emit_direct_store_static_property_result(
         if let Some(done) = done { ctx.emitter.label(&done); }
         return Ok(());
     }
-    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
-    clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+    abi::emit_store_result_to_symbol_then(
+        ctx.emitter, &slot.symbol, &slot.php_type, release_previous,
+        |emitter| clear_uninitialized_marker_after_static_store(
+            emitter, &slot.symbol, &slot.php_type,
+        ),
+    );
     Ok(())
 }
 
@@ -663,12 +667,12 @@ fn branch_static_property_slot(
 
 /// Clears the typed-property high word after a successful static property store.
 fn clear_uninitialized_marker_after_static_store(
-    ctx: &mut FunctionContext<'_>,
+    emitter: &mut crate::codegen::emit::Emitter,
     symbol: &str,
     ty: &PhpType,
 ) {
     if !matches!(ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
-        abi::emit_store_zero_to_symbol(ctx.emitter, symbol, 8);
+        abi::emit_store_zero_to_symbol(emitter, symbol, 8);
     }
 }
 

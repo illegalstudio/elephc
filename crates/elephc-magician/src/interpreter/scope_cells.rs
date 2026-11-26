@@ -299,18 +299,29 @@ pub(in crate::interpreter) fn finish_activation_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut cleanup = Ok(());
-    for value in scope.drain_owned_cells() {
-        if let Err(status) = eval_release_value(context, values, value) {
-            cleanup = Err(status);
-        }
+    use elephc_memoir::runtime_owners::{CleanupErrorPolicy, finish_owner_cleanup};
+    finish_owner_cleanup(
+        result, scope.drain_owned_cells(), CleanupErrorPolicy::Last, &mut (context, values),
+        |(context, values), value| eval_release_value(context, &mut **values, value),
+        |(context, values), value| { let _ = eval_release_value(context, &mut **values, value); },
+    )
+}
+
+/// Retires every displaced scope owner while exposing the remaining leases to the collector.
+pub(in crate::interpreter) fn retire_replaced_scope_cells(
+    replaced: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{StagedRuntimeOwners, with_runtime_owners};
+    match replaced.as_slice() {
+        [] => return Ok(()),
+        [cell] => return eval_release_value(context, values, *cell),
+        _ => {}
     }
-    match (result, cleanup) {
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-        (Err(status), _) => Err(status),
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let owners = StagedRuntimeOwners::default();
+    for cell in replaced { owners.stage(cell); }
+    with_runtime_owners(&owners, || owners.release(Ok(()), |cell| {
+        eval_release_value(context, values, cell)
+    }))
 }

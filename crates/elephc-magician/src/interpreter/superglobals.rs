@@ -82,9 +82,8 @@ pub(in crate::interpreter) fn seed_named_cli_superglobals(
             continue;
         }
         let value = eval_cli_superglobal_value(name, values)?;
-        for replaced in set_owned_scope_cell(context, scope, (*name).to_string(), value, values)? {
-            eval_release_value(context, values, replaced)?;
-        }
+        let replaced = set_owned_scope_cell(context, scope, (*name).to_string(), value, values)?;
+        super::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
     }
     Ok(())
 }

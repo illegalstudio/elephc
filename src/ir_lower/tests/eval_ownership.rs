@@ -385,9 +385,8 @@ echo widenAfterOpaqueEval('return null; // ' . $argc, $argc > 1);
     let stored = function.value(function.instructions[store].operands[0]).unwrap();
     assert_eq!(stored.php_type.codegen_repr(), crate::types::PhpType::Int, "{target}");
     assert!(eval < store, "{target}: the local is first assigned after eval");
-    assert_eq!(function.instructions[eval + 1..store].iter().filter(|inst| {
-        inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
-    }).count(), 1, "{target}: deferred retirement must survive until final slot typing");
+    assert!(function.instructions[store].replaces_local_owner(),
+        "{target}: deferred retirement must survive until final slot typing");
     crate::codegen::generate_user_asm_from_ir(&module, false, false)
         .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }
@@ -438,7 +437,7 @@ fn process_local_first_writes_preserve_entry_initialization_on_all_targets() {
             let slot = Some(Immediate::LocalSlot(local.id));
             let store = main.instructions.iter().position(|inst| inst.op == Op::StoreLocal && inst.immediate == slot).unwrap();
             if Ownership::php_type_needs_lifetime_tracking(&local.php_type) {
-                assert!(main.instructions[..store].iter().any(|inst| inst.op == Op::ReleaseLocalSlot && inst.immediate == slot),
+                assert!(main.instructions[store].replaces_local_owner(),
                     "{target}: {statement} must retire the entry-point owner");
             }
             let value = main.value(main.instructions[store].operands[0]).unwrap();

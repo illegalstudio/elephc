@@ -385,10 +385,7 @@ fn store_into(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let replaced = set_owned_scope_cell(context, scope, name.to_string(), value, values)?;
-    for cell in replaced {
-        eval_release_value(context, values, cell)?;
-    }
-    Ok(())
+    crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)
 }
 
 /// Borrows the scope this frame reads and writes.

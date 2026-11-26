@@ -390,9 +390,7 @@ pub(in crate::interpreter) fn execute_stmt(
                     return Err(status);
                 }
             };
-            for replaced in replaced {
-                eval_release_value(context, values, replaced)?;
-            }
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
             if let Some(cell) = visible_scope_cell(context, scope, name) {
                 if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
             }
@@ -400,15 +398,8 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::IncDecVar { name, increment } => {
@@ -426,15 +417,8 @@ pub(in crate::interpreter) fn execute_stmt(
                 }
             };
             eval_release_value(context, values, current)?;
-            for replaced in set_owned_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                values,
-            )? {
-                eval_release_value(context, values, replaced)?;
-            }
+            let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+            crate::interpreter::scope_cells::retire_replaced_scope_cells(replaced, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Switch { expr, cases } => {

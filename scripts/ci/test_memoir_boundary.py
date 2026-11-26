@@ -305,6 +305,18 @@ class MigratedSourceContractTests(unittest.TestCase):
         }
         self.assertTrue(witnesses <= locations)
 
+    def test_owner_publication_and_shutdown_consumers_are_guarded(self):
+        """Require both native shutdown routes and Magician's scope cleanup to delegate."""
+        for path, helper in {
+            "src/codegen/frame.rs": "abi::emit_drain_static_owner(",
+            "src/codegen/web.rs": "abi::emit_drain_static_owner(",
+            "src/codegen/web/application/shutdown.rs": "abi::emit_drain_static_owner(",
+            "src/codegen/lower_inst/objects/property_stores.rs": "symbol_owners::emit_publish_address_owner(",
+            "crates/elephc-magician/src/interpreter/scope_cells.rs": "finish_owner_cleanup(",
+        }.items():
+            with self.subTest(path=path):
+                self.assertIn(helper, MIGRATED_SOURCE_CONTRACTS[path]["required"])
+
 
 class ArchiveBoundaryTests(unittest.TestCase):
     """Distinguish linked Rust runtime functions from compiler emitters."""

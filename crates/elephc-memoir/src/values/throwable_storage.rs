@@ -102,6 +102,16 @@ pub fn emit_default_code(emitter: &mut impl TargetAbi, payload: &str) {
     emitter.emit_store_zero_to_address(payload, CODE);
 }
 
+/// Stores the normalized integer code in a Throwable payload.
+pub fn emit_store_code(emitter: &mut impl TargetAbi, payload: &str, code: &str) {
+    emitter.emit_store_to_address(code, payload, CODE);
+}
+
+/// Publishes the already-retained previous owner in the constructor's payload.
+pub fn emit_store_previous(emitter: &mut impl TargetAbi, payload: &str, previous: &str) {
+    emitter.emit_store_to_address(previous, payload, PREVIOUS);
+}
+
 /// Detaches the default message and previous owners before constructor initialization.
 pub fn emit_release_constructor_defaults(emitter: &mut impl Emitter, object_frame_offset: FrameOffset) {
     let object = emitter.symbol_scratch_reg();
