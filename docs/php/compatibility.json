@@ -1742,6 +1742,14 @@
   "newer_than_baseline": {
     "classes": [
       {
+        "name": "Openssl\\OpensslException",
+        "since": "8.6"
+      },
+      {
+        "name": "Openssl\\Psk",
+        "since": "8.6"
+      },
+      {
         "name": "SortDirection",
         "since": "8.6"
       },

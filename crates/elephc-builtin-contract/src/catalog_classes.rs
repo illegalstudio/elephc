@@ -217,6 +217,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("Override", "override", Class, Core, Prelude, since: Php83),
     class!("ParentIterator", "parentiterator", Class, Spl, CheckerInjected),
     class!("ParseError", "parseerror", Class, Core, CheckerInjected),
+    class!("Openssl\\OpensslException", "openssl\\opensslexception", Class, Openssl, Prelude, since: Php86),
+    class!("Openssl\\Psk", "openssl\\psk", Class, Openssl, Prelude, since: Php86),
     class!("Pcntl\\QosClass", "pcntl\\qosclass", Enum, Pcntl, CheckerInjected, since: Php84, targets: &["macos-aarch64"]),
     class!("PDO", "pdo", Class, Pdo, Prelude),
     class!("Pdo\\Dblib", "pdo\\dblib", Class, PdoDblib, Prelude, since: Php84),

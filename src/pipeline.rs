@@ -613,6 +613,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
+    let ast = crate::openssl_prelude::inject_if_used(
+        ast,
+        with_crates.contains("openssl"),
+        &mut prelude_inventory,
+    );
     let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,

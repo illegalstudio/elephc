@@ -2720,6 +2720,42 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "openssl",
+      "name": "Openssl\\OpensslException",
+      "php_manual": null,
+      "since": "8.6"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "openssl",
+      "name": "Openssl\\Psk",
+      "php_manual": null,
+      "since": "8.6"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },

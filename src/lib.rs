@@ -51,6 +51,7 @@ mod progress;
 pub mod bcmath_prelude;
 /// PHP 8.6 `Time\Duration` and `Time\TimeException` standard-library prelude injection.
 pub mod time_prelude;
+pub mod openssl_prelude;
 /// PHP 8.6 mixed-operand `clamp()` prelude helper.
 pub mod clamp_prelude;
 /// PHP 8.6 declaration-time constructor/destructor deprecations.

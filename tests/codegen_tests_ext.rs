@@ -77,6 +77,7 @@ mod codegen {
     mod fileinfo_stream_magic;
     mod gmp_phpt;
     mod gmp_php86;
+    mod openssl_php86;
     mod gmp_eval;
     mod gmp_class;
     mod gmp_math;
