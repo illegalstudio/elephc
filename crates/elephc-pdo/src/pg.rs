@@ -88,6 +88,8 @@ pub struct PgConn {
     pub notices: Arc<Mutex<VecDeque<String>>>,
     /// Default `PDO::ATTR_PREFETCH` state snapshotted by prepared statements.
     pub prefetch: bool,
+    /// Default `Pdo\Pgsql::ATTR_CHUNK_SIZE` snapshotted by prepared statements.
+    pub default_chunk_size: i64,
     /// Monotonic query generation used to invalidate an older unbuffered cursor
     /// when PostgreSQL starts another query on the same connection.
     query_generation: u64,
@@ -127,7 +129,12 @@ pub struct PgStmt {
     pub cursor: isize,
     /// Whether the query has been executed yet.
     pub executed: bool,
-    /// Whether this statement buffers its full result (`ATTR_PREFETCH != 0`).
+    /// The statement's resolved `PDO::ATTR_PREFETCH` preference.
+    prefetch: bool,
+    /// `Pdo\Pgsql::ATTR_CHUNK_SIZE` for this statement; `0` disables chunking.
+    chunk_size: i64,
+    /// Whether this statement buffers its full result (`ATTR_PREFETCH != 0`
+    /// and no chunk size is active).
     pub buffered: bool,
     /// Query generation assigned when an unbuffered execution starts.
     query_generation: u64,
@@ -1934,6 +1941,7 @@ impl PgConn {
             sqlstate: "00000".to_string(),
             notices,
             prefetch: true,
+            default_chunk_size: 0,
             query_generation: 0,
             active_stream: None,
             next_stream_id: 0,
@@ -1942,9 +1950,24 @@ impl PgConn {
     }
 
     /// Sets the default PostgreSQL prefetch/buffering mode for future statements.
+    ///
+    /// A connection-level `PDO::ATTR_PREFETCH` also clears the default chunk
+    /// size, matching php-src's `chunk_size_prefetch.phpt` resolution.
     pub fn set_prefetch(&mut self, prefetch: bool) -> i64 {
         self.prefetch = prefetch;
+        self.default_chunk_size = 0;
         1
+    }
+
+    /// Sets the default PostgreSQL chunk size for future statements.
+    pub fn set_chunk_size(&mut self, size: i64) -> i64 {
+        self.default_chunk_size = size;
+        1
+    }
+
+    /// Returns the default PostgreSQL chunk size for future statements.
+    pub fn get_chunk_size(&self) -> i64 {
+        self.default_chunk_size
     }
 
     /// Starts a new query generation and returns the generation an unbuffered
@@ -2633,6 +2656,8 @@ impl PgConn {
                 rows: Vec::new(),
                 cursor: -1,
                 executed: false,
+                prefetch: self.prefetch,
+                chunk_size: 0,
                 buffered: self.prefetch,
                 query_generation: 0,
                 stream_id: None,
@@ -2682,6 +2707,8 @@ impl PgConn {
                     rows: Vec::new(),
                     cursor: -1,
                     executed: false,
+                    prefetch: self.prefetch,
+                    chunk_size: 0,
                     buffered: self.prefetch,
                     query_generation: 0,
                     stream_id: None,
@@ -2731,8 +2758,25 @@ impl PgStmt {
         if self.executed {
             return 0;
         }
-        self.buffered = prefetch;
+        self.prefetch = prefetch;
+        self.buffered = self.prefetch && self.chunk_size == 0;
         1
+    }
+
+    /// Sets this statement's chunk size before its first execution. A positive
+    /// chunk size wins over a buffering `PDO::ATTR_PREFETCH`.
+    pub fn set_chunk_size(&mut self, size: i64) -> i64 {
+        if self.executed {
+            return 0;
+        }
+        self.chunk_size = size;
+        self.buffered = self.prefetch && size == 0;
+        1
+    }
+
+    /// Returns this statement's effective chunk size (`0` disables chunking).
+    pub fn get_chunk_size(&self) -> i64 {
+        self.chunk_size
     }
 
     /// Resolves a named placeholder to its 1-based index (0 if unknown). The
@@ -2944,25 +2988,46 @@ impl PgStmt {
             }
         }
         if let Some(stream_id) = self.stream_id {
-            return match conn.next_stream_row(stream_id) {
-                Ok(Some((columns, row))) => {
-                    if !columns.is_empty() {
-                        self.col_names = columns;
-                        self.col_tables = vec![String::new(); self.col_names.len()];
-                    }
-                    self.rows.clear();
-                    self.rows.push(row);
-                    self.cursor = 0;
-                    1
-                }
-                Ok(None) => {
-                    self.rows.clear();
-                    self.cursor = 0;
-                    self.stream_id = None;
-                    0
-                }
-                Err(code) => code,
+            if !self.rows.is_empty() && (self.cursor as usize) + 1 < self.rows.len() {
+                self.cursor += 1;
+                return 1;
+            }
+            let target = if self.chunk_size > 0 {
+                self.chunk_size as usize
+            } else {
+                1
             };
+            let mut chunk = Vec::new();
+            let mut columns_update: Option<Vec<String>> = None;
+            while chunk.len() < target {
+                match conn.next_stream_row(stream_id) {
+                    Ok(Some((columns, row))) => {
+                        if !columns.is_empty() {
+                            columns_update = Some(columns);
+                        }
+                        chunk.push(row);
+                    }
+                    Ok(None) => {
+                        self.stream_id = None;
+                        break;
+                    }
+                    Err(code) => return code,
+                }
+            }
+            if chunk.is_empty() {
+                self.rows.clear();
+                self.cursor = 0;
+                conn.changes = 0;
+                return 0;
+            }
+            if let Some(columns) = columns_update {
+                self.col_names = columns;
+                self.col_tables = vec![String::new(); self.col_names.len()];
+            }
+            self.rows = chunk;
+            self.cursor = 0;
+            conn.changes = self.rows.len() as i64;
+            return 1;
         }
         self.cursor += 1;
         if (self.cursor as usize) < self.rows.len() {

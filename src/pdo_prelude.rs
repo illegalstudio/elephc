@@ -388,6 +388,11 @@ extern "elephc_pdo" {
     // v42: PostgreSQL connection default and prepare-local ATTR_PREFETCH.
     function elephc_pdo_set_prefetch(int $conn, int $enabled): int;
     function elephc_pdo_stmt_set_prefetch(int $stmt, int $enabled): int;
+    // v58: Pdo\Pgsql::ATTR_CHUNK_SIZE connection default and statement override.
+    function elephc_pdo_set_chunk_size(int $conn, int $size): int;
+    function elephc_pdo_get_chunk_size(int $conn): int;
+    function elephc_pdo_stmt_set_chunk_size(int $stmt, int $size): int;
+    function elephc_pdo_stmt_get_chunk_size(int $stmt): int;
     // v47: PHP 8.5+ maps ATTR_PREFETCH=0 onto lazy simple-query consumption too.
     function elephc_pdo_stmt_enable_simple_streaming(int $stmt): int;
     // v23: per-column PostgreSQL type metadata for getColumnMeta (P2-k). Both are
@@ -2038,6 +2043,12 @@ class PDO {
             }
         } elseif (str_starts_with($_dsn, "pgsql:") && isset($this->attributes[1])) {
             elephc_pdo_set_prefetch($this->conn, $this->attrBoolValue($this->attributes[1]) ? 1 : 0);
+        } elseif (str_starts_with($_dsn, "pgsql:") && isset($this->attributes[1002])) {
+            $_constructorChunkSize = $this->attrIntValue($this->attributes[1002]);
+            if ($_constructorChunkSize < 0 || $_constructorChunkSize > 2147483647) {
+                throw new ValueError("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647");
+            }
+            elephc_pdo_set_chunk_size($this->conn, $_constructorChunkSize);
         } elseif (str_starts_with($_dsn, "firebird:")) {
             foreach ([0, 14, 1003, 1007] as $_firebirdIntAttribute) {
                 if (isset($this->attributes[$_firebirdIntAttribute])) {
@@ -2376,6 +2387,13 @@ class PDO {
 
     public function setAttribute(int $attribute, $value): bool {
         $_driver = elephc_pdo_driver_name($this->conn);
+        if ($attribute == 1002 && $_driver === "pgsql") {
+            $_attrChunkSize = $this->attrIntValue($value);
+            if ($_attrChunkSize < 0 || $_attrChunkSize > 2147483647) {
+                throw new ValueError("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647");
+            }
+            return elephc_pdo_set_chunk_size($this->conn, $_attrChunkSize) === 1;
+        }
         if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci" || $_driver === "cubrid")) {
             $_autocommit = $this->attrBoolValue($value);
             if (elephc_pdo_set_autocommit($this->conn, $_autocommit ? 1 : 0) !== 1) {
@@ -2564,6 +2582,9 @@ class PDO {
     protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
+        if ($attribute == 1002 && elephc_pdo_driver_name($this->conn) === "pgsql") {
+            return elephc_pdo_get_chunk_size($this->conn);
+        }
         if (elephc_pdo_driver_name($this->conn) === "sqlsrv") {
             if ($attribute == 5) {
                 return [
@@ -2791,6 +2812,7 @@ class PDO {
         $_disable = $this->disablePrepares;
         $_scrollable = false;
         $_prefetchOverride = -2;
+        $_chunkOverride = -1;
         if (array_key_exists(10, $options)) {
             $_cursorMode = (int) $options[10];
             if ($_driver === "sqlite" && $_cursorMode !== 0) {
@@ -2810,6 +2832,12 @@ class PDO {
         }
         if ($_driver === "pgsql" && isset($options[1000])) {
             $_disable = $this->attrBoolValue($options[1000]);
+        }
+        if ($_driver === "pgsql" && array_key_exists(1002, $options)) {
+            $_chunkOverride = $this->attrIntValue($options[1002]);
+            if ($_chunkOverride < 0 || $_chunkOverride > 2147483647) {
+                throw new ValueError("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647");
+            }
         }
         if ($_driver === "mysql" && isset($options[1004])) {
             $_emulated = $this->attrBoolValue($options[1004]);
@@ -2873,6 +2901,19 @@ class PDO {
         }
         if ($_prefetchOverride != -2) {
             elephc_pdo_stmt_set_prefetch($_handle, $_prefetchOverride);
+        }
+        if ($_driver === "pgsql") {
+            $_stmtChunkSize = $_chunkOverride;
+            if ($_stmtChunkSize < 0) {
+                $_stmtChunkSize = $_prefetchOverride !== -2 ? 0 : elephc_pdo_get_chunk_size($this->conn);
+            }
+            if ($_scrollable) {
+                if ($_chunkOverride > 0) {
+                    throw new ValueError("Pdo\\Pgsql::ATTR_CHUNK_SIZE cannot be combined with PDO::ATTR_CURSOR set to PDO::CURSOR_SCROLL");
+                }
+                $_stmtChunkSize = 0;
+            }
+            elephc_pdo_stmt_set_chunk_size($_handle, $_stmtChunkSize);
         }
         // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --
         if ($_driver === "pgsql") {
@@ -4017,6 +4058,19 @@ class PDOStatement implements IteratorAggregate {
         return "object";
     }
 
+    private function attrIntValue(mixed $value): int {
+        if (is_int($value) || is_bool($value)) {
+            return (int) $value;
+        }
+        if (is_string($value)) {
+            $_sval = (string) $value;
+            if (is_numeric($_sval) && strpos($_sval, ".") === false && strpos($_sval, "e") === false && strpos($_sval, "E") === false) {
+                return (int) $_sval;
+            }
+        }
+        throw new TypeError("Attribute value must be of type int for selected attribute, " . $this->argValueTypeName($value) . " given");
+    }
+
     private function copyConstructorArgs(mixed $source): array {
         $_copy = [];
         foreach ((array) $source as $_key => $_value) {
@@ -4918,6 +4972,9 @@ class PDOStatement implements IteratorAggregate {
         }
         if ($_rc > 0) {
             $this->updateBoundColumns();
+            if (elephc_pdo_driver_name($this->conn) === "pgsql") {
+                $this->rowCount = elephc_pdo_changes($this->conn);
+            }
         }
         return $_rc;
     }
@@ -5628,6 +5685,9 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function getAttribute(int $name): mixed {
+        if ($name == 1002 && elephc_pdo_driver_name($this->conn) === "pgsql") {
+            return elephc_pdo_stmt_get_chunk_size($this->stmt);
+        }
         if (elephc_pdo_driver_name($this->conn) === "sqlsrv"
             && ($name == 10 || ($name >= 1000 && $name <= 1009))) {
             $_sqlsrvValue = elephc_pdo_sqlsrv_stmt_attribute($this->stmt, $name);
@@ -5686,6 +5746,13 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function setAttribute(int $attribute, mixed $value): bool {
+        if ($attribute == 1002 && elephc_pdo_driver_name($this->conn) === "pgsql") {
+            $_stmtChunkSize = $this->attrIntValue($value);
+            if ($_stmtChunkSize < 0 || $_stmtChunkSize > 2147483647) {
+                throw new ValueError("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647");
+            }
+            return elephc_pdo_stmt_set_chunk_size($this->stmt, $_stmtChunkSize) === 1;
+        }
         if (elephc_pdo_driver_name($this->conn) === "sqlsrv") {
             if ($attribute == 1002 || $attribute == 10 || $attribute == 1003) {
                 $this->failCode("IMSSP", "The attribute may only be set when preparing a statement.");
@@ -6611,6 +6678,9 @@ namespace Pdo {
         // connection-transaction-status enum.
         const ATTR_DISABLE_PREPARES = 1000;
         const ATTR_RESULT_MEMORY_SIZE = 1001;
+        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE begin --
+        const ATTR_CHUNK_SIZE = 1002;
+        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE end --
         const TRANSACTION_IDLE = 0;
         const TRANSACTION_ACTIVE = 1;
         const TRANSACTION_INTRANS = 2;
@@ -6994,6 +7064,11 @@ fn prelude_source_for_version(
         let mut source = PDO_PRELUDE_SRC.to_owned();
         remove_version_block(
             &mut source,
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE begin --",
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE end --",
+        );
+        remove_version_block(
+            &mut source,
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --",
         );
@@ -7003,6 +7078,11 @@ fn prelude_source_for_version(
 
     if php_version < PhpVersion::Php84 {
         let mut source = PDO_PRELUDE_SRC.to_owned();
+        remove_version_block(
+            &mut source,
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE begin --",
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE end --",
+        );
         remove_version_block(
             &mut source,
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
@@ -7034,7 +7114,15 @@ fn prelude_source_for_version(
         return Cow::Owned(source);
     }
 
-    let mut source = PDO_PRELUDE_SRC
+    let mut source = PDO_PRELUDE_SRC.to_owned();
+    if php_version < PhpVersion::Php86 {
+        remove_version_block(
+            &mut source,
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE begin --",
+            "        // -- elephc PHP >= 8.6 PDO_Pgsql ATTR_CHUNK_SIZE end --",
+        );
+    }
+    let mut source = source
         .replace("const FETCH_GROUP = 0x10000;", "const FETCH_GROUP = 0x20;")
         .replace("const FETCH_UNIQUE = 0x30000;", "const FETCH_UNIQUE = 0x40;")
         .replace("const FETCH_CLASSTYPE = 0x40000;", "const FETCH_CLASSTYPE = 0x80;")

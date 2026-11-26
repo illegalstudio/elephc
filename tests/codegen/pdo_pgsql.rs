@@ -85,6 +85,17 @@ try {
     assert_eq!(out, "missing-cache-blocked");
 }
 
+/// `Pdo\Pgsql::ATTR_CHUNK_SIZE` is a PHP 8.6 class constant, so static access
+/// proves the profile-gated declaration is present.
+#[test]
+fn test_pdo_pgsql_attr_chunk_size_constant_php86() {
+    let out = compile_and_run_with_php_version(
+        "<?php echo Pdo\\Pgsql::ATTR_CHUNK_SIZE;",
+        PhpVersion::Php86,
+    );
+    assert_eq!(out, "1002");
+}
+
 /// Verifies PHP 8.4's nullable notice callback signature without requiring a live server.
 #[test]
 fn test_pdo_pgsql_notice_callback_accepts_null() {
@@ -225,7 +236,7 @@ $stillReadable = $buffered->fetchColumn();
 echo $first . ":" . $rowCount . ":" . $closed . ":" . $bufferedCount . ":" . $stillReadable;
 "#,
     );
-    assert_eq!(out, "1:0:closed:2:1");
+    assert_eq!(out, "1:1:closed:2:1");
 }
 
 /// PHP 8.5 extends ATTR_PREFETCH=0 to emulated/simple-protocol statements. Only
@@ -1129,4 +1140,319 @@ echo $trueId . ":" . $falseId;
 "#,
     ));
     assert_eq!(out, "1:2");
+}
+
+/// PHP 8.6's `Pdo\Pgsql::ATTR_CHUNK_SIZE` groups a result set into row chunks
+/// and reports the active chunk through `rowCount()` while fetching.
+#[test]
+#[ignore]
+fn test_pgsql_attr_chunk_size_chunks_rows() {
+    let out = compile_and_run_with_php_version(
+        &pg_program(
+            r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+function run_chunk(PDO $db, string $label, array $options): void {
+    $stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", $options);
+    $stmt->execute();
+    $values = [];
+    $sizes = [];
+    while (($row = $stmt->fetch(PDO::FETCH_NUM))) {
+        $values[] = $row[0];
+        $sizes[] = $stmt->rowCount();
+    }
+    echo $label, "=", implode(",", $values), "|", implode(",", $sizes), "\n";
+}
+run_chunk($db, "default", []);
+run_chunk($db, "prefetch0", [PDO::ATTR_PREFETCH => 0]);
+run_chunk($db, "chunk1", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 1]);
+run_chunk($db, "chunk4", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 4]);
+run_chunk($db, "chunk5", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 5]);
+run_chunk($db, "chunk99", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 99]);
+"#,
+        ),
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "default=1,2,3,4,5,6,7,8,9,10|10,10,10,10,10,10,10,10,10,10\n\
+prefetch0=1,2,3,4,5,6,7,8,9,10|1,1,1,1,1,1,1,1,1,1\n\
+chunk1=1,2,3,4,5,6,7,8,9,10|1,1,1,1,1,1,1,1,1,1\n\
+chunk4=1,2,3,4,5,6,7,8,9,10|4,4,4,4,4,4,4,4,2,2\n\
+chunk5=1,2,3,4,5,6,7,8,9,10|5,5,5,5,5,5,5,5,5,5\n\
+chunk99=1,2,3,4,5,6,7,8,9,10|10,10,10,10,10,10,10,10,10,10\n"
+    );
+}
+
+/// Resolves the connection and statement `ATTR_CHUNK_SIZE` precedence exactly as
+/// php-src does, including the prefetch/chunk interaction and opt-out.
+#[test]
+#[ignore]
+fn test_pgsql_attr_chunk_size_resolution() {
+    let out = compile_and_run_with_php_version(
+        &pg_program(
+            r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+function report(PDO $db, mixed $stmt): void {
+    $stmt->fetch();
+    printf(
+        "connection: %s, statement: %s, rows delivered at once: %d\n",
+        var_export($db->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE), true),
+        var_export($stmt->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE), true),
+        $stmt->rowCount(),
+    );
+}
+echo "=== nothing set ===\n";
+report($db, $db->query("SELECT * FROM generate_series(1, 10)"));
+echo "=== query() inherits a lazy ATTR_PREFETCH ===\n";
+$db->setAttribute(PDO::ATTR_PREFETCH, 0);
+report($db, $db->query("SELECT * FROM generate_series(1, 10)"));
+echo "=== the statement overrides an inherited ATTR_PREFETCH ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [PDO::ATTR_PREFETCH => 1]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+$db->setAttribute(PDO::ATTR_PREFETCH, 1);
+echo "=== set on the statement only ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 4]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== set on the connection ===\n";
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 3);
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)");
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== query() inherits the connection ===\n";
+report($db, $db->query("SELECT * FROM generate_series(1, 10)"));
+echo "=== the statement overrides the connection ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 6]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== a chunk size wins over a buffering ATTR_PREFETCH ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)",
+    [PDO::ATTR_PREFETCH => 1, Pdo\Pgsql::ATTR_CHUNK_SIZE => 2]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== the statement asks to buffer ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [PDO::ATTR_PREFETCH => 1]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== the statement asks for lazy ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [PDO::ATTR_PREFETCH => 0]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== a statement can opt out of an inherited chunk size ===\n";
+$stmt = $db->prepare("SELECT * FROM generate_series(1, 10)", [Pdo\Pgsql::ATTR_CHUNK_SIZE => 0]);
+$stmt->execute();
+report($db, $stmt);
+unset($stmt);
+echo "=== back to 0 ===\n";
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 0);
+report($db, $db->query("SELECT * FROM generate_series(1, 10)"));
+"#,
+        ),
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "=== nothing set ===\n\
+  connection: 0, statement: 0, rows delivered at once: 10\n\
+=== query() inherits a lazy ATTR_PREFETCH ===\n\
+  connection: 0, statement: 0, rows delivered at once: 1\n\
+=== the statement overrides an inherited ATTR_PREFETCH ===\n\
+  connection: 0, statement: 0, rows delivered at once: 10\n\
+=== set on the statement only ===\n\
+  connection: 0, statement: 4, rows delivered at once: 4\n\
+=== set on the connection ===\n\
+  connection: 3, statement: 3, rows delivered at once: 3\n\
+=== query() inherits the connection ===\n\
+  connection: 3, statement: 3, rows delivered at once: 3\n\
+=== the statement overrides the connection ===\n\
+  connection: 3, statement: 6, rows delivered at once: 6\n\
+=== a chunk size wins over a buffering ATTR_PREFETCH ===\n\
+  connection: 3, statement: 2, rows delivered at once: 2\n\
+=== the statement asks to buffer ===\n\
+  connection: 3, statement: 0, rows delivered at once: 10\n\
+=== the statement asks for lazy ===\n\
+  connection: 3, statement: 0, rows delivered at once: 1\n\
+=== a statement can opt out of an inherited chunk size ===\n\
+  connection: 3, statement: 0, rows delivered at once: 10\n\
+=== back to 0 ===\n\
+  connection: 0, statement: 0, rows delivered at once: 10\n"
+    );
+}
+
+/// Rejects invalid chunk sizes with php-src's `ValueError`/`TypeError` text and
+/// refuses a statement chunk combined with a scrollable cursor.
+#[test]
+#[ignore]
+fn test_pgsql_attr_chunk_size_errors() {
+    let out = compile_and_run_with_php_version(
+        &pg_program(
+            r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+try {
+    $db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, -1);
+} catch (ValueError $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+echo "kept: "; var_dump($db->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE));
+try {
+    $db->prepare("SELECT 1", [Pdo\Pgsql::ATTR_CHUNK_SIZE => -42]);
+} catch (ValueError $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+try {
+    new PDO((string) getenv("ELEPHC_PG_DSN"), null, null, [Pdo\Pgsql::ATTR_CHUNK_SIZE => -1]);
+} catch (ValueError $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+foreach ([1.5, "8", [8], null, new stdClass()] as $value) {
+    try {
+        $db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, $value);
+        printf("%-8s accepted as %d\n", get_debug_type($value), $db->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE));
+    } catch (TypeError $e) {
+        printf("%-8s %s: %s\n", get_debug_type($value), $e::class, $e->getMessage());
+    }
+}
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 0);
+try {
+    $db->prepare("SELECT 1", [PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL, Pdo\Pgsql::ATTR_CHUNK_SIZE => 4]);
+} catch (ValueError $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 4);
+$stmt = $db->prepare("SELECT 1", [PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL]);
+$stmt->execute();
+echo "cursor: ", $stmt->fetchColumn(), "\n";
+unset($stmt);
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 0);
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 2147483647);
+echo "max: "; var_dump($db->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE));
+try { $db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 2147483648); }
+catch (ValueError $e) { echo 'set: ', $e::class, ': ', $e->getMessage(), "\n"; }
+try { $db->prepare("SELECT 1", [Pdo\Pgsql::ATTR_CHUNK_SIZE => PHP_INT_MAX]); }
+catch (ValueError $e) { echo 'prepare: ', $e::class, ': ', $e->getMessage(), "\n"; }
+echo "usable: ", $db->query("SELECT 1")->fetchColumn(), "\n";
+"#,
+        ),
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647\n\
+kept: int(0)\n\
+ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647\n\
+ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647\n\
+float    TypeError: Attribute value must be of type int for selected attribute, float given\n\
+string   accepted as 8\n\
+array    TypeError: Attribute value must be of type int for selected attribute, array given\n\
+null     TypeError: Attribute value must be of type int for selected attribute, null given\n\
+stdClass TypeError: Attribute value must be of type int for selected attribute, object given\n\
+ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE cannot be combined with PDO::ATTR_CURSOR set to PDO::CURSOR_SCROLL\n\
+cursor: 1\n\
+max: int(2147483647)\n\
+set: ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647\n\
+prepare: ValueError: Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647\n\
+usable: 1\n"
+    );
+}
+
+/// Fetches, fetches all, re-executes, and recovers after a chunked stream is
+/// invalidated by another query on the same connection.
+#[test]
+#[ignore]
+fn test_pgsql_attr_chunk_size_fetch_and_takeover() {
+    let out = compile_and_run_with_php_version(
+        &pg_program(
+            r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 3);
+$db->exec("CREATE TEMP TABLE t AS SELECT g AS n FROM generate_series(1, 10) g");
+function values(mixed $stmt): string {
+    $values = [];
+    while (($row = $stmt->fetch(PDO::FETCH_NUM))) { $values[] = $row[0]; }
+    return implode(",", $values);
+}
+echo "fetch: ", values($db->query("SELECT n FROM t ORDER BY n")), "\n";
+$all = $db->query("SELECT n FROM t ORDER BY n")->fetchAll(PDO::FETCH_NUM);
+$allValues = [];
+foreach ($all as $row) { $allValues[] = $row[0]; }
+echo "all: ", implode(",", $allValues), "\n";
+echo "empty: "; var_dump($db->query("SELECT n FROM t WHERE false")->fetch());
+echo "small: ", values($db->query("SELECT n FROM t WHERE n <= 2 ORDER BY n")), "\n";
+$stmt = $db->prepare("SELECT n FROM t WHERE n <= ? ORDER BY n");
+$stmt->execute([5]);
+echo "drained: ", values($stmt), "\n";
+$stmt->execute([10]);
+$stmt->fetch();
+$stmt->execute([4]);
+echo "reexec: ", values($stmt), "\n";
+unset($stmt);
+$first = $db->prepare("SELECT * FROM generate_series(1, 10)");
+$first->execute();
+echo "first: ", $first->fetch(PDO::FETCH_NUM)[0], "\n";
+$db->query("SELECT * FROM generate_series(1, 10)")->fetch();
+$rest = [];
+while (($row = $first->fetch(PDO::FETCH_NUM))) { $rest[] = $row[0]; }
+echo "rest: ", var_export(implode(",", $rest), true), "\n";
+echo "code: ", $first->errorCode(), "\n";
+$db->beginTransaction();
+echo "txn: ", values($db->query("SELECT n FROM t WHERE n <= 7 ORDER BY n")), "\n";
+$db->commit();
+$db->exec("CREATE TEMP TABLE t2 (n int)");
+$dml = $db->prepare("INSERT INTO t2 SELECT n FROM t WHERE n <= 7");
+$dml->execute();
+echo "inserted: "; var_dump($dml->rowCount());
+"#,
+        ),
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "fetch: 1,2,3,4,5,6,7,8,9,10\n\
+all: 1,2,3,4,5,6,7,8,9,10\n\
+empty: bool(false)\n\
+small: 1,2\n\
+drained: 1,2,3,4,5\n\
+reexec: 1,2,3,4\n\
+first: 1\n\
+rest: ''\n\
+code: 00000\n\
+txn: 1,2,3,4,5,6,7\n\
+inserted: int(7)\n"
+    );
+}
+
+/// A connection-level `PDO::ATTR_PREFETCH` clears its `ATTR_CHUNK_SIZE`, as in
+/// php-src's `chunk_size_prefetch.phpt`.
+#[test]
+#[ignore]
+fn test_pgsql_attr_chunk_size_prefetch_replaces_it() {
+    let out = compile_and_run_with_php_version(
+        &pg_program(
+            r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+function report(PDO $db, int $prefetch): void {
+    $db->setAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE, 5);
+    $db->setAttribute(PDO::ATTR_PREFETCH, $prefetch);
+    $stmt = $db->query("SELECT * FROM generate_series(1, 10)");
+    $stmt->fetch();
+    printf("prefetch=%d: chunk=%d, rows=%d\n", $prefetch, $db->getAttribute(Pdo\Pgsql::ATTR_CHUNK_SIZE), $stmt->rowCount());
+}
+report($db, 1);
+report($db, 0);
+"#,
+        ),
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "prefetch=1: chunk=0, rows=10\nprefetch=0: chunk=0, rows=1\n"
+    );
 }

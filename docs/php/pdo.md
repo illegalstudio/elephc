@@ -470,6 +470,7 @@ relationship matches PHP.
 | `Pdo\Mysql::ATTR_SSL_KEY` / `ATTR_SSL_CERT` / `ATTR_SSL_CA` / `ATTR_SSL_VERIFY_SERVER_CERT` | Drive MySQL TLS (see the TLS section). |
 | `Pdo\Pgsql::ATTR_DISABLE_PREPARES` | Uses PostgreSQL's execute-only simple-query path, including multi-command SQL. |
 | `ATTR_PREFETCH` | PostgreSQL connection/prepare option controlling buffered cursor semantics. |
+| `Pdo\Pgsql::ATTR_CHUNK_SIZE` | PHP 8.6: groups a result set into chunks of N rows and reports the active chunk through `rowCount()`. Accepted at constructor, connection, prepare-option and statement scope; a positive value wins over a buffering `ATTR_PREFETCH`, `0` opts out, and a scrollable cursor rejects an explicit statement chunk. |
 | `ATTR_CURSOR` (prepare option) | PostgreSQL supports `CURSOR_SCROLL` and all `FETCH_ORI_*` movements. SQLite rejects non-forward cursors; MySQL remains forward-only. |
 | `ATTR_FETCH_TABLE_NAMES` | MySQL prefixes fetched column keys with the protocol table label; other drivers reject it. |
 
@@ -1329,6 +1330,12 @@ preserve source SQL evaluation order, and retain the rendered text for
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.
+- `Pdo\Pgsql::ATTR_CHUNK_SIZE` is resolved like php-src: the constructor and
+  connection `setAttribute()` set the default, prepare options and statement
+  `setAttribute()` override it, an explicit `ATTR_PREFETCH` suppresses inheritance
+  unless a statement chunk is also given, and `PDO::ATTR_PREFETCH` clears the
+  connection chunk. The driver groups rows client-side, so the feature does not
+  require libpq 17.
 - PDO_DBLIB's full 1000–1006 attribute range is implemented. Connection timeout is
   constructor-only; query timeout is write-only; version attributes are read-only;
   boolean value options are readable and writable, matching the driver's php-src hook.

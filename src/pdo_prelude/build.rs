@@ -1310,6 +1310,23 @@ fn pdo_setattribute() -> MethodBuilder {
         .body(vec![
             s_assign("_driver", e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")])),
             s_if(
+                e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(1002)), BinOp::And, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("pgsql"))),
+                vec![
+                    s_assign("_attrChunkSize", e_method_call(e_this(), "attrIntValue", vec![e_var("value")])),
+                    s_if(
+                        e_binop(e_binop(e_var("_attrChunkSize"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("_attrChunkSize"), BinOp::Gt, e_int(2147483647))),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_binop(e_call("elephc_pdo_set_chunk_size", vec![e_this_prop("conn"), e_var("_attrChunkSize")]), BinOp::StrictEq, e_int(1))),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(0)), BinOp::And, e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("_driver"), BinOp::StrictEq, e_str("mysql")), BinOp::Or, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("odbc"))), BinOp::Or, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("informix"))), BinOp::Or, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("ibm"))), BinOp::Or, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("oci"))), BinOp::Or, e_binop(e_var("_driver"), BinOp::StrictEq, e_str("cubrid")))),
                 vec![
                     s_assign("_autocommit", e_method_call(e_this(), "attrBoolValue", vec![e_var("value")])),
@@ -1547,6 +1564,14 @@ fn pdo_getattribute() -> MethodBuilder {
         .param("attribute", TypeExpr::Int)
         .returns(t_mixed())
         .body(vec![
+            s_if(
+                e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(1002)), BinOp::And, e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("pgsql"))),
+                vec![
+                    s_return(e_call("elephc_pdo_get_chunk_size", vec![e_this_prop("conn")])),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("sqlsrv")),
                 vec![
@@ -3343,6 +3368,41 @@ fn pdostatement_argvaluetypename() -> MethodBuilder {
         ])
 }
 
+/// `attrIntValue` — lifted out of `decl_class_pdostatement` so it builds in its own stack frame.
+fn pdostatement_attrintvalue() -> MethodBuilder {
+    method("attrIntValue")
+        .private()
+        .param("value", t_mixed())
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_if(
+                e_binop(e_call("is_int", vec![e_var("value")]), BinOp::Or, e_call("is_bool", vec![e_var("value")])),
+                vec![
+                    s_return(e_cast(CastType::Int, e_var("value"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_string", vec![e_var("value")]),
+                vec![
+                    s_assign("_sval", e_cast(CastType::String, e_var("value"))),
+                    s_if(
+                        e_binop(e_binop(e_binop(e_call("is_numeric", vec![e_var("_sval")]), BinOp::And, e_binop(e_call("strpos", vec![e_var("_sval"), e_str(".")]), BinOp::StrictEq, e_bool(false))), BinOp::And, e_binop(e_call("strpos", vec![e_var("_sval"), e_str("e")]), BinOp::StrictEq, e_bool(false))), BinOp::And, e_binop(e_call("strpos", vec![e_var("_sval"), e_str("E")]), BinOp::StrictEq, e_bool(false))),
+                        vec![
+                            s_return(e_cast(CastType::Int, e_var("_sval"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ],
+                vec![],
+                None,
+            ),
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("Attribute value must be of type int for selected attribute, "), BinOp::Concat, e_method_call(e_this(), "argValueTypeName", vec![e_var("value")])), BinOp::Concat, e_str(" given"))])),
+        ])
+}
+
 /// `copyConstructorArgs` — lifted out of `decl_class_pdostatement` so it builds in its own stack frame.
 fn pdostatement_copyconstructorargs() -> MethodBuilder {
     method("copyConstructorArgs")
@@ -4466,6 +4526,14 @@ fn pdostatement_stepcursor() -> MethodBuilder {
                 e_binop(e_var("_rc"), BinOp::Gt, e_int(0)),
                 vec![
                     s_expr(e_method_call(e_this(), "updateBoundColumns", vec![])),
+                    s_if(
+                        e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("pgsql")),
+                        vec![
+                            s_prop_assign(e_this(), "rowCount", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ],
                 vec![],
                 None,
@@ -4798,6 +4866,14 @@ fn pdostatement_getattribute() -> MethodBuilder {
         .returns(t_mixed())
         .body(vec![
             s_if(
+                e_binop(e_binop(e_var("name"), BinOp::Eq, e_int(1002)), BinOp::And, e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("pgsql"))),
+                vec![
+                    s_return(e_call("elephc_pdo_stmt_get_chunk_size", vec![e_this_prop("stmt")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("sqlsrv")), BinOp::And, e_binop(e_binop(e_var("name"), BinOp::Eq, e_int(10)), BinOp::Or, e_binop(e_binop(e_var("name"), BinOp::GtEq, e_int(1000)), BinOp::And, e_binop(e_var("name"), BinOp::LtEq, e_int(1009))))),
                 vec![
                     s_assign("_sqlsrvValue", e_call("elephc_pdo_sqlsrv_stmt_attribute", vec![e_this_prop("stmt"), e_var("name")])),
@@ -4893,6 +4969,23 @@ fn pdostatement_setattribute() -> MethodBuilder {
         .param("value", t_mixed())
         .returns(TypeExpr::Bool)
         .body(vec![
+            s_if(
+                e_binop(e_binop(e_var("attribute"), BinOp::Eq, e_int(1002)), BinOp::And, e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("pgsql"))),
+                vec![
+                    s_assign("_stmtChunkSize", e_method_call(e_this(), "attrIntValue", vec![e_var("value")])),
+                    s_if(
+                        e_binop(e_binop(e_var("_stmtChunkSize"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("_stmtChunkSize"), BinOp::Gt, e_int(2147483647))),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_binop(e_call("elephc_pdo_stmt_set_chunk_size", vec![e_this_prop("stmt"), e_var("_stmtChunkSize")]), BinOp::StrictEq, e_int(1))),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_call("elephc_pdo_driver_name", vec![e_this_prop("conn")]), BinOp::StrictEq, e_str("sqlsrv")),
                 vec![
@@ -7463,6 +7556,40 @@ fn decl_extern_elephc_pdo_stmt_set_prefetch() -> Stmt {
     extern_fn("elephc_pdo_stmt_set_prefetch", "elephc_pdo")
         .param("stmt", CType::Int)
         .param("enabled", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_pdo_set_chunk_size` — transcribed from the PHP form.
+fn decl_extern_elephc_pdo_set_chunk_size() -> Stmt {
+    extern_fn("elephc_pdo_set_chunk_size", "elephc_pdo")
+        .param("conn", CType::Int)
+        .param("size", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_pdo_get_chunk_size` — transcribed from the PHP form.
+fn decl_extern_elephc_pdo_get_chunk_size() -> Stmt {
+    extern_fn("elephc_pdo_get_chunk_size", "elephc_pdo")
+        .param("conn", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_pdo_stmt_set_chunk_size` — transcribed from the PHP form.
+fn decl_extern_elephc_pdo_stmt_set_chunk_size() -> Stmt {
+    extern_fn("elephc_pdo_stmt_set_chunk_size", "elephc_pdo")
+        .param("stmt", CType::Int)
+        .param("size", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_pdo_stmt_get_chunk_size` — transcribed from the PHP form.
+fn decl_extern_elephc_pdo_stmt_get_chunk_size() -> Stmt {
+    extern_fn("elephc_pdo_stmt_get_chunk_size", "elephc_pdo")
+        .param("stmt", CType::Int)
         .returns(CType::Int)
         .build()
 }
@@ -11014,6 +11141,18 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                         (e_binop(e_call("str_starts_with", vec![e_var("_dsn"), e_str("pgsql:")]), BinOp::And, e_call("isset", vec![e_index(e_this_prop("attributes"), e_int(1))])), vec![
                             s_expr(e_call("elephc_pdo_set_prefetch", vec![e_this_prop("conn"), e_ternary(e_method_call(e_this(), "attrBoolValue", vec![e_index(e_this_prop("attributes"), e_int(1))]), e_int(1), e_int(0))])),
                         ]),
+                        (e_binop(e_call("str_starts_with", vec![e_var("_dsn"), e_str("pgsql:")]), BinOp::And, e_call("isset", vec![e_index(e_this_prop("attributes"), e_int(1002))])), vec![
+                            s_assign("_constructorChunkSize", e_method_call(e_this(), "attrIntValue", vec![e_index(e_this_prop("attributes"), e_int(1002))])),
+                            s_if(
+                                e_binop(e_binop(e_var("_constructorChunkSize"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("_constructorChunkSize"), BinOp::Gt, e_int(2147483647))),
+                                vec![
+                                    s_throw(e_new("ValueError", vec![e_str("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_call("elephc_pdo_set_chunk_size", vec![e_this_prop("conn"), e_var("_constructorChunkSize")])),
+                        ]),
                         (e_call("str_starts_with", vec![e_var("_dsn"), e_str("firebird:")]), vec![
                             s_foreach(e_array(vec![e_int(0), e_int(14), e_int(1003), e_int(1007)]), None, "_firebirdIntAttribute", vec![
                                 s_if(
@@ -11204,6 +11343,7 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                         s_assign("_disable", e_this_prop("disablePrepares")),
                         s_assign("_scrollable", e_bool(false)),
                         s_assign("_prefetchOverride", e_neg(e_int(2))),
+                        s_assign("_chunkOverride", e_neg(e_int(1))),
                         s_if(
                             e_call("array_key_exists", vec![e_int(10), e_var("options")]),
                             vec![
@@ -11252,6 +11392,22 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                             e_binop(e_binop(e_var("_driver"), BinOp::StrictEq, e_str("pgsql")), BinOp::And, e_call("isset", vec![e_index(e_var("options"), e_int(1000))])),
                             vec![
                                 s_assign("_disable", e_method_call(e_this(), "attrBoolValue", vec![e_index(e_var("options"), e_int(1000))])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_binop(e_var("_driver"), BinOp::StrictEq, e_str("pgsql")), BinOp::And, e_call("array_key_exists", vec![e_int(1002), e_var("options")])),
+                            vec![
+                                s_assign("_chunkOverride", e_method_call(e_this(), "attrIntValue", vec![e_index(e_var("options"), e_int(1002))])),
+                                s_if(
+                                    e_binop(e_binop(e_var("_chunkOverride"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("_chunkOverride"), BinOp::Gt, e_int(2147483647))),
+                                    vec![
+                                        s_throw(e_new("ValueError", vec![e_str("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and 2147483647")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
                             ],
                             vec![],
                             None,
@@ -11380,6 +11536,43 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                             e_binop(e_var("_prefetchOverride"), BinOp::NotEq, e_neg(e_int(2))),
                             vec![
                                 s_expr(e_call("elephc_pdo_stmt_set_prefetch", vec![e_var("_handle"), e_var("_prefetchOverride")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_var("_driver"), BinOp::StrictEq, e_str("pgsql")),
+                            vec![
+                                s_assign("_stmtChunkSize", e_var("_chunkOverride")),
+                                s_if(
+                                    e_binop(e_var("_stmtChunkSize"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_assign("_stmtChunkSize", e_ternary(
+                                            e_binop(e_var("_prefetchOverride"), BinOp::StrictNotEq, e_neg(e_int(2))),
+                                            e_int(0),
+                                            e_call("elephc_pdo_get_chunk_size", vec![e_this_prop("conn")]),
+                                        )),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_var("_scrollable"),
+                                    vec![
+                                        s_if(
+                                            e_binop(e_var("_chunkOverride"), BinOp::Gt, e_int(0)),
+                                            vec![
+                                                s_throw(e_new("ValueError", vec![e_str("Pdo\\Pgsql::ATTR_CHUNK_SIZE cannot be combined with PDO::ATTR_CURSOR set to PDO::CURSOR_SCROLL")])),
+                                            ],
+                                            vec![],
+                                            None,
+                                        ),
+                                        s_assign("_stmtChunkSize", e_int(0)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_expr(e_call("elephc_pdo_stmt_set_chunk_size", vec![e_var("_handle"), e_var("_stmtChunkSize")])),
                             ],
                             vec![],
                             None,
@@ -11915,6 +12108,7 @@ fn decl_class_pdostatement(php_version: PhpVersion) -> Stmt {
         .method(pdostatement_errorinfo())
         .method(pdostatement_setdefaultfetchmode())
         .method(pdostatement_argvaluetypename())
+        .method(pdostatement_attrintvalue())
         .method(pdostatement_copyconstructorargs())
         .method(
             method("setFetchMode")
@@ -12933,6 +13127,9 @@ fn decl_stmt_bootstrap_1(php_version: PhpVersion, drivers: OptionalDrivers) -> S
                 .extends("\\PDO")
                 .constant("ATTR_DISABLE_PREPARES", e_int(1000))
                 .constant("ATTR_RESULT_MEMORY_SIZE", e_int(1001))
+                .when(php_version >= PhpVersion::Php86, |class| {
+                    class.constant("ATTR_CHUNK_SIZE", e_int(1002))
+                })
                 // PHP 8.5 marked the Pgsql transaction-state constants `#[\Deprecated]` — they
                 // report a state the driver never updates. The values stay; the annotation is
                 // what reference PHP warns from, so it has to appear on exactly those profiles.
@@ -13159,6 +13356,10 @@ pub(crate) fn pdo_declarations(php_version: PhpVersion, drivers: OptionalDrivers
             decl_extern_elephc_pdo_buffered_query(),
             decl_extern_elephc_pdo_set_prefetch(),
             decl_extern_elephc_pdo_stmt_set_prefetch(),
+            decl_extern_elephc_pdo_set_chunk_size(),
+            decl_extern_elephc_pdo_get_chunk_size(),
+            decl_extern_elephc_pdo_stmt_set_chunk_size(),
+            decl_extern_elephc_pdo_stmt_get_chunk_size(),
             decl_extern_elephc_pdo_stmt_enable_simple_streaming(),
             decl_extern_elephc_pdo_column_native_type(),
             decl_extern_elephc_pdo_column_type_oid(),

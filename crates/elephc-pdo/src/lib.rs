@@ -1038,13 +1038,14 @@ fn open_persistent_dsn(
 /// common PDO core `name`/`len`/`precision` metadata for CLI-backed drivers.
 /// v57 adds Microsoft PDO_SQLSRV 5.13.1 through Microsoft ODBC Driver 17/18,
 /// including its statement attributes, connection information, datetime flag,
-/// and sensitivity-classification metadata accessors.
+/// and sensitivity-classification metadata accessors. v58 adds PostgreSQL
+/// connection/statement `Pdo\Pgsql::ATTR_CHUNK_SIZE` controls.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(57, || 57)
+    ffi_guard(58, || 58)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -1744,6 +1745,43 @@ pub extern "C" fn elephc_pdo_stmt_set_prefetch(stmt_id: i64, enabled: i64) -> i6
         Some(Stmt::Postgres(statement)) => statement.set_prefetch(enabled != 0),
         #[cfg(feature = "oci")]
         Some(Stmt::Oci(statement)) => statement.set_prefetch(enabled),
+        _ => 0,
+    })
+}
+
+/// Sets PostgreSQL's default `Pdo\Pgsql::ATTR_CHUNK_SIZE` for subsequently
+/// prepared statements, returning 1 for a PostgreSQL handle and 0 otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_set_chunk_size(conn_id: i64, size: i64) -> i64 {
+    ffi_guard(0, || match lock_recover(conns()).get_mut(&conn_id) {
+        Some(Conn::Postgres(connection)) => connection.set_chunk_size(size),
+        _ => 0,
+    })
+}
+
+/// Returns PostgreSQL's default `Pdo\Pgsql::ATTR_CHUNK_SIZE`, or 0.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_get_chunk_size(conn_id: i64) -> i64 {
+    ffi_guard(0, || match lock_recover(conns()).get(&conn_id) {
+        Some(Conn::Postgres(connection)) => connection.get_chunk_size(),
+        _ => 0,
+    })
+}
+
+/// Overrides one unexecuted PostgreSQL statement's chunk size.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_set_chunk_size(stmt_id: i64, size: i64) -> i64 {
+    ffi_guard(0, || match lock_recover(stmts()).get_mut(&stmt_id) {
+        Some(Stmt::Postgres(statement)) => statement.set_chunk_size(size),
+        _ => 0,
+    })
+}
+
+/// Returns one PostgreSQL statement's effective chunk size, or 0.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_get_chunk_size(stmt_id: i64) -> i64 {
+    ffi_guard(0, || match lock_recover(stmts()).get(&stmt_id) {
+        Some(Stmt::Postgres(statement)) => statement.get_chunk_size(),
         _ => 0,
     })
 }
@@ -6228,11 +6266,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v57 exposes
-    /// PDO_SQLSRV and its driver-specific statement/configuration surface on top of v56.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v58 adds
+    /// Pdo\Pgsql::ATTR_CHUNK_SIZE connection and statement controls on top of v57.
     #[test]
-    fn version_is_v57() {
-        assert_eq!(elephc_pdo_version(), 57);
+    fn version_is_v58() {
+        assert_eq!(elephc_pdo_version(), 58);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

@@ -336,6 +336,11 @@ extern "elephc_pdo" {
     // v42: PostgreSQL connection default and prepare-local ATTR_PREFETCH.
     function elephc_pdo_set_prefetch(int $conn, int $enabled): int;
     function elephc_pdo_stmt_set_prefetch(int $stmt, int $enabled): int;
+    // v58: Pdo\Pgsql::ATTR_CHUNK_SIZE connection default and statement override.
+    function elephc_pdo_set_chunk_size(int $conn, int $size): int;
+    function elephc_pdo_get_chunk_size(int $conn): int;
+    function elephc_pdo_stmt_set_chunk_size(int $stmt, int $size): int;
+    function elephc_pdo_stmt_get_chunk_size(int $stmt): int;
     // v47: PHP 8.5+ maps ATTR_PREFETCH=0 onto lazy simple-query consumption too.
     function elephc_pdo_stmt_enable_simple_streaming(int $stmt): int;
     // v23: per-column PostgreSQL type metadata for getColumnMeta (P2-k). Both are

@@ -60,6 +60,8 @@ pub struct PgConn {
     pub errcode: i64,
     pub sqlstate: String,
     pub prefetch: bool,
+    /// Default `Pdo\Pgsql::ATTR_CHUNK_SIZE` snapshotted by prepared statements.
+    pub default_chunk_size: i64,
     pub in_transaction: bool,
     generation: u64,
     statement_counter: u64,
@@ -82,6 +84,8 @@ pub struct PgStmt {
     pub rows: Vec<Vec<Cell>>,
     pub cursor: isize,
     pub executed: bool,
+    prefetch: bool,
+    chunk_size: i64,
     pub buffered: bool,
     simple_streaming: bool,
     streaming: bool,
@@ -311,6 +315,7 @@ impl PgConn {
             errcode: 0,
             sqlstate: "00000".to_string(),
             prefetch: true,
+            default_chunk_size: 0,
             in_transaction: false,
             generation: 0,
             statement_counter: 0,
@@ -318,10 +323,23 @@ impl PgConn {
         })
     }
 
-    /// Sets the default prefetch mode for future statements.
+    /// Sets the default prefetch mode for future statements and clears the
+    /// connection's default chunk size, matching php-src.
     pub fn set_prefetch(&mut self, prefetch: bool) -> i64 {
         self.prefetch = prefetch;
+        self.default_chunk_size = 0;
         1
+    }
+
+    /// Sets the default chunk size for future statements.
+    pub fn set_chunk_size(&mut self, size: i64) -> i64 {
+        self.default_chunk_size = size;
+        1
+    }
+
+    /// Returns the default chunk size for future statements.
+    pub fn get_chunk_size(&self) -> i64 {
+        self.default_chunk_size
     }
 
     /// Starts a new query generation after draining any prior async results.
@@ -594,6 +612,8 @@ impl PgConn {
             rows: Vec::new(),
             cursor: -1,
             executed: false,
+            prefetch: self.prefetch,
+            chunk_size: 0,
             buffered: self.prefetch,
             simple_streaming: false,
             streaming: false,
@@ -631,8 +651,25 @@ impl PgStmt {
         if self.executed {
             return 0;
         }
-        self.buffered = prefetch;
+        self.prefetch = prefetch;
+        self.buffered = self.prefetch && self.chunk_size == 0;
         1
+    }
+
+    /// Sets the statement chunk size before execution; a positive size wins
+    /// over a buffering `PDO::ATTR_PREFETCH`.
+    pub fn set_chunk_size(&mut self, size: i64) -> i64 {
+        if self.executed {
+            return 0;
+        }
+        self.chunk_size = size;
+        self.buffered = self.prefetch && size == 0;
+        1
+    }
+
+    /// Returns the statement's effective chunk size.
+    pub fn get_chunk_size(&self) -> i64 {
+        self.chunk_size
     }
 
     /// Resolves a named parameter to its one-based position.
@@ -759,11 +796,26 @@ impl PgStmt {
             return -1;
         }
         if self.streaming {
+            if !self.rows.is_empty() && (self.cursor as usize) + 1 < self.rows.len() {
+                self.cursor += 1;
+                return 1;
+            }
+            let target = if self.chunk_size > 0 {
+                self.chunk_size as usize
+            } else {
+                1
+            };
+            let mut chunk = Vec::new();
             loop {
                 let Some(result) = conn.client.result() else {
                     self.streaming = false;
                     conn.succeed(&self.query_string, conn.changes);
-                    return 0;
+                    if chunk.is_empty() {
+                        self.rows.clear();
+                        self.cursor = 0;
+                        return 0;
+                    }
+                    break;
                 };
                 if !result_ok(&result) {
                     self.streaming = false;
@@ -773,15 +825,20 @@ impl PgStmt {
                     if self.emulated || self.columns.is_empty() {
                         self.columns = result_columns(&conn.client, &result, false);
                     }
-                    self.rows.clear();
-                    self.rows.push(decode_result_row(&result, 0));
-                    self.cursor = 0;
-                    return 1;
+                    chunk.push(decode_result_row(&result, 0));
+                    if chunk.len() >= target {
+                        break;
+                    }
+                    continue;
                 }
                 if result.status() == Status::CommandOk {
                     conn.changes = result.cmd_tuples().unwrap_or(0) as i64;
                 }
             }
+            self.rows = chunk;
+            self.cursor = 0;
+            conn.changes = self.rows.len() as i64;
+            return 1;
         }
         self.cursor += 1;
         ((self.cursor as usize) < self.rows.len()) as i64

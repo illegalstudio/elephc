@@ -815,8 +815,10 @@ impl ClosureBuilder {
 
     /// Builds the closure expression.
     pub fn build(self) -> Expr {
-        let mut param_attributes: Vec<Vec<crate::parser::ast::AttributeGroup>> = Vec::new();
-        param_attributes.resize(self.params.len(), Vec::new());
+        // The parser leaves a closure's `param_attributes` empty when no parameter
+        // carries an attribute; unlike a method, it does not pad to the parameter
+        // count. Keep the same shape so the prelude oracle compares equal.
+        let param_attributes: Vec<Vec<crate::parser::ast::AttributeGroup>> = Vec::new();
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
