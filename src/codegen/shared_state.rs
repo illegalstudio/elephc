@@ -22,6 +22,9 @@ use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethod
 use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
 
+mod module_runtime;
+mod module_callables;
+
 /// Optional runtime families discovered while codegen lowers synthetic EIR functions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneratedRuntimeFeatures {
@@ -33,6 +36,12 @@ pub(crate) struct GeneratedRuntimeFeatures {
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
+    /// Immutable source-body facts shared with literal-only wrapper snapshots.
+    module_runtime_facts: std::cell::OnceCell<module_runtime::ModuleRuntimeFacts>,
+    /// Immutable function, extern and public include-group names shared by all contexts.
+    module_callable_index: std::cell::OnceCell<module_callables::ModuleCallableIndex>,
+    /// Global symbols whose local aliases can expose a persistent boxed reference wrapper.
+    global_reference_names: std::cell::OnceCell<std::collections::HashSet<String>>,
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
     /// Descriptor invokers' coercive `int`/`float` parameter helpers have been emitted.
@@ -65,6 +74,10 @@ pub(crate) struct SharedCodegenState {
     count_guard_sharing: Option<bool>,
     /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
     pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
+    /// Repeated literal-name Mixed reads, keyed by lexical scope, name and fetch mode.
+    pub(super) literal_property_read_helpers: Option<super::shared_literal_property_read::ReadPlan>,
+    /// Repeated literal writes preserve their opcode, visibility and exact value contract.
+    pub(super) literal_property_write_helpers: Option<super::shared_literal_property_write::WritePlan>,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls

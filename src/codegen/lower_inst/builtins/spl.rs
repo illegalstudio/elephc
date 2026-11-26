@@ -8,6 +8,9 @@
 //! Key details:
 //! - Object ids use the heap pointer as a process-stable identity.
 //!   `spl_object_hash()` stringifies that identity with the shared itoa helper.
+//! - A boxed or callable argument is unwrapped at run time: a Closure keeps its own handle, an
+//!   invokable object converted to a callable stands for its receiver, and any other value raises
+//!   PHP's argument `TypeError`.
 
 use crate::codegen::{
     abi, callable_descriptor, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -670,12 +673,117 @@ fn load_object_operand(
     let ty = ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Object(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::DeclaredCallable => {
+            emit_boxed_object_argument(ctx, name);
+            Ok(())
+        }
+        PhpType::Callable => {
+            let done = ctx.next_label("spl_object_callable_done");
+            let descriptor = abi::int_result_reg(ctx.emitter);
+            emit_descriptor_object_argument(ctx, name, descriptor, &done);
+            ctx.emitter.label(&done);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,
             other
         ))),
     }
+}
+
+/// Replaces the boxed argument in the result register with the object it holds.
+///
+/// A boxed object (tag 6) passes its payload and a callable descriptor (tag 10) is resolved by
+/// `emit_descriptor_object_argument`. Every other value raises PHP's argument `TypeError`,
+/// which names a boolean by its value.
+fn emit_boxed_object_argument(ctx: &mut FunctionContext<'_>, name: &str) {
+    let object = ctx.next_label("spl_object_boxed_object");
+    let callable = ctx.next_label("spl_object_boxed_callable");
+    let bool_case = ctx.next_label("spl_object_boxed_bool");
+    let true_case = ctx.next_label("spl_object_boxed_true");
+    let done = ctx.next_label("spl_object_boxed_done");
+    let errors = [(0_u8, "int"), (1, "string"), (2, "float"), (4, "array"), (5, "array"), (9, "resource")]
+        .map(|(tag, type_name)| (tag, type_name, ctx.next_label("spl_object_boxed_type_error")));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 6, &object);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 10, &callable);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
+    for (tag, _, label) in &errors {
+        super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, *tag, label);
+    }
+    // Every remaining tag is PHP's null.
+    emit_object_argument_type_error(ctx, name, "null");
+    for (_, type_name, label) in &errors {
+        ctx.emitter.label(label);
+        emit_object_argument_type_error(ctx, name, type_name);
+    }
+    let payload = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    ctx.emitter.label(&bool_case);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_case);
+    emit_object_argument_type_error(ctx, name, "false");
+    ctx.emitter.label(&true_case);
+    emit_object_argument_type_error(ctx, name, "true");
+    ctx.emitter.label(&callable);
+    emit_descriptor_object_argument(ctx, name, payload, &done);
+    ctx.emitter.label(&object);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+    ctx.emitter.label(&done);
+}
+
+/// Leaves the object a callable descriptor stands for in the result register, then jumps to
+/// `done`.
+///
+/// A Closure carries an object handle and is its own identity. An invokable object converted
+/// to a callable stands for its receiver. A function name or method array passed as a callable
+/// is still a string or an array to PHP, so it raises the argument `TypeError`, as does null.
+fn emit_descriptor_object_argument(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    descriptor: &str,
+    done: &str,
+) {
+    let null_case = ctx.next_label("spl_object_descriptor_null");
+    let string_case = ctx.next_label("spl_object_descriptor_string");
+    let array_case = ctx.next_label("spl_object_descriptor_array");
+    let receiver = ctx.next_label("spl_object_descriptor_receiver");
+    let no_handle = ctx.next_label("spl_object_descriptor_no_handle");
+    callable_descriptor::emit_branch_if_missing_descriptor(ctx.emitter, descriptor, &null_case);
+    super::types::emit_branch_to_invokable_receiver(ctx, descriptor, &receiver);
+    callable_descriptor::emit_require_object_handle(ctx.emitter, descriptor, &no_handle);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), descriptor);
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&no_handle);
+    callable_descriptor::emit_branch_on_descriptor_origin(
+        ctx.emitter, descriptor, &string_case, &array_case,
+    );
+    // An internal adapter without its own handle is still reported as a Closure, as get_class()
+    // does, so it keeps the descriptor's identity.
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), descriptor);
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&receiver);
+    let receiver_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), receiver_reg);
+    abi::emit_jump(ctx.emitter, done);
+    for (label, type_name) in [(&null_case, "null"), (&string_case, "string"), (&array_case, "array")] {
+        ctx.emitter.label(label);
+        emit_object_argument_type_error(ctx, name, type_name);
+    }
+}
+
+/// Raises PHP's `TypeError` for a non-object `$object` argument of an SPL identity builtin.
+fn emit_object_argument_type_error(ctx: &mut FunctionContext<'_>, name: &str, type_name: &str) {
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!("{name}(): Argument #1 ($object) must be of type object, {type_name} given"),
+    );
 }
 
 /// Returns a string literal operand when EIR preserved it as a `ConstStr`.

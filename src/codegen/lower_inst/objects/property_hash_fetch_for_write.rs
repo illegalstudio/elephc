@@ -58,7 +58,6 @@ pub(in crate::codegen::lower_inst) fn lower_property_hash_contains(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let name = expect_operand(inst, 1)?;
-    let (_, offset) = property_hash_layout(ctx, object)?;
     let target = ctx.emitter.target;
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -69,7 +68,7 @@ pub(in crate::codegen::lower_inst) fn lower_property_hash_contains(
     abi::emit_store_to_sp(ctx.emitter, ptr, 8);
     abi::emit_store_to_sp(ctx.emitter, len, 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, 0);
-    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), scratch, offset);
+    emit_load_readable_property_hash(ctx, object, scratch, abi::int_arg_reg_name(target, 0))?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 8);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 16);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -92,7 +91,6 @@ pub(in crate::codegen::lower_inst) fn lower_property_hash_read(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let name = expect_operand(inst, 1)?;
-    let (_, offset) = property_hash_layout(ctx, object)?;
     let target = ctx.emitter.target;
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -103,7 +101,7 @@ pub(in crate::codegen::lower_inst) fn lower_property_hash_read(
     abi::emit_store_to_sp(ctx.emitter, ptr, 8);
     abi::emit_store_to_sp(ctx.emitter, len, 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, 0);
-    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), scratch, offset);
+    emit_load_readable_property_hash(ctx, object, scratch, abi::int_arg_reg_name(target, 0))?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 8);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 16);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -137,4 +135,54 @@ fn property_hash_layout(ctx: &FunctionContext<'_>, object: ValueId) -> Result<(S
         info.properties.len()
     };
     Ok((class.to_string(), dynamic_property_hash_offset(property_count)))
+}
+
+/// Reads a proven dynamic-hash receiver through its real class layout, without nominal retagging.
+fn emit_load_readable_property_hash(
+    ctx: &mut FunctionContext<'_>, object: ValueId, object_register: &str, result_register: &str,
+) -> Result<()> {
+    if !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(class) if class.is_empty()) {
+        let (_, offset) = property_hash_layout(ctx, object)?;
+        abi::emit_load_from_address(ctx.emitter, result_register, object_register, offset);
+        return Ok(());
+    }
+    // These storage flags describe the real tail, independently of __debugInfo projections.
+    let done = ctx.next_label("property_hash_runtime_layout_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            debug_assert_eq!((object_register, result_register), ("x9", "x0"));
+            ctx.emitter.instruction("mov x0, #0");                              // default to an absent dynamic hash
+            ctx.emitter.instruction(&format!("cbz x9, {done}"));                // a null receiver has no tail
+            ctx.emitter.instruction("ldr x10, [x9]");                           // read the actual object's class id
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_gc_desc_count");
+            ctx.emitter.instruction("ldr x11, [x11]");                          // load the runtime class table extent
+            ctx.emitter.instruction("cmp x10, x11");                            // reject incomplete or unregistered class ids
+            ctx.emitter.instruction(&format!("b.hs {done}"));                   // preserve the absent hash on invalid ids
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_object_dynamic_prop_flags");
+            ctx.emitter.instruction("ldr x11, [x11, x10, lsl #3]");             // inspect storage capability rather than dump visibility
+            ctx.emitter.instruction(&format!("cbz x11, {done}"));               // a class without a hash cannot be read
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_object_payload_sizes");
+            ctx.emitter.instruction("ldr x11, [x11, x10, lsl #3]");             // obtain this class's exact payload size
+            ctx.emitter.instruction("sub x11, x11, #8");                        // the dynamic hash occupies the last payload word
+            ctx.emitter.instruction("ldr x0, [x9, x11]");                       // borrow the installed hash without mutating it
+        }
+        Arch::X86_64 => {
+            debug_assert_eq!((object_register, result_register), ("r11", "rdi"));
+            ctx.emitter.instruction("xor edi, edi");                            // default to an absent dynamic hash
+            ctx.emitter.instruction("test r11, r11");                           // determine whether the receiver exists
+            ctx.emitter.instruction(&format!("jz {done}"));                     // a null receiver has no tail
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // read the actual object's class id
+            abi::emit_symbol_address(ctx.emitter, "rcx", "_class_gc_desc_count");
+            ctx.emitter.instruction("cmp r10, QWORD PTR [rcx]");                // reject incomplete or unregistered class ids
+            ctx.emitter.instruction(&format!("jae {done}"));                    // preserve the absent hash on invalid ids
+            abi::emit_symbol_address(ctx.emitter, "rcx", "_class_object_dynamic_prop_flags");
+            ctx.emitter.instruction("cmp QWORD PTR [rcx + r10 * 8], 0");        // inspect storage capability rather than dump visibility
+            ctx.emitter.instruction(&format!("je {done}"));                     // a class without a hash cannot be read
+            abi::emit_symbol_address(ctx.emitter, "rcx", "_class_object_payload_sizes");
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rcx + r10 * 8]");      // obtain this class's exact payload size
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + rcx - 8]");      // borrow the installed hash without mutating it
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
 }

@@ -138456,11 +138456,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap",
-          "alloc_concat"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -138581,10 +138577,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_heap"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",

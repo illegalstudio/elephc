@@ -54,6 +54,8 @@ mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
 mod shared_property_read;
+mod shared_literal_property_read;
+mod shared_literal_property_write;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_mbstring_callable;
@@ -638,7 +640,7 @@ fn finalize_user_asm(
     let generated_runtime_features = shared.generated_runtime_features();
     Ok(GeneratedUserAsm {
         asm: crate::codegen::visibility::append_hidden_directives_with_extras(
-            &user_asm,
+            user_asm,
             &exported,
             module.target.platform,
             additional_internal,

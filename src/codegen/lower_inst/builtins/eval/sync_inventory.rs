@@ -158,7 +158,7 @@ pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Op
             // Only real global storage instructions make a name a program
             // global; eval scope ops reference names through the same data
             // pool without any global storage behind them.
-            if !matches!(inst.op, Op::LoadGlobal | Op::StoreGlobal) {
+            if !matches!(inst.op, Op::LoadGlobal | Op::LoadGlobalRefCell | Op::StoreGlobal) {
                 continue;
             }
             if !is_typed_superglobal {
@@ -201,6 +201,7 @@ pub(super) fn global_instruction_name<'a>(
 /// Returns the value type carried by a global load or store instruction.
 pub(super) fn global_instruction_value_type(function: &Function, inst: &Instruction) -> Option<PhpType> {
     match inst.op {
+        Op::LoadGlobalRefCell => Some(PhpType::Mixed),
         Op::LoadGlobal => {
             let result = inst.result?;
             function.value(result).map(|value| value.php_type.clone())

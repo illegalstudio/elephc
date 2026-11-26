@@ -288,7 +288,7 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `get_declared_interfaces()` | Same as above for interfaces |
 | `get_declared_traits()` | Returns user-declared trait names in source order |
 | `spl_classes()` | Returns the indexed array of SPL/core class and interface names shipped by the compiler today (currently 61 entries: SPL/core interfaces, throwable types, SPL exception classes, runtime-backed containers, and storage/decorator/filesystem iterators). The list grows as later phases ship more SPL types |
-| `spl_object_id($obj)` | PHP's object handle: a small dense integer starting at 1, reused LIFO once an object is destroyed. Same value `var_dump()` prints as `object(C)#N` |
+| `spl_object_id($obj)` | PHP's object handle: a small dense integer starting at 1, reused LIFO once an object is destroyed. Same value `var_dump()` prints as `object(C)#N`. Accepts an object, a `Closure` (its own handle; an invokable object converted to a callable keeps the object's handle), or a boxed `mixed` value checked at run time: any other value throws PHP's `TypeError` (`... must be of type object, int given`). `spl_object_hash()` accepts the same values |
 | `spl_object_hash($obj)` | PHP's 32-character rendering of that same handle — 16 zero-padded hex digits followed by 16 zeros, so handle `1` is `"00000000000000010000000000000000"` |
 | `get_class($obj)` | Resolves to the argument's static type name. Inside a method called with no argument, returns the current class context |
 | `get_parent_class($obj)` | Returns the parent class name from `ctx.classes[name].parent`, or empty string when the class has no parent |

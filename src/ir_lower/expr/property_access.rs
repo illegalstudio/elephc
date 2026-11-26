@@ -580,7 +580,9 @@ pub(crate) fn lower_native_xml_property_write_fetch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    lower_method_call_with_receiver(ctx, object, "__elephc_property_write_fetch", &[name], Op::MethodCall, expr)
+    // Both callers already selected the native XML protocol by type or runtime guard.
+    // Preserve its boxed receiver ABI without planning unrelated ordinary magic calls.
+    lower_method_call_with_receiver_direct(ctx, object, "__elephc_property_write_fetch", &[name], Op::MethodCall, expr)
 }
 
 /// Lowers a named property read once the receiver is already evaluated.

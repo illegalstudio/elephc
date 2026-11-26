@@ -772,6 +772,7 @@ Each instruction has:
 | `LoadRefCell(slot)` | none | value or address | `reads_local`, maybe `reads_heap` |
 | `StoreRefCell(slot, value)` | value | `Void` | `writes_local`, maybe `writes_heap`, `refcount_op` |
 | `LoadGlobal(name)` | none | declared type | `reads_global` |
+| `LoadGlobalRefCell(name)` | none | `Pointer` to the boxed global symbol | `reads_global` |
 | `StoreGlobal(name, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
 | `LoadStaticLocal(slot)` | none | slot type | `reads_global` |
 | `StoreStaticLocal(slot, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |

@@ -53,7 +53,9 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             // Tail-sinking copies the tail into each branch of the if/switch/try.
             // Declarations (functions, classes, interfaces, enums, traits, externs)
             // are hoisted and must stay singular — sinking one into multiple
-            // branches would emit duplicate symbols and fail the assembler.
+            // branches would emit duplicate symbols and fail the assembler. A `const`
+            // or literal `define()` stays singular too: the constant prescan only reads
+            // it where it stands.
             // Control-flow statements (if/switch/try/loops) must also stay singular:
             // sinking them duplicates nested control flow and produces exponential
             // AST growth (each successive if duplicates the remaining tail).
@@ -175,10 +177,31 @@ mod tests {
         // singular because their remaining tail still contains control flow.
         assert_eq!(eliminated.len(), 512);
     }
+
+    /// A `const` or literal `define()` after an `if` stays at the top level, where the constant
+    /// prescan reads it, while a tail of ordinary statements is still sunk.
+    #[test]
+    fn constant_declarations_are_not_tail_sunk() {
+        for (tail, kept) in [
+            ("define('PLUG_DIR', '/x/plugins'); echo PLUG_DIR;", 3),
+            ("const PLUG_DIR = '/x/plugins'; echo PLUG_DIR;", 3),
+            ("echo 'tail';", 1),
+        ] {
+            let source = format!("<?php if ($argc > 5) {{ echo 'many'; }} {tail}");
+            let tokens = crate::lexer::tokenize(&source).expect("tokenize constant tail fixture");
+            let statements = crate::parser::parse(&tokens).expect("parse constant tail fixture");
+            let eliminated = dce_block(statements);
+            assert_eq!(eliminated.len(), kept, "{tail}");
+            if kept == 3 {
+                assert!(crate::codegen_support::stmt_declares_scanned_constant(&eliminated[1]), "{tail}");
+            }
+        }
+    }
 }
 
 /// Returns true when `stmt` is, or recursively contains, a symbol-emitting
-/// declaration. Recurses through control-flow and grouping bodies.
+/// declaration or a constant declaration the prescan reads in place. Recurses
+/// through control-flow and grouping bodies.
 fn stmt_contains_declaration(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::FunctionDecl { .. }
@@ -190,6 +213,11 @@ fn stmt_contains_declaration(stmt: &Stmt) -> bool {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => true,
+        // The constant prescan reads `const` and literal `define()` statements only where they
+        // stand, so a copy sunk into branches would hide the constant from every function.
+        StmtKind::ConstDecl { .. } | StmtKind::ExprStmt(_) => {
+            crate::codegen_support::stmt_declares_scanned_constant(stmt)
+        }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }

@@ -787,3 +787,23 @@ fn test_core_get_resources_aot_inventory_and_filters() {
         "3:5:4:O:1:5:Unknown:get_resources(): Argument #1 ($type) must be a valid resource type:6:N"
     );
 }
+
+/// Initialized null locals are visible, while an unset local remains absent.
+#[test]
+fn test_core_get_defined_vars_keeps_initialized_null() {
+    let out = compile_and_run(r#"<?php
+function null_scope(?string $parameter = null): void {
+    $first = null;
+    $gone = null;
+    unset($gone);
+    $alias =& $first;
+    $variables = get_defined_vars();
+    echo implode(',', array_keys($variables)), ':',
+        array_key_exists('first', $variables) ? 'set' : 'missing', ':',
+        $variables['first'] === null ? 'null' : 'wrong', ':',
+        array_key_exists('gone', $variables) ? 'wrong' : 'unset';
+}
+null_scope();
+"#);
+    assert_eq!(out, "parameter,first,alias:set:null:unset");
+}

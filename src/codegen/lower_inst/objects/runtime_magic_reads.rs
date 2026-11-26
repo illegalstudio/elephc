@@ -130,6 +130,7 @@ fn emit_runtime_magic_accessors(
         if isset.by_ref_return {
             preserve_and_release_reference_bool(ctx);
         }
+        emit_magic_isset_answer(ctx, isset);
         abi::emit_branch_if_int_result_zero(ctx.emitter, &absent);
         if arm.isset_only {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);

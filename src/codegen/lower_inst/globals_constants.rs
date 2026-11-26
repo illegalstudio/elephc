@@ -9,6 +9,16 @@
 
 use super::*;
 
+/// Borrows a boxed global symbol slot without promoting an uninitialized function local.
+pub(super) fn lower_load_global_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let symbol = ir_global_symbol(ctx.global_name_data(data)?);
+    // The second word is reserved for the same persistent reference wrapper protocol as statics.
+    ctx.data.add_comm(symbol.clone(), 16);
+    abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a global storage load into the result register and SSA destination slot.
 pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
@@ -48,9 +58,17 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
-    ctx.data
-        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
+    let referenced = store_ty == PhpType::Mixed
+        && ctx.shared.global_has_reference(ctx.module, &name);
+    ctx.data.add_comm(symbol.clone(), if referenced { 16 } else { store_ty.codegen_repr().stack_size().max(8) });
+    if referenced {
+        let prefix = ctx.next_label("global_reference_publish");
+        crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
+            ctx.emitter, &symbol, true, None, &prefix,
+        );
+    } else {
+        abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
+    }
     Ok(())
 }
 

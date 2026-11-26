@@ -7,7 +7,7 @@
 //! - `crate::codegen::finalize_user_asm()` and runtime method-table emission.
 //!
 //! Key details:
-//! - Only one trailing generated collector can be synthesized because its actual count is known.
+//! - One generated collector can be synthesized, or an existing matching collector forwarded.
 //! - A source variadic keeps its physical entry, and no entry may drop an injected hidden argc.
 //! - The wrapper roots synthesized Mixed arguments and collectors before entering PHP.
 //! - It preserves every return word while releasing temporary owners after the call.
@@ -68,10 +68,11 @@ pub(crate) fn plan_method_abi(
     {
         return Err("source method ABI adaptation cannot synthesize the hidden actual-count parameter".to_string());
     }
-    if caller.variadic.is_some() {
+    let forward_collector = forwards_generated_collector(caller, physical);
+    if caller.variadic.is_some() && !forward_collector {
         return Err("source method ABI adaptation cannot forward a source variadic with an unknown actual count".to_string());
     }
-    let append_collector = crate::func_args::sig_collects_surplus_args(physical);
+    let append_collector = crate::func_args::sig_collects_surplus_args(physical) && !forward_collector;
     let projected = if append_collector {
         source_visible_signature(physical)?
     } else {
@@ -113,6 +114,23 @@ pub(crate) fn plan_method_abi(
         (true, false) => MethodAbiPlan::BoxArguments,
         (true, true) => MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector,
     })
+}
+
+/// Forwards the same compiler-owned tail without rebuilding its actual-count metadata.
+fn forwards_generated_collector(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    let generated_tail = |sig: &FunctionSig| {
+        crate::func_args::sig_collects_surplus_args(sig)
+            && sig.params.last().is_some_and(|(name, ty)| {
+                name == crate::func_args::HIDDEN_ARGS_PARAM
+                    && matches!(ty, PhpType::Array(element) if **element == PhpType::Mixed)
+            })
+            && sig.ref_params.last() == Some(&false)
+    };
+    generated_tail(caller)
+        && generated_tail(physical)
+        && caller.params.len() == physical.params.len()
+        && crate::func_args::sig_collects_optional_arg_count(caller)
+            == crate::func_args::sig_collects_optional_arg_count(physical)
 }
 
 /// Plans ordinary EIR calls using declared parameters rather than generated frame slots.
@@ -661,6 +679,57 @@ mod tests {
             variadic,
             deprecation: None,
             is_generator: false,
+        }
+    }
+
+    /// Existing generated collectors allow fixed-prefix boxing without weakening tail contracts.
+    #[test]
+    fn planner_forwards_generated_collectors_while_boxing_contravariant_parameters() {
+        let hidden = crate::func_args::HIDDEN_ARGS_PARAM.to_string();
+        let source = signature(vec![
+            ("label".into(), PhpType::Str), ("number".into(), PhpType::Float),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden));
+        let mut physical = source.clone();
+        physical.params[0].1 = PhpType::Mixed;
+        physical.params[1].1 = PhpType::Mixed;
+        assert_eq!(plan_method_abi(&source, &physical), Ok(MethodAbiPlan::BoxArguments));
+
+        physical.ref_params[2] = true;
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.ref_params[2] = false;
+        physical.params[2].1 = PhpType::Array(Box::new(PhpType::Int));
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.params[2].1 = source.params[2].1.clone();
+        physical.defaults[0] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::StringLiteral("default".into()), crate::span::Span::dummy(),
+        ));
+        assert!(plan_method_abi(&source, &physical).is_err());
+    }
+
+    /// Every target forwards an existing collector while boxing fixed values and a void result.
+    #[test]
+    fn generated_collector_forwarding_emits_on_all_targets_without_an_empty_tail() {
+        let hidden = crate::func_args::HIDDEN_ARGS_PARAM.to_string();
+        let mut source = signature(vec![
+            ("label".into(), PhpType::Str), ("number".into(), PhpType::Float),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden));
+        source.return_type = PhpType::Mixed;
+        let mut physical = source.clone();
+        physical.params[0].1 = PhpType::Mixed;
+        physical.params[1].1 = PhpType::Mixed;
+        physical.return_type = PhpType::Void;
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for kind in [MethodKind::Instance, MethodKind::Static] {
+                let mut emitter = Emitter::new(crate::codegen_support::platform::Target::parse(target).unwrap());
+                emit_method_adapter(&mut emitter, "_test_forwarded_tail", "_test_forwarded_tail_callee",
+                    kind, &source, &physical, true).unwrap();
+                let asm = emitter.output();
+                assert!(asm.contains("_test_forwarded_tail_callee"), "{target}: {asm}");
+                assert!(!asm.contains("__rt_array_new"), "{target}: {asm}");
+                assert!(asm.contains("__rt_mixed_from_value"), "{target}: {asm}");
+            }
         }
     }
 

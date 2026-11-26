@@ -310,19 +310,25 @@ var_dump($t->n, $t->fresh);
     assert_eq!(out, "int(9)\nint(7)\n");
 }
 
-/// Legacy scalar payloads retain their no-op while a null receiver raises PHP's catchable Error.
+/// Every non-object payload raises PHP's catchable Error, naming the receiver's type.
+///
+/// Scalars used to drop the write in silence while only `null` raised.
 #[test]
-fn test_mixed_receiver_non_object_payload_drops_the_write() {
+fn test_mixed_receiver_non_object_payload_raises_php_error() {
     let out = compile_and_run(
         r#"<?php
 function w(mixed $o): void { $o->n = 9; }
-w(7);
-w("x");
-try { w(null); } catch (Error $error) { echo $error->getMessage(), '|'; }
+foreach ([7, "x", null] as $receiver) {
+    try { w($receiver); } catch (Error $error) { echo $error->getMessage(), '|'; }
+}
 echo "survived";
 "#,
     );
-    assert_eq!(out, "Attempt to assign property \"n\" on null|survived");
+    assert_eq!(
+        out,
+        "Attempt to assign property \"n\" on int|Attempt to assign property \"n\" on string|\
+         Attempt to assign property \"n\" on null|survived"
+    );
 }
 
 /// The runtime-name spelling has always dispatched this way; pinned so the two paths cannot drift

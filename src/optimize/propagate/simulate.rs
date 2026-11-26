@@ -12,6 +12,9 @@
 
 use super::*;
 
+// Keep sequential unknown branches from multiplying loop states without bound.
+const MAX_LOOP_CONSTANT_PATHS: usize = 64;
+
 /// Intersects multiple constant environments, retaining only variable assignments
 /// that are identical across every path. Returns an empty map if no paths are provided.
 ///
@@ -103,7 +106,13 @@ fn simulate_loop_block_constant_paths_from(
             summary.continue_paths.append(&mut stmt_summary.continue_paths);
             summary.exits_current_block |= stmt_summary.exits_current_block;
         }
-        active_paths = next_active_paths;
+        // Joining keeps only facts shared by every incoming state. Later branches
+        // may become unknown, which safely widens their possible outcomes.
+        active_paths = if next_active_paths.len() > MAX_LOOP_CONSTANT_PATHS {
+            vec![merge_constant_env_paths(next_active_paths)]
+        } else {
+            next_active_paths
+        };
         if active_paths.is_empty() {
             break;
         }

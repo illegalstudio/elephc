@@ -13,6 +13,7 @@
 
 mod string_append;
 mod reflection_locals;
+mod escaped_callables;
 pub(crate) use reflection_locals::ReflectionBindings;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -1717,7 +1718,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .unwrap_or(LocalKind::PhpLocal);
                 (kind == LocalKind::PhpLocal
                     && self.initialized_slots.contains(slot)
-                    && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
+                    && !matches!(self.local_types.get(name), Some(PhpType::Never)))
                 .then(|| {
                     let position = first_slots.get(name.as_str()).copied();
                     (position.unwrap_or(slot.as_raw()), name.clone())
@@ -4220,6 +4221,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if target == source {
             return;
         }
+        // A global declaration has no initialized local payload to promote. Its symbol owns
+        // the boxed value, so a function-local alias borrows that stable writable address.
+        if !self.in_main && self.local_uses_global_storage(source)
+            && !self.local_uses_global_storage(target)
+            && self.global_alias_type(source) == PhpType::Mixed
+            && !self.should_load_from_eval_scope(source)
+        {
+            let global = self.intern_global_name(source);
+            let address = self.emit_value(
+                Op::LoadGlobalRefCell, Vec::new(), Some(Immediate::GlobalName(global)),
+                PhpType::Pointer(None), Op::LoadGlobalRefCell.default_effects(), span,
+            );
+            self.bind_local_ref_cell_ptr(target, address, PhpType::Mixed, span);
+            return;
+        }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         let source_repr = self.local_type(source).codegen_repr();
@@ -5420,15 +5436,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Invalidates every tracked callable local whose cell escaped this activation.
     fn invalidate_escaped_callable_locals(&mut self) {
-        let escaped = self
-            .static_callable_local_epochs
-            .keys()
-            .filter(|name| {
-                self.ref_bound_locals.contains(*name)
-                    || (self.in_main && self.all_global_var_names.contains(*name))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let escaped = escaped_callables::names(
+            &self.static_callable_local_epochs,
+            &self.ref_bound_locals,
+            &self.all_global_var_names,
+            self.in_main,
+        );
         for name in escaped {
             self.clear_static_callable_local(&name);
         }

@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::ir::{Function, Immediate, InstId, Op, ValueId};
 
 /// Returns whether a scoped caller slot will retire this SSA owner's reference.
-pub(super) fn has_scoped_cleanup(
+pub(in crate::codegen) fn has_scoped_cleanup(
     function: &Function,
     value: ValueId,
     current: Option<InstId>,

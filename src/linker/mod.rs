@@ -12,6 +12,7 @@
 
 mod archive_dedup;
 mod bridges;
+mod chunked_assembly;
 mod command;
 mod native_packages;
 mod pdo;
@@ -213,6 +214,14 @@ pub(crate) fn assembler_command(target: Target) -> Command {
 
 /// Invokes the target assembler for one generated assembly source file.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+    match chunked_assembly::try_assemble(target, asm_path, obj_path) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("Assembler error: {error}");
+            process::exit(1);
+        }
+    }
     let mut assembler = assembler_command(target);
     assembler.arg("-o").arg(obj_path).arg(asm_path);
     command::run_tool("Assembler", &mut assembler);
