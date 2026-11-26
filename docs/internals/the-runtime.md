@@ -1929,31 +1929,43 @@ they are internal assembly interfaces.
 | `__rt_gc_phpext_scan_begin` | `arrays/gc_host_roots.rs` | Start the native-owner scan used by the PHP extension producer profile. |
 | `__rt_gc_visit_children` | `arrays/gc_mark_reachable.rs` | Visit child edges during runtime graph traversal. |
 | `__rt_hash_set_entry`, `__rt_hash_set_owned_refusal` | `arrays/hash_set.rs` | Shared hash insertion entry and cleanup of a refused owned value. |
+| `__rt_hash_entry_bind_reference` | `arrays/hash_entry_reference.rs` | Bind a local hash entry to an existing reference cell. |
+| `__rt_hash_reindex_dense`, `__rt_hash_shuffle_links` | `arrays/hash_reindex_dense.rs`, `arrays/shuffle.rs` | Rebuild dense integer keys after entry-order changes and shuffle the linked entries without detaching reference cells. |
+| `__rt_hash_sort_require_scalars`, `__rt_mixed_sort_reject_non_scalar`, `__rt_mixed_sort_reject_non_scalar_x86` | `arrays/php_compare_slots.rs` | Validate sortable payloads and report a non-scalar value on the target-specific comparison path. |
 | `__rt_hash_spread_entry` | `arrays/hash_spread.rs` | Shared hash-copy entry for spread and object-property projection modes. |
 | `__rt_hash_to_mixed_box_owned`, `__rt_hash_to_mixed_x86_box_owned` | `arrays/hash_to_mixed.rs` | Box owned entry payloads during associative-array widening on each architecture. |
 | `__rt_hash_write_guard_inspect` | `arrays/hash_write_guard.rs` | Inspect protected construction-time hash owners for claim and ownership queries. |
 | `__rt_array_map_sum_add_body` | `arrays/keyed_kernels.rs` | Shared mapped-integer sum body with the original checked-add fallback. |
 | `__rt_mixed_from_owned_string` | `arrays/mixed_from_value.rs` | Box a transferred string owner without borrowing its bytes. |
+| `__rt_mixed_deref_reference` | `arrays/mixed_reference.rs` | Read the boxed value held by an existing reference cell. |
+| `__rt_callable_closure_copy`, `__rt_callable_closure_from_owned` | `callables/closure_copy.rs` | Convert a callable descriptor to a PHP Closure, retaining an existing Closure or giving the wrapped callable a Closure identity. |
 | `__rt_callable_descriptor_release_owned` | `callables/descriptor_release.rs` | Retire a transferred callable descriptor and its owned captures. |
 | `__rt_callable_owned_args_enter` | `callables/invoke_owned_args.rs` | Enter the protected invocation that owns temporary boxed arguments. |
 | `__rt_mixed_loose_eq_common` | `compare/mixed_loose_eq.rs` | Shared PHP loose-equality dispatch after operand setup. |
+| `__rt_mixed_loose_eq_refs` | `compare/mixed_loose_eq.rs` | Dereference boxed reference operands before dispatching loose equality. |
 | `__rt_eval_native_callable_chain_previous` | `eval_bridge/callable_adapter.rs` | Preserve the previous Throwable chain across an eval-to-native callable boundary. |
 | `__rt_eval_owner_frame_noop` | `eval_bridge/owner_frames.rs` | No-op cleanup entry for a Rust-owned temporary visitor record. |
+| `__rt_debuginfo_fatal` | `exceptions/uncaught_report.rs` | Report a fatal error when `__debugInfo()` fails to return the required array. |
 | `__rt_cleanup_print_r_capture` | `io/print_r_buffer.rs` | Release abandoned growable print_r capture storage during unwinding. |
-| `__rt_print_r_indexed`, `__rt_print_r_int_key`, `__rt_print_r_spaces`, `__rt_print_r_str_key`, `__rt_print_r_value` | `io/print_r_walk.rs` | Render indentation, indexed entries, keys and individual values for print_r. |
+| `__rt_print_r_hash`, `__rt_print_r_indexed`, `__rt_print_r_int_key`, `__rt_print_r_spaces`, `__rt_print_r_str_key`, `__rt_print_r_value` | `io/print_r_walk.rs` | Render associative and indexed arrays, indentation, keys, and individual values for `print_r()`. |
 | `__rt_simplexml_wrapper_failure` | `io/simplexml_wrapper_failure.rs` | Raise the chained TypeError produced by a SimpleXML stream-wrapper context assignment. |
 | `__rt_abs_int` | `numeric.rs` | Compute the raw integer absolute-value fast path. |
-| `__rt_pr_debuginfo_object`, `__rt_vd_debuginfo_object` | `objects/debug_info.rs` | Render user __debugInfo projections through var_dump and print_r. |
+| `__rt_obj_debuginfo_fetch`, `__rt_pr_debuginfo_object`, `__rt_vd_debuginfo_object` | `objects/debug_info.rs` | Fetch user `__debugInfo()` projections and render them through `var_dump()` and `print_r()`. |
 | `__rt_cleanup_native_debug`, `__rt_try_native_debug_object` | `objects/native_debug.rs` | Probe native debug projections and release protected snapshot owners. |
 | `__rt_print_r_object_header` | `objects/print_r_object.rs` | Render the class or enum header preceding print_r object fields. |
+| `__rt_property_reference_numeric_x` | `property_ref_cells.rs` | Validate a numeric assignment through a typed property reference on x86_64. |
 | `__rt_reference_argument_pin_enter`, `__rt_reference_argument_pins_staging` | `reference_cells/argument_pins.rs` | Stage and activate source leases until the exact native formal parameter claims them. |
+| `__rt_reference_cell_canonical` | `reference_cells/canonical.rs` | Authenticate a native cell's borrowed canonical PHP reference payload. |
 | `__rt_reference_cell_promote_mixed`, `__rt_reference_cell_retain_mixed` | `reference_cells/mixed_payload.rs` | Retain canonical Mixed reference payloads and lazily promote their storage. |
 | `__rt_reference_parameter_acquire` | `reference_cells/parameter_bindings.rs` | Transfer an incoming reference binding into its formal parameter owner. |
 | `__rt_reference_property_unset` | `reference_cells/property_unset.rs` | Publish an uninitialized property cell before retiring its old owner. |
+| `__rt_reference_validate_native`, `__rt_reference_publish_native` | `reference_cells/validation_coordinator.rs`, `reference_cells/validation_publish.rs` | Validate a candidate against native declaration sources and publish the replacement through the protected reference boundary. |
 | `__rt_reference_source_associate_native`, `__rt_reference_sources_bind_object` | `reference_cells/source_lifecycle.rs` | Associate canonical native cells with weak declaration-source metadata. |
+| `__rt_reference_static_mixed_payload`, `__rt_reference_static_mixed_promote`, `__rt_reference_static_mixed_release` | `reference_cells/static_cells.rs` | Read, promote and retire the canonical cell backing a static property. |
 | `__rt_reference_validation_coerce` | `reference_cells/validation_coercion.rs` | Run declaration coercion below a protected native Throwable boundary. |
 | `__rt_reference_validation_identical`, `__rt_reference_validation_is_current`, `__rt_reference_validation_release` | `reference_cells/validation_ops.rs` | Probe current physical storage, compare PHP identity and retire validation owners. |
 | `__rt_reference_validation_pin_enter`, `__rt_reference_validation_pin_leave`, `__rt_reference_validation_pin_take` | `reference_cells/validation_pins.rs` | Enter, remove or transfer validation roots without changing PHP alias sharing. |
+| `__rt_addcslashes` | `strings/addcslashes.rs` | Escape selected bytes, including byte ranges and control bytes, and report invalid range syntax. |
 | `__rt_mb_is_ascii` | `strings/mbstring/ascii_case.rs` | Screen a subject for allocation-free ASCII case-conversion paths. |
 | `__rt_mb_strstr_len_utf8` | `strings/mbstring/ascii_strstr_len.rs` | Compute an admitted UTF-8 ASCII substring result length without building the string. |
 | `__rt_mbstring_callback_resolve_body` | `strings/mbstring/callback/resolve.rs` | Resolve and transfer one callback owner into the protected mbregex arena. |
@@ -1966,6 +1978,7 @@ they are internal assembly interfaces.
 | `__rt_str_transient_base` | `strings/str_persist.rs` | Authenticate an exact live transient-string payload base before adopting it. |
 | `__rt_str_dup_owned` | `strings/strcopy.rs` | Allocate an independent owned copy of string bytes. |
 | `__rt_trim_warning` | `strings/trim_warnings.rs` | Build the caller-named invalid character-range warning. |
+| `__rt_preg_compile`, `__rt_preg_match_compiled`, `__rt_preg_free` | `system/preg_compiled.rs` | Prepare, reuse and release the PCRE2 pattern handle used by compiled `preg_grep()`. |
 | `__rt_unser_allowed_classes_entry_metadata_error`, `__rt_unser_allowed_classes_entry_null_error`, `__rt_unser_allowed_classes_entry_object_error`, `__rt_unser_allowed_classes_entry_type_error`, `__rt_unser_allowed_classes_policy_type_error`, `__rt_unser_options_type_error` | `system/unserialize/allowed_classes_aarch64.rs` | Raise the AArch64 allowed_classes and options validation errors before hydration. |
 | `__rt_unser_depth_fatal` | `system/unserialize/decoder_aarch64.rs` | Raise the guarded AArch64 unserialize depth failure. |
 | `__rt_unser_type_error_ready`, `__rt_unser_type_error_ready_x` | `system/unserialize/diagnostics.rs` | Enter the prepared target-specific unserialize TypeError path. |

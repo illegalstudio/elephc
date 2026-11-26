@@ -229,6 +229,7 @@ instanceof
 |---|---|
 | `OpenTag` | `<?php` — required at the start of every file |
 | `AttrOpen` | `#[` — starts a PHP 8 attribute group; bare `#` is a line comment |
+| `DollarBrace` | `${` opens a computed variable name, including after a member access operator |
 | `Eof` | End of file — signals the parser to stop |
 
 ## String interpolation
