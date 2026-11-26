@@ -13,9 +13,9 @@ available on every supported target, in compiled code and inside `eval()`.
 
 ```php
 filter_var(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed
-filter_var_array(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): mixed
+filter_var_array(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null
 filter_input(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed
-filter_input_array(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): mixed
+filter_input_array(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null
 filter_has_var(int $input_type, string $var_name): bool
 filter_list(): array
 filter_id(string $name): int|false
@@ -138,7 +138,7 @@ change what `filter_input(INPUT_GET, …)` sees. The directive is deprecated in 
 the same deprecation once per process.
 
 ```php
-// elephc --web --ini filter.default=special_chars app.php
+// elephc build --web --ini filter.default=special_chars app.php
 echo $_GET['name'];                                  // filtered
 echo filter_input(INPUT_GET, 'name');                // raw request value
 echo filter_input(INPUT_GET, 'name', FILTER_SANITIZE_SPECIAL_CHARS);

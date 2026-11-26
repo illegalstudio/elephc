@@ -16,6 +16,10 @@ This skill is an explicit exception to the normal implementation workflow in `AG
 
 Run `prepare-release-changelog` before beginning the remaining release checks. Read and follow `../prepare-release-changelog/SKILL.md`; require its PR/direct-commit ledger to cover the exact candidate head with zero unresolved commits. If the audit has not completed, if the candidate SHA changed afterward, or if approved edits to the numbered candidate release section remain unapplied, stop and complete that skill first. `[Unreleased]` must remain empty.
 
+#### Release version stamping
+
+Check [the release workflow](../../../.github/workflows/release.yml) when assessing the package version. After `verify-ci` verifies the tagged commit, the `prepare` job takes the version from the tag, updates `Cargo.toml` and the root `elephc` entry in `Cargo.lock`, and pushes the bump commit to `main`. The release build checks out `needs.prepare.outputs.sha` and compares the resulting binary's version with the tag. The previous package version in the candidate checkout is expected before this workflow runs and requires no manual bump before tagging.
+
 ### 1. README.md Completeness
 
 Read `README.md`. Cross-check against the actual codebase:

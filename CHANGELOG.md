@@ -5,6 +5,39 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.10] - 2026-11-26
+
+- Changed source compilation to require `elephc build <source-file>`, with options after `build`. Added `elephc check <source-file>` for analysis without code generation. Legacy invocations print a migration hint.
+- Added PHP 8.5's `ext/filter` surface, including validation, sanitization, callbacks, request input, and the `FILTER_*` and `INPUT_*` constants. `filter.default` and `filter.default_flags` apply to request input and `parse_str()`.
+- Added `posix_kill()`, `posix_isatty()`, `posix_geteuid()`, `posix_getpgrp()`, `posix_get_last_error()`, `posix_errno()` and `posix_strerror()` to compiled code and `eval()`.
+- Added project and per-entry monitoring configuration in `elephc.toml`, transaction include and exclude rules, and budgets. Expanded APM with dated captures, process-tree metrics and trace links, and added a timeline to exact profiles. Entry overrides honor `enabled = false`.
+- Added optional trailing parameters to method overrides, interface implementations and interface redeclarations. Backed enum case values can now use supported constant expressions.
+- Added `$flags` and `$offset` to `preg_match()` and `$offset` to `preg_match_all()` in compiled code and `eval()`. Compiled `preg_grep()` now compiles its pattern once per call.
+- Added `addcslashes()` and `parse_str()` to compiled code, string-offset reads and writes through boxed strings, and implicit array creation on the first offset write to a null or unset local.
+- Added reference elements in array literals and reference assignment to local array elements. Supported array reordering operations preserve their aliases, and unsupported mutation paths emit a diagnostic.
+- Unified PHP scanning and parsing for the compiler, `eval()`, the REPL and `TOKEN_PARSE`. Improved tokenizer throughput and matched PHP more closely on delimiter warnings, `__halt_compiler()` and variable-variable expressions.
+- Reduced generated binary size by sharing callable dispatch and compacting mbstring's codec tables. Eligible literal UTF-8 checks with `mb_check_encoding()` no longer pull in the mbstring bridge.
+- Reused cached runtime objects when their emitted assembly is identical across compiler builds.
+- Reduced compiler memory use for large PHP applications such as the WordPress port. On Linux, large assembly files are assembled in chunks. The compiler also shares repeated property and callable dispatch.
+- Added `#[ReturnTypeWillChange]` handling for `Iterator` and `ArrayAccess`. ArrayAccess appends now pass a null offset, and `spl_object_id()` and `spl_object_hash()` accept runtime-typed objects and closures.
+- Fixed class-typed parameters, returns and properties to check runtime-typed values at the boundary and raise a catchable `TypeError` for incompatible values.
+- Fixed runtime-typed values passed to declared scalar parameters or returned as `string`, `float` or `bool` to follow PHP's strict and weak coercion rules, including catchable `TypeError` for invalid values. Fixed out-of-range float array reads returning stale data.
+- Fixed guarded assignments and `elseif` chains losing a narrowed union type. Array builders now preserve checked element storage for boxed values proven to have the declared element type.
+- Fixed `is_a()` and `is_subclass_of()` with target names selected at runtime, including names declared by `eval()` when the eval bridge is linked.
+- Fixed callable arrays for private and protected methods to respect the calling scope. Late-bound `static::` calls now resolve private-method cases against the called class, and `Closure::fromCallable()` uses the same name resolution as invocation for declared `callable` values.
+- Fixed trait methods imported along more than one path and checked compatibility of abstract trait requirements. Added trait `as final` adaptations and corrected diagnostics for member modifiers, enum declarations and invalid promoted defaults.
+- Fixed namespaced calls in Composer-autoloaded files to see functions declared elsewhere in the program. INI, OPcache and version helpers now work when only autoloaded code calls them.
+- Fixed `eval()` support for `@`, throw expressions, `const` statements, by-reference callable declarations and trailing commas in parameter lists, closure `use` lists and `unset()`.
+- Fixed compiled `preg_*` delimiter and modifier handling, empty matches and split limits. `preg_match()` now compiles patterns with embedded NUL bytes by length.
+- Fixed `setlocale()` candidate validation and environment-locale fallback. Corrected weak and strict `exit()` and `die()` status handling, including string output and nullable values.
+- Fixed x86_64 eval bridge calls to preserve the host's callee-saved registers.
+- Fixed APM wrapper temporaries leaking into PHP variable introspection.
+- Fixed property access through runtime-typed receivers to preserve PHP's magic accessor order, raise errors on invalid writes, and release temporary values.
+- Fixed shared `include_once` and `require_once` declarations and callable lookup by public name. Fixed references to named globals, initialized null locals missing from `get_defined_vars()`, and top-level `define()` calls after conditionals losing their type information.
+- Fixed array assignments to request superglobals in `--web` builds, method adapters dropping surplus arguments, and untyped parameters losing closure values.
+- Security: hardened PHAR signature verification, session upload-progress settings and session ID validation, mbstring encoding names and regex replacements, URI serialization limits and `DateTime` hydration. Executable PHARs require a signature under the default `phar.require_hash` setting. Added PHAR OpenSSL SHA-256 and SHA-512 signing.
+- Security: updated the `url` dependency to 2.5.9 for RUSTSEC-2026-0592.
+
 ## [0.27.9] - 2026-11-20
 
 - Added PHP 8.5's `uri` extension: `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, `Uri\UriComparisonMode`, `Uri\WhatWg\UrlValidationError` and their exceptions, linked automatically when a program uses `Uri\` (or forced with `--with-uri`) on PHP 8.5 profiles and checked against 332 cases ported from php-src's `ext/uri` tests.
@@ -1021,7 +1054,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.9...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.10...HEAD
+[0.27.10]: https://github.com/illegalstudio/elephc/compare/v0.27.9...v0.27.10
 [0.27.9]: https://github.com/illegalstudio/elephc/compare/v0.27.8...v0.27.9
 [0.27.8]: https://github.com/illegalstudio/elephc/compare/v0.27.7...v0.27.8
 [0.27.7]: https://github.com/illegalstudio/elephc/compare/v0.27.6...v0.27.7

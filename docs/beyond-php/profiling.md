@@ -49,7 +49,7 @@ Here `hot_leaf` takes 79% of the run, but only 4% is its own PHP. The rest is th
 ### Build a binary that can be profiled
 
 ```bash
-elephc --with-monitoring shop.php
+elephc build --with-monitoring shop.php
 ```
 
 The profiling code stays dormant until asked. A monitored binary run on its own behaves like one built without the flag: same output, nothing on stderr. It is safe to ship the binary you profile.
@@ -633,7 +633,7 @@ elephc monitor --stitch gateway.log --stitch inventory.log \
 For exact per-function call counts without the full profiler, compile with `--counters`:
 
 ```bash
-elephc --counters app.php
+elephc build --counters app.php
 ./app          # prints, to stderr at exit:
 # elephc-counters: hot_leaf 40
 # elephc-counters: call_hot 0
@@ -709,8 +709,8 @@ A sampled stack can be shorter than the real one. What it shows did run.
 ### Narrowing it to a few functions
 
 ```bash
-elephc --with-monitoring=process_order,'PDOStatement::*' app.php
-elephc --with-monitoring=@hot-functions.txt app.php
+elephc build --with-monitoring=process_order,'PDOStatement::*' app.php
+elephc build --with-monitoring=@hot-functions.txt app.php
 ```
 
 - Hooks go only on the functions you name.
