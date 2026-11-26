@@ -28,6 +28,7 @@ mod string;
 mod math;
 pub(crate) mod gmp;
 mod spl;
+mod tls;
 mod pointers;
 mod system;
 pub(crate) use system::preg_match::{

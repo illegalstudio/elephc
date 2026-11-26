@@ -621,7 +621,11 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             eval_forced: false,
         },
     );
-    if php_version >= elephc::php_version::PhpVersion::Php86 && source.contains("session_data") {
+    if php_version >= elephc::php_version::PhpVersion::Php86
+        && (source.contains("session_data")
+            || source.contains("psk_client_cb")
+            || source.contains("psk_server_cb"))
+    {
         check_result
             .required_libraries
             .retain(|library| library != "elephc_tls");

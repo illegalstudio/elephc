@@ -1317,6 +1317,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // libssl backend installs the PEM session before the handshake.
     out.push_str(&comm_directive("_elephc_tls_connect_session_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_connect_session_insecure_fn", 8, target));
+    // PHP 8.6 external-PSK connect variant; the descriptor/adapter pair lives in
+    // the two slots the stream-context prelude writes.
+    out.push_str(&comm_directive("_elephc_tls_connect_psk_fn", 8, target));
+    out.push_str(&comm_directive("_tls_psk_client_descriptor", 8, target));
+    out.push_str(&comm_directive("_tls_psk_client_adapter", 8, target));
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));

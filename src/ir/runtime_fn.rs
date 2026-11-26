@@ -553,6 +553,12 @@ pub enum RuntimeFnId {
     /// Reports the address of `__rt_curl_invoke_callback`, the codegen adapter that
     /// re-enters compiled PHP from inside a libcurl callback. Reaches no bridge symbol.
     CurlAdapterAddr,
+    /// Reports the address of the shared callable adapter used by the TLS PSK
+    /// callback. Reaches no bridge symbol.
+    TlsAdapterAddr,
+    /// Stores the normalized `ssl.psk_client_cb` descriptor and adapter address in
+    /// the TLS runtime slots. Reaches no bridge symbol.
+    TlsSetPskClient,
     /// Runs an easy handle's configured transfer to completion.
     CurlEasyPerform,
     /// Takes the `CURLOPT_RETURNTRANSFER`-captured response body from an easy handle.
@@ -1465,6 +1471,12 @@ impl RuntimeFnId {
             ),
             RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
+            ),
+            // The adapter address is a bare code pointer with no operands.
+            RuntimeFnId::TlsAdapterAddr => crate::ir::Effects::PURE,
+            // Storing the descriptor and adapter updates the process-wide TLS slots.
+            RuntimeFnId::TlsSetPskClient => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
@@ -2992,6 +3004,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasySetCallback
                 // A bare machine address with no operands at all: nothing to alias.
                 | RuntimeFnId::CurlAdapterAddr
+                | RuntimeFnId::TlsAdapterAddr
+                // The TLS setter stores borrowed pointers and returns nothing.
+                | RuntimeFnId::TlsSetPskClient
                 // `curl_reset`/`curl_upkeep` answer a bare acceptance flag and
                 // `curl_pause` a bare `CURLcode`; none of the three produces storage.
                 | RuntimeFnId::CurlEasyPause
@@ -3832,6 +3847,8 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
             RuntimeFnId::CurlEasySetCallback => "__elephc_curl_easy_set_callback",
             RuntimeFnId::CurlAdapterAddr => "__elephc_curl_adapter_addr",
+            RuntimeFnId::TlsAdapterAddr => "__elephc_tls_adapter_addr",
+            RuntimeFnId::TlsSetPskClient => "__elephc_tls_set_psk_client",
             RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
             RuntimeFnId::CurlEasyId => "__elephc_curl_easy_id",
             RuntimeFnId::CurlMultiInit => "__elephc_curl_multi_init",

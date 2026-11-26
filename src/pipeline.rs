@@ -292,11 +292,12 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
-    // PHP 8.6's ssl.session_data needs the libssl-backed TLS stream backend.
-    // Detect the option before prelude injection (the stream-error wrapper
-    // itself also contains the literal) and swap the rustls bridge for it.
-    let tls_session = php_version >= crate::php_version::PhpVersion::Php86
-        && program_uses_ssl_session_data(&ast);
+    // PHP 8.6's ssl.session_data and psk_client_cb need the libssl-backed TLS
+    // stream backend. Detect the options before prelude injection (the
+    // stream-error wrapper itself also contains the literals) and swap the
+    // rustls bridge for it.
+    let tls_libssl = php_version >= crate::php_version::PhpVersion::Php86
+        && program_uses_libssl_tls(&ast);
     timings.record_since("resolve", phase_started);
     // Compile-time deprecations raised while each physical file was prepared, reported where
     // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
@@ -1385,7 +1386,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         ir_module.apm_rules = Some(rules);
     }
     let mut required_libraries = check_result.required_libraries.clone();
-    if tls_session {
+    if tls_libssl {
         required_libraries.retain(|library| library != "elephc_tls");
         if !required_libraries
             .iter()
@@ -1476,10 +1477,14 @@ mod tests {
     }
 }
 
-/// Returns whether the user program names PHP 8.6's `ssl.session_data` option.
-fn program_uses_ssl_session_data(program: &[crate::parser::ast::Stmt]) -> bool {
+/// Returns whether the user program names a PHP 8.6 option that needs libssl.
+fn program_uses_libssl_tls(program: &[crate::parser::ast::Stmt]) -> bool {
     crate::prelude_prune::usage::collect(program)
         .literals
         .iter()
-        .any(|literal| literal.eq_ignore_ascii_case("session_data"))
+        .any(|literal| {
+            literal.eq_ignore_ascii_case("session_data")
+                || literal.eq_ignore_ascii_case("psk_client_cb")
+                || literal.eq_ignore_ascii_case("psk_server_cb")
+        })
 }

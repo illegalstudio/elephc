@@ -222,6 +222,104 @@ echo is_string($response) && strpos($response, "Master-Key:") !== false
     );
 }
 
+/// `ssl.psk_client_cb` re-enters compiled PHP during a TLS 1.3 handshake and
+/// authenticates against a certificate-less external-PSK OpenSSL server.
+#[test]
+fn test_openssl_tls13_psk_client_callback_php86() {
+    if skip_without_openssl_native("test_openssl_tls13_psk_client_callback_php86") {
+        return;
+    }
+    if skip_without_openssl_psk_cli("test_openssl_tls13_psk_client_callback_php86") {
+        return;
+    }
+    let server = OpensslPskServer::start("736563726574", "client")
+        .expect("openssl CLI is available after its skip gate");
+    let source = r#"<?php
+$context = stream_context_create([
+    "ssl" => [
+        "verify_peer" => "0",
+        "psk_client_cb" => function ($stream) {
+            return new Openssl\Psk("secret", "client");
+        },
+    ],
+]);
+$body = file_get_contents("https://127.0.0.1:PHP_TEST_PORT/", false, $context);
+echo is_string($body) && strpos($body, "Cipher") !== false ? "psk-ok\n" : "psk-failed\n";
+"#
+    .replace("PHP_TEST_PORT", &server.port().to_string());
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "psk-ok\n");
+    assert!(
+        server.wait_for_state("SSL_accept:SSLv3/TLS read finished", 1, std::time::Duration::from_secs(5)),
+        "PSK handshake was not completed: {}",
+        server.state_log()
+    );
+}
+
+/// The production `elephc build` pipeline selects the libssl TLS bridge for a
+/// program that names `ssl.psk_client_cb` and completes a TLS 1.3 external-PSK
+/// handshake against a local OpenSSL server.
+#[test]
+fn test_openssl_tls13_psk_client_callback_cli_php86() {
+    if skip_without_openssl_native("test_openssl_tls13_psk_client_callback_cli_php86") {
+        return;
+    }
+    if skip_without_openssl_psk_cli("test_openssl_tls13_psk_client_callback_cli_php86") {
+        return;
+    }
+    let server = OpensslPskServer::start("736563726574", "client")
+        .expect("openssl CLI is available after its skip gate");
+    let dir = make_cli_test_dir("elephc_openssl_tls13_psk_client_callback");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$context = stream_context_create([
+    "ssl" => [
+        "verify_peer" => "0",
+        "psk_client_cb" => function ($stream) {
+            return new Openssl\Psk("secret", "client");
+        },
+    ],
+]);
+$body = file_get_contents("https://127.0.0.1:PHP_TEST_PORT/", false, $context);
+echo is_string($body) && strpos($body, "Cipher") !== false ? "psk-ok\n" : "psk-failed\n";
+"#
+        .replace("PHP_TEST_PORT", &server.port().to_string()),
+    )
+    .expect("write CLI PSK fixture");
+    let Some(mut command) = openssl_cli_command(&dir) else {
+        eprintln!("ELEPHC_OPENSSL_NATIVE_SKIP_GATE skipping CLI PSK fixture");
+        return;
+    };
+    let compile = command
+        .args(["--php-version", "8.6", "--quiet", "main.php"])
+        .output()
+        .expect("compile CLI PSK fixture");
+    assert!(
+        compile.status.success(),
+        "CLI PSK link failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .output()
+        .expect("run CLI PSK fixture");
+    assert!(
+        run.status.success(),
+        "CLI PSK fixture failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "psk-ok\n");
+    assert!(
+        server.wait_for_state(
+            "SSL_accept:SSLv3/TLS read finished",
+            1,
+            std::time::Duration::from_secs(5)
+        ),
+        "CLI PSK handshake was not completed: {}",
+        server.state_log()
+    );
+}
+
 /// The production `elephc build` pipeline selects the libssl TLS bridge for a
 /// program that names `ssl.session_data`, links the managed `openssl-crypto`
 /// package, and resumes the imported session against a local OpenSSL server.

@@ -41,6 +41,7 @@ pub(crate) mod class_relations;
 pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
+pub(crate) mod tls;
 pub(crate) mod debug;
 pub(super) mod eval;
 /// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval

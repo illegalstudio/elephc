@@ -200,7 +200,7 @@ mod tests {
         // +2: the PHP 8.6 GMP functions `gmp_powm_sec` and `gmp_prevprime`.
         // +7: the ext/posix bridge builtins `posix_kill`, `posix_isatty`, `posix_geteuid`,
         // `posix_getpgrp`, `posix_get_last_error`, `posix_errno` and `posix_strerror`.
-        assert_eq!(contracts().len(), 1352 + curl_surface);
+        assert_eq!(contracts().len(), 1354 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

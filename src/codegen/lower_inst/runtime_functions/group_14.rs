@@ -94,6 +94,12 @@ pub(super) fn lower(
         RuntimeFnId::CurlAdapterAddr => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_adapter_addr(ctx, inst)
         }),
+        RuntimeFnId::TlsAdapterAddr => Some({
+            crate::codegen::lower_inst::builtins::tls::lower_tls_adapter_addr(ctx, inst)
+        }),
+        RuntimeFnId::TlsSetPskClient => Some({
+            crate::codegen::lower_inst::builtins::tls::lower_tls_set_psk_client(ctx, inst)
+        }),
         RuntimeFnId::CurlEasySetoptLong => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_long(ctx, inst)
         }),

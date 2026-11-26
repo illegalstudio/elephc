@@ -241,8 +241,16 @@ honours `ssl.verify_peer = "0"`; it does not yet consume `ssl.cafile`,
 cannot import an OpenSSL session. Because the libssl bridge replaces rustls for
 that whole program, `stream_socket_enable_crypto()`, `ssl.capath`,
 `ssl.peer_name`, and client-certificate connect paths in the same build report
-a TLS backend error rather than falling back. The external-PSK, early-data, and
-session callback options remain deferred.
+a TLS backend error rather than falling back.
+
+PHP 8.6's `ssl.psk_client_cb` installs a callback that returns an
+`Openssl\Psk` (or `null` to abort) for external-PSK authentication. It is invoked
+during the TLS handshake through the shared callable adapter; TLS 1.3 uses
+`SSL_CTX_set_psk_use_session_callback` and TLS 1.2 uses
+`SSL_CTX_set_psk_client_callback`. elephc passes `null` as the callback's
+`$stream` argument because the TLS socket has no PHP stream resource before the
+handshake completes. `ssl.psk_server_cb` is accepted but unused for client
+streams. The early-data and session-callback options remain deferred.
 
 ## Stream contexts
 

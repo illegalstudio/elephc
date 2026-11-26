@@ -46,8 +46,70 @@ pub(crate) fn declarations() -> Program {
         stream_context_set_default_wrapper(),
     ];
     program.extend(read_wrappers::declarations());
+    program.extend(tls_psk_helpers());
     program.shrink_to_fit();
     program
+}
+
+/// PHP source for the PHP 8.6 TLS external-PSK callback wrappers.
+///
+/// Kept as source instead of AST builders: the callback wrapper is ordinary PHP
+/// with a closure, integer shifts, and a try/throw-free validation flow, and
+/// spelling it here keeps the wire encoding (`identity_len | identity | psk`)
+/// readable next to the bridge parser.
+const TLS_PSK_HELPERS_SRC: &str = r#"<?php
+function __elephc_tls_set_psk_client_cb($callback) {
+    if ($callback === null) {
+        \__elephc_tls_set_psk_client(0, 0);
+        return;
+    }
+    if (!\is_callable($callback)) {
+        throw new \TypeError("ssl.psk_client_cb must be a valid callback");
+    }
+    $normalized = \__elephc_normalize_callable($callback);
+    $wrapped = function ($stream = null) use ($normalized) {
+        $psk = $normalized($stream);
+        if ($psk === null) {
+            return null;
+        }
+        if (!\is_a($psk, "Openssl\Psk")) {
+            throw new \TypeError("PSK callback must return Openssl\Psk or null");
+        }
+        if ($psk->identity === null) {
+            throw new \ValueError("Client PSK callback must return Openssl\Psk with a non-null identity");
+        }
+        $length = \strlen($psk->identity);
+        return \chr(($length >> 24) & 255)
+            . \chr(($length >> 16) & 255)
+            . \chr(($length >> 8) & 255)
+            . \chr($length & 255)
+            . $psk->identity
+            . $psk->psk;
+    };
+    $wrapped = \__elephc_normalize_callable($wrapped);
+    \__ElephcStreamContexts::$pskCallbacks[] = $wrapped;
+    $descriptor = \__elephc_callable_ptr($wrapped);
+    $adapter = \__elephc_tls_adapter_addr();
+    \__elephc_tls_set_psk_client($descriptor, $adapter);
+}
+
+function __elephc_tls_apply_psk_client($options) {
+    $callback = null;
+    if (\is_array($options)
+        && \isset($options["ssl"])
+        && \is_array($options["ssl"])
+        && \array_key_exists("psk_client_cb", $options["ssl"])) {
+        $callback = $options["ssl"]["psk_client_cb"];
+    }
+    \__elephc_tls_set_psk_client_cb($callback);
+}
+"#;
+
+/// Parses [`TLS_PSK_HELPERS_SRC`] into the stream-error prelude's declarations.
+fn tls_psk_helpers() -> Program {
+    let tokens = crate::lexer::tokenize(TLS_PSK_HELPERS_SRC)
+        .expect("TLS PSK stream helpers must tokenize");
+    crate::parser::parse_internal(&tokens).expect("TLS PSK stream helpers must parse")
 }
 
 /// Returns whether `usage` reaches any stream error symbol or a wrapped stream call.
@@ -239,6 +301,7 @@ fn stream_context_registry_class() -> Stmt {
     class("__ElephcStreamContexts")
         .static_prop("optionsById", t_array(), Some(e_array(vec![])))
         .static_prop("byStream", t_array(), Some(e_array(vec![])))
+        .static_prop("pskCallbacks", t_array(), Some(e_array(vec![])))
         .build()
 }
 

@@ -62,6 +62,29 @@ pub fn emit_https(emitter: &mut Emitter) {
     //    variants ignore them, so one call site serves all three.
     emitter.instruction("stp x0, x1, [sp, #-16]!");                             // save host_ptr/host_len across the context lookups
     emitter.instruction("str x2, [sp, #-16]!");                                 // save port (16 bytes for stack alignment)
+    // -- PHP 8.6 external PSK: a registered callback bypasses certificate/session options --
+    abi::emit_symbol_address(emitter, "x9", "_tls_psk_client_descriptor");
+    emitter.instruction("ldr x9, [x9]");                                        // normalized psk_client_cb descriptor
+    emitter.instruction("cbz x9, __rt_https_open_no_psk_aarch64");              // no PSK callback → normal TLS option chain
+    emitter.instruction("ldr x2, [sp, #0]");                                    // port
+    emitter.instruction("ldr x0, [sp, #16]");                                   // host pointer
+    emitter.instruction("ldr x1, [sp, #24]");                                   // host length
+    emitter.instruction("mov x3, x9");                                          // descriptor → connect arg 3
+    abi::emit_symbol_address(emitter, "x4", "_tls_psk_client_adapter");
+    emitter.instruction("ldr x4, [x4]");                                        // adapter → connect arg 4
+    emitter.instruction("mov x5, #1");                                          // PSK authenticates; no certificate to verify
+    abi::emit_symbol_address(emitter, "x10", "_elephc_tls_connect_psk_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // PSK connect entry
+    emitter.instruction("cbz x10, __rt_https_open_psk_unavailable_aarch64");    // missing backend → fail closed
+    emitter.instruction("blr x10");                                             // open the PSK session
+    emitter.instruction("add sp, sp, #32");                                     // discard saved host/port
+    emitter.instruction("cmp x0, #0");                                          // did the PSK handshake succeed?
+    emitter.instruction("b.lt __rt_https_open_fail");                           // negative handle → TLS failure
+    emitter.instruction("b __rt_https_open_connected_aarch64");                 // continue at the shared connected path
+    emitter.label("__rt_https_open_psk_unavailable_aarch64");
+    emitter.instruction("add sp, sp, #32");                                     // discard saved host/port
+    emitter.instruction("b __rt_https_open_fail");                              // no PSK backend → fail closed
+    emitter.label("__rt_https_open_no_psk_aarch64");
     emitter.instruction("sub sp, sp, #16");                                     // string-lookup out slots: [sp+0]=ptr, [sp+8]=len
     let session_enabled = crate::codegen_support::compile_php_version()
         >= crate::php_version::PhpVersion::Php86;
@@ -210,6 +233,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("blr x9");                                              // open the TLS session, x0 = handle
     emitter.instruction("cmp x0, #0");                                          // did the TLS handshake fail?
     emitter.instruction("b.lt __rt_https_open_fail");                           // negative handle means TLS connect failed
+    emitter.label("__rt_https_open_connected_aarch64");
     emitter.instruction("str x0, [sp, #0]");                                    // save the TLS session handle
 
     // -- elephc_tls_write(handle, req_ptr, req_len) --
@@ -347,6 +371,22 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the port number
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the request pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the request length
+    // -- PHP 8.6 external PSK: a registered callback bypasses certificate/session options --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_tls_psk_client_descriptor", 0); // normalized psk_client_cb descriptor
+    emitter.instruction("test r10, r10");                                       // callback registered?
+    emitter.instruction("jz __rt_https_open_no_psk_x");                         // no PSK callback → normal TLS option chain
+    emitter.instruction("mov rcx, r10");                                        // descriptor → connect arg 4
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_tls_psk_client_adapter", 0);  // adapter → connect arg 5
+    emitter.instruction("mov r9, 1");                                           // PSK authenticates; no certificate to verify
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_connect_psk_fn", 0); // PSK connect entry
+    emitter.instruction("test r10, r10");                                       // backend present?
+    emitter.instruction("jz __rt_https_open_fail_x86");                         // missing backend → fail closed
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // host pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // host length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // port
+    emitter.instruction("call r10");                                            // open the PSK session
+    emitter.instruction("jmp __rt_https_open_connected_check_x86");             // continue at the shared connected path
+    emitter.label("__rt_https_open_no_psk_x");
     emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // no ssl.session_data yet
     emitter.instruction("mov QWORD PTR [rbp - 104], 0");                        // secure TLS by default
 
@@ -502,6 +542,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // arg 1 = host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // arg 2 = port (rcx/r8 hold cafile args)
     emitter.instruction("call r9");                                             // open the TLS session, rax = handle
+    emitter.label("__rt_https_open_connected_check_x86");
     emitter.instruction("cmp rax, 0");                                          // did the TLS handshake fail?
     emitter.instruction("jl __rt_https_open_fail_x86");                         // negative handle means TLS connect failed
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the TLS session handle
@@ -680,6 +721,9 @@ mod tests {
                 "_ssl_session_data_key_str",
                 "_elephc_tls_connect_session_fn",
                 "_elephc_tls_connect_session_insecure_fn",
+                "_tls_psk_client_descriptor",
+                "_tls_psk_client_adapter",
+                "_elephc_tls_connect_psk_fn",
             ] {
                 assert!(asm.contains(needle), "{name}: missing {needle}");
             }

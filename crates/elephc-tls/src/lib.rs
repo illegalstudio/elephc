@@ -698,6 +698,23 @@ pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
     -1
 }
 
+/// Rustls cannot use an external PSK. The libssl-backed
+/// `elephc-tls-openssl` bridge provides this entry point; this stub keeps the
+/// published elephc-tls ABI linkable and fails closed if a PSK callback reaches
+/// a rustls build.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_psk(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _descriptor: *mut std::ffi::c_void,
+    _adapter: *const std::ffi::c_void,
+    _insecure: std::ffi::c_int,
+) -> i64 {
+    crate::error::record("TLS external PSK requires the libssl backend");
+    -1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

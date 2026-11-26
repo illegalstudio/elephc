@@ -52,6 +52,18 @@ pub(crate) struct SSL_SESSION {
     _private: [u8; 0],
 }
 
+/// Opaque libssl cipher descriptor.
+#[repr(C)]
+pub(crate) struct SSL_CIPHER {
+    _private: [u8; 0],
+}
+
+/// Opaque libcrypto digest descriptor.
+#[repr(C)]
+pub(crate) struct EVP_MD {
+    _private: [u8; 0],
+}
+
 /// Opaque memory BIO.
 #[repr(C)]
 pub(crate) struct BIO {
@@ -95,6 +107,14 @@ const SSL_SESS_CACHE_SERVER: c_long = 2;
 /// `TLS1_2_VERSION`.
 #[cfg(all(test, elephc_tls_openssl_native))]
 pub(crate) const TLS1_2_VERSION: c_long = 0x0303;
+/// `TLS1_3_VERSION`.
+const TLS1_3_VERSION: c_int = 0x0304;
+/// TLS 1.3 cipher-suite id for `TLS_AES_128_GCM_SHA256`.
+const TLS1_3_AES_128_GCM_SHA256: [u8; 2] = [0x13, 0x01];
+/// TLS 1.3 cipher-suite id for `TLS_AES_256_GCM_SHA384`.
+const TLS1_3_AES_256_GCM_SHA384: [u8; 2] = [0x13, 0x02];
+/// `OPENSSL_ENCODING_PEM`-style result kind the PHP adapter uses for a string.
+const PSK_RESULT_STRING: i64 = 1;
 
 extern "C" {
     fn OPENSSL_init_ssl(opts: u64, settings: *const c_void) -> c_int;
@@ -152,6 +172,37 @@ extern "C" {
     fn ERR_error_string_n(code: u64, buf: *mut c_char, len: usize);
     fn ERR_get_error() -> u64;
     fn ERR_clear_error();
+    fn SSL_CTX_set_psk_use_session_callback(
+        ctx: *mut SSL_CTX,
+        callback: Option<unsafe extern "C" fn(
+            *mut SSL,
+            *const EVP_MD,
+            *mut *const u8,
+            *mut usize,
+            *mut *mut SSL_SESSION,
+        ) -> c_int>,
+    );
+    fn SSL_CTX_set_psk_client_callback(
+        ctx: *mut SSL_CTX,
+        callback: Option<unsafe extern "C" fn(
+            *mut SSL,
+            *const c_char,
+            *mut c_char,
+            u32,
+            *mut u8,
+            u32,
+        ) -> u32>,
+    );
+    fn SSL_SESSION_new() -> *mut SSL_SESSION;
+    fn SSL_SESSION_set1_master_key(
+        session: *mut SSL_SESSION,
+        key: *const u8,
+        len: usize,
+    ) -> c_int;
+    fn SSL_SESSION_set_cipher(session: *mut SSL_SESSION, cipher: *const SSL_CIPHER) -> c_int;
+    fn SSL_SESSION_set_protocol_version(session: *mut SSL_SESSION, version: c_int) -> c_int;
+    fn SSL_CIPHER_find(ssl: *mut SSL, cipher_id: *const u8) -> *const SSL_CIPHER;
+    fn SSL_CIPHER_get_handshake_digest(cipher: *const SSL_CIPHER) -> *const EVP_MD;
 }
 
 #[cfg(all(test, elephc_tls_openssl_native))]
@@ -163,6 +214,16 @@ extern "C" {
         sid_ctx_len: u32,
     ) -> c_int;
     fn SSL_accept(ssl: *mut SSL) -> c_int;
+    fn SSL_CTX_set_psk_find_session_callback(
+        ctx: *mut SSL_CTX,
+        callback: Option<unsafe extern "C" fn(
+            *mut SSL,
+            *const u8,
+            usize,
+            *mut *mut SSL_SESSION,
+        ) -> c_int>,
+    );
+    fn SSL_CTX_set_ciphersuites(ctx: *mut SSL_CTX, suites: *const c_char) -> c_int;
 }
 
 /// One live TLS connection.
@@ -182,6 +243,43 @@ static NEXT_ID: AtomicI64 = AtomicI64::new(1);
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
     static SESSION_PEM: RefCell<CString> = RefCell::new(CString::default());
+    /// The PSK callback installed on the connection currently handshaking.
+    static PSK_CALLBACK: RefCell<Option<PskCallback>> = const { RefCell::new(None) };
+    /// Keeps the last identity advertised by the callback alive until the
+    /// handshake has consumed it.
+    static PSK_IDENTITY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One PHP-supplied external-PSK callback, decomposed at the PHP layer.
+#[derive(Clone, Copy)]
+struct PskCallback {
+    /// The normalized callable descriptor pointer.
+    descriptor: *mut c_void,
+    /// The codegen adapter address (`__rt_curl_invoke_callback`).
+    adapter: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut PskCallSpec) -> i64,
+}
+
+/// One PHP argument in `__rt_mixed_from_value`'s `(tag, lo, hi)` encoding.
+#[repr(C)]
+pub(crate) struct PskCallArg {
+    tag: i64,
+    lo: i64,
+    hi: i64,
+}
+
+/// The bridge-owned call descriptor the codegen adapter reads at fixed offsets.
+///
+/// Layout is load-bearing: it must match `crates/elephc-curl/src/callbacks.rs`'s
+/// `CallSpec` because the shared adapter is `__rt_curl_invoke_callback`.
+#[repr(C)]
+pub(crate) struct PskCallSpec {
+    argc: i64,
+    argv: *const PskCallArg,
+    result_kind: i64,
+    out_buf: *mut u8,
+    out_cap: i64,
+    out_len: i64,
+    status: i64,
 }
 
 /// Returns the process-wide handle table.
@@ -326,6 +424,145 @@ unsafe fn parse_session(pem: &[u8]) -> Option<*mut SSL_SESSION> {
     }
 }
 
+/// Invokes the installed PHP PSK callback and returns its `(identity, psk)`
+/// byte pair, or `None` for a null/empty/failed result.
+///
+/// The PHP side returns `identity_len (4 bytes, big-endian) | identity | psk`;
+/// the adapter is the shared `__rt_curl_invoke_callback`, so the spec layout must
+/// stay exactly the curl bridge's `CallSpec`.
+unsafe fn invoke_psk_callback(identity: Option<&[u8]>) -> Option<(Vec<u8>, Vec<u8>)> {
+    let callback = PSK_CALLBACK.with(|slot| *slot.borrow())?;
+    let argument = identity.map(|bytes| PskCallArg {
+        tag: 1,
+        lo: bytes.as_ptr() as i64,
+        hi: bytes.len() as i64,
+    });
+    let mut buffer = vec![0u8; 512];
+    let mut spec = PskCallSpec {
+        argc: i64::from(argument.is_some()),
+        argv: argument
+            .as_ref()
+            .map_or(ptr::null(), |argument| argument as *const PskCallArg),
+        result_kind: PSK_RESULT_STRING,
+        out_buf: buffer.as_mut_ptr(),
+        out_cap: buffer.len() as i64,
+        out_len: 0,
+        status: 0,
+    };
+    let _ = (callback.adapter)(callback.descriptor, ptr::null_mut(), &mut spec);
+    if spec.status != 0 || spec.out_len <= 4 || spec.out_len > spec.out_cap {
+        return None;
+    }
+    let encoded = &buffer[..spec.out_len as usize];
+    let identity_len =
+        u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]) as usize;
+    if identity_len == 0 || identity_len > encoded.len() - 4 {
+        return None;
+    }
+    let identity = encoded[4..4 + identity_len].to_vec();
+    let psk = encoded[4 + identity_len..].to_vec();
+    if psk.is_empty() {
+        return None;
+    }
+    Some((identity, psk))
+}
+
+/// Builds the TLS 1.3 `SSL_SESSION` that carries an external PSK.
+///
+/// Mirrors php-src's `php_openssl_psk_build_session`: the session's master key
+/// is the PSK, the cipher is the TLS 1.3 suite whose handshake digest matches
+/// `md` when libssl supplies one, and the protocol version is TLS 1.3.
+unsafe fn build_psk_session(
+    ssl: *mut SSL,
+    psk: &[u8],
+    md: *const EVP_MD,
+) -> Option<*mut SSL_SESSION> {
+    let mut cipher = SSL_CIPHER_find(ssl, TLS1_3_AES_128_GCM_SHA256.as_ptr());
+    if !md.is_null()
+        && !cipher.is_null()
+        && SSL_CIPHER_get_handshake_digest(cipher) != md
+    {
+        cipher = SSL_CIPHER_find(ssl, TLS1_3_AES_256_GCM_SHA384.as_ptr());
+        if cipher.is_null() || SSL_CIPHER_get_handshake_digest(cipher) != md {
+            return None;
+        }
+    }
+    if cipher.is_null() {
+        return None;
+    }
+    let session = SSL_SESSION_new();
+    if session.is_null() {
+        return None;
+    }
+    if SSL_SESSION_set1_master_key(session, psk.as_ptr(), psk.len()) != 1
+        || SSL_SESSION_set_cipher(session, cipher) != 1
+        || SSL_SESSION_set_protocol_version(session, TLS1_3_VERSION) != 1
+    {
+        SSL_SESSION_free(session);
+        return None;
+    }
+    Some(session)
+}
+
+/// TLS 1.3 external-PSK client callback.
+///
+/// # Safety
+/// Called by libssl with writable `identity_out`, `identity_len_out`, and
+/// `session_out` pointers for the duration of the handshake.
+unsafe extern "C" fn psk_use_session_cb(
+    ssl: *mut SSL,
+    md: *const EVP_MD,
+    identity_out: *mut *const u8,
+    identity_len_out: *mut usize,
+    session_out: *mut *mut SSL_SESSION,
+) -> c_int {
+    let Some((identity, psk)) = invoke_psk_callback(None) else {
+        return 0;
+    };
+    let Some(session) = build_psk_session(ssl, &psk, md) else {
+        record_error("Failed to build the TLS 1.3 PSK session");
+        return 0;
+    };
+    PSK_IDENTITY.with(|slot| *slot.borrow_mut() = identity);
+    let (pointer, length) = PSK_IDENTITY.with(|slot| {
+        let identity = slot.borrow();
+        (identity.as_ptr(), identity.len())
+    });
+    *identity_out = pointer;
+    *identity_len_out = length;
+    *session_out = session;
+    1
+}
+
+/// TLS 1.2 external-PSK client callback.
+///
+/// # Safety
+/// Called by libssl with `identity_out` sized for `max_identity_len` bytes and
+/// `psk_out` sized for `max_psk_len` bytes.
+unsafe extern "C" fn psk_client_cb(
+    _ssl: *mut SSL,
+    _hint: *const c_char,
+    identity_out: *mut c_char,
+    max_identity_len: u32,
+    psk_out: *mut u8,
+    max_psk_len: u32,
+) -> u32 {
+    let Some((identity, psk)) = invoke_psk_callback(None) else {
+        return 0;
+    };
+    if identity.is_empty()
+        || identity.len() + 1 > max_identity_len as usize
+        || psk.len() > max_psk_len as usize
+    {
+        record_error("TLS PSK identity or key exceeds the libssl buffer");
+        return 0;
+    }
+    ptr::copy_nonoverlapping(identity.as_ptr(), identity_out as *mut u8, identity.len());
+    *identity_out.add(identity.len()) = 0;
+    ptr::copy_nonoverlapping(psk.as_ptr(), psk_out, psk.len());
+    psk.len() as u32
+}
+
 /// Opens one TCP+TLS connection and returns its handle, or `-1`.
 unsafe fn connect_inner(
     host: &str,
@@ -335,12 +572,17 @@ unsafe fn connect_inner(
     client_cert: Option<(&str, &str)>,
     session: Option<&[u8]>,
     max_version: Option<c_long>,
+    psk: Option<PskCallback>,
 ) -> i64 {
     init_ssl();
     clear_error();
     let Some(ctx) = create_client_ctx(insecure, cafile, client_cert, max_version) else {
         return -1;
     };
+    if psk.is_some() {
+        SSL_CTX_set_psk_use_session_callback(ctx, Some(psk_use_session_cb));
+        SSL_CTX_set_psk_client_callback(ctx, Some(psk_client_cb));
+    }
     let ssl = SSL_new(ctx);
     if ssl.is_null() {
         record_ssl_error("Failed to allocate TLS connection");
@@ -399,7 +641,15 @@ unsafe fn connect_inner(
         }
         SSL_SESSION_free(session);
     }
+    let previous_psk = if psk.is_some() {
+        Some(PSK_CALLBACK.with(|slot| slot.replace(psk)))
+    } else {
+        None
+    };
     let rc = SSL_connect(ssl);
+    if let Some(previous) = previous_psk {
+        PSK_CALLBACK.with(|slot| *slot.borrow_mut() = previous);
+    }
     if rc != 1 {
         let error = SSL_get_error(ssl, rc);
         if error == SSL_ERROR_SYSCALL {
@@ -448,7 +698,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, None, None, None, None)
+        connect_inner(host, port, false, None, None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -469,7 +719,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_insecure(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, true, None, None, None, None)
+        connect_inner(host, port, true, None, None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -496,7 +746,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_cafile(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, Some(cafile), None, None, None)
+        connect_inner(host, port, false, Some(cafile), None, None, None, None)
     }))
     .unwrap_or(-1)
 }
@@ -520,7 +770,7 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, false, None, None, Some(session), None)
+        connect_inner(host, port, false, None, None, Some(session), None, None)
     }))
     .unwrap_or(-1)
 }
@@ -547,7 +797,54 @@ pub unsafe extern "C" fn elephc_tls_openssl_connect_session_insecure(
         return -1;
     };
     catch_unwind(AssertUnwindSafe(|| {
-        connect_inner(host, port, true, None, None, Some(session), None)
+        connect_inner(host, port, true, None, None, Some(session), None, None)
+    }))
+    .unwrap_or(-1)
+}
+
+/// C ABI: connects with an external PSK supplied by a PHP callback.
+///
+/// `descriptor` is the normalized callable descriptor pointer and `adapter` the
+/// address of the shared codegen adapter that re-enters compiled PHP. `insecure`
+/// disables certificate verification, as the PHP `verify_peer = "0"` option does.
+///
+/// # Safety
+/// The host pointer must reference `host_len` readable bytes; `descriptor` and
+/// `adapter` must outlive the handshake and come from the PHP prelude.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_openssl_connect_psk(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    descriptor: *mut c_void,
+    adapter: *const c_void,
+    insecure: c_int,
+) -> i64 {
+    let host = std::slice::from_raw_parts(host, host_len);
+    let Ok(host) = std::str::from_utf8(host) else {
+        record_error("TLS host is not UTF-8");
+        return -1;
+    };
+    if descriptor.is_null() || adapter.is_null() {
+        record_error("TLS PSK callback is not installed");
+        return -1;
+    }
+    let adapter: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut PskCallSpec) -> i64 =
+        std::mem::transmute(adapter);
+    catch_unwind(AssertUnwindSafe(|| {
+        connect_inner(
+            host,
+            port,
+            insecure != 0,
+            None,
+            None,
+            None,
+            None,
+            Some(PskCallback {
+                descriptor,
+                adapter,
+            }),
+        )
     }))
     .unwrap_or(-1)
 }
@@ -819,6 +1116,19 @@ pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
     session_len: usize,
 ) -> i64 {
     elephc_tls_openssl_connect_session_insecure(host, host_len, port, session, session_len)
+}
+
+/// C ABI: connects with an external PSK supplied by a PHP callback.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_psk(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    descriptor: *mut c_void,
+    adapter: *const c_void,
+    insecure: c_int,
+) -> i64 {
+    elephc_tls_openssl_connect_psk(host, host_len, port, descriptor, adapter, insecure)
 }
 
 /// C ABI: reads plaintext from a libssl handle.
@@ -1110,6 +1420,139 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
                 }
             }
         }
+    }
+
+    /// The PSK the loopback server accepts.
+    static SERVER_PSK: OnceLock<Vec<u8>> = OnceLock::new();
+
+    /// TLS 1.3 server callback: accepts the `client` identity and returns the
+    /// session carrying the configured external PSK.
+    unsafe extern "C" fn server_psk_find_session_cb(
+        ssl: *mut SSL,
+        identity: *const u8,
+        identity_len: usize,
+        session_out: *mut *mut SSL_SESSION,
+    ) -> c_int {
+        let identity = std::slice::from_raw_parts(identity, identity_len);
+        if identity != b"client" {
+            return 0;
+        }
+        let Some(psk) = SERVER_PSK.get() else {
+            return 0;
+        };
+        let Some(session) = build_psk_session(ssl, psk, ptr::null()) else {
+            return 0;
+        };
+        *session_out = session;
+        1
+    }
+
+    /// Creates a certificate-less TLS 1.3 server context that only accepts the
+    /// external PSK from `server_psk_find_session_cb`.
+    unsafe fn server_context_psk(psk: &[u8]) -> *mut SSL_CTX {
+        let _ = SERVER_PSK.set(psk.to_vec());
+        let ctx = SSL_CTX_new(TLS_server_method());
+        assert!(!ctx.is_null());
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, None);
+        SSL_CTX_set_psk_find_session_callback(ctx, Some(server_psk_find_session_cb));
+        assert_eq!(
+            SSL_CTX_set_ciphersuites(ctx, c"TLS_AES_128_GCM_SHA256".as_ptr()),
+            1
+        );
+        assert_eq!(
+            SSL_CTX_ctrl(
+                ctx,
+                SSL_CTRL_SET_MAX_PROTO_VERSION,
+                TLS1_3_VERSION as c_long,
+                ptr::null_mut(),
+            ),
+            1
+        );
+        ctx
+    }
+
+    /// Runs a one-connection TLS 1.3 PSK server and reports whether it accepted.
+    fn serve_psk(
+        port_tx: mpsc::Sender<u16>,
+        done_tx: mpsc::Sender<bool>,
+        psk: Vec<u8>,
+    ) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind PSK server");
+        port_tx
+            .send(listener.local_addr().expect("PSK server address").port())
+            .expect("send PSK server port");
+        let accepted = unsafe {
+            let ctx = server_context_psk(&psk);
+            let (stream, _) = listener.accept().expect("accept PSK client");
+            let ssl = SSL_new(ctx);
+            assert!(!ssl.is_null());
+            assert_eq!(SSL_set_fd(ssl, stream.as_raw_fd()), 1);
+            let handshake = SSL_accept(ssl) == 1;
+            if !handshake {
+                eprintln!("PSK server handshake failed: {:?}", last_error());
+            }
+            if handshake {
+                let mut byte = [0u8; 1];
+                assert_eq!(SSL_read(ssl, byte.as_mut_ptr() as *mut c_void, 1), 1);
+                assert_eq!(
+                    SSL_write(ssl, b"psk".as_ptr() as *const c_void, 3),
+                    3
+                );
+            }
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            handshake
+        };
+        done_tx.send(accepted).expect("send PSK server result");
+    }
+
+    /// Test adapter: returns `identity_len | identity | psk` exactly as the PHP
+    /// wrapper does, without needing a compiled PHP program.
+    unsafe extern "C" fn psk_test_adapter(
+        _descriptor: *mut c_void,
+        _object: *mut c_void,
+        spec: *mut PskCallSpec,
+    ) -> i64 {
+        let encoded: &[u8] = b"\x00\x00\x00\x06clientsecret";
+        if encoded.len() > (*spec).out_cap as usize {
+            (*spec).status = -1;
+            return 0;
+        }
+        ptr::copy_nonoverlapping(encoded.as_ptr(), (*spec).out_buf, encoded.len());
+        (*spec).out_len = encoded.len() as i64;
+        (*spec).status = 0;
+        0
+    }
+
+    /// Verifies the TLS 1.3 external-PSK connect path against a loopback server.
+    #[test]
+    fn tls13_external_psk_round_trip() {
+        let (port_tx, port_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let server = thread::spawn(move || serve_psk(port_tx, done_tx, b"secret".to_vec()));
+        let port = port_rx.recv().expect("PSK server port");
+
+        let handle = unsafe {
+            elephc_tls_openssl_connect_psk(
+                b"127.0.0.1".as_ptr(),
+                9,
+                port,
+                1 as *mut c_void,
+                psk_test_adapter as *const c_void,
+                1,
+            )
+        };
+        assert!(handle > 0, "PSK connect: {:?}", last_error());
+        assert_eq!(
+            unsafe { elephc_tls_openssl_write(handle, b"a".as_ptr(), 1) },
+            1
+        );
+        assert_eq!(read_exact_tls(handle, 3), b"psk");
+        elephc_tls_openssl_close(handle);
+
+        assert!(done_rx.recv().expect("PSK server result"));
+        server.join().expect("PSK server thread");
     }
 
     /// Verifies that an exported TLS 1.2 session resumes on the next connection.

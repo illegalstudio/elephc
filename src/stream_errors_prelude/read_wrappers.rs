@@ -1189,6 +1189,10 @@ fn context_create_wrapper() -> Stmt {
                 e_var("id"),
                 e_var("stored"),
             ),
+            s_expr(e_call(
+                "__elephc_tls_apply_psk_client",
+                vec![e_var("options")],
+            )),
             s_return(e_var("context")),
         ])
         .build()
@@ -1353,6 +1357,15 @@ fn context_set_option_wrapper() -> Stmt {
                         Vec::new(),
                         None,
                     ),
+                    s_if(
+                        e_var("result"),
+                        vec![s_expr(e_call(
+                            "__elephc_tls_apply_psk_client",
+                            vec![e_var("wrapper")],
+                        ))],
+                        Vec::new(),
+                        None,
+                    ),
                 ],
                 Vec::new(),
                 Some(vec![
@@ -1374,6 +1387,16 @@ fn context_set_option_wrapper() -> Stmt {
                             "convertedValue",
                             e_method_call(e_var("value"), "export", vec![e_int(2)]),
                         )],
+                        Vec::new(),
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("wrapper"), BinOp::StrictEq, e_str("ssl")),
+                            BinOp::And,
+                            e_binop(e_var("option"), BinOp::StrictEq, e_str("psk_client_cb")),
+                        ),
+                        vec![s_assign("convertedValue", e_str(""))],
                         Vec::new(),
                         None,
                     ),
@@ -1428,6 +1451,23 @@ fn context_set_option_wrapper() -> Stmt {
                                 None,
                             ),
                         ],
+                        Vec::new(),
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_var("result"),
+                            BinOp::And,
+                            e_binop(
+                                e_binop(e_var("wrapper"), BinOp::StrictEq, e_str("ssl")),
+                                BinOp::And,
+                                e_binop(e_var("option"), BinOp::StrictEq, e_str("psk_client_cb")),
+                            ),
+                        ),
+                        vec![s_expr(e_call(
+                            "__elephc_tls_set_psk_client_cb",
+                            vec![e_var("value")],
+                        ))],
                         Vec::new(),
                         None,
                     ),

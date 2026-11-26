@@ -73,7 +73,169 @@ pub(crate) fn skip_without_openssl_cli(test_name: &str) -> bool {
     true
 }
 
-/// A local `openssl s_server` process plus the material for its first session.
+/// A local certificate-less TLS 1.3 `openssl s_server` that only accepts one
+/// external PSK identity.
+pub(crate) struct OpensslPskServer {
+    child: Child,
+    directory: PathBuf,
+    port: u16,
+    log_path: PathBuf,
+}
+
+impl OpensslPskServer {
+    /// Starts a TLS 1.3 PSK `s_server -www -state -nocert` listener.
+    pub(crate) fn start(psk_hex: &str, identity: &str) -> Option<Self> {
+        let binary = psk_cli()?;
+        let mut last_log = String::new();
+        for _ in 0..5 {
+            let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+            let directory = std::env::temp_dir().join(format!(
+                "elephc_openssl_psk_server_{}_{}",
+                std::process::id(),
+                id
+            ));
+            std::fs::create_dir_all(&directory)
+                .expect("openssl PSK server: create fixture directory");
+            let log_path = directory.join("server.log");
+            let port = reserve_port();
+            let log = std::fs::File::create(&log_path).expect("openssl PSK server: create log");
+            let stderr = log.try_clone().expect("openssl PSK server: clone log");
+            let child = Command::new(binary)
+                .args([
+                    "s_server",
+                    "-accept",
+                    &port.to_string(),
+                    "-tls1_3",
+                    "-psk",
+                    psk_hex,
+                    "-psk_identity",
+                    identity,
+                    "-nocert",
+                    "-www",
+                    "-state",
+                ])
+                .current_dir(&directory)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log))
+                .stderr(Stdio::from(stderr))
+                .spawn()
+                .expect("openssl PSK server: spawn s_server");
+            let mut server = Self {
+                child,
+                directory,
+                port,
+                log_path,
+            };
+            if server.wait_for_listener(Duration::from_secs(5)) {
+                return Some(server);
+            }
+            last_log = server.state_log();
+            server.stop();
+            drop(server);
+        }
+        panic!("openssl PSK server: s_server did not listen on five port attempts: {last_log}");
+    }
+
+    /// Returns the loopback port the fixture server listens on.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Returns the accumulated `-state` transcript.
+    pub(crate) fn state_log(&self) -> String {
+        std::fs::read_to_string(&self.log_path).unwrap_or_default()
+    }
+
+    /// Waits until the transcript contains `needle` at least `count` times.
+    pub(crate) fn wait_for_state(&self, needle: &str, count: usize, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.state_log().matches(needle).count() >= count {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    /// Waits for the `ACCEPT` banner that means the listener is bound.
+    fn wait_for_listener(&mut self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return false;
+            }
+            if self.state_log().contains("ACCEPT") {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    /// Terminates the fixture server and reaps its process.
+    pub(crate) fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for OpensslPskServer {
+    /// Stops the fixture server and removes its scratch directory.
+    fn drop(&mut self) {
+        self.stop();
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Reports whether an `openssl` binary supports the TLS 1.3 PSK server options.
+fn psk_cli() -> Option<&'static Path> {
+    static BINARY: OnceLock<Option<PathBuf>> = OnceLock::new();
+    BINARY
+        .get_or_init(|| {
+            if let Some(explicit) = std::env::var_os("ELEPHC_TEST_OPENSSL_BIN") {
+                let path = PathBuf::from(explicit);
+                return cli_supports_psk_server(&path).then_some(path);
+            }
+            let mut candidates = vec![PathBuf::from("openssl")];
+            for prefix in ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"] {
+                candidates.push(PathBuf::from(prefix).join("bin/openssl"));
+            }
+            candidates.into_iter().find(|path| cli_supports_psk_server(path))
+        })
+        .as_deref()
+}
+
+/// Verifies the candidate binary advertises the TLS 1.3 PSK server flags.
+fn cli_supports_psk_server(path: &Path) -> bool {
+    let Ok(output) = Command::new(path).arg("s_server").arg("-help").output() else {
+        return false;
+    };
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text.contains("-psk") && text.contains("-nocert") && text.contains("-tls1_3")
+}
+
+/// Reports a skip for `test_name` when no TLS 1.3 PSK-capable CLI is available.
+pub(crate) fn skip_without_openssl_psk_cli(test_name: &str) -> bool {
+    if psk_cli().is_some() {
+        return false;
+    }
+    if std::env::var_os(OPENSSL_CLI_REQUIRE_ENV).is_some_and(|value| !value.is_empty()) {
+        panic!(
+            "{test_name}: {OPENSSL_CLI_REQUIRE_ENV} is set but no openssl s_server with \
+             TLS 1.3 PSK support was found (set ELEPHC_TEST_OPENSSL_BIN to its path)"
+        );
+    }
+    eprintln!(
+        "{OPENSSL_CLI_SKIP_MARKER} skipping {test_name}: no openssl s_server with TLS 1.3 \
+         PSK support was found (set ELEPHC_TEST_OPENSSL_BIN to its path)"
+    );
+    true
+}
+
+/// A local certificate-less TLS 1.3 `openssl s_server` that only accepts one
+/// external PSK identity.
 pub(crate) struct OpensslSessionServer {
     child: Child,
     directory: PathBuf,
