@@ -1119,11 +1119,55 @@ fn context_create_wrapper() -> Stmt {
         .param_default("params", t_mixed(), e_null())
         .returns(t_mixed())
         .body(vec![
+            s_assign("converted", e_var("options")),
+            s_if(
+                e_binop(
+                    e_call("is_array", vec![e_var("options")]),
+                    BinOp::And,
+                    e_call(
+                        "isset",
+                        vec![e_index(
+                            e_index(e_var("options"), e_str("ssl")),
+                            e_str("session_data"),
+                        )],
+                    ),
+                ),
+                vec![s_if(
+                    e_call(
+                        "is_a",
+                        vec![
+                            e_index(
+                                e_index(e_var("options"), e_str("ssl")),
+                                e_str("session_data"),
+                            ),
+                            e_str("Openssl\\Session"),
+                        ],
+                    ),
+                    vec![s_expr(e_assign(
+                        e_index(
+                            e_index(e_var("converted"), e_str("ssl")),
+                            e_str("session_data"),
+                        ),
+                        e_method_call(
+                            e_index(
+                                e_index(e_var("options"), e_str("ssl")),
+                                e_str("session_data"),
+                            ),
+                            "export",
+                            vec![e_int(2)],
+                        ),
+                    ))],
+                    Vec::new(),
+                    None,
+                )],
+                Vec::new(),
+                None,
+            ),
             s_assign(
                 "context",
                 e_call(
                     "stream_context_create",
-                    vec![e_var("options"), e_var("params")],
+                    vec![e_var("converted"), e_var("params")],
                 ),
             ),
             s_if(
@@ -1194,11 +1238,55 @@ fn context_set_option_wrapper() -> Stmt {
             s_if(
                 e_call("is_array", vec![e_var("wrapper")]),
                 vec![
+                    s_assign("converted", e_var("wrapper")),
+                    s_if(
+                        e_binop(
+                            e_call("is_array", vec![e_var("wrapper")]),
+                            BinOp::And,
+                            e_call(
+                                "isset",
+                                vec![e_index(
+                                    e_index(e_var("wrapper"), e_str("ssl")),
+                                    e_str("session_data"),
+                                )],
+                            ),
+                        ),
+                        vec![s_if(
+                            e_call(
+                                "is_a",
+                                vec![
+                                    e_index(
+                                        e_index(e_var("wrapper"), e_str("ssl")),
+                                        e_str("session_data"),
+                                    ),
+                                    e_str("Openssl\\Session"),
+                                ],
+                            ),
+                            vec![s_expr(e_assign(
+                                e_index(
+                                    e_index(e_var("converted"), e_str("ssl")),
+                                    e_str("session_data"),
+                                ),
+                                e_method_call(
+                                    e_index(
+                                        e_index(e_var("wrapper"), e_str("ssl")),
+                                        e_str("session_data"),
+                                    ),
+                                    "export",
+                                    vec![e_int(2)],
+                                ),
+                            ))],
+                            Vec::new(),
+                            None,
+                        )],
+                        Vec::new(),
+                        None,
+                    ),
                     s_assign(
                         "result",
                         e_call(
                             "stream_context_set_option",
-                            vec![e_var("context"), e_var("wrapper")],
+                            vec![e_var("context"), e_var("converted")],
                         ),
                     ),
                     s_if(

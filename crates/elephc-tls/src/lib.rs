@@ -669,6 +669,35 @@ pub extern "C" fn elephc_tls_close(handle_id: i64) {
     }
 }
 
+/// Rustls cannot import an OpenSSL PEM session. The libssl-backed
+/// `elephc-tls-openssl` bridge provides this entry point; this stub keeps the
+/// published elephc-tls ABI linkable for ordinary rustls HTTPS programs and
+/// fails closed if `ssl.session_data` reaches a rustls build.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_session(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _session: *const u8,
+    _session_len: usize,
+) -> i64 {
+    crate::error::record("TLS session resumption requires the libssl backend");
+    -1
+}
+
+/// Insecure counterpart of [`elephc_tls_connect_session`].
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _session: *const u8,
+    _session_len: usize,
+) -> i64 {
+    crate::error::record("TLS session resumption requires the libssl backend");
+    -1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

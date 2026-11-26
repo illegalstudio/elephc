@@ -17,6 +17,9 @@
 //!   pointers (`_elephc_tls_*_fn`) so the shared runtime carries no direct
 //!   elephc-tls symbol reference — only programs that actually open https URLs
 //!   pull in `-lelephc_tls` at link time.
+//! - PHP 8.6 `ssl.session_data` selects the session variants when the context
+//!   carries the option; the selected bridge's `connect_session` entry installs
+//!   the PEM session before the handshake.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -37,11 +40,18 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.comment("--- runtime: https_open ---");
     emitter.label_global("__rt_https_open");
 
-    // Frame (80 bytes): [0]=tls handle [8]=req ptr [16]=req len
-    //                   [24]=response len [32]=body start [40]=temp fd.
-    emitter.instruction("sub sp, sp, #80");                                     // allocate the helper frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
+    // Frame (96 bytes): [0]=tls handle [8]=req ptr [16]=req len
+    //                   [24]=response len [32]=body start [40]=temp fd
+    //                   [48]=session ptr [56]=session len
+    //                   [64]=session present [72]=insecure policy
+    //                   [80]=saved x29/x30.
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the helper frame plus saved TLS-session state
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
+    emitter.instruction("stp x19, x20, [sp, #48]");                             // save the imported session ptr/len
+    emitter.instruction("stp x21, x22, [sp, #64]");                             // save the session/insecure flags
+    emitter.instruction("mov x21, #0");                                         // no ssl.session_data yet
+    emitter.instruction("mov x22, #0");                                         // secure TLS by default
     emitter.instruction("str x3, [sp, #8]");                                    // save the HTTP request pointer
     emitter.instruction("str x4, [sp, #16]");                                   // save the HTTP request length
 
@@ -53,6 +63,22 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("stp x0, x1, [sp, #-16]!");                             // save host_ptr/host_len across the context lookups
     emitter.instruction("str x2, [sp, #-16]!");                                 // save port (16 bytes for stack alignment)
     emitter.instruction("sub sp, sp, #16");                                     // string-lookup out slots: [sp+0]=ptr, [sp+8]=len
+    // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
+    // Openssl\Session object to its PEM export in the builtin option map.
+    emitter.instruction("str xzr, [sp, #0]");                                   // out ptr default
+    emitter.instruction("str xzr, [sp, #8]");                                   // out len default
+    abi::emit_symbol_address(emitter, "x0", "_ssl_key_str");
+    emitter.instruction("mov x1, #3");                                          // strlen("ssl")
+    abi::emit_symbol_address(emitter, "x2", "_ssl_session_data_key_str");
+    emitter.instruction("mov x3, #12");                                         // strlen("session_data")
+    emitter.instruction("mov x4, sp");                                          // out_ptr_addr
+    emitter.instruction("add x5, sp, #8");                                      // out_len_addr
+    emitter.instruction("bl __rt_get_string_context_option");                   // x0 = 1 on hit
+    emitter.instruction("cbz x0, __rt_https_open_no_session_lookup_aarch64");   // no session_data → normal option chain
+    emitter.instruction("ldr x19, [sp, #0]");                                   // session PEM pointer
+    emitter.instruction("ldr x20, [sp, #8]");                                   // session PEM length
+    emitter.instruction("mov x21, #1");                                         // remember that a session was supplied
+    emitter.label("__rt_https_open_no_session_lookup_aarch64");
     // ssl.cafile lookup — a custom CA bundle path
     emitter.instruction("str xzr, [sp, #0]");                                   // out ptr default
     emitter.instruction("str xzr, [sp, #8]");                                   // out len default
@@ -148,6 +174,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x9]");                                        // peer_name connect variant address
     emitter.instruction("b __rt_https_open_have_fn_aarch64");                   // continue at target label
     emitter.label("__rt_https_open_insecure_aarch64");
+    emitter.instruction("mov x22, #1");                                         // remember the insecure TLS policy for a session connect
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_connect_insecure_fn");
     emitter.instruction("ldr x9, [x9]");                                        // insecure variant address
     emitter.instruction("mov x3, #0");                                          // no cafile/capath/peer_name path
@@ -159,6 +186,18 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // no cafile/capath/peer_name path
     emitter.instruction("mov x4, #0");                                          // no cafile/capath/peer_name path
     emitter.label("__rt_https_open_have_fn_aarch64");
+    emitter.instruction("cbz x21, __rt_https_open_no_session_aarch64");         // no session_data → keep the normal connect variant
+    emitter.instruction("mov x3, x19");                                         // session PEM pointer → connect arg 3
+    emitter.instruction("mov x4, x20");                                         // session PEM length → connect arg 4
+    emitter.instruction("cbnz x22, __rt_https_open_session_insecure_aarch64");  // insecure session variant
+    abi::emit_symbol_address(emitter, "x9", "_elephc_tls_connect_session_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // secure session connect address
+    emitter.instruction("b __rt_https_open_session_selected_aarch64");          // continue with the selected session target
+    emitter.label("__rt_https_open_session_insecure_aarch64");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_tls_connect_session_insecure_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // insecure session connect address
+    emitter.label("__rt_https_open_session_selected_aarch64");
+    emitter.label("__rt_https_open_no_session_aarch64");
     emitter.instruction("add sp, sp, #16");                                     // discard the string-lookup out slots
     emitter.instruction("ldr x2, [sp], #16");                                   // restore port
     emitter.instruction("ldp x0, x1, [sp], #16");                               // restore host_ptr/host_len
@@ -259,8 +298,10 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.syscall(199);
 
     emitter.instruction("ldr x0, [sp, #40]");                                   // return the rewound body descriptor
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ldp x21, x22, [sp, #64]");                             // restore the session/insecure flags
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore the session ptr/len
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame plus saved TLS-session state
     emitter.instruction("ret");                                                 // return the https:// stream descriptor
 
     // -- reject a failed handshake while preserving the existing partial-response EOF behavior --
@@ -274,8 +315,10 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.label("__rt_https_open_fail");
     abi::emit_store_imm_to_symbol(emitter, "_stream_error_tls", 0, 1);
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed https:// open
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ldp x21, x22, [sp, #64]");                             // restore the session/insecure flags
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore the session ptr/len
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame plus saved TLS-session state
     emitter.instruction("ret");                                                 // return the failure result
 }
 
@@ -287,19 +330,43 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
 
     // Frame (rbp-relative): [-8]=tls handle [-16]=host ptr [-24]=host len
     //                       [-32]=port [-40]=req ptr [-48]=req len
-    //                       [-56]=response len [-64]=body start [-72]=temp fd.
+    //                       [-56]=response len [-64]=body start [-72]=temp fd
+    //                       [-80/-88]=lookup out slots
+    //                       [-96]=session present [-104]=insecure policy
+    //                       [-112]=session ptr [-120]=session len.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 96");                                         // reserve the helper spill slots (96 = +16 for verify_peer)
+    emitter.instruction("sub rsp, 128");                                        // reserve the helper spill slots plus TLS-session state
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the host pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the host length
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the port number
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the request pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the request length
+    emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // no ssl.session_data yet
+    emitter.instruction("mov QWORD PTR [rbp - 104], 0");                        // secure TLS by default
 
     // -- pick the connect fn from the ssl context: cafile, else verify_peer --
     //    The call always passes cafile args (rcx/r8); the secure/insecure
     //    variants ignore them, so one call site serves all three.
+    // ssl.session_data lookup — the PHP 8.6 wrapper already converted the
+    // Openssl\Session object to its PEM export in the builtin option map.
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // string-lookup out ptr default
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // string-lookup out len default
+    abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");                   // load runtime data address
+    emitter.instruction("mov rsi, 3");                                          // strlen("ssl")
+    abi::emit_symbol_address(emitter, "rdx", "_ssl_session_data_key_str");      // load runtime data address
+    emitter.instruction("mov rcx, 12");                                         // strlen("session_data")
+    emitter.instruction("lea r8, [rbp - 80]");                                  // out_ptr_addr
+    emitter.instruction("lea r9, [rbp - 88]");                                  // out_len_addr
+    emitter.instruction("call __rt_get_string_context_option");                 // rax = 1 on hit
+    emitter.instruction("test rax, rax");                                       // check whether session_data was found
+    emitter.instruction("jz __rt_https_open_no_session_lookup_x");              // no session_data → normal option chain
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // session PEM pointer
+    emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // save the session pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // session PEM length
+    emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // save the session length
+    emitter.instruction("mov QWORD PTR [rbp - 96], 1");                         // remember that a session was supplied
+    emitter.label("__rt_https_open_no_session_lookup_x");
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // string-lookup out ptr default
     emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // string-lookup out len default
     abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");                   // load runtime data address
@@ -395,6 +462,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // peer_name len → connect arg r8
     emitter.instruction("jmp __rt_https_open_have_fn_x");                       // rcx/r8 already hold the peer_name path
     emitter.label("__rt_https_open_insecure_x");
+    emitter.instruction("mov QWORD PTR [rbp - 104], 1");                        // remember the insecure TLS policy
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_insecure_fn", 0); // relaxed (insecure) variant
     emitter.instruction("xor ecx, ecx");                                        // no cafile/capath/peer_name path
     emitter.instruction("xor r8d, r8d");                                        // no cafile/capath/peer_name path
@@ -404,6 +472,18 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ecx, ecx");                                        // no cafile/capath/peer_name path
     emitter.instruction("xor r8d, r8d");                                        // no cafile/capath/peer_name path
     emitter.label("__rt_https_open_have_fn_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // was ssl.session_data supplied?
+    emitter.instruction("je __rt_https_open_no_session_x");                     // no session → keep the normal connect variant
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                      // session PEM pointer → connect arg rcx
+    emitter.instruction("mov r8, QWORD PTR [rbp - 120]");                       // session PEM length → connect arg r8
+    emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                        // insecure policy?
+    emitter.instruction("je __rt_https_open_session_secure_x");                 // secure session variant
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_session_insecure_fn", 0); // insecure session connect
+    emitter.instruction("jmp __rt_https_open_session_selected_x");              // continue with the selected session target
+    emitter.label("__rt_https_open_session_secure_x");
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_connect_session_fn", 0); // secure session connect
+    emitter.label("__rt_https_open_session_selected_x");
+    emitter.label("__rt_https_open_no_session_x");
 
     // -- connect(host, host_len, port, cafile_ptr, cafile_len) — through r9 --
     emitter.instruction("test r9, r9");                                         // missing elephc-tls runtime means HTTPS open fails closed
@@ -505,7 +585,7 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call lseek");                                          // rewind the temp file
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the rewound body descriptor
-    emitter.instruction("add rsp, 96");                                         // release the helper frame
+    emitter.instruction("add rsp, 128");                                        // release the helper frame plus TLS-session state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the https:// stream descriptor
 
@@ -520,7 +600,38 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_https_open_fail_x86");
     abi::emit_store_imm_to_symbol(emitter, "_stream_error_tls", 0, 1);
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed https:// open
-    emitter.instruction("add rsp, 96");                                         // release the helper frame
+    emitter.instruction("add rsp, 128");                                        // release the helper frame plus TLS-session state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every supported target emits the PHP 8.6 session lookup and both session
+    /// connect dispatch paths when it emits the shared HTTPS runtime helper.
+    #[test]
+    fn https_session_wiring_is_emitted_for_every_supported_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_https(&mut emitter);
+            let asm = emitter.output();
+            for needle in [
+                "_ssl_session_data_key_str",
+                "_elephc_tls_connect_session_fn",
+                "_elephc_tls_connect_session_insecure_fn",
+            ] {
+                assert!(asm.contains(needle), "{name}: missing {needle}");
+            }
+        }
+    }
 }

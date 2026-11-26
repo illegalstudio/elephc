@@ -68,8 +68,19 @@ pub fn emit_get_string_context_option(emitter: &mut Emitter) {
     // -- hash_get(top, wrapper) → value_lo = sub-hash on hit --
     emitter.instruction("ldr x1, [sp, #0]");                                    // wrapper_ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // wrapper_len
-    emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo
+    emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x3=tag
     emitter.instruction("cbz x0, __rt_gsco_miss");                              // branch when the checked value is zero or equal
+    // A wrapper created from a heterogeneous options array stores its
+    // sub-array in a Mixed cell; unbox it before walking the option hash.
+    emitter.instruction("cmp x3, #5");                                          // raw associative sub-hash?
+    emitter.instruction("b.eq __rt_gsco_have_sub");                             // use the payload directly
+    emitter.instruction("cmp x3, #7");                                          // boxed Mixed sub-array?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // other tags cannot hold an option hash
+    emitter.instruction("mov x0, x1");                                          // boxed cell → unbox argument
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=payload low, x2=payload high
+    emitter.instruction("cmp x0, #5");                                          // does the cell wrap an associative array?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // non-array wrappers cannot hold options
+    emitter.label("__rt_gsco_have_sub");
 
     // -- hash_get(sub, option) → value_lo=str ptr, x2=str len, x3=tag --
     emitter.instruction("mov x0, x1");                                          // sub-hash → first arg
@@ -78,7 +89,14 @@ pub fn emit_get_string_context_option(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=lo, x2=hi, x3=tag
     emitter.instruction("cbz x0, __rt_gsco_miss");                              // branch when the checked value is zero or equal
     emitter.instruction("cmp x3, #1");                                          // require string tag
-    emitter.instruction("b.ne __rt_gsco_miss");                                 // branch when the checked value is nonzero or different
+    emitter.instruction("b.eq __rt_gsco_have_string");                          // raw string option value
+    emitter.instruction("cmp x3, #7");                                          // boxed Mixed option value?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // non-string options are treated as missing
+    emitter.instruction("mov x0, x1");                                          // boxed cell → unbox argument
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=payload low, x2=payload high
+    emitter.instruction("cmp x0, #1");                                          // does the cell wrap a string?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // non-string wrappers are treated as missing
+    emitter.label("__rt_gsco_have_string");
 
     // -- write (ptr, len) through the caller's output addresses --
     emitter.instruction("ldr x9, [sp, #32]");                                   // out_ptr_addr
@@ -131,6 +149,17 @@ fn emit_get_string_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=hi, rcx=tag
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gsco_miss_x86");                               // branch when the checked value is zero or equal
+    // A wrapper created from a heterogeneous options array stores its
+    // sub-array in a Mixed cell; unbox it before walking the option hash.
+    emitter.instruction("cmp rcx, 5");                                          // raw associative sub-hash?
+    emitter.instruction("je __rt_gsco_have_sub_x86");                           // use the payload directly
+    emitter.instruction("cmp rcx, 7");                                          // boxed Mixed sub-array?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // other tags cannot hold an option hash
+    emitter.instruction("mov rax, rdi");                                        // boxed cell → unbox argument
+    emitter.instruction("call __rt_mixed_unbox");                               // rax=tag, rdi=payload low, rdx=payload high
+    emitter.instruction("cmp rax, 5");                                          // does the cell wrap an associative array?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // non-array wrappers cannot hold options
+    emitter.label("__rt_gsco_have_sub_x86");
 
     // hash_get(sub, option) — sub-hash already in rdi
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // opt_ptr
@@ -138,8 +167,16 @@ fn emit_get_string_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=lo, rsi=hi, rcx=tag
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gsco_miss_x86");                               // branch when the checked value is zero or equal
-    emitter.instruction("cmp rcx, 1");                                          // compare runtime values for the next branch
-    emitter.instruction("jne __rt_gsco_miss_x86");                              // branch when the checked value is nonzero or different
+    emitter.instruction("cmp rcx, 1");                                          // require a string option value
+    emitter.instruction("je __rt_gsco_have_string_x86");                        // raw string option value
+    emitter.instruction("cmp rcx, 7");                                          // boxed Mixed option value?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // non-string options are treated as missing
+    emitter.instruction("mov rax, rdi");                                        // boxed cell → unbox argument
+    emitter.instruction("call __rt_mixed_unbox");                               // rax=tag, rdi=payload low, rdx=payload high
+    emitter.instruction("cmp rax, 1");                                          // does the cell wrap a string?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // non-string wrappers are treated as missing
+    emitter.instruction("mov rsi, rdx");                                        // unboxed string length is the high word
+    emitter.label("__rt_gsco_have_string_x86");
 
     // -- write through output addresses --
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // out_ptr_addr

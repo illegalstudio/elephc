@@ -102,6 +102,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["openssl"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_tls_openssl",
+        package: "elephc-tls-openssl",
+        php_extensions: &["openssl"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
         // This archive backs both PDO and mysqli; the injected surface reports which
@@ -1481,7 +1486,7 @@ fn test_link_plan(
     // them. The production path resolves `openssl-crypto` (and its `zlib`
     // dependency) through `pipeline::backend`; the harness reads the same durable
     // cache structurally. A fixture whose artifacts are missing skips before this.
-    if named.contains("elephc_openssl") {
+    if named.contains("elephc_openssl") || named.contains("elephc_tls_openssl") {
         if let Some(packages) = openssl_native_packages() {
             for package in packages {
                 plan.push(LinkItem::SearchPath(package.library_dir.clone()));

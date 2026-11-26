@@ -1,0 +1,27 @@
+<?php
+// PHP 8.6 TLS session resumption.
+//
+// Capture a session from the server once:
+//   openssl s_client -connect example.com:443 -sess_out session.pem </dev/null
+//
+// Then build and run:
+//   elephc build examples/tls-session-resume/main.php --php-version 8.6
+//   ./examples/tls-session-resume/main session.pem
+//
+// `ssl.session_data` selects the libssl-backed TLS bridge; the project manifest
+// declares the managed openssl-crypto package it links against.
+$path = $argv[1] ?? "session.pem";
+$session = Openssl\Session::import(file_get_contents($path));
+
+printf(
+    "session %s, protocol %s, cipher %s\n",
+    bin2hex($session->id),
+    $session->getProtocol(),
+    $session->getCipher(),
+);
+
+$context = stream_context_create([
+    "ssl" => ["session_data" => $session],
+]);
+
+echo file_get_contents("https://example.com/", false, $context);

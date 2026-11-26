@@ -202,6 +202,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             }
         }
     }
+    // The libssl session backend publishes the whole `elephc_tls_*` ABI, so it
+    // is mutually exclusive with the rustls bridge: linking both would define
+    // every stream entry point twice. A session-using program wins.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_tls_openssl")
+    {
+        planned_link_libraries.retain(|library| library != "elephc_tls");
+        forced_bridge_libs.retain(|library| library != "elephc_tls");
+    }
 
     if emit == Emit::Phpext && (hosted_php_ext.is_some() || !planned_link_libraries.is_empty()) {
         eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
@@ -210,7 +220,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     let requires_elephc_tls = planned_link_libraries
         .iter()
-        .any(|library| library == "elephc_tls");
+        .any(|library| library == "elephc_tls" || library == "elephc_tls_openssl");
 
     // Report the bridges actually linked into THIS compilation to
     // `extension_loaded()` / `get_loaded_extensions()`. Each planned bridge is

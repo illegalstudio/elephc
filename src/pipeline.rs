@@ -292,6 +292,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
+    // PHP 8.6's ssl.session_data needs the libssl-backed TLS stream backend.
+    // Detect the option before prelude injection (the stream-error wrapper
+    // itself also contains the literal) and swap the rustls bridge for it.
+    let tls_session = php_version >= crate::php_version::PhpVersion::Php86
+        && program_uses_ssl_session_data(&ast);
     timings.record_since("resolve", phase_started);
     // Compile-time deprecations raised while each physical file was prepared, reported where
     // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
@@ -1379,6 +1384,16 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         rules.push_str(&format!("@{build}\n"));
         ir_module.apm_rules = Some(rules);
     }
+    let mut required_libraries = check_result.required_libraries.clone();
+    if tls_session {
+        required_libraries.retain(|library| library != "elephc_tls");
+        if !required_libraries
+            .iter()
+            .any(|library| library == "elephc_tls_openssl")
+        {
+            required_libraries.push("elephc_tls_openssl".to_string());
+        }
+    }
     backend::emit_and_link(backend::BackendInputs {
         repl_build: entry.is_repl_host(),
         announce_success: !entry.is_test_suite(),
@@ -1393,7 +1408,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         extra_link_libs: &extra_link_libs,
         extra_link_paths: &extra_link_paths,
         extra_frameworks: &extra_frameworks,
-        required_libraries: &check_result.required_libraries,
+        required_libraries: &required_libraries,
         target,
         emit,
         heap_size,
@@ -1459,4 +1474,12 @@ mod tests {
         }
         assert!(ini_bool("999999999999999999999999999999999999999999"));
     }
+}
+
+/// Returns whether the user program names PHP 8.6's `ssl.session_data` option.
+fn program_uses_ssl_session_data(program: &[crate::parser::ast::Stmt]) -> bool {
+    crate::prelude_prune::usage::collect(program)
+        .literals
+        .iter()
+        .any(|literal| literal.eq_ignore_ascii_case("session_data"))
 }

@@ -1,0 +1,6 @@
+[native]
+schema = 1
+
+[native.dependencies]
+openssl-crypto = "3.6.4"
+zlib = "1.3.2"

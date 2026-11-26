@@ -289,6 +289,9 @@ path = "junit.xml"
 path = "debug/libelephc_tls.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_tls_openssl.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_pdo.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

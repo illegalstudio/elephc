@@ -33,6 +33,9 @@ const BRIDGE_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     // The cipher bridge declares libcrypto's provider/EVP symbols without
     // linking them; the package's zlib dependency supplies `libz.a` after it.
     ("elephc_openssl", &["openssl-crypto"]),
+    // The PHP 8.6 session backend imports/export libssl SSL_SESSION values and
+    // links the same managed OpenSSL 3.6.4 archives as the cipher bridge.
+    ("elephc_tls_openssl", &["openssl-crypto"]),
 ];
 
 /// Returns the managed native packages a planned library set needs, in link order.

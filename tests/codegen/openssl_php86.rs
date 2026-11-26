@@ -147,3 +147,149 @@ echo $stored instanceof Openssl\Session ? "session" : get_debug_type($stored), "
     let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
     assert_eq!(out, "bool(true)\nsession\n");
 }
+
+/// The `stream_context_create()` options array also converts `ssl.session_data`
+/// to PEM for the builtin while `stream_context_get_options()` keeps the object.
+#[test]
+fn test_openssl_session_create_array_preserves_visible_object_php86() {
+    if skip_without_openssl_native("test_openssl_session_create_array_preserves_visible_object_php86") {
+        return;
+    }
+    let pem = format!(
+        "{}\n",
+        include_str!("strings/fixtures/ssl_session_tls12.pem").trim_end()
+    );
+    let source = r#"<?php
+$pem = <<<'PEM'
+__SESSION_PEM__PEM;
+$session = Openssl\Session::import($pem);
+$context = stream_context_create(["ssl" => ["session_data" => $session]]);
+$stored = stream_context_get_options($context)["ssl"]["session_data"] ?? null;
+echo $stored instanceof Openssl\Session ? "session" : get_debug_type($stored), "\n";
+"#
+    .replace("__SESSION_PEM__", &pem);
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "session\n");
+}
+
+/// `fopen('https://...')` resumes a TLS 1.2 session supplied through the PHP 8.6
+/// `ssl.session_data` context option against a local OpenSSL server.
+#[test]
+fn test_openssl_https_session_resumption_php86() {
+    if skip_without_openssl_native("test_openssl_https_session_resumption_php86") {
+        return;
+    }
+    if skip_without_openssl_cli("test_openssl_https_session_resumption_php86") {
+        return;
+    }
+    let server = OpensslSessionServer::start(
+        crate::codegen::io::streams::TEST_HTTPS_CERT_PEM,
+        crate::codegen::io::streams::TEST_HTTPS_KEY_PEM,
+    )
+    .expect("openssl CLI is available after its skip gate");
+    let session_pem = server.seed_session();
+    assert!(
+        server.wait_for_state("write certificate", 1, std::time::Duration::from_secs(5)),
+        "initial handshake transcript missing: {}",
+        server.state_log()
+    );
+    let source = format!(
+        r#"<?php
+$pem = <<<'PEM'
+{session_pem}PEM;
+$session = Openssl\Session::import($pem);
+$context = stream_context_create(["ssl" => ["verify_peer" => "0", "session_data" => $session]]);
+$response = file_get_contents("https://127.0.0.1:{port}/", false, $context);
+echo is_string($response) && strpos($response, "Master-Key:") !== false
+    ? "resumed-page\n"
+    : "response-missing\n";
+"#,
+        session_pem = session_pem,
+        port = server.port()
+    );
+    let out = compile_and_run_with_php_version(&source, PhpVersion::Php86);
+    assert_eq!(out, "resumed-page\n");
+    assert!(
+        server.wait_for_state("read client hello", 2, std::time::Duration::from_secs(5)),
+        "second handshake was not logged: {}",
+        server.state_log()
+    );
+    let log = server.state_log();
+    assert_eq!(
+        log.matches("write certificate").count(),
+        1,
+        "the session_data connection must resume, not perform a second full handshake: {log}"
+    );
+}
+
+/// The production `elephc build` pipeline selects the libssl TLS bridge for a
+/// program that names `ssl.session_data`, links the managed `openssl-crypto`
+/// package, and resumes the imported session against a local OpenSSL server.
+#[test]
+fn test_openssl_https_session_resumption_cli_php86() {
+    if skip_without_openssl_native("test_openssl_https_session_resumption_cli_php86") {
+        return;
+    }
+    if skip_without_openssl_cli("test_openssl_https_session_resumption_cli_php86") {
+        return;
+    }
+    let server = OpensslSessionServer::start(
+        crate::codegen::io::streams::TEST_HTTPS_CERT_PEM,
+        crate::codegen::io::streams::TEST_HTTPS_KEY_PEM,
+    )
+    .expect("openssl CLI is available after its skip gate");
+    let session_pem = server.seed_session();
+    let dir = make_cli_test_dir("elephc_openssl_https_session_resumption");
+    fs::write(
+        dir.join("main.php"),
+        format!(
+            r#"<?php
+$pem = <<<'PEM'
+{session_pem}PEM;
+$session = Openssl\Session::import($pem);
+$context = stream_context_create();
+stream_context_set_option($context, ["ssl" => ["verify_peer" => "0", "session_data" => $session]]);
+$response = file_get_contents("https://127.0.0.1:{port}/", false, $context);
+echo is_string($response) && strpos($response, "Master-Key:") !== false
+    ? "resumed-page\n"
+    : "response-missing\n";
+"#,
+            session_pem = session_pem,
+            port = server.port()
+        ),
+    )
+    .expect("write CLI session resumption fixture");
+    let Some(mut command) = openssl_cli_command(&dir) else {
+        eprintln!("ELEPHC_OPENSSL_NATIVE_SKIP_GATE skipping CLI session fixture");
+        return;
+    };
+    let compile = command
+        .args(["--php-version", "8.6", "--quiet", "main.php"])
+        .output()
+        .expect("compile CLI session resumption fixture");
+    assert!(
+        compile.status.success(),
+        "CLI session resumption link failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .output()
+        .expect("run CLI session resumption fixture");
+    assert!(
+        run.status.success(),
+        "CLI session resumption fixture failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "resumed-page\n");
+    assert!(
+        server.wait_for_state("read client hello", 2, std::time::Duration::from_secs(5)),
+        "second handshake was not logged: {}",
+        server.state_log()
+    );
+    let log = server.state_log();
+    assert_eq!(
+        log.matches("write certificate").count(),
+        1,
+        "the CLI session_data connection must resume: {log}"
+    );
+}

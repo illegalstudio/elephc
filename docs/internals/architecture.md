@@ -674,6 +674,7 @@ crates/
 ├── elephc-reference/          Dependency-neutral native property-reference metadata and validation
 ├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
+├── elephc-tls-openssl/        libssl TLS bridge for PHP 8.6 `ssl.session_data` resumption
 ├── elephc-tokenizer/          Standalone C bridge for the PHP tokenizer APIs
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-uri/                PHP 8.5 `ext/uri` bridge for RFC 3986 and WHATWG URL values

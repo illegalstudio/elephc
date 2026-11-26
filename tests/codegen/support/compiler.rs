@@ -621,10 +621,24 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             eval_forced: false,
         },
     );
+    if php_version >= elephc::php_version::PhpVersion::Php86 && source.contains("session_data") {
+        check_result
+            .required_libraries
+            .retain(|library| library != "elephc_tls");
+        if !check_result
+            .required_libraries
+            .iter()
+            .any(|library| library == "elephc_tls_openssl")
+        {
+            check_result
+                .required_libraries
+                .push("elephc_tls_openssl".to_string());
+        }
+    }
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
-        .any(|lib| lib == "elephc_tls");
+        .any(|lib| lib == "elephc_tls" || lib == "elephc_tls_openssl");
     drop(frontend_phase);
     let eir_phase = fixture_phase_timing("eir");
     let mut ir_module =

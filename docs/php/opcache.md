@@ -1269,6 +1269,7 @@ Bridge-linked extensions are added on top, per compilation:
 | Bridge | Reported extension | Linked when |
 |---|---|---|
 | `elephc-tls` | `openssl` | TLS streams used, or `--with-tls` |
+| `elephc-tls-openssl` | `openssl` | `ssl.session_data` named, or `--with-openssl-tls` |
 | `elephc-pdo` | `PDO` | PDO used, or `--with-pdo` |
 | `elephc-pdo` | `mysqli` | mysqli used, or `--with-mysqli` |
 | `elephc-crypto` | `hash` | `hash()` used, or `--with-crypto` |

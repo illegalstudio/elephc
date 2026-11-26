@@ -1313,6 +1313,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // other than the connection host). Same late-binding/extra-args pattern.
     out.push_str(&comm_directive("_elephc_tls_connect_capath_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_connect_peer_name_fn", 8, target));
+    // PHP 8.6 session-resumption variants: same late-binding pattern, but the
+    // libssl backend installs the PEM session before the handshake.
+    out.push_str(&comm_directive("_elephc_tls_connect_session_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_connect_session_insecure_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
@@ -1529,6 +1533,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _ssl_key_str\n_ssl_key_str:\n    .ascii \"ssl\"\n");
     out.push_str(
         ".globl _ssl_peer_name_key_str\n_ssl_peer_name_key_str:\n    .ascii \"peer_name\"\n",
+    );
+    // PHP 8.6 ssl.session_data: a PEM session string produced by the
+    // stream-context wrapper when the caller passes an Openssl\Session.
+    out.push_str(
+        ".globl _ssl_session_data_key_str\n_ssl_session_data_key_str:\n    .ascii \"session_data\"\n",
     );
     out.push_str(
         ".globl _ssl_verify_peer_key_str\n_ssl_verify_peer_key_str:\n    .ascii \"verify_peer\"\n",

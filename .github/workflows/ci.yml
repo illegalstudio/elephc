@@ -35,6 +35,7 @@ env:
   RUST_MIN_STACK: "33554432"
   BRIDGE_CRATES: >-
     -p elephc-tls
+    -p elephc-tls-openssl
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-openssl

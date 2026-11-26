@@ -105,6 +105,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_tls_openssl",
+        env_var: "ELEPHC_TLS_OPENSSL_LIB_DIR",
+        crate_name: "elephc-tls-openssl",
+        flag_name: "openssl-tls",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The libssl backend implements the PHP 8.6 TLS session stream surface.
+        php_extensions: &["openssl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_pdo",
         env_var: "ELEPHC_PDO_LIB_DIR",
         crate_name: "elephc-pdo",

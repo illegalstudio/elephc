@@ -720,6 +720,167 @@ pub extern "C" fn elephc_tls_openssl_clear_error() {
     clear_error();
 }
 
+// ---------------------------------------------------------------------------
+// Drop-in elephc-tls ABI aliases
+// ---------------------------------------------------------------------------
+
+/// C ABI: secure client connect with default trust roots.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+) -> i64 {
+    elephc_tls_openssl_connect(host, host_len, port)
+}
+
+/// C ABI: insecure client connect.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_insecure(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+) -> i64 {
+    elephc_tls_openssl_connect_insecure(host, host_len, port)
+}
+
+/// C ABI: client connect with a custom CA bundle.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_cafile(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    cafile: *const u8,
+    cafile_len: usize,
+) -> i64 {
+    elephc_tls_openssl_connect_cafile(host, host_len, port, cafile, cafile_len)
+}
+
+/// C ABI: unsupported CA-directory variant for this backend.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_capath(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _capath: *const u8,
+    _capath_len: usize,
+) -> i64 {
+    record_error("TLS capath is not supported by the libssl session backend");
+    -1
+}
+
+/// C ABI: unsupported peer-name override for this backend.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_peer_name(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _peer_name: *const u8,
+    _peer_name_len: usize,
+) -> i64 {
+    record_error("TLS peer_name is not supported by the libssl session backend");
+    -1
+}
+
+/// C ABI: unsupported client-certificate variant for this backend.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_client_cert(
+    _host: *const u8,
+    _host_len: usize,
+    _port: u16,
+    _cert: *const u8,
+    _cert_len: usize,
+    _key: *const u8,
+    _key_len: usize,
+) -> i64 {
+    record_error("TLS client certificates are not supported by the libssl session backend");
+    -1
+}
+
+/// C ABI: imports a PEM session and connects securely.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_session(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    session: *const u8,
+    session_len: usize,
+) -> i64 {
+    elephc_tls_openssl_connect_session(host, host_len, port, session, session_len)
+}
+
+/// C ABI: imports a PEM session and connects without certificate checks.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_connect_session_insecure(
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    session: *const u8,
+    session_len: usize,
+) -> i64 {
+    elephc_tls_openssl_connect_session_insecure(host, host_len, port, session, session_len)
+}
+
+/// C ABI: reads plaintext from a libssl handle.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_read(
+    handle_id: i64,
+    buffer: *mut u8,
+    length: usize,
+) -> isize {
+    elephc_tls_openssl_read(handle_id, buffer, length)
+}
+
+/// C ABI: writes plaintext to a libssl handle.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_write(
+    handle_id: i64,
+    buffer: *const u8,
+    length: usize,
+) -> isize {
+    elephc_tls_openssl_write(handle_id, buffer, length)
+}
+
+/// C ABI: closes a libssl handle.
+#[no_mangle]
+pub extern "C" fn elephc_tls_close(handle_id: i64) {
+    elephc_tls_openssl_close(handle_id);
+}
+
+/// C ABI: returns the thread-local last error.
+#[no_mangle]
+pub extern "C" fn elephc_tls_last_error() -> *const c_char {
+    elephc_tls_openssl_last_error()
+}
+
+/// C ABI: clears the thread-local last error.
+#[no_mangle]
+pub extern "C" fn elephc_tls_clear_error() {
+    elephc_tls_openssl_clear_error();
+}
+
+/// C ABI: unsupported fd-attach variant for this backend.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_attach_fd(_fd: i32, _host: *const u8, _host_len: usize) -> i64 {
+    record_error("stream_socket_enable_crypto is not supported by the libssl session backend");
+    -1
+}
+
+/// C ABI: unsupported fd-attach with client certificate.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_attach_fd_client_cert(
+    _fd: i32,
+    _host: *const u8,
+    _host_len: usize,
+    _cert: *const u8,
+    _cert_len: usize,
+    _key: *const u8,
+    _key_len: usize,
+) -> i64 {
+    record_error("stream_socket_enable_crypto is not supported by the libssl session backend");
+    -1
+}
+
 #[cfg(all(test, elephc_tls_openssl_native))]
 mod tests {
     use super::*;

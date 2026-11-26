@@ -74,7 +74,7 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
 | `ftps://` | Explicit FTP over TLS using `AUTH TLS`, with TLS on both control and data channels. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. |
 | `http://` | HTTP/1.0 `GET` read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. v1 does not follow redirects and buffers up to 1 MiB. |
-| `https://` | Same as `http://`, but over TLS through the `elephc-tls` static library. Programs using it auto-link `-lelephc_tls`; programs that do not use TLS pay no extra link cost. |
+| `https://` | Same as `http://`, but over TLS through the `elephc-tls` static library. Programs using it auto-link `-lelephc_tls`; programs that do not use TLS pay no extra link cost. A program that names `ssl.session_data` instead links the libssl-backed `elephc-tls-openssl` bridge plus the managed `openssl-crypto` package. |
 | `compress.zlib://` | Read-only wrapper that opens the underlying file and applies `zlib.inflate`. |
 | `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |
 | `glob://` | Directory-style wrapper for iterating paths matching a glob pattern through `opendir()` / `readdir()`. |
@@ -230,6 +230,20 @@ and `ssl.passphrase` are not supported. `ssl.ciphers` and
 but are no-ops: rustls does not consume OpenSSL cipher-list strings and chooses
 its TLS 1.2/1.3 policy internally.
 
+PHP 8.6's `ssl.session_data` resumes a TLS session. Pass an `Openssl\Session`
+object or a PEM session string; the stream-context wrapper exports the object to
+PEM for the TLS layer while `stream_context_get_options()` keeps returning the
+object. A program whose source names `session_data` links the libssl-backed
+`elephc-tls-openssl` bridge and the managed `openssl-crypto` package, so the
+project must declare it (`elephc native add openssl-crypto`). The session path
+honours `ssl.verify_peer = "0"`; it does not yet consume `ssl.cafile`,
+`ssl.capath`, `ssl.peer_name`, or client certificates, and the rustls bridge
+cannot import an OpenSSL session. Because the libssl bridge replaces rustls for
+that whole program, `stream_socket_enable_crypto()`, `ssl.capath`,
+`ssl.peer_name`, and client-certificate connect paths in the same build report
+a TLS backend error rather than falling back. The external-PSK, early-data, and
+session callback options remain deferred.
+
 ## Stream contexts
 
 | Function | Signature | Description |
@@ -237,7 +251,7 @@ its TLS 1.2/1.3 policy internally.
 | `stream_context_create()` | `stream_context_create(array $options = [], array $params = []): resource` | Create a stream-context resource and persist `$options` in the single global context slot. A literal `['notification' => <closure>]` in `$params` is captured for HTTP notification callbacks. |
 | `stream_context_get_default()` | `stream_context_get_default(array $options = []): resource` | Return the default context resource. The optional arg is evaluated for side effects; v1 does not apply it. |
 | `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Return the default context resource. v1 evaluates `$options` for side effects but does not yet walk and persist the array; use `stream_context_set_option(stream_context_get_default(), ...)` when code needs options stored. |
-| `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. In the four-arg form, values are stored as strings in v1. |
+| `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. Values are stored as strings in v1; an `Openssl\Session` passed as `ssl.session_data` is exported to PEM for the TLS layer and kept as the object in `stream_context_get_options()` on PHP 8.6. |
 | `stream_context_set_options()` | `stream_context_set_options(resource $context, array $options): bool` | Two-argument options-array form; keeps the same persisted options hash and per-context dispatch map as `stream_context_set_option()`. |
 | `stream_context_set_params()` | `stream_context_set_params(resource $context, array $params): bool` | Captures a literal `notification` closure or first-class callable into the global notification slot and returns `true`. |
 | `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return the persisted options hash, or an empty hash when no context has been created. |
@@ -247,7 +261,7 @@ its TLS 1.2/1.3 policy internally.
 Active stream-context consumers:
 
 - `fopen("http://...")` reads `http.method`, `http.header`, and `http.content`.
-- `fopen("https://...")` reads the `ssl` trust and peer-name options.
+- `fopen("https://...")` reads the `ssl` trust, peer-name, and PHP 8.6 `session_data` options.
 - `fopen("ftp://...")` reads `ftp.resume_pos`.
 - `file_get_contents()` over `https://` reads the same `ssl` options; over
   `ftp://` or `ftps://` it reads `ftp.resume_pos`.

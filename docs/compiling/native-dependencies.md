@@ -56,10 +56,11 @@ recovery.
 libmagic 5.46 backs fileinfo and embeds its compiled magic database in the
 program. `openssl-crypto` 3.6.4 supplies the default-provider cipher engine
 used by symmetric `openssl_*` calls plus the libssl session backend for
-`Openssl\Session`, with zlib as its catalog dependency.
+`Openssl\Session` and the PHP 8.6 `ssl.session_data` TLS stream path, with zlib
+as its catalog dependency.
 Declare them with `elephc native add libmagic` or
 `elephc native add openssl-crypto`; their force-enable flags are
-`--with-fileinfo` and `--with-openssl`.
+`--with-fileinfo`, `--with-openssl`, and `--with-openssl-tls`.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link

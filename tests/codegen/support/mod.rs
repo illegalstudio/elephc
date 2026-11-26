@@ -50,6 +50,7 @@ pub(crate) mod fileinfo_native;
 mod native_projects;
 mod oniguruma;
 mod openssl_native;
+mod openssl_tls_server;
 mod projects;
 pub(crate) mod xml_native;
 pub(crate) mod tidy_native;
@@ -68,6 +69,7 @@ pub(crate) use oniguruma::*;
 pub(crate) use openssl_native::{
     openssl_cli_command, openssl_native_packages, skip_without_openssl_native,
 };
+pub(crate) use openssl_tls_server::{skip_without_openssl_cli, OpensslSessionServer};
 pub(crate) use projects::*;
 pub(crate) use gmp_native::{gmp_native_package, skip_without_gmp_native, GmpNativePackage, GMP_NATIVE_PACKAGE};
 // Named rather than globbed: `xml_native::available()` would otherwise collide with
