@@ -130,9 +130,11 @@ pub fn emit_mixed_property_get(emitter: &mut Emitter) {
 /// Emit `__rt_mixed_property_set(mixed_ptr, name_ptr, name_len, value_mixed_ptr)`.
 ///
 /// Companion to `__rt_mixed_property_get`: writes a value into a stdClass
-/// instance reached through a Mixed receiver. Non-stdClass payloads silently
-/// drop the write (mirroring PHP's "attempt to assign property on non-object"
-/// warning behaviour for the most common idiom).
+/// instance reached through a Mixed receiver. The helper owns one reference to
+/// the value cell: the stdClass hash keeps it, and every other payload drops the
+/// write and releases the cell. EIR lowering raises PHP's receiver Errors before
+/// the call, so a drop here only remains for receivers this backend cannot store
+/// into.
 pub fn emit_mixed_property_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_property_set_x86_64(emitter);
@@ -419,8 +421,8 @@ fn emit_mixed_property_get_aarch64(emitter: &mut Emitter) {
 ///
 /// Inputs: `x0` = mixed_ptr, `x1` = name_ptr, `x2` = name_len, `x3` = value_mixed_ptr.
 /// Unboxes the Mixed, validates the tag is 6 (object) and the class_id matches
-/// `_stdclass_class_id`, then delegates to `__rt_stdclass_set`. Non-stdClass payloads
-/// silently drop the write (no return value).
+/// `_stdclass_class_id`, then delegates to `__rt_stdclass_set`. Every other payload drops
+/// the write and releases the value cell the caller handed over (no return value).
 fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_set ---");
@@ -437,23 +439,31 @@ fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("bl __rt_mixed_deref");                                 // resolve the current object behind a persistent reference
     emitter.instruction("str x0, [sp, #0]");                                    // retain the concrete receiver for property lookup
-    emitter.instruction("cbz x0, __rt_mixed_property_set_done");                // null Mixed → silently drop the write
+    emitter.instruction("cbz x0, __rt_mixed_property_set_drop");                // null Mixed → drop the write
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
-    emitter.instruction("b.ne __rt_mixed_property_set_done");                   // non-object payload → silently drop the write
+    emitter.instruction("b.ne __rt_mixed_property_set_drop");                   // non-object payload → drop the write
     emitter.instruction("ldr x9, [x0, #8]");                                    // load obj pointer from mixed[8]
-    emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_property_set_done");
+    emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_property_set_drop");
     emitter.instruction("ldr x10, [x9]");                                       // load class_id from obj[0]
     abi::emit_symbol_address(emitter, "x11", "_stdclass_class_id");
     emitter.instruction("ldr x11, [x11]");                                      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp x10, x11");                                        // is the receiver a stdClass instance?
-    emitter.instruction("b.ne __rt_mixed_property_set_done");                   // unrelated class → silently drop the write
+    emitter.instruction("b.ne __rt_mixed_property_set_drop");                   // unrelated class → drop the write
 
     emitter.instruction("mov x0, x9");                                          // x0 = stdClass obj pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = name_ptr
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = name_len
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = value_mixed_ptr
     emitter.instruction("bl __rt_stdclass_set");                                // delegate to the dynamic-property writer
+    emitter.instruction("b __rt_mixed_property_set_done");                      // the stdClass hash now owns the value cell
+
+    // The caller handed this helper one reference to the value cell. A write that stores
+    // nothing must end it here, or every dropped write leaks the cell.
+    emitter.label("__rt_mixed_property_set_drop");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the value cell this helper owns
+    emitter.instruction("cbz x0, __rt_mixed_property_set_done");                // tolerate a null value cell defensively
+    emitter.instruction("bl __rt_decref_mixed");                                // release the value cell no property kept
 
     emitter.label("__rt_mixed_property_set_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -647,8 +657,8 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load obj pointer from mixed[8]
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_property_get_null");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
-    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
-    emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stdclass_class_id", 0);       // load the stdClass class_id sentinel (r9: r12 is callee-saved)
+    emitter.instruction("cmp r11, r9");                                         // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_mixed_property_get_null");                    // unrelated class → null result
 
     emitter.instruction("mov rdi, r10");                                        // rdi = stdClass obj pointer
@@ -674,7 +684,8 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
 /// Inputs (SysV): `rdi` = mixed_ptr, `rsi` = name_ptr, `rdx` = name_len,
 /// `rcx` = value_mixed_ptr. Unboxes the Mixed, validates the tag is 6 (object)
 /// and the class_id matches `_stdclass_class_id`, then delegates to
-/// `__rt_stdclass_set`. Non-stdClass payloads silently drop the write (no return value).
+/// `__rt_stdclass_set`. Every other payload drops the write and releases the value cell
+/// the caller handed over (no return value).
 fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_set ---");
@@ -694,22 +705,31 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the concrete receiver for later property access
     emitter.instruction("test rdi, rdi");                                       // null Mixed → drop write
-    emitter.instruction("je __rt_mixed_property_set_done");                     // branch on the current JSON object encoder condition
+    emitter.instruction("je __rt_mixed_property_set_drop");                     // null Mixed → drop the write
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
-    emitter.instruction("jne __rt_mixed_property_set_done");                    // non-object payload → drop write
+    emitter.instruction("jne __rt_mixed_property_set_drop");                    // non-object payload → drop the write
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load obj pointer from mixed[8]
-    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_property_set_done");
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_property_set_drop");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
-    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
-    emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
-    emitter.instruction("jne __rt_mixed_property_set_done");                    // unrelated class → drop write
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stdclass_class_id", 0);       // load the stdClass class_id sentinel (r9: r12 is callee-saved)
+    emitter.instruction("cmp r11, r9");                                         // is the receiver a stdClass instance?
+    emitter.instruction("jne __rt_mixed_property_set_drop");                    // unrelated class → drop the write
 
     emitter.instruction("mov rdi, r10");                                        // rdi = stdClass obj pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = name_ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = name_len
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // rcx = value_mixed_ptr
     emitter.instruction("call __rt_stdclass_set");                              // delegate to the dynamic-property writer
+    emitter.instruction("jmp __rt_mixed_property_set_done");                    // the stdClass hash now owns the value cell
+
+    // The caller handed this helper one reference to the value cell. A write that stores
+    // nothing must end it here, or every dropped write leaks the cell.
+    emitter.label("__rt_mixed_property_set_drop");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the value cell this helper owns
+    emitter.instruction("test rax, rax");                                       // tolerate a null value cell defensively
+    emitter.instruction("jz __rt_mixed_property_set_done");                     // nothing to release for a null value cell
+    emitter.instruction("call __rt_decref_mixed");                              // release the value cell no property kept
 
     emitter.label("__rt_mixed_property_set_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer

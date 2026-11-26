@@ -486,12 +486,12 @@ pub(super) fn resolve_property_runtime_action(
                     warns_on_miss: false,
                 });
             }
-            // A `readonly` class carries php's no-dynamic-properties flag, so CREATING the name
-            // is an `Error`, never a store. Answering here keeps the write arms' invariant intact:
-            // a write may never see `DynamicMissing`, and a readonly class deliberately reserves
-            // no hash. A read or an `unset()` needs no arm of its own, because nothing can ever
+            // A `readonly` class or an enum carries php's no-dynamic-properties flag, so CREATING
+            // the name is an `Error`, never a store. Answering here keeps the write arms'
+            // invariant intact: a write may never see `DynamicMissing`, and neither class
+            // reserves a hash. A read or an `unset()` needs no arm of its own, because nothing can ever
             // have been created, which is exactly what `DynamicMissing` already means.
-            if kind.creates_dynamic_property() && class_is_readonly(ctx, class_name) {
+            if kind.creates_dynamic_property() && class_forbids_dynamic_properties(ctx, class_name) {
                 let class_name = class_name.trim_start_matches('\\');
                 if matches!(kind, PropertyAccessKind::RuntimeWrite) {
                     return Ok(PropertyRuntimeAction::RefuseRuntimeName {
@@ -538,6 +538,17 @@ pub(super) fn resolve_property_runtime_action(
             })
         }
     }
+}
+
+/// Returns whether php refuses to create any dynamic property on this class.
+///
+/// A `readonly` class and an enum both carry the engine's no-dynamic-properties flag, so a write
+/// of an undeclared name raises `Cannot create dynamic property C::$p` and neither reserves a
+/// hash. Mixed-receiver ladders need an arm for such a class: without one the write fell into the
+/// miss path and was dropped.
+pub(super) fn class_forbids_dynamic_properties(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    class_is_readonly(ctx, class_name)
+        || ctx.module.enum_infos.contains_key(class_name.trim_start_matches('\\'))
 }
 
 /// Returns whether the class is declared `readonly`, which php makes no-dynamic-properties.

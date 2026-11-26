@@ -638,7 +638,11 @@ fn declared_mixed_named_property_set_candidates(
             .properties
             .iter()
             .any(|(declared, _)| declared == property);
-        if !declares && dynamic_property_hash_offset_for_class(ctx, class_name, property)?.is_none()
+        // A readonly class or an enum declares no hash either, but php still answers the write:
+        // it raises `Cannot create dynamic property`, so the class keeps its refusal arm.
+        if !declares
+            && dynamic_property_hash_offset_for_class(ctx, class_name, property)?.is_none()
+            && !class_forbids_dynamic_properties(ctx, class_name)
         {
             continue;
         }
@@ -1447,6 +1451,29 @@ pub(super) fn lower_runtime_mixed_prop_set(
             ))
         })
         .collect::<Vec<_>>();
+    // A readonly class or an enum has no hash, and php refuses to create any name there. A
+    // runtime name the class does not declare reaches this per-CLASS arm, which raises php's
+    // Error with that name instead of falling into the miss path and dropping the write.
+    let mut refusal_arms = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| {
+            !crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+                && class_forbids_dynamic_properties(ctx, class_name)
+        })
+        .map(|(class_name, class_info)| (class_info.class_id, class_name.clone()))
+        .collect::<Vec<_>>();
+    refusal_arms.sort_by_key(|(class_id, _)| *class_id);
+    let refusal_labels = refusal_arms
+        .iter()
+        .map(|(_, class_name)| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_set_refuse_{}",
+                label_fragment(class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -1478,8 +1505,17 @@ pub(super) fn lower_runtime_mixed_prop_set(
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
+    for ((class_id, _), label) in refusal_arms.iter().zip(refusal_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, *class_id, 16, label);
+    }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for ((_, class_name), label) in refusal_arms.iter().zip(refusal_labels.iter()) {
+        ctx.emitter.label(label);
+        release_unstored_adopted_value(ctx, value)?;
+        emit_readonly_runtime_dynamic_property_error(ctx, class_name, property_value, 32);
+    }
 
     for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
         ctx.emitter.label(label);

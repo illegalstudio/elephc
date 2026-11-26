@@ -1130,9 +1130,19 @@ header's first word:
 | `$o->name = $v` | `lower_mixed_static_prop_set` | one compare per class in the build that declares `name` and can hold this value |
 | `$o->{$expr} = $v` | `lower_runtime_mixed_prop_set` | the same compare, then a name comparison per candidate |
 
-A match stores straight into that class's declared slot. A **stdClass** payload and a **non-object**
-payload both fall through to `__rt_mixed_property_set`, which writes a dynamic property for the
-first and drops the write for the second — PHP's *attempt to assign property on non-object*.
+A match stores straight into that class's declared slot. A class that keeps the name in its own
+per-instance hash gets a hash arm, and a `readonly` class or an enum gets an arm that raises PHP's
+`Cannot create dynamic property C::$p`, since neither may hold a dynamic property. A **stdClass**
+payload falls through to `__rt_mixed_property_set`, which writes a dynamic property.
+
+Receivers that are not property-bearing objects never reach the dispatch. EIR lowering
+(`property_write_receiver.rs`) tests the boxed receiver after the right-hand side runs and raises
+PHP's Error: `Attempt to assign property "p" on int` (or `on true`, `on array`, and so on, with
+`modify` for an intermediate hop) for a non-object, and `Cannot create dynamic property
+Closure::$p` for a Closure, which elephc keeps in callable storage rather than as an object with a
+property table. `__rt_mixed_property_set` owns one reference to the value cell it is handed and
+releases it when it stores nothing, which now happens only for a builtin whose compiler-owned
+layout reserves no property hash (`ArrayObject`, for example).
 
 Until issue #1094 only the runtime-name spelling dispatched. The static-name spelling went straight
 to `__rt_mixed_property_set`, whose class-id check only admits stdClass, so `$o->n = 9` through a
