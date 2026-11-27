@@ -4407,6 +4407,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
         if target == source && !self.local_can_own_reference_cell(source) { return; }
+        if !self.in_main && self.local_uses_global_storage(source)
+            && !self.local_uses_global_storage(target)
+            && self.global_alias_type(source) == PhpType::Mixed
+            && !self.should_load_from_eval_scope(source)
+            && self.extern_global_type(source).is_none()
+        {
+            // Superglobals outside web mode still address the program's boxed symbol.
+            let span = span.unwrap_or_else(Span::dummy);
+            let owner = self.bind_program_global_reference(target, source, span);
+            super::expr::retire_owned_call_operand(self, owner, span);
+            return;
+        }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         let source_repr = self.local_type(source).codegen_repr();
@@ -4486,6 +4498,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, false, span);
+    }
+
+    /// Binds a frame name to a boxed global and returns the staging owner to retire.
+    pub(crate) fn bind_program_global_reference(&mut self, target: &str, source: &str, span: Span) -> LocalSlotId {
+        let (staged, owner) = self.predeclare_returned_ref_cell_staging();
+        super::expr::register_owned_call_operand(self, owner, span);
+        let data = self.intern_global_name(source);
+        let pointer = self.emit_value(
+            Op::LoadGlobalRefCell, Vec::new(), Some(Immediate::GlobalName(data)),
+            PhpType::Pointer(None), Op::LoadGlobalRefCell.default_effects(), Some(span),
+        );
+        // Replacing the target may run a destructor, so stage the incoming lease first.
+        self.adopt_returned_ref_cell_into(&staged, pointer, PhpType::Mixed, Some(span));
+        super::local_binding_origins::end(self, target, Some(span));
+        self.clear_reflection_class_local(target);
+        self.clear_reflection_function_local(target);
+        self.clear_reflection_property_local(target);
+        self.clear_reflection_method_local(target);
+        self.bind_persistent_ref_cell_ptr(target, pointer, span);
+        owner
     }
 
     /// Retains canonical persistent storage without changing an earlier raw frame payload ABI.

@@ -9,6 +9,31 @@
 
 use crate::support::*;
 
+/// Ordinary superglobal writes and a function-local alias share the same persistent cell.
+#[test]
+fn test_superglobal_alias_writes_through_persistent_cell() {
+    let source = r#"<?php
+$_GET = ['a' => 1];
+function superglobalAlias(): void {
+    $alias =& $_GET;
+    $alias['b'] = 2;
+    echo isset($_GET['b']) ? $_GET['b'] : 'missing', ':';
+    $_GET = ['c' => 3];
+    echo isset($alias['c']) ? $alias['c'] : 'missing';
+}
+superglobalAlias();
+unset($_GET);
+"#;
+    let check = || {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "2:3");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    };
+    check();
+    without_ir_opt(check);
+}
+
 /// Local aliases and ordinary global stores observe the same cell and keep value snapshots.
 #[test]
 fn test_named_global_alias_values_and_snapshots() {
